@@ -1,0 +1,10 @@
+# DeepSeek Harness 插件补丁清单：加载 dsh-trading-core 插件
+# 用法：
+#   npx @deepseek-ai/dsh web --patch C:/Users/徐诗靖/Desktop/tradingagentCN/dsh-trading-core/dsh-plugin/cordis.yml
+- insert:
+    - id: stock-analysis
+      # Windows 下 cordis loader 只接受 file:// URL（裸 C:/ 路径会被当作 URL scheme）
+      name: 'file:///C:/Users/%E5%BE%90%E8%AF%97%E9%9D%96/Desktop/tradingagentCN/dsh-trading-core/dsh-plugin/src/index.ts'
+      config:
+        # 适配器服务地址（S1-S2 起在 8000 端口）
+        adapterBaseUrl: 'http://127.0.0.1:8000'

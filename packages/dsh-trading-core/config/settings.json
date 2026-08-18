@@ -1,0 +1,18 @@
+{
+  "project_dir": "C:\\Users\\徐诗靖\\Desktop\\tradingagentCN\\dsh-trading-core\\tradingagents",
+  "results_dir": "./results",
+  "data_dir": "C:\\Users\\徐诗靖\\Documents\\TradingAgents\\data",
+  "data_cache_dir": "C:\\Users\\徐诗靖\\Desktop\\tradingagentCN\\dsh-trading-core\\tradingagents\\dataflows/data_cache",
+  "llm_provider": "deepseek",
+  "deep_think_llm": "deepseek-chat",
+  "quick_think_llm": "deepseek-chat",
+  "backend_url": "https://api.deepseek.com",
+  "max_debate_rounds": 1,
+  "max_risk_discuss_rounds": 1,
+  "max_recur_limit": 100,
+  "online_tools": true,
+  "online_news": false,
+  "realtime_data": false,
+  "use_memory": false,
+  "risk_profile": "balanced"
+}

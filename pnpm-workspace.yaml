@@ -1,6 +1,11 @@
 packages:
   - vendor/*
   - packages/*/*
+  # dsh-trading-core is a self-contained A-share analysis plugin: it owns its
+  # Python venv and does its own npm install inside packages/dsh-trading-core/
+  # (dsh-plugin). Keep it out of the pnpm workspace so root installs/builds are
+  # unaffected.
+  - '!packages/dsh-trading-core/**'
   # The Landlock launcher is developed with its harness consumers but keeps
   # its native build and publication scripts under native/landlock-run.
   - native/landlock-run

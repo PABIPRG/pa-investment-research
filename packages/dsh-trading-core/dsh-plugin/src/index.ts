@@ -1,0 +1,539 @@
+// TradingAgents-CN × DeepSeek Harness 插件
+// 注册 analyze_stock 工具：对话式触发 → Python 适配器(SSE) → 引擎 → Signal。
+//
+// 依赖适配器服务（adapter/，S1-S2 已在 8000 端口跑通）：
+//   POST /analyze                      启动任务 → { task_id }
+//   GET  /analyze/{id}/stream          SSE 进度流（stage/result/error/done）
+//   GET  /analyze/{id}/result          最终 Signal + 分步报告
+//
+// 流式进度映射（dsh 工具是请求/响应模型，没有 stream.write）：
+//   execute 内消费适配器 SSE，每个 stage 事件 → exec.agent.inject() 追加到
+//   模型上下文，对话轨迹实时可见分析阶段；最终结果走 canonical value。
+//   参考：docs/cookbook/adding-a-tool.md · docs/cookbook/extension-cookbook.md
+
+import type { Context } from '@deepseek-ai/cordis'
+import Schema from '@deepseek-ai/schemastery'
+import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
+import type { JsonValue } from '@deepseek-ai/dsh-session'
+import {
+  consumeSse,
+  getLatestBrief,
+  getRiskProfile,
+  getWatchlist,
+  saveHoldings,
+  setRiskProfile,
+  setWatchlist,
+  startAnalysis,
+  startTask,
+  type HoldingInput,
+} from './client.ts'
+import { setupBriefPusher } from './brief-pusher.ts'
+import {
+  renderBrief,
+  renderBriefCard,
+  renderFullReport,
+  renderHoldingsCard,
+  renderHoldingsReport,
+  renderSignalCard,
+  type AnalyzeResult,
+  type BriefSignal,
+  type HoldingsSignal,
+} from './render.ts'
+
+export const name = 'stock-analysis'
+
+export interface Config {
+  adapterBaseUrl: string
+  streamTimeoutMs: number
+  enableInChatPush: boolean
+  pushPollMs: number
+  pushSessions: string[]
+}
+
+export const Config: Schema<Config> = Schema.object({
+  adapterBaseUrl: Schema.string().default('http://127.0.0.1:8000'),
+  streamTimeoutMs: Schema.number().default(600_000),
+  enableInChatPush: Schema.boolean().description('dsh 对话内定时播报简报（外部推送由适配器 scheduler 负责）').default(false),
+  pushPollMs: Schema.number().description('对话内播报轮询周期 ms').default(120_000),
+  pushSessions: Schema.array(Schema.string()).description('播报目标会话 id；空 = 所有活跃会话').default([]),
+})
+
+export const inject = ['tools', 'agents']
+
+/** 风险偏好参数（三个流式工具共用）。缺省用适配器已保存偏好。 */
+const RISK_PROFILE_PARAM = {
+  type: 'string',
+  description: '风险偏好：conservative(保守)/balanced(稳健)/aggressive(进取)；缺省用已保存偏好',
+  enum: ['conservative', 'balanced', 'aggressive'] as const,
+} as const
+
+/** 通用流式任务：POST 启动 → SSE 消费 → 返回 lossless 结果。 */
+async function runStreamingTask(
+  config: Config,
+  exec: ToolRunContext,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<{ signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }> {
+  const taskId = await startTask(config.adapterBaseUrl, path, body, exec.signal)
+  const result = await consumeSse(
+    `${config.adapterBaseUrl}/analyze/${taskId}/stream`,
+    exec,
+    config.streamTimeoutMs,
+  )
+  return result as { signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }
+}
+
+export function apply(ctx: Context, config: Config) {
+  setupBriefPusher(ctx, {
+    adapterBaseUrl: config.adapterBaseUrl,
+    enableInChatPush: config.enableInChatPush,
+    pushPollMs: config.pushPollMs,
+    pushSessions: config.pushSessions,
+  })
+
+  ctx.tools.register(
+    defineTool({
+      name: 'analyze_stock',
+      description:
+        '对 A 股股票进行多智能体 AI 分析（市场/基本面/新闻/情绪分析师 → 多空辩论 → 交易员 → 风险辩论 → 风险经理），' +
+        '返回买入/持有/卖出决策、目标价、置信度与完整分步报告。' +
+        '输入可以是股票代码（如 600519）或名称（如 贵州茅台）；date 留空表示最近交易日。',
+      parameters: {
+        ticker: {
+          type: 'string',
+          required: true,
+          description: '股票代码（如 600519）或名称（如 贵州茅台）',
+        },
+        date: {
+          type: 'string',
+          description: '分析日期 YYYY-MM-DD，可选，默认最近交易日',
+        },
+        research_depth: {
+          type: 'string',
+          description: '研究深度，可选，默认 standard',
+          enum: ['quick', 'basic', 'standard', 'deep', 'full'] as const,
+        },
+        config_overrides: {
+          type: 'json',
+          description: '可选，会话级引擎参数覆盖（如 max_debate_rounds）',
+        },
+        risk_profile: RISK_PROFILE_PARAM,
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            signal: { type: 'json', description: '统一决策信号（action/target_price/confidence/risk_score/reasoning）' },
+            reports: { type: 'json', description: '各分析阶段的分步 Markdown 报告' },
+            performance_metrics: { type: 'json', description: '各节点耗时统计' },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: renderFullReport(value as AnalyzeResult) },
+        ],
+        // 结果卡依赖的唯一事实源；纯函数，replay 可用
+        presentationMeta: (_args, value) =>
+          renderSignalCard((value as AnalyzeResult).signal),
+      },
+      presentCall: (args) => ({
+        card: 'generic',
+        title: `📈 分析 ${String((args as { ticker?: string }).ticker ?? '')}`,
+        kind: 'other',
+        rawInput: args,
+      }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: 'AI 多智能体分析完成',
+        content: [
+          {
+            type: 'text',
+            text:
+              typeof result.meta === 'string'
+                ? result.meta
+                : '分析完成。查看模型回复中的完整决策与分步报告。',
+          },
+        ],
+      }),
+      async execute(args, exec) {
+        // 1) 启动分析任务
+        const body: Record<string, unknown> = {
+          ticker: args.ticker,
+        }
+        if (args.date !== undefined) body.date = args.date
+        if (args.research_depth !== undefined) body.research_depth = args.research_depth
+        if (args.config_overrides !== undefined) body.config_overrides = args.config_overrides
+        if (args.risk_profile !== undefined) body.risk_profile = args.risk_profile
+
+        const taskId = await startAnalysis(config.adapterBaseUrl, body, exec.signal)
+
+        // 2) 消费 SSE 进度流，逐阶段注入模型上下文
+        // consumeSse 内部会逐阶段 injectProgress 到模型上下文
+        const result = await consumeSse(
+          `${config.adapterBaseUrl}/analyze/${taskId}/stream`,
+          exec,
+          config.streamTimeoutMs,
+        )
+        // 适配器返回体是 lossless JSON；render/presentationMeta 内再按 AnalyzeResult 读取
+        return result as { signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }
+      },
+    }),
+  )
+
+  // ── 功能3：持仓风险分析（analyze_holdings）────────────────────────────
+  ctx.tools.register(
+    defineTool({
+      name: 'analyze_holdings',
+      description:
+        '分析当前持仓的风险：市值/浮盈/权重/集中度 HHI/行业暴露 + 逐股年化波动率/最大回撤/β。' +
+        'deep 模式对每只股票并行跑引擎 quick 深度（约 3-5 分钟），输出每股风险分与买卖信号；' +
+        'quick 模式仅定量风险（秒级）。holdings 传持仓列表（代码+股数+成本价）；不传则用已保存持仓。',
+      parameters: {
+        holdings: {
+          type: 'json',
+          description: '持仓列表 [{ticker:"600519", quantity:200, cost_price:1480}, ...]；缺省用已保存持仓',
+        },
+        mode: {
+          type: 'string',
+          enum: ['quick', 'deep'],
+          description: 'deep=逐股引擎分析(慢,约3-5分钟), quick=仅定量风险(秒级)，默认 deep',
+        },
+        use_saved: {
+          type: 'boolean',
+          description: 'holdings 为空时是否回退到已保存持仓，默认 true',
+        },
+        risk_profile: RISK_PROFILE_PARAM,
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            signal: { type: 'json', description: '组合信号（市值/浮盈/风险/逐股明细）' },
+            reports: { type: 'json', description: 'Markdown 报告' },
+            performance_metrics: { type: 'json', description: '耗时统计' },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: renderHoldingsReport(value as { signal: HoldingsSignal; reports?: Record<string, string> }) },
+        ],
+        presentationMeta: (_args, value) => renderHoldingsCard((value as { signal: HoldingsSignal }).signal),
+      },
+      presentCall: (args) => ({
+        card: 'generic',
+        title: `🧺 分析持仓（${String((args as { mode?: string }).mode ?? 'deep')}）`,
+        kind: 'other',
+        rawInput: args,
+      }),
+      presentResult: () => ({
+        card: 'generic',
+        title: '持仓风险分析完成',
+        content: [{ type: 'text', text: '组合市值/浮盈/集中度/逐股风险已生成。' }],
+      }),
+      async execute(args, exec) {
+        const body: Record<string, unknown> = { mode: args.mode ?? 'deep' }
+        if (args.holdings !== undefined) body.holdings = args.holdings
+        if (args.use_saved !== undefined) body.use_saved = args.use_saved
+        if (args.risk_profile !== undefined) body.risk_profile = args.risk_profile
+        return runStreamingTask(config, exec, '/holdings/analyze', body)
+      },
+    }),
+  )
+
+  // ── 功能4：市场简报（market_brief）──────────────────────────────────
+  ctx.tools.register(
+    defineTool({
+      name: 'market_brief',
+      description:
+        '生成 A股盘前/盘后市场简报：指数、涨跌家数、板块动向、北向资金、龙虎榜、资讯汇总，' +
+        '并挖掘事件驱动机会点（自选股异动/龙虎榜主力净买入/板块资金异动/资讯事件）。' +
+        'period 选 pre_market(盘前)/post_market(盘后)/now(盘中)。结果同时可推送至企业微信/Server酱。',
+      parameters: {
+        period: {
+          type: 'string',
+          enum: ['pre_market', 'post_market', 'now'],
+          description: 'pre_market=盘前, post_market=盘后, now=当前（默认 now）',
+        },
+        scope: {
+          type: 'string',
+          description: '覆盖范围: all/market/industry/concept/news/watchlist，默认 all',
+        },
+        tickers: {
+          type: 'json',
+          description: '覆盖的自选股代码列表；缺省用已保存 watchlist',
+        },
+        risk_profile: RISK_PROFILE_PARAM,
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            signal: { type: 'json', description: '简报信号（summary 为 Markdown 简报）' },
+            reports: { type: 'json', description: 'Markdown 报告' },
+            performance_metrics: { type: 'json', description: '耗时统计' },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: renderBrief(value as { signal: BriefSignal }) },
+        ],
+        presentationMeta: (_args, value) => renderBriefCard((value as { signal: BriefSignal }).signal),
+      },
+      presentCall: (args) => ({
+        card: 'generic',
+        title: `📊 ${String((args as { period?: string }).period ?? 'now')} 简报`,
+        kind: 'other',
+        rawInput: args,
+      }),
+      presentResult: () => ({
+        card: 'generic',
+        title: '市场简报已生成',
+        content: [{ type: 'text', text: '查看模型回复中的完整简报与机会点。' }],
+      }),
+      async execute(args, exec) {
+        const body: Record<string, unknown> = { period: args.period ?? 'now' }
+        if (args.scope !== undefined) body.scope = args.scope
+        if (args.tickers !== undefined) body.tickers = args.tickers
+        if (args.risk_profile !== undefined) body.risk_profile = args.risk_profile
+        return runStreamingTask(config, exec, '/brief', body)
+      },
+    }),
+  )
+
+  // ── 自选列表（set_watchlist / get_watchlist）────────────────────────
+  ctx.tools.register(
+    defineTool({
+      name: 'set_watchlist',
+      description: '整体替换自选股票列表（覆盖 600519、000858 等），供简报/持仓分析的 watchlist 维度使用。',
+      parameters: {
+        tickers: {
+          type: 'json',
+          required: true,
+          description: '自选股票代码列表，如 ["600519","000858","300750"]',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { saved: { type: 'number', description: '保存条数' } },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `已保存 ${String((value as { saved?: number }).saved ?? 0)} 只自选股。` },
+        ],
+      },
+      presentCall: () => ({ card: 'generic', title: '⭐ 设置自选列表', kind: 'other' }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: '自选列表已更新',
+        content: [{ type: 'text', text: `已保存 ${String((result as { saved?: number }).saved ?? 0)} 只自选股。` }],
+      }),
+      async execute(args, exec) {
+        const tickers = (args as { tickers: string[] }).tickers
+        return (await setWatchlist(config.adapterBaseUrl, tickers, exec.signal)) as { saved?: number }
+      },
+    }),
+  )
+
+  // ── 持仓保存（set_holdings，供 analyze_holdings 的 use_saved 复用）──
+  ctx.tools.register(
+    defineTool({
+      name: 'set_holdings',
+      description:
+        '保存/整体替换当前持仓到本地（供 analyze_holdings 不传 holdings 时复用）。' +
+        'holdings 为 [{ticker:"600519", quantity:200, cost_price:1500}, ...]，股数与原币成本价。',
+      parameters: {
+        holdings: {
+          type: 'json',
+          required: true,
+          description: '持仓列表 [{ticker, quantity, cost_price}, ...]',
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { saved: { type: 'number', description: '保存条数' } },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `已保存 ${String((value as { saved?: number }).saved ?? 0)} 条持仓。` },
+        ],
+      },
+      presentCall: () => ({ card: 'generic', title: '💼 保存持仓', kind: 'other' }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: '持仓已保存',
+        content: [{ type: 'text', text: `已保存 ${String((result as { saved?: number }).saved ?? 0)} 条持仓。` }],
+      }),
+      async execute(args, exec) {
+        const holdings = ((args as { holdings: unknown }).holdings ?? []) as HoldingInput[]
+        return (await saveHoldings(config.adapterBaseUrl, holdings, exec.signal)) as { saved?: number }
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'get_watchlist',
+      description: '读取当前自选股票列表。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { tickers: { type: 'array', items: { type: 'string' }, description: '自选股票代码列表' } },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `自选股：${((value as { tickers?: string[] }).tickers ?? []).join('、') || '（空）'}` },
+        ],
+      },
+      presentCall: () => ({ card: 'generic', title: '⭐ 读取自选列表', kind: 'other' }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: '自选列表',
+        content: [{ type: 'text', text: JSON.stringify((result as { tickers?: string[] }).tickers ?? []) }],
+      }),
+      async execute(_args, exec) {
+        return (await getWatchlist(config.adapterBaseUrl, exec.signal)) as { tickers?: string[] }
+      },
+    }),
+  )
+
+  // ── 风险偏好画像（set_risk_profile / get_risk_profile）────────────────
+  ctx.tools.register(
+    defineTool({
+      name: 'set_risk_profile',
+      description:
+        '保存全局风险偏好画像：conservative(保守，保本控回撤)/balanced(稳健，默认)/aggressive(进取，求高收益)。' +
+        '后续所有个股分析/持仓分析/市场简报均按此偏好展开分析框架；单次调用仍可传 risk_profile 覆盖。',
+      parameters: {
+        risk_profile: {
+          type: 'string',
+          required: true,
+          description: '风险偏好画像：conservative/balanced/aggressive',
+          enum: ['conservative', 'balanced', 'aggressive'] as const,
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            risk_profile: { type: 'string', description: '已保存的画像键名' },
+            label: { type: 'string', description: '画像中文名' },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { risk_profile?: string; label?: string }
+          return [
+            {
+              type: 'text' as const,
+              text: `已切换风险偏好：${v.label ?? v.risk_profile ?? '—'}（${v.risk_profile ?? ''}）`,
+            },
+          ]
+        },
+      },
+      presentCall: () => ({ card: 'generic', title: '🎯 设置风险偏好', kind: 'other' }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: '风险偏好已更新',
+        content: [{ type: 'text', text: String((result as { label?: string }).label ?? '') }],
+      }),
+      async execute(args, exec) {
+        const riskProfile = String((args as { risk_profile: string }).risk_profile)
+        return (await setRiskProfile(config.adapterBaseUrl, riskProfile, exec.signal)) as {
+          risk_profile?: string
+          label?: string
+        }
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'get_risk_profile',
+      description: '读取当前保存的风险偏好画像（conservative/balanced/aggressive）及中文名。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            risk_profile: { type: 'string', description: '画像键名' },
+            label: { type: 'string', description: '画像中文名' },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { risk_profile?: string; label?: string }
+          return [
+            {
+              type: 'text' as const,
+              text: `当前风险偏好：${v.label ?? v.risk_profile ?? '未知'}（${v.risk_profile ?? ''}）`,
+            },
+          ]
+        },
+      },
+      presentCall: () => ({ card: 'generic', title: '🎯 读取风险偏好', kind: 'other' }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: '风险偏好',
+        content: [{ type: 'text', text: String((result as { label?: string }).label ?? '') }],
+      }),
+      async execute(_args, exec) {
+        return (await getRiskProfile(config.adapterBaseUrl, exec.signal)) as {
+          risk_profile?: string
+          label?: string
+        }
+      },
+    }),
+  )
+
+  // ── 简报读取（get_latest_brief，供对话内推送/主动查询）────────────────
+  ctx.tools.register(
+    defineTool({
+      name: 'get_latest_brief',
+      description: '读取最近一次生成的市场简报（含是否已在 dsh 对话内播报的标记）。',
+      parameters: {},
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            period: { type: 'string' },
+            trade_date: { type: 'string' },
+            summary: { type: 'string' },
+            dsh_pushed: { type: 'boolean' },
+          },
+        },
+        render: (_args, value) => {
+          const v = value as { id?: string; period?: string; trade_date?: string; dsh_pushed?: boolean }
+          const label = v.period === 'pre_market' ? '盘前' : v.period === 'post_market' ? '盘后' : '盘中'
+          return [
+            {
+              type: 'text' as const,
+              text: v.id
+                ? `最近简报：${label} · ${v.trade_date ?? ''}（dsh 已播报：${v.dsh_pushed ? '是' : '否'}）`
+                : '暂无简报',
+            },
+          ]
+        },
+      },
+      presentCall: () => ({ card: 'generic', title: '📥 读取最近简报', kind: 'other' }),
+      presentResult: (_args, result) => ({
+        card: 'generic',
+        title: '最近简报',
+        content: [{ type: 'text', text: String((result as { id?: string }).id ?? '暂无简报') }],
+      }),
+      async execute(_args, exec) {
+        return (await getLatestBrief(config.adapterBaseUrl, exec.signal)) as {
+          id?: string
+          period?: string
+          trade_date?: string
+          summary?: string
+          dsh_pushed?: boolean
+        }
+      },
+    }),
+  )
+}

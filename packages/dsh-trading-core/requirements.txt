@@ -1,0 +1,47 @@
+# dsh-trading-core 运行时依赖（裁剪自 TradingAgents-CN，仅保留插件真正用到的）
+# 安装：python -m venv env && env/Scripts/python.exe -m pip install -r requirements.txt
+
+# ── 引擎核心（tradingagents/）──────────────────────────────────────
+# LLM 与多智能体编排
+langgraph
+langchain-openai
+langchain-core
+langchain-anthropic
+openai>=1.0.0,<2.0.0
+tenacity
+# 记忆（ChromaDB 嵌入）
+chromadb
+dashscope
+# A 股数据
+akshare>=1.17.86
+baostock
+tushare
+curl-cffi>=0.6.0   # 模拟真实浏览器 TLS 指纹，绕过反爬
+# 数据计算
+pandas
+numpy
+stockstats
+yfinance            # 美股数据
+finnhub-python      # 美股新闻/基本面
+python-dateutil
+# 新闻/资讯抓取
+feedparser
+beautifulsoup4
+requests
+tqdm
+python-dotenv
+typing-extensions
+toml                 # 日志配置读取
+
+# ── HTTP 服务（adapter/）──────────────────────────────────────────
+fastapi
+uvicorn[standard]
+sse-starlette
+pydantic
+apscheduler
+
+# ── 可选（均有 try/except 守卫，按需安装）────────────────────────
+# pymongo      # MongoDB 缓存 / 用量记录（USE_MONGODB_STORAGE=false 时不需要）
+# redis        # Redis 缓存（TA_CACHE_STRATEGY=file 时不需要）
+# jqdatasdk    # 聚宽持仓源（仅演示，恒不可用）
+# xtquant      # QMT 持仓源
