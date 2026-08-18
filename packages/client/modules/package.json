@@ -47,6 +47,9 @@
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
   },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "workspace:^"
+  },
   "files": [
     "lib/index.js",
     "lib/invariant.js",

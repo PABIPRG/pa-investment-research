@@ -10,8 +10,9 @@
  * `dsh --profile tui --resume abc` boots the tui profile with `--resume abc`,
  * and `dsh --profile web -h` prints the web app's help, not this one's.
  *
- * `web` is a hardcoded alias for `--profile web`; `plugin` manages a profile's
- * plugin dependencies by forwarding to pnpm.
+ * `cli` and `web` are shipped application aliases for the corresponding
+ * profiles; `electron` selects the desktop application process; `plugin`
+ * manages a profile's plugin dependencies by forwarding to pnpm.
  * @module @deepseek-ai/dsh/args
  */
 
@@ -44,10 +45,15 @@ interface PluginInvocation {
   args: string[]
 }
 
-/** The resolved `dsh` invocation. Help, version, and errors exit inside {@link parseDshArgs}. */
-export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInvocation
+/** Launch the Electron desktop application process. */
+interface ElectronInvocation {
+  mode: 'electron'
+}
 
-/** Launcher flags shared by the default command and the `web` alias. */
+/** The resolved `dsh` invocation. Help, version, and errors exit inside {@link parseDshArgs}. */
+export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInvocation | ElectronInvocation
+
+/** Launcher flags shared by the default command and profile aliases. */
 interface BootOptions {
   patch?: string[]
   dumpConfig?: boolean
@@ -63,7 +69,9 @@ const collect = (value: string, previous: string[] = []): string[] => [...previo
 /** The launcher's own help text; each app prints its own. */
 const HELP_EXAMPLES = `
 Examples:
+  dsh cli "run the tests"                    run one command-line task (same as: dsh --profile headless)
   dsh --profile web                          boot the web profile (same as: dsh web)
+  dsh electron                               launch the Electron desktop application
   dsh --profile headless "run the tests"     answer one task, print the result, and exit
   dsh --profile tui --patch ./extra.yml      boot a custom profile with one extra overlay
   dsh --profile tui --resume <session>       arguments after the launcher flags reach the app
@@ -74,7 +82,7 @@ Examples:
 /**
  * Resolve a boot or dump invocation from the launcher flags and the leftover
  * inner arguments.
- * @param program - the command whose options were parsed (the root, or the `web` alias).
+ * @param program - the command whose options were parsed (the root, or a profile alias).
  * @param profile - the profile these flags boot.
  * @param options - the launcher flags commander collected.
  * @param args - the leftover arguments, in argv order.
@@ -117,7 +125,7 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
   program
     .name('dsh')
     .version(version, '-V, --version', 'output the version number')
-    .description('dsh: boot a DeepSeek Harness profile — an ordered stack of plugin-bundle patch layers under your own overrides.')
+    .description('dsh: launch a shipped application or boot a profile of plugin-bundle patch layers under your own overrides.')
     .addHelpText('after', HELP_EXAMPLES)
     .exitOverride()
     // The launcher's flags come first and end at the first token it does not
@@ -153,19 +161,35 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
     }
   }
 
-  const web = program.command('web').description('boot the web profile (alias of --profile web); the web app\'s own flags follow')
-  web
-    .helpOption(false)
-    .allowUnknownOption()
-    .passThroughOptions()
-    .enablePositionalOptions()
-    .argument('[args...]', 'arguments for the web app (see: dsh web --help)')
-    .option('--patch <path>', 'extra patch-list overlay applied after the profile layer (repeatable)', collect)
-    .option('--dump-config', 'print the composed web-profile tree (with the user layer and any --patch) and exit')
-    .option('--dump-default-config', 'print the web profile\'s bundle layers (no user layer) and exit')
-    .action((args: string[], options: BootOptions) => {
-      rejectParentOptions('web')
-      resolved = resolveBoot(web, 'web', options, args)
+  /** Register a shipped application alias backed by a profile. */
+  const profileAlias = (name: 'cli' | 'web', profile: 'headless' | 'web', appLabel: string): void => {
+    const command = program.command(name).description(`boot the ${profile} profile; the ${appLabel}'s own arguments follow`)
+    command
+      .helpOption(false)
+      .allowUnknownOption()
+      .passThroughOptions()
+      .enablePositionalOptions()
+      .argument('[args...]', `arguments for the ${appLabel} (see: dsh ${name} --help)`)
+      .option('--patch <path>', 'extra patch-list overlay applied after the profile layer (repeatable)', collect)
+      .option('--dump-config', `print the composed ${profile}-profile tree (with the user layer and any --patch) and exit`)
+      .option('--dump-default-config', `print the ${profile} profile's bundle layers (no user layer) and exit`)
+      .action((args: string[], options: BootOptions) => {
+        rejectParentOptions(name)
+        resolved = resolveBoot(command, profile, options, args)
+      })
+  }
+
+  profileAlias('cli', 'headless', 'command-line app')
+  profileAlias('web', 'web', 'web app')
+
+  program
+    .command('electron')
+    .description('launch the Electron desktop application')
+    .helpOption('-h, --help', 'display help for command')
+    .allowExcessArguments(false)
+    .action(() => {
+      rejectParentOptions('electron')
+      resolved = { mode: 'electron' }
     })
 
   const plugin = program.command('plugin').description('manage a profile\'s plugins by forwarding the remaining arguments to pnpm in the profile directory')

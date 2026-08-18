@@ -14,9 +14,16 @@ const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
 /**
  * Create the browser-backed generic RPC caller.
+ *
+ * The desktop shell serves the Host from the renderer's own origin, so it uses
+ * this caller unchanged.
  * @returns caller that owns request correlation and response-envelope validation.
  */
 export function createWebConnectionRpc(): ClientConnectionRpc {
+  return createConnectionRpc((input, init) => globalThis.fetch(input, init))
+}
+
+function createConnectionRpc(fetcher: (input: URL, init?: RequestInit) => Promise<Response>): ClientConnectionRpc {
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)
@@ -27,7 +34,7 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
         method: endpoint,
         payload,
       }
-      const response = await globalThis.fetch(
+      const response = await fetcher(
         new URL(`${channel}/${endpoint}`, resolveBase()),
         {
           method: 'POST',

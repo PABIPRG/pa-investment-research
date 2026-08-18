@@ -27,6 +27,11 @@ function readVersion(): string {
 const invocation = parseDshArgs(process.argv.slice(2), readVersion())
 
 switch (invocation.mode) {
+  case 'electron': {
+    const { runElectronApplication } = await import('./electron.ts')
+    process.exit(await runElectronApplication())
+    break
+  }
   case 'profile': {
     const { runProfile } = await import('./profile-boot.ts')
     await runProfile({

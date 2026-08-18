@@ -95,7 +95,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
   ): () => Promise<void> {
     assertChannel(channel)
     const trustedHosts = options.authority === 'loopback' ? [] : this.trustedHosts
-    const fetchHandler = rpcFetchHandler(channel, handler)
+    const fetchHandler = connectionRpcFetchHandler(channel, handler)
     const route: WebRoute = {
       kind: 'prefix',
       path: channel,
@@ -126,7 +126,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
     const interceptor: ConnectionRpcInterceptor = {
       matches,
-      fetchHandler: rpcFetchHandler(channel, handler),
+      fetchHandler: connectionRpcFetchHandler(channel, handler),
       options,
     }
     return owner.effect(() => {
@@ -141,7 +141,13 @@ export class HostConnectionService extends Service implements HostConnectionHand
   }
 }
 
-function rpcFetchHandler(
+/**
+ * Adapt one registered Connection RPC handler to the shared Fetch envelope.
+ * @param channel - absolute registered channel prefix.
+ * @param handler - endpoint handler supplied by the channel owner.
+ * @returns Fetch handler suitable for an HTTP or IPC transport.
+ */
+export function connectionRpcFetchHandler(
   channel: string,
   handler: ConnectionRpcHandler,
 ): FetchHandler {

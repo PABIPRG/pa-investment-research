@@ -6,6 +6,7 @@
  * @module @deepseek-ai/dsh-app-boot
  */
 
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { parseEnv } from 'node:util'
@@ -472,6 +473,19 @@ function groupedDump(
   return lines.join('\n') + '\n'
 }
 
+function importHostOwnedModule(
+  loader: Loader,
+  name: string,
+  bareModuleBaseUrl: string,
+  fallback: (specifier: string) => unknown,
+): unknown {
+  if (isAbsolute(name)) return fallback(pathToFileURL(name).href)
+  if (name.startsWith('.') || name.startsWith('cordis:')) return fallback(name)
+  if (loader.internal !== undefined) return loader.internal.import(name, bareModuleBaseUrl, {})
+  const resolved = createRequire(bareModuleBaseUrl).resolve(name)
+  return fallback(pathToFileURL(resolved).href)
+}
+
 /**
  * Mount and remember the exact root Include entry used by app boot and user patch-layer HMR.
  * @param ctx - context carrying an initialized Loader service.
@@ -493,13 +507,12 @@ export async function mountRootInclude(
     ? Include
     : class HostResolvedRootInclude extends Include {
       override import(name: string, getOuterStack?: () => string[]): unknown {
-        const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
-        if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(specifier, getOuterStack)
-        const internal = this.ctx.loader.internal
-        /* v8 ignore next -- Node supplies the internal loader; this preserves the
-           original diagnostic for hypothetical embedders without it. */
-        if (internal === undefined) return super.import(specifier, getOuterStack)
-        return internal.import(specifier, bareModuleBaseUrl, {})
+        return importHostOwnedModule(
+          this.ctx.loader,
+          name,
+          bareModuleBaseUrl,
+          specifier => super.import(specifier, getOuterStack),
+        )
       }
     }
   // `cordis:group` alongside it: a group row is how a composition gives one
@@ -768,7 +781,20 @@ export async function boot(
   try {
     ctx.baseUrl = pathToFileURL(dirname(absoluteConfigPath)).href + '/'
     ctx.provide('dshHomePath', dshHomePath)
-    await ctx.plugin(Loader)
+    if (bareModuleBaseUrl === undefined) {
+      await ctx.plugin(Loader)
+    } else {
+      await ctx.plugin(class HostResolvedLoader extends Loader {
+        override import(name: string, getOuterStack?: () => string[]): unknown {
+          return importHostOwnedModule(
+            this,
+            name,
+            bareModuleBaseUrl,
+            specifier => super.import(specifier, getOuterStack),
+          )
+        }
+      })
+    }
     await prepare?.(ctx)
     stage = 'plugin tree failed to load'
     await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl)

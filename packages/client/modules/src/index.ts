@@ -2,10 +2,9 @@
  * Node half of the client module system (`dsh.client` dual-face package): scans
  * the host Loader's entries for packages declaring `dsh.client`, composes the
  * `window.__DSH_BOOT__` entry graph (wire single source: {@link WebBootEntry}
- * in `./client/manifest.ts`), serves `/plugins/<id>/client.js` and its source
- * map, taps the index render to inject the boot manifest, and provides the
- * `clientModuleHost` service (the HMR node half's registration/notification
- * face).
+ * in `./client/manifest.ts`), and provides the `clientModuleHost` service. A
+ * composed Web server receives the `/plugins` route and index-manifest tap;
+ * desktop carriers read the same graph and bundle paths directly.
  *
  * Scanning is incremental per package — there is no full-rescan code path.
  * Every cordis `internal/plugin` emission (fiber construction/disposal) marks
@@ -30,6 +29,7 @@ import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import z from '@deepseek-ai/schemastery'
 import type { WebBootEntry, WebBootGraph } from './client/manifest.ts'
 
 export type {
@@ -38,10 +38,20 @@ export type {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** The web plugin table (provided by the client-modules node half). */
+    /** The client plugin table (provided by the client-modules node half). */
     clientModules: ClientModuleRegistry
   }
 }
+
+/** Client graph composition settings. */
+export interface Config {
+  /** Client packages enrolled without an active Host Loader entry. */
+  additionalPackages?: string[]
+}
+
+export const Config: z<Config> = z.object({
+  additionalPackages: z.array(String).default([]),
+})
 
 /** package.json `dsh.client` declaration fields, validated one by one after reading the file. */
 interface DshClientDeclaration {
@@ -103,6 +113,17 @@ class ClientPackageCompositionError extends AggregateError {
 interface WebPluginRecord {
   entry: WebBootEntry
   clientPath: string
+}
+
+const BUNDLE_SUFFIX = '/client.js'
+const MAP_SUFFIX = '/client.js.map'
+
+/** One bundle-route file, resolved for whichever carrier serves the graph's URLs. */
+export interface BundleFile {
+  /** Absolute path of the built artifact. */
+  readonly path: string
+  /** Content type the carrier must label the bytes with. */
+  readonly contentType: string
 }
 
 /** Narrow an unknown parsed JSON value to the `dsh.client` declaration, throwing on malformed fields. */
@@ -175,14 +196,16 @@ export function injectBootManifest(html: string, graph: WebBootGraph): string {
 }
 
 /**
- * The web plugin table service: incremental `dsh.client` scan + wire composition
- * + bundle route + index tap. Construction runs the activation scan
- * synchronously — a malformed declaration or missing bundle among the
- * already-loaded entries aggregates into one loud throw (FAILED fiber; the
- * boot activation audit reports it).
+ * The client plugin table service: incremental `dsh.client` scan plus wire
+ * composition. When a Web server is present it also mounts the bundle route
+ * and index tap. Construction runs the activation scan synchronously — a
+ * malformed declaration or missing bundle among the already-loaded entries
+ * aggregates into one loud throw (FAILED fiber; the boot activation audit
+ * reports it).
  */
 export class ClientModuleRegistry extends Service {
-  static inject = ['webServer', 'loader']
+  static inject = ['loader']
+  static Config = Config
 
   private readonly table = new Map<string, WebPluginRecord>()
   // Negative verdicts (unresolvable specifier — builtins like cordis:include,
@@ -192,16 +215,19 @@ export class ClientModuleRegistry extends Service {
   private readonly rebuildListeners = new Set<(id: string, rev: string) => void>()
   private readonly graphListeners = new Set<() => void>()
   private readonly dirty = new Set<string>()
+  private readonly additionalPackages: ReadonlySet<string>
   private readonly resolvePkgJson: (spec: string) => string
   private flushQueued = false
   private composed: WebBootGraph
 
   /**
    * Build the service: subscribe, seed, and run the activation flush.
-   * @param ctx - plugin context carrying webServer and loader.
+   * @param ctx - plugin context carrying the Loader and optional Web server.
+   * @param config - graph packages supplied by an alternate carrier.
    */
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'clientModules')
+    this.additionalPackages = new Set(config.additionalPackages ?? [])
     // Resolution anchor: the config tree's baseUrl (the cordis.yml directory,
     // whose package declares every composed plugin as a dependency). The
     // modules package's own URL would miss sibling packages under pnpm's
@@ -231,6 +257,7 @@ export class ClientModuleRegistry extends Service {
     // current entries, flushed synchronously (nothing async between subscribe,
     // seed, and flush).
     for (const entry of ctx.loader.entries()) this.dirty.add(entry.options.name)
+    for (const packageName of this.additionalPackages) this.dirty.add(packageName)
     this.composed = this.compose()
     const failures: Error[] = []
     this.flush(err => failures.push(err))
@@ -238,14 +265,16 @@ export class ClientModuleRegistry extends Service {
       throw new ClientPackageCompositionError(failures)
     }
 
-    ctx.effect(
-      () => ctx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
-      'client-modules: bundle route',
-    )
-    ctx.effect(
-      () => ctx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
-      'client-modules: boot manifest injection',
-    )
+    ctx.inject(['webServer'], (webCtx) => {
+      webCtx.effect(
+        () => webCtx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
+        'client-modules: bundle route',
+      )
+      webCtx.effect(
+        () => webCtx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
+        'client-modules: boot manifest injection',
+      )
+    })
   }
 
   /**
@@ -263,6 +292,29 @@ export class ClientModuleRegistry extends Service {
    */
   clientPath(id: string): string | undefined {
     return this.table.get(id)?.clientPath
+  }
+
+  /**
+   * Resolve a bundle-route pathname to the file a carrier should serve.
+   *
+   * The id may contain a scope slash, so the id is what remains between the
+   * prefix and the fixed suffix. Anything else under `/plugins` (including
+   * `/plugins/events` when the HMR row is absent) is an unknown resource.
+   * @param pathname - decoded request pathname.
+   * @returns the file to serve, or undefined when the route addresses no bundle.
+   */
+  bundleFile(pathname: string): BundleFile | undefined {
+    const prefix = '/plugins/'
+    if (!pathname.startsWith(prefix)) return undefined
+    const isSourceMap = pathname.endsWith(MAP_SUFFIX)
+    const suffix = isSourceMap ? MAP_SUFFIX : BUNDLE_SUFFIX
+    if (!pathname.endsWith(suffix)) return undefined
+    const clientPath = this.clientPath(pathname.slice(prefix.length, -suffix.length))
+    if (clientPath === undefined) return undefined
+    return {
+      path: isSourceMap ? `${clientPath}.map` : clientPath,
+      contentType: isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
+    }
   }
 
   /**
@@ -382,7 +434,7 @@ export class ClientModuleRegistry extends Service {
 
   /** Reconcile one entry name against the live loader entries. @returns whether the table changed. */
   private processOne(entryName: string): boolean {
-    let qualifies = false
+    let qualifies = this.additionalPackages.has(entryName)
     for (const entry of this.ctx.loader.entries()) {
       if (entry.options.name === entryName && entry.fiber !== undefined && !entry.disabled) {
         qualifies = true
@@ -426,26 +478,16 @@ export class ClientModuleRegistry extends Service {
     }
     /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server requests. */
     const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname)
-    // The id may contain a scope slash. Anything else under /plugins (including
-    // /plugins/events when the HMR row is absent) is an unknown resource.
-    const prefix = '/plugins/'
-    const mapSuffix = '/client.js.map'
-    const bundleSuffix = '/client.js'
-    const isSourceMap = pathname.startsWith(prefix) && pathname.endsWith(mapSuffix)
-    const suffix = isSourceMap ? mapSuffix : bundleSuffix
-    const clientPath = pathname.startsWith(prefix) && pathname.endsWith(suffix)
-      ? this.clientPath(pathname.slice(prefix.length, -suffix.length))
-      : undefined
-    const path = clientPath === undefined ? undefined : `${clientPath}${isSourceMap ? '.map' : ''}`
-    if (path === undefined) {
+    const file = this.bundleFile(pathname)
+    if (file === undefined) {
       res.writeHead(404)
       res.end()
       return
     }
     try {
-      const body = await readFile(path)
+      const body = await readFile(file.path)
       res.writeHead(200, {
-        'content-type': isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
+        'content-type': file.contentType,
         'cache-control': 'no-cache',
       })
       res.end(body)

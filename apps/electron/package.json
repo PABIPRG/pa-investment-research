@@ -1,0 +1,62 @@
+{
+  "name": "@deepseek-ai/dsh-electron",
+  "productName": "DeepSeek Harness",
+  "description": "Electron desktop application for DeepSeek Harness",
+  "version": "0.1.0-rc.5",
+  "author": "DeepSeek",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "apps/electron"
+  },
+  "type": "module",
+  "main": "lib/main.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "lib/*.cjs",
+    "lib/types/**/*.d.ts",
+    "electron.patch.yml",
+    "renderer"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @deepseek-ai/dsh-web-frontend exec vite build --base ./ --outDir ../electron/renderer --emptyOutDir",
+    "start": "electron .",
+    "package": "pnpm --workspace-root run build && pnpm --workspace-root exec tsx apps/electron/src/packaging.ts package",
+    "make": "pnpm --workspace-root run build && pnpm --workspace-root exec tsx apps/electron/src/packaging.ts make"
+  },
+  "config": {
+    "forge": "./forge.config.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh": "workspace:^",
+    "@deepseek-ai/dsh-app-boot": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-client-modules": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-directory-picker-native": "workspace:^",
+    "@deepseek-ai/dsh-host-directory-picker-native": "workspace:^",
+    "@deepseek-ai/dsh-host-apiproxy": "workspace:^"
+  },
+  "devDependencies": {
+    "@electron/get": "5.1.0",
+    "@electron/packager": "18.4.4",
+    "@electron-forge/cli": "7.8.3",
+    "@electron-forge/maker-zip": "7.8.3",
+    "@electron-forge/shared-types": "7.8.3",
+    "electron": "43.2.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

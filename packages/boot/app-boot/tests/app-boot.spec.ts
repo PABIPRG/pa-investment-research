@@ -625,6 +625,54 @@ describe('boot', () => {
     }
   })
 
+  it('resolves host-owned bare plugins when Node loader internals are unavailable', async () => {
+    const configDir = tmp()
+    const hostDir = tmp()
+    const pluginDir = join(hostDir, 'node_modules', 'closed-runtime-plugin')
+    mkdirSync(pluginDir, { recursive: true })
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({
+      name: 'closed-runtime-plugin',
+      type: 'module',
+      exports: './index.mjs',
+    }))
+    writeFileSync(join(pluginDir, 'index.mjs'), [
+      'export function apply(ctx) {',
+      '  ctx.provide("closedRuntimePluginLoaded", true)',
+      '}',
+      '',
+    ].join('\n'))
+    const latePluginDir = join(hostDir, 'node_modules', 'late-runtime-plugin')
+    mkdirSync(latePluginDir, { recursive: true })
+    writeFileSync(join(latePluginDir, 'package.json'), JSON.stringify({
+      name: 'late-runtime-plugin',
+      type: 'module',
+      exports: './index.mjs',
+    }))
+    writeFileSync(join(latePluginDir, 'index.mjs'), [
+      'export function apply(ctx) {',
+      '  ctx.provide("lateRuntimePluginLoaded", true)',
+      '}',
+      '',
+    ].join('\n'))
+    writeFileSync(join(configDir, 'cordis.yml'), [
+      '- id: closed-runtime',
+      '  name: closed-runtime-plugin',
+      '',
+    ].join('\n'))
+
+    const hostBaseUrl = pathToFileURL(join(hostDir, 'entry.mjs')).href
+    const ctx = await boot(NAME, join(configDir, 'cordis.yml'), undefined, (hostCtx) => {
+      hostCtx.loader.internal = undefined
+    }, hostBaseUrl)
+    try {
+      expect(ctx.get('closedRuntimePluginLoaded')).toBe(true)
+      await ctx.loader.create({ name: 'late-runtime-plugin' })
+      expect(ctx.get('lateRuntimePluginLoaded')).toBe(true)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('runs host preparation before the Loader tree mounts', async () => {
     const dir = tmp()
     writeFileSync(join(dir, 'noop.mjs'), 'export const name = "noop"\nexport function apply() {}\n')

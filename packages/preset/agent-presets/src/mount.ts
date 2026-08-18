@@ -43,14 +43,6 @@ interface MountedTree {
 const mounted = new WeakMap<object, MountedTree>()
 
 /**
- * The base URL bare specifiers resolve against, per pending mount, keyed by the
- * same config object. Recorded before the subtree is plugged, because `Include`
- * rewrites its own context's `baseUrl` to the composition's directory and the
- * pre-mount value is the only handle on where the harness itself lives.
- */
-const harnessBase = new WeakMap<object, string>()
-
-/**
  * Include subclass that publishes its tree and fiber for the audit, and never
  * writes to the file it read.
  */
@@ -69,26 +61,20 @@ class PresetTree extends Include {
    * a package name: a locally authored preset lives under the user's home,
    * where Node's upward `node_modules` walk never reaches the harness's own
    * dependencies, so every `@deepseek-ai/dsh-*` row would fail to import. The
-   * mount records the host composition's base instead, which is inside the
-   * installed harness, and bare names resolve from there. An absolute
+   * root Loader retains the host composition's base and any host-specific
+   * public resolution fallback, so bare names delegate to it. An absolute
    * filesystem path names neither base and becomes a file URL before Node's
-   * ESM loader receives it, which is required for drive-letter paths on
-   * Windows.
+   * ESM loader receives it, which is required for drive-letter paths on Windows.
    * @param name - the module specifier from the row.
    * @param getOuterStack - the loader's stack composer for import diagnostics.
    * @returns the imported module, or the `cordis:` builtin.
    */
   override import(name: string, getOuterStack?: () => string[]): unknown {
     const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
-    const base = harnessBase.get(this.config)
-    /* v8 ignore next -- every PresetTree is constructed by `mountPreset`, which records the base first */
-    if (base === undefined) return super.import(specifier, getOuterStack)
-    if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(name, getOuterStack)
-    const internal = this.ctx.loader.internal
-    /* v8 ignore next -- Node always supplies the internal module loader; the branch keeps a
-       hypothetical embedder from losing the row's name in a resolution error. */
-    if (internal === undefined) return super.import(specifier, getOuterStack)
-    return internal.import(specifier, base, {})
+    if (isAbsolute(name) || name.startsWith('.') || name.startsWith('cordis:')) {
+      return super.import(specifier, getOuterStack)
+    }
+    return this.ctx.loader.import(name, getOuterStack)
   }
 
   /**
@@ -338,11 +324,6 @@ export async function mountPreset(agentCtx: Context, preset: AgentPreset): Promi
     )
   }
   const config: Include.Config = { path: pathToFileURL(preset.path).href }
-  // Captured before the subtree exists: the standing scope context still
-  // carries the host composition's base, which is inside the installed
-  // harness and is therefore where a row's package name has to resolve from.
-  /* v8 ignore next -- the Loader sets `baseUrl` on the root before any scoped context derives from it */
-  if (agentCtx.baseUrl !== undefined) harnessBase.set(config, agentCtx.baseUrl)
   // Before the record this mount is about to add: standing mounts are one per
   // preset and live until whole-tree teardown, so pruning here only sweeps
   // records of torn-down runtimes (tests; an HMR reload of the roster).

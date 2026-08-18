@@ -1,0 +1,40 @@
+# Agent Note: Electron desktop carrier reuses the Web profile without a network server
+
+Status: implemented
+
+English | [中文](2026-08-18-electron-desktop-carrier.zh.md)
+
+## Problem
+
+The repository needs a desktop application under `apps/` that launches the existing graphical client and can later produce distributable Electron artifacts. The Web application already owns the product UI and the `web` profile already composes the required Host services and client-plugin roster, so a desktop application must preserve those owners rather than create a second frontend or a separate Host assembly. It must also avoid exposing Node or unrestricted Electron APIs to renderer code.
+
+The existing Web carrier assumes an HTTP listener, same-origin Fetch, `/plugins` bundle routes, index manifest injection, and WebSocket downlinks. Electron needs the same four-quadrant RPC protocol and client plugin graph without a listening port.
+
+## Decision
+
+`apps/electron` is a product application over the shipped `web` profile. The `dsh electron` application selector verifies its built main, preload, and renderer artifacts, then starts the sibling application with its locally installed Electron executable. The main and preload bundles leave the `electron` module external because that executable provides it at runtime. The Electron main process calls the CLI package's exported `runProfile()` with the Electron package manifest as the installation anchor and applies `electron.patch.yml` above the profile. The selector is not a profile alias: `dsh --profile electron` retains the generic named-composition meaning. The overlay disables `web-startup`, `webserver`, `web-runtime`, `client-hmr`, the adaptive `directory-picker`, and the Web `connection` row; preserves the remaining Host and client-plugin rows; and inserts the native Host/client directory-picker pair plus the application-owned `ElectronConnectionService`.
+
+Profile boot treats the generated profile root config as the host module base. App boot uses Cordis's internal module loader when available and otherwise resolves host-owned bare packages through `createRequire()` before importing file URLs; this applies to both nested include entries and entries added to the root Loader later. A subtree plugged in outside the Loader's entry graph reaches the same resolution only by delegating its bare specifiers to the root Loader's public `import()`, which is how [a session's preset composition](2026-08-03-per-session-agent-presets.md) mounts here. Electron passes `watchPatches: false` because Cordis HMR requires Node module-loader internals that Electron does not expose. Both `cordis.patch.yml` layers still apply during startup, but changes require an application restart.
+
+The Connection protocol keeps one implementation. The renderer reaches the Host over [the application's own URL scheme](2026-08-18-desktop-application-url-scheme.md), so `ElectronApiClient` subclasses `WebApiClient` and overrides only `events.mux` and `events.host`, which use fixed callback streams over preload; every other request takes the inherited same-origin Fetch path. The main-process service maps requests to the existing API Proxy Fetch handler, generic Connection RPC registrations, and ApiProxy event iterables. The renderer selects this carrier only when preload exposes a versioned `__DSH_ELECTRON__` bridge; fixture mode still takes precedence.
+
+The client-module registry operates with or without a Web server. If one is present, optional injection installs `/plugins` and the index manifest tap. Another carrier may configure `additionalPackages` for a client package whose Host carrier row is disabled, then read `graph()` and `bundleFile()` directly. Electron adds the Connection client bundle this way and serves the same relative bundle URLs and injected index document from its scheme. The renderer is a second Vite build of `apps/web` with relative asset paths; no UI code is forked.
+
+Preload exposes only `openStream` and `closeStream`. `BrowserWindow` enables context isolation, Chromium sandboxing, and Web security, and disables Node integration. The main process accepts IPC only from that window's main frame, validates each request, denies permission requests and in-window navigation, and opens only HTTP(S) links externally. The ESM main module schedules its asynchronous startup without top-level-awaiting `app.whenReady()`, because Electron readiness follows initial module evaluation, and claims the scheme's privileges in that same pre-readiness window. The application keeps a single-instance lock and drains IPC plus the Cordis tree during quit.
+
+Packaging creates a self-contained production deployment with `pnpm deploy`, then invokes Electron Packager with dependency pruning disabled because the deployment already contains the production closure. This avoids Electron Packager's dependency walker interpreting pnpm's isolated workspace links as an npm layout, without switching the repository to `node-linker=hoisted`. Electron Forge 7.8.3 runs makers over the packaged application; the configured maker is an unsigned per-platform ZIP, while signing, notarization, and installer makers remain distribution configuration. Packaging keeps `asar` disabled because the client module system reads independently built plugin bundles from filesystem paths. The workspace records pnpm's ordinary hidden-hoist default (`hoistPattern: ['*']`) explicitly because Forge requires a visible on-disk hoist policy. Forge's `@electron/rebuild@3.7.2` names Electron's node-gyp fork through a git dependency, which pnpm's `blockExoticSubdeps` correctly rejects; a parent-scoped override selects Electron's registry-published `@electron/node-gyp@10.2.0-electron.2` instead of weakening the workspace policy.
+
+## Alternatives considered
+
+- **Start the existing Web server on loopback and point Electron at it**: this retains a listening socket, browser trust policy, HTTP route ownership, and WebSocket lifecycle solely to cross a process-local application boundary. It also makes desktop startup depend on port allocation.
+- **Ship an `electron` profile template**: a profile selects a Cordis composition inside the current Node process; it cannot select the Electron runtime that must own the desktop main process. Keeping the application selector separate preserves `--profile` for user compositions.
+- **Build a separate Electron renderer**: this duplicates the application shell and client-plugin roster. A relative-path build of `apps/web` preserves one UI owner.
+- **Expose `ipcRenderer` or a generic channel method from preload**: this lets page code reach channels that were never designed as renderer capabilities. Fixed methods keep the exposed API auditable.
+- **Enable `asar` immediately**: the client module registry still reads bundle files by filesystem path. Packing those files behind an archive abstraction becomes a separate decision.
+
+## Consequences
+
+- `pnpm dsh electron` launches existing desktop artifacts without rebuilding. `pnpm run start:electron` builds and launches them; `pnpm run package:electron` creates an unpacked app and `pnpm run make:electron` creates the current platform's ZIP under `apps/electron/out/`.
+- Desktop and Web use the same profile, `$DSH_HOME`, Host services, client plugins, and session data. Carrier differences stay in Connection and application assembly.
+- Client HMR and live profile-patch watching are disabled in Electron. Client bundle changes require a rebuild and restart; profile patch changes require a restart.
+- The keyless proof covers the event-stream lifecycle, in-process RPC dispatch, client-module composition without a Web server, ESM lifecycle scheduling, public bare-package fallback, both aggregate TypeScript programs, the full workspace build, a real Electron renderer DOM, and Forge packaging.

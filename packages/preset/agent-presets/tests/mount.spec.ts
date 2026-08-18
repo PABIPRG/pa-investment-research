@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -38,10 +39,14 @@ const ROOTS = [
  * @param roster - roster config, defaulting to the fixture roots.
  * @returns the booted context.
  */
-async function harness(roster: Config = { default: 'standard', roots: ROOTS, includeUserRoot: false }): Promise<Context> {
+async function harness(
+  roster: Config = { default: 'standard', roots: ROOTS, includeUserRoot: false },
+  LoaderPlugin: typeof Loader = Loader,
+  baseUrl: string = pathToFileURL(FIXTURES).href + '/',
+): Promise<Context> {
   const ctx = new Context()
-  ctx.baseUrl = pathToFileURL(FIXTURES).href + '/'
-  await ctx.plugin(Loader)
+  ctx.baseUrl = baseUrl
+  await ctx.plugin(LoaderPlugin)
   ctx.loader.builtins.include = Include
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(SessionStore)
@@ -85,6 +90,43 @@ beforeEach(async () => {
 })
 
 describe('composing an agent from a preset', () => {
+  it('uses the root Loader host resolution for a bare package without Node loader internals', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-preset-host-resolution-'))
+    const presetDir = join(root, 'host-resolved')
+    const host = await mkdtemp(join(tmpdir(), 'dsh-preset-host-modules-'))
+    const packageDir = join(host, 'node_modules', 'host-preset-plugin')
+    await mkdir(presetDir)
+    await mkdir(packageDir, { recursive: true })
+    await writeFile(join(packageDir, 'package.json'), JSON.stringify({
+      name: 'host-preset-plugin',
+      type: 'module',
+      exports: './index.mjs',
+    }))
+    await writeFile(join(packageDir, 'index.mjs'), 'export function apply() {}\n')
+    await writeFile(
+      join(presetDir, COMPOSITION_FILE),
+      '- id: host-resolved\n  name: host-preset-plugin\n',
+    )
+    const hostBaseUrl = pathToFileURL(join(host, 'entry.mjs')).href
+    class HostResolvedLoader extends Loader {
+      override import(name: string, getOuterStack?: () => string[]): unknown {
+        if (name !== 'host-preset-plugin') return super.import(name, getOuterStack)
+        const resolved = createRequire(hostBaseUrl).resolve(name)
+        return super.import(pathToFileURL(resolved).href, getOuterStack)
+      }
+    }
+    const scoped = await harness(
+      { default: 'host-resolved', roots: [{ path: root, trust: 'user' }], includeUserRoot: false },
+      HostResolvedLoader,
+      hostBaseUrl,
+    )
+    scoped.loader.internal = undefined
+
+    const agent = await agentOn(scoped, 'sess-host-resolved')
+
+    expect(agent.id).toBe(SessionId('sess-host-resolved'))
+  })
+
   it('hands an absolute plugin path to Node as a file URL', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-preset-absolute-plugin-'))
     const presetDir = join(root, 'absolute')

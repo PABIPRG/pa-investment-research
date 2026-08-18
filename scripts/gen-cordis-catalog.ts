@@ -471,6 +471,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   Workspace: 'workspace.md',
   WorkspaceId: 'workspace.md',
   WebBootGraph: 'client-modules.md',
+  BundleFile: 'client-modules.md',
   SessionTelemetryRecord: 'session-telemetry.md',
   WorkflowRunInfo: 'workflow.md',
   WorkflowStartRequest: 'workflow.md',

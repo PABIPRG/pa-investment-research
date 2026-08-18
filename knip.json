@@ -740,6 +740,25 @@
         "@deepseek-ai/.+"
       ]
     },
+    "apps/electron": {
+      "entry": [
+        "src/packaging.ts",
+        "src/main.ts",
+        "src/preload.ts",
+        "forge.config.ts",
+        "tests/**/*.spec.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@electron-forge/cli",
+        "@electron-forge/maker-zip",
+        "@deepseek-ai/dsh-client-ui-directory-picker-native",
+        "@deepseek-ai/dsh-host-directory-picker-native"
+      ]
+    },
     "packages/client/modules": {
       "entry": [
         "tests/**/*.spec.ts"

@@ -386,8 +386,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'clientModules',
-    summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap.',
-    description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
+    summary: 'The client plugin table service: incremental `dsh.client` scan plus wire composition.',
+    description: 'The client plugin table service: incremental `dsh.client` scan plus wire composition. When a Web server is present it also mounts the bundle route and index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
     methods: [
       {
         signature: 'graph(): WebBootGraph',
@@ -400,6 +400,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Absolute path of an entry\'s client bundle.',
         parameters: [{ name: 'id', description: 'entry id (package name).' }],
         returns: 'the path, or undefined for an unknown id.',
+      },
+      {
+        signature: 'bundleFile(pathname: string): BundleFile | undefined',
+        description: 'Resolve a bundle-route pathname to the file a carrier should serve.\n\nThe id may contain a scope slash, so the id is what remains between the prefix and the fixed suffix. Anything else under `/plugins` (including `/plugins/events` when the HMR row is absent) is an unknown resource.',
+        parameters: [{ name: 'pathname', description: 'decoded request pathname.' }],
+        returns: 'the file to serve, or undefined when the route addresses no bundle.',
       },
       {
         signature: 'rebuilt(id: string): string | undefined',
@@ -2738,6 +2744,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'Branded',
     declaration: 'export type Branded<B extends string> = string & {\n    readonly [BRAND]: B;\n};',
+  },
+  {
+    name: 'BundleFile',
+    declaration: 'export interface BundleFile {\n    readonly path: string;\n    readonly contentType: string;\n}',
   },
   {
     name: 'CancelOptions',

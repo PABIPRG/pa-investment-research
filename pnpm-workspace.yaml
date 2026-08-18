@@ -24,9 +24,17 @@ packages:
 # builds must resolve those matching names to this workspace's pinned sources.
 linkWorkspacePackages: true
 
+# This is pnpm's ordinary hidden-hoist default, recorded explicitly because
+# Electron Forge refuses pnpm packaging unless an on-disk hoist policy is visible.
+hoistPattern:
+  - '*'
+
 overrides:
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+  # Forge 7.8.3's rebuild helper names Electron's node-gyp fork by git URL.
+  # Use the same maintained fork from the registry so blockExoticSubdeps stays enabled.
+  '@electron/rebuild@3.7.2>@electron/node-gyp': '10.2.0-electron.2'
 
 peerDependencyRules:
   allowedVersions:
@@ -39,6 +47,9 @@ peerDependencyRules:
 # (git hooks) genuinely need theirs.
 allowBuilds:
   esbuild: true
+  # Electron's install step downloads and verifies the platform runtime used
+  # by local launch and Forge packaging.
+  electron: true
   lefthook: true
   # Cross-platform boundary for the persistent PTY backend, including ConPTY on Windows.
   node-pty: true

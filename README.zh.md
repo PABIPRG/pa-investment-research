@@ -34,6 +34,8 @@ pnpm run build
 pnpm dsh web
 ```
 
+如需在 Electron 桌面外壳中启动同一套已构建 UI，请运行 `pnpm dsh electron`。构建后启动的便捷命令、打包命令与当前分发限制见 [Electron 应用 README](apps/electron/README.md)。
+
 ## 社区与支持
 
 - 欢迎通过 [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions) 提交反馈或 bug 报告。

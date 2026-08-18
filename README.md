@@ -34,6 +34,8 @@ pnpm run build
 pnpm dsh web
 ```
 
+To launch the same built UI in the Electron desktop shell, run `pnpm dsh electron`. The build-and-launch shortcut, packaging commands, and current distribution limits are documented in the [Electron application README](apps/electron/README.md).
+
 ## Community and support
 
 - Feel free to submit feedback or bug reports through [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions).

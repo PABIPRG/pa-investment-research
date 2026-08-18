@@ -14,7 +14,7 @@ The browser client runs the same cordis plugin mechanism, so it needs the same s
 
 Conventional frontend engineering digests all dependencies at build time: one bundle, externals resolved by the bundler, nothing left to manage at runtime. Runtime module management on top of that is the unusual requirement here. The client therefore splits into two layers: the upper layer is cordis plugin loading through the same vendored Loader, and the lower layer is module-granular dependency management — `dsh-client-modules`.
 
-The lower layer supplies four capabilities: externals (the platform list), remote arrival (same-origin external classic scripts plus lazy factory registration), versioning (content-hash revs), and hot update (invalidate/prefetch).
+The lower layer supplies four capabilities: externals (the platform list), carrier-authored external classic-script arrival plus lazy factory registration, versioning (content-hash revs), and hot update (invalidate/prefetch).
 
 Plugin bundles are built independently outside Vite's module graph. Feeding response text into an inline script leaves the browser with a dynamic source execution: no standard source-map chain connects the network resource, generated bundle, and TypeScript/TSX source, so performance profiles and stacks stop at generated `client.js`; the module system must also buffer the complete source and split one arrival responsibility across fetch and execute transport boundaries.
 
@@ -54,7 +54,7 @@ The vendored Loader consumes the module system through its `internal` contract �
 
 ### External-script arrival and source maps
 
-Each graph row's `url` goes to a same-origin external classic `<script src>` with `async` set. The browser owns the network request and script execution; the node is removed as soon as `load` or `error` settles so HMR cannot accumulate dead nodes. Successful settlement also requires the graph row's factory id to exist in the module table, or arrival fails; registration still does not run the factory, so the side-effect boundary remains first materialization.
+Each graph row's `url` goes to an external classic `<script src>` with `async` set. Web graphs use same-origin `/plugins` URLs; the Electron graph uses local `file:` URLs supplied by its main process. Chromium owns the resource request and script execution; the node is removed as soon as `load` or `error` settles so HMR cannot accumulate dead nodes. Successful settlement also requires the graph row's factory id to exist in the module table, or arrival fails; registration still does not run the factory, so the side-effect boundary remains first materialization.
 
 The shared tsdown preset emits `client.js.map` for every plugin and rewrites first-party source paths into the browser-resolvable repository shape `/packages/<group>/<package>/src/...`. Other workspace sources inlined into a bundle likewise resolve to their `packages/` owner, while dependency paths remain unchanged; `sourcesContent` carries the source, so the host only serves the map at `/plugins/<id>/client.js.map` and exposes no source route. The Vite shell also emits source maps, letting both shell code and out-of-graph plugins map stacks and performance profiles back to TypeScript/TSX.
 
@@ -113,7 +113,7 @@ The support boundary, stated honestly. Reload is coarse by design: fresh fiber, 
 | `dsh-client-ui-slots` | slot registry core | plain, seeded | promote to plugin; receive runtime's slots machinery |
 | `dsh-client-web-react` | ctx↔React glue | plain, seeded | promote to plugin; renderer install moves into its apply |
 | `dsh-client-ui-primitives` | base components | plain, seeded | promote to plugin (components via slots/services) |
-| `dsh-client-connection` | wire layer | plugin (`dsh.client` + bundle), declares `immediately` | transport swap (Electron IPC carrier) |
+| `dsh-client-connection` | wire layer | plugin (`dsh.client` + bundle), declares `immediately` | Web HTTP/WebSocket and Electron IPC carriers |
 | `dsh-client-runtime` | session object layer + slots service + store engine | plugin, declares `immediately` | keeps shrinking toward a pure session object layer |
 | `dsh-client-ui-theme` | theme tokens/service | plugin, declares `immediately`, plus the `./styles/*` source channel | Theme Registry (separate ruling) |
 | `dsh-client-i18n` | I18nService | plugin, declares `immediately` | per-deployment locale composition |
