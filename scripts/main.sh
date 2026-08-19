@@ -14,8 +14,8 @@ SCRIPTS=(
   "init|初始化项目（前端安装依赖并构建）|scripts/init.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
   "dev-web|启动前端 Web 开发服务|cd frontend && pnpm run dev:web"
-  "start-electron|构建并启动 Electron 桌面端|cd frontend && pnpm run start:electron"
-  "start-electron-dev|直接启动 Electron 桌面端（不构建，需先初始化）|cd frontend && pnpm --filter @deepseek-ai/dsh-electron run start"
+  "start-electron|构建并启动 Electron 桌面端|scripts/run-electron.sh build"
+  "start-electron-dev|直接启动 Electron 桌面端（不构建，需先初始化）|scripts/run-electron.sh dev"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)
