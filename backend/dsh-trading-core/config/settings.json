@@ -1,8 +1,8 @@
 {
-  "project_dir": "C:\\Users\\徐诗靖\\Desktop\\tradingagentCN\\dsh-trading-core\\tradingagents",
+  "project_dir": "./tradingagents",
   "results_dir": "./results",
-  "data_dir": "C:\\Users\\徐诗靖\\Documents\\TradingAgents\\data",
-  "data_cache_dir": "C:\\Users\\徐诗靖\\Desktop\\tradingagentCN\\dsh-trading-core\\tradingagents\\dataflows/data_cache",
+  "data_dir": "./data",
+  "data_cache_dir": "./tradingagents/dataflows/data_cache",
   "llm_provider": "deepseek",
   "deep_think_llm": "deepseek-chat",
   "quick_think_llm": "deepseek-chat",

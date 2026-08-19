@@ -58,9 +58,13 @@ except Exception as e:
     MongoDBStorage = None
 
 
+# settings.json 中的路径字段：读取时展开为绝对路径；保存时压缩为相对路径
+_PATH_KEYS = ("project_dir", "results_dir", "data_dir", "data_cache_dir", "cache_dir")
+
+
 class ConfigManager:
     """配置管理器"""
-    
+
     def __init__(self, config_dir: str = "config"):
         self.config_dir = Path(config_dir)
         self.config_dir.mkdir(exist_ok=True)
@@ -69,6 +73,8 @@ class ConfigManager:
         self.pricing_file = self.config_dir / "pricing.json"
         self.usage_file = self.config_dir / "usage.json"
         self.settings_file = self.config_dir / "settings.json"
+        # 相对路径锚点：config 目录的父目录 = 项目根（dsh-trading-core/）
+        self._project_root = self.config_dir.parent.resolve()
 
         # 加载.env文件（保持向后兼容）
         self._load_env_file()
@@ -78,6 +84,41 @@ class ConfigManager:
         self._init_mongodb_storage()
 
         self._init_default_configs()
+
+    # ── settings.json 路径规范化（相对 ↔ 绝对）───────────────────────
+    def _absolutize_paths(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """把 settings 中的目录字段从项目相对路径展开为绝对路径（原地修改并返回）。"""
+        for key in _PATH_KEYS:
+            value = settings.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            p = Path(value)
+            if not p.is_absolute():
+                settings[key] = str((self._project_root / p).resolve())
+        return settings
+
+    def _relativize_paths(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """把 settings 中的目录字段压缩为相对路径（相对于项目根），用于写回磁盘。"""
+        for key in _PATH_KEYS:
+            value = settings.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            p = Path(value)
+            # 绝对路径且与项目根在同一驱动器上 → 转相对
+            if p.is_absolute():
+                try:
+                    settings[key] = str(
+                        Path(os.path.relpath(str(p.resolve() if p.exists() else p),
+                                            str(self._project_root)))
+                    )
+                    # 统一为 Unix 风格的 ./ 前缀，保证跨平台可读
+                    if not settings[key].startswith("."):
+                        settings[key] = "./" + settings[key]
+                    settings[key] = settings[key].replace("\\", "/")
+                except ValueError:
+                    # 跨盘（Windows C:\ vs D:\）relpath 失败 → 保留原绝对路径
+                    pass
+        return settings
 
     def _load_env_file(self):
         """加载.env文件（保持向后兼容）"""
@@ -476,13 +517,13 @@ class ConfigManager:
         return 0.0, "CNY"
     
     def load_settings(self) -> Dict[str, Any]:
-        """加载设置，合并.env中的配置"""
+        """加载设置，合并.env中的配置，路径字段展开为绝对路径"""
         try:
             if self.settings_file.exists():
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
             else:
-                # 如果设置文件不存在，创建默认设置
+                # 如果设置文件不存在，创建默认设置（路径一律用相对形式，写回磁盘时保持一致）
                 settings = {
                     "default_provider": "dashscope",
                     "default_model": "qwen-turbo",
@@ -491,9 +532,9 @@ class ConfigManager:
                     "currency_preference": "CNY",
                     "auto_save_usage": True,
                     "max_usage_records": 10000,
-                    "data_dir": os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "data"),
-                    "cache_dir": os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "data", "cache"),
-                    "results_dir": os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "results"),
+                    "data_dir": "./data",
+                    "cache_dir": "./data/cache",
+                    "results_dir": "./results",
                     "auto_create_dirs": True,
                     "openai_enabled": False,
                 }
@@ -502,7 +543,10 @@ class ConfigManager:
             logger.error(f"加载设置失败: {e}")
             settings = {}
 
-        # 合并.env中的其他配置
+        # ① 磁盘上的相对路径 → 绝对路径（后续逻辑一律用绝对路径做文件操作）
+        settings = self._absolutize_paths(settings)
+
+        # 合并.env中的其他配置（环境变量路径也展开为绝对路径）
         env_settings = {
             "finnhub_api_key": os.getenv("FINNHUB_API_KEY", ""),
             "reddit_client_id": os.getenv("REDDIT_CLIENT_ID", ""),
@@ -528,6 +572,9 @@ class ConfigManager:
             elif value != "" and value is not None:
                 settings[key] = value
 
+        # ② 环境变量覆盖后再规范化一次（保证 env 中传入的相对路径也被展开）
+        settings = self._absolutize_paths(settings)
+
         return settings
 
     def get_env_config_status(self) -> Dict[str, Any]:
@@ -549,10 +596,12 @@ class ConfigManager:
         }
 
     def save_settings(self, settings: Dict[str, Any]):
-        """保存设置"""
+        """保存设置：路径字段写回磁盘前压缩为相对路径（跨机器可移植）。"""
         try:
+            # 拷贝一份再修改，避免污染调用者持有的绝对路径 settings
+            to_save = self._relativize_paths(dict(settings))
             with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, ensure_ascii=False, indent=2)
+                json.dump(to_save, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存设置失败: {e}")
     

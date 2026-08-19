@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     manager = TaskManager(registry=_build_registry())
 
-    app = FastAPI(title="TradingAgents-CN Adapter", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="TradingAgents Adapter", version="0.1.0", lifespan=lifespan)
     app.state.manager = manager
 
     # dsh 插件（Node/TS）跨进程调用，放开跨域
