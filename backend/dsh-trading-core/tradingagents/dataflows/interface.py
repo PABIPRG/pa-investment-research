@@ -1530,13 +1530,14 @@ def get_china_stock_data_unified(
     """
     # 🔧 智能日期范围处理：自动扩展到配置的回溯天数，处理周末/节假日
     from tradingagents.utils.dataflow_utils import get_trading_date_range
-    from app.core.config import get_settings
 
     original_start_date = start_date
     original_end_date = end_date
 
     # 从配置获取市场分析回溯天数（默认30天）
     try:
+        # app/ 已从引擎抽离，此导入可能失败 → 走 except 默认值兜底
+        from app.core.config import get_settings
         settings = get_settings()
         lookback_days = settings.MARKET_ANALYST_LOOKBACK_DAYS
         logger.info(f"📅 [配置验证] ===== MARKET_ANALYST_LOOKBACK_DAYS 配置检查 =====")
@@ -1762,13 +1763,14 @@ def get_hk_stock_data_unified(symbol: str, start_date: str = None, end_date: str
 
         # 🔧 智能日期范围处理：自动扩展到配置的回溯天数，处理周末/节假日
         from tradingagents.utils.dataflow_utils import get_trading_date_range
-        from app.core.config import get_settings
 
         original_start_date = start_date
         original_end_date = end_date
 
         # 从配置获取市场分析回溯天数（默认60天）
         try:
+            # app/ 已从引擎抽离，此导入可能失败 → 走 except 默认值兜底
+            from app.core.config import get_settings
             settings = get_settings()
             lookback_days = settings.MARKET_ANALYST_LOOKBACK_DAYS
             logger.info(f"📅 [港股配置验证] MARKET_ANALYST_LOOKBACK_DAYS: {lookback_days}天")

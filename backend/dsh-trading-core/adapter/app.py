@@ -108,7 +108,8 @@ def create_app() -> FastAPI:
                 "holdings", "default",
                 [h.model_dump() for h in req.holdings],
             )
-        return {"saved": len(req.holdings or []), "mode": req.mode}
+        # 只回显插件声明过的 saved 字段（set_holdings schema additionalProperties:false）
+        return {"saved": len(req.holdings or [])}
 
     @app.get("/watchlist", response_model=dict)
     async def watchlist_get():
@@ -149,16 +150,25 @@ def create_app() -> FastAPI:
 
     @app.get("/brief/latest", response_model=dict)
     async def brief_latest():
-        """最近一份简报（含 dsh_pushed 标记，供 dsh 对话内推送去重）。"""
+        """最近一份简报（含 dsh_pushed 标记，供 dsh 对话内推送去重）。
+
+        输出归一化为插件 get_latest_brief schema 声明的 5 个字段
+        （additionalProperties:false 且非空类型）；无简报时返回空字符串 + False，
+        避免 dsh 侧 schema 校验失败。"""
         store = JsonStore()
         key = store.get("briefs", "latest")
         if not key:
-            # 尚无简报：返回空记录（id=null），dsh 工具/播报轮询按「暂无简报」优雅处理
-            return {"id": None, "period": None, "trade_date": None, "summary": None, "dsh_pushed": None}
+            return {"id": "", "period": "", "trade_date": "", "summary": "", "dsh_pushed": False}
         rec = store.get("briefs", key)
         if not rec:
-            raise HTTPException(status_code=404, detail="简报记录缺失")
-        return rec
+            return {"id": "", "period": "", "trade_date": "", "summary": "", "dsh_pushed": False}
+        return {
+            "id": rec.get("id", ""),
+            "period": rec.get("period", ""),
+            "trade_date": rec.get("trade_date", ""),
+            "summary": rec.get("summary", ""),
+            "dsh_pushed": bool(rec.get("dsh_pushed", False)),
+        }
 
     @app.post("/brief/{brief_id}/dsh-pushed", response_model=dict)
     async def brief_dsh_pushed(brief_id: str):
