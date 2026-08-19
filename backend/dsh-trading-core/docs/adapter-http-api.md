@@ -76,12 +76,6 @@ SSE 事件序列：stage* → result → done   （成功）
 
 健康检查，返回各任务 runner 的注册名。
 
-**测试 curl**
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
 **响应** `200`
 
 ```json
@@ -122,42 +116,6 @@ curl http://127.0.0.1:8000/health
 | deep | 2 | 2 | false |
 | full | 3 | 3 | true |
 
-**测试入参**
-
-```bash
-# 场景1：最小入参（仅 ticker，其余用缺省）
-curl -X POST http://127.0.0.1:8000/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"ticker":"600519"}'
-
-# 场景2：完整入参（指定日期、深度、画像）
-curl -X POST http://127.0.0.1:8000/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ticker":"600519",
-    "name":"贵州茅台",
-    "date":"2026-08-19",
-    "market":"a_shares",
-    "research_depth":"deep",
-    "risk_profile":"balanced"
-  }'
-
-# 场景3：用名称代替代码 + quick 深度（快速验证链路）
-curl -X POST http://127.0.0.1:8000/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"ticker":"贵州茅台","research_depth":"quick"}'
-
-# 场景4：会话级覆盖（辩论 2 轮）
-curl -X POST http://127.0.0.1:8000/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ticker":"000858",
-    "config_overrides":{"max_debate_rounds":2,"max_risk_discuss_rounds":2}
-  }'
-```
-
-> Windows PowerShell 用户请把单引号 `-d '...'` 改为双引号转义 `-d "{\"ticker\":\"600519\"}"`，或直接用 `curl.exe` 而非 `curl` 别名。
-
 **响应** `200`
 
 ```json
@@ -193,50 +151,6 @@ curl -X POST http://127.0.0.1:8000/analyze \
 | `quantity` | number | `> 0` | 持仓数量（股） |
 | `cost_price` | number | `>= 0` | 持仓成本价（元） |
 
-**测试入参**
-
-```bash
-# 场景1：完整持仓 deep 分析（逐股引擎，慢）
-curl -X POST http://127.0.0.1:8000/holdings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "holdings":[
-      {"ticker":"600519","quantity":100,"cost_price":1500},
-      {"ticker":"000858","quantity":200,"cost_price":135},
-      {"ticker":"300750","quantity":50,"cost_price":210}
-    ],
-    "mode":"deep",
-    "risk_profile":"balanced"
-  }'
-
-# 场景2：quick 模式（仅定量风险，秒级，不跑引擎）
-curl -X POST http://127.0.0.1:8000/holdings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "holdings":[
-      {"ticker":"600519","quantity":100,"cost_price":1500}
-    ],
-    "mode":"quick"
-  }'
-
-# 场景3：回退到已保存持仓（先调 /holdings/save 存一次）
-curl -X POST http://127.0.0.1:8000/holdings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"mode":"quick","use_saved":true}'
-
-# 场景4：保守画像下的多股 quick 分析
-curl -X POST http://127.0.0.1:8000/holdings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "holdings":[
-      {"ticker":"601318","quantity":300,"cost_price":48.5},
-      {"ticker":"600036","quantity":500,"cost_price":35.2}
-    ],
-    "mode":"quick",
-    "risk_profile":"conservative"
-  }'
-```
-
 **响应** `200`
 
 ```json
@@ -251,36 +165,6 @@ curl -X POST http://127.0.0.1:8000/holdings/analyze \
 
 **请求体**：同 `HoldingsRequest`（只用 `holdings` + `mode`）。
 
-**测试入参**
-
-```bash
-# 场景1：保存 3 只持仓（之后可用 use_saved 回退）
-curl -X POST http://127.0.0.1:8000/holdings/save \
-  -H "Content-Type: application/json" \
-  -d '{
-    "holdings":[
-      {"ticker":"600519","quantity":100,"cost_price":1500},
-      {"ticker":"000858","quantity":200,"cost_price":135},
-      {"ticker":"300750","quantity":50,"cost_price":210}
-    ],
-    "mode":"deep"
-  }'
-
-# 场景2：保存单只持仓
-curl -X POST http://127.0.0.1:8000/holdings/save \
-  -H "Content-Type: application/json" \
-  -d '{"holdings":[{"ticker":"600519","quantity":100,"cost_price":1500}]}'
-
-# 场景3：保存后立刻 quick 分析（一次保存 + 多次分析）
-curl -X POST http://127.0.0.1:8000/holdings/save \
-  -H "Content-Type: application/json" \
-  -d '{"holdings":[{"ticker":"600519","quantity":100,"cost_price":1500}]}'
-# 然后分析：
-curl -X POST http://127.0.0.1:8000/holdings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"mode":"quick","use_saved":true}'
-```
-
 **响应** `200`
 
 ```json
@@ -290,12 +174,6 @@ curl -X POST http://127.0.0.1:8000/holdings/analyze \
 ---
 
 ### 3.5 GET `/watchlist` — 读取自选
-
-**测试 curl**
-
-```bash
-curl http://127.0.0.1:8000/watchlist
-```
 
 **响应** `200`
 
@@ -313,25 +191,6 @@ curl http://127.0.0.1:8000/watchlist
 |---|---|---|---|
 | `tickers` | string[] | ✅ | 自选股票代码列表（整体替换） |
 
-**测试入参**
-
-```bash
-# 场景1：替换为 3 只白酒/新能源龙头
-curl -X POST http://127.0.0.1:8000/watchlist \
-  -H "Content-Type: application/json" \
-  -d '{"tickers":["600519","000858","300750"]}'
-
-# 场景2：单只自选
-curl -X POST http://127.0.0.1:8000/watchlist \
-  -H "Content-Type: application/json" \
-  -d '{"tickers":["600519"]}'
-
-# 场景3：清空自选（传空数组）
-curl -X POST http://127.0.0.1:8000/watchlist \
-  -H "Content-Type: application/json" \
-  -d '{"tickers":[]}'
-```
-
 **响应** `200`
 
 ```json
@@ -341,12 +200,6 @@ curl -X POST http://127.0.0.1:8000/watchlist \
 ---
 
 ### 3.7 GET `/risk_profile` — 读取风险偏好
-
-**测试 curl**
-
-```bash
-curl http://127.0.0.1:8000/risk_profile
-```
 
 **响应** `200`
 
@@ -367,25 +220,6 @@ curl http://127.0.0.1:8000/risk_profile
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `risk_profile` | string | ✅ | `conservative`/`balanced`/`aggressive` |
-
-**测试入参**
-
-```bash
-# 场景1：切换为保守型
-curl -X POST http://127.0.0.1:8000/risk_profile \
-  -H "Content-Type: application/json" \
-  -d '{"risk_profile":"conservative"}'
-
-# 场景2：切换为进取型
-curl -X POST http://127.0.0.1:8000/risk_profile \
-  -H "Content-Type: application/json" \
-  -d '{"risk_profile":"aggressive"}'
-
-# 场景3：切回稳健型
-curl -X POST http://127.0.0.1:8000/risk_profile \
-  -H "Content-Type: application/json" \
-  -d '{"risk_profile":"balanced"}'
-```
 
 **响应** `200`
 
@@ -410,37 +244,6 @@ curl -X POST http://127.0.0.1:8000/risk_profile \
 | `tickers` | string[] | | `null` | 覆盖自选股；为空用已保存 watchlist |
 | `risk_profile` | string | | `null` | `conservative`/`balanced`/`aggressive` |
 
-**测试入参**
-
-```bash
-# 场景1：盘后简报（最常用，all 范围）
-curl -X POST http://127.0.0.1:8000/brief \
-  -H "Content-Type: application/json" \
-  -d '{"period":"post_market","scope":"all"}'
-
-# 场景2：盘前简报
-curl -X POST http://127.0.0.1:8000/brief \
-  -H "Content-Type: application/json" \
-  -d '{"period":"pre_market","scope":"all"}'
-
-# 场景3：盘中简报（缺省即 now）
-curl -X POST http://127.0.0.1:8000/brief \
-  -H "Content-Type: application/json" \
-  -d '{}'
-
-# 场景4：仅自选股简报（覆盖 tickers）
-curl -X POST http://127.0.0.1:8000/brief \
-  -H "Content-Type: application/json" \
-  -d '{"period":"post_market","scope":"watchlist","tickers":["600519","000858"]}'
-
-# 场景5：保守画像下的盘后简报
-curl -X POST http://127.0.0.1:8000/brief \
-  -H "Content-Type: application/json" \
-  -d '{"period":"post_market","scope":"all","risk_profile":"conservative"}'
-```
-
-> ⚠️ 请**串行**调用，不要并发跑多个 brief 任务（akshare 的 py_mini_racer V8 并发会崩适配器）。
-
 **响应** `200`
 
 ```json
@@ -450,12 +253,6 @@ curl -X POST http://127.0.0.1:8000/brief \
 ---
 
 ### 3.10 GET `/brief/latest` — 最近简报
-
-**测试 curl**
-
-```bash
-curl http://127.0.0.1:8000/brief/latest
-```
 
 **响应** `200`
 
@@ -493,21 +290,6 @@ curl http://127.0.0.1:8000/brief/latest
 
 **路径参数**：`brief_id` = 简报 `id`（如 `now:2026-08-19`）。
 
-**测试入参**
-
-```bash
-# 场景1：标记盘中简报已推送（先 GET /brief/latest 拿 id）
-curl -X POST http://127.0.0.1:8000/brief/now:2026-08-19/dsh-pushed
-
-# 场景2：标记盘后简报已推送
-curl -X POST http://127.0.0.1:8000/brief/post_market:2026-08-19/dsh-pushed
-
-# 场景3：幂等验证（重复调用应返回相同结果）
-curl -X POST http://127.0.0.1:8000/brief/now:2026-08-19/dsh-pushed
-```
-
-> PowerShell 下 URL 中的 `:` 可能被解析，建议用引号包裹 URL：`curl.exe -X POST "http://127.0.0.1:8000/brief/now:2026-08-19/dsh-pushed"`。
-
 **响应** `200`
 
 ```json
@@ -519,22 +301,6 @@ curl -X POST http://127.0.0.1:8000/brief/now:2026-08-19/dsh-pushed
 ---
 
 ### 3.12 GET `/analyze/{task_id}` — 任务状态
-
-**测试 curl**
-
-```bash
-# 场景1：查询任务状态（用 POST /analyze 返回的 task_id 替换）
-curl http://127.0.0.1:8000/analyze/9f3c1a2b4d5e6f7809a1b2c3d4e5f607
-
-# 场景2：轮询直到 done（bash while 循环）
-TID=9f3c1a2b4d5e6f7809a1b2c3d4e5f607
-while true; do
-  S=$(curl -s http://127.0.0.1:8000/analyze/$TID | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
-  echo "status=$S"
-  [ "$S" = "done" -o "$S" = "failed" ] && break
-  sleep 2
-done
-```
 
 **响应** `200`
 
@@ -554,22 +320,6 @@ done
 ### 3.13 GET `/analyze/{task_id}/stream` — SSE 进度流
 
 `text/event-stream`，每 15s 心跳（`ping` 注释帧，无 `event`）。
-
-**测试 curl**
-
-```bash
-# 场景1：消费完整 SSE 流（启动 /analyze 后立即订阅）
-curl -N http://127.0.0.1:8000/analyze/9f3c1a2b4d5e6f7809a1b2c3d4e5f607/stream
-
-# 场景2：限制最大等待时间 120s（避免长任务阻塞终端）
-curl -N --max-time 120 http://127.0.0.1:8000/analyze/9f3c1a2b4d5e6f7809a1b2c3d4e5f607/stream
-
-# 场景3：只看前 50 行（快速采样进度事件）
-curl -N http://127.0.0.1:8000/analyze/9f3c1a2b4d5e6f7809a1b2c3d4e5f607/stream | head -n 50
-```
-
-> Windows PowerShell 下请使用 `curl.exe` 而非 `curl` 别名，否则 `-N` 流式输出会被 `Invoke-WebRequest` 缓冲：
-> `curl.exe -N "http://127.0.0.1:8000/analyze/<task_id>/stream"`
 
 **事件类型**
 
@@ -602,22 +352,6 @@ data: {}
 ---
 
 ### 3.14 GET `/analyze/{task_id}/result` — 最终结果
-
-**测试 curl**
-
-```bash
-# 场景1：取最终结果（任务 done 后才能取到，否则 409）
-curl http://127.0.0.1:8000/analyze/9f3c1a2b4d5e6f7809a1b2c3d4e5f607/result
-
-# 场景2：未完成时取（返回 409，配合轮询用）
-TID=9f3c1a2b4d5e6f7809a1b2c3d4e5f607
-while true; do
-  R=$(curl -s -w "\n%{http_code}" http://127.0.0.1:8000/analyze/$TID/result)
-  CODE=$(echo "$R" | tail -1)
-  if [ "$CODE" = "200" ]; then echo "$R" | head -1; break; fi
-  sleep 3
-done
-```
 
 **响应** `200`：见 §4 各 `task_type` 的结果载荷。
 
@@ -780,71 +514,6 @@ done
 2. 消费 SSE 取 result.signal.summary  // 或 GET /brief/latest 回查
 3. POST /brief/{brief_id}/dsh-pushed  // 标记已推送，避免重复
 ```
-
-### 6.4 一键端到端测试脚本（bash）
-
-把下面保存为 `e2e_test.sh`，启动适配器后执行 `bash e2e_test.sh`：
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-BASE=http://127.0.0.1:8000
-
-echo "=== 1. 健康检查 ==="
-curl -s $BASE/health; echo
-
-echo "=== 2. 保存持仓 ==="
-curl -s -X POST $BASE/holdings/save \
-  -H "Content-Type: application/json" \
-  -d '{"holdings":[{"ticker":"600519","quantity":100,"cost_price":1500}]}'; echo
-
-echo "=== 3. 设置自选 ==="
-curl -s -X POST $BASE/watchlist \
-  -H "Content-Type: application/json" \
-  -d '{"tickers":["600519","000858"]}'; echo
-
-echo "=== 4. 切换风险偏好 ==="
-curl -s -X POST $BASE/risk_profile \
-  -H "Content-Type: application/json" \
-  -d '{"risk_profile":"balanced"}'; echo
-
-echo "=== 5. 启动个股分析 ==="
-TID=$(curl -s -X POST $BASE/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"ticker":"600519","research_depth":"quick"}' \
-  | grep -o '"task_id":"[^"]*"' | cut -d'"' -f4)
-echo "task_id=$TID"
-
-echo "=== 6. 消费 SSE 进度流（max 60s）==="
-curl -N --max-time 60 $BASE/analyze/$TID/stream | head -n 30
-
-echo "=== 7. 查任务状态 ==="
-curl -s $BASE/analyze/$TID; echo
-
-echo "=== 8. 取最终结果 ==="
-curl -s $BASE/analyze/$TID/result; echo
-
-echo "=== 9. quick 持仓分析（用已保存持仓）==="
-HTID=$(curl -s -X POST $BASE/holdings/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"mode":"quick","use_saved":true}' \
-  | grep -o '"task_id":"[^"]*"' | cut -d'"' -f4)
-curl -N --max-time 30 $BASE/analyze/$HTID/stream | head -n 20
-
-echo "=== 10. 生成盘后简报 ==="
-BTID=$(curl -s -X POST $BASE/brief \
-  -H "Content-Type: application/json" \
-  -d '{"period":"post_market","scope":"all"}' \
-  | grep -o '"task_id":"[^"]*"' | cut -d'"' -f4)
-curl -N --max-time 60 $BASE/analyze/$BTID/stream | head -n 20
-
-echo "=== 11. 取最近简报 ==="
-curl -s $BASE/brief/latest; echo
-
-echo "=== E2E 测试完成 ==="
-```
-
-> Windows 用户可在 PowerShell 下用 `curl.exe` 替代 `curl`，并手动设置 `$TID = ...` 变量。
 
 ---
 
