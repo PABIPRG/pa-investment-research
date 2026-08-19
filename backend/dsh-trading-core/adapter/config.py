@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """适配器配置：统一从项目根 .env 加载。
 
-修现坑：适配器此前不 load_dotenv，DEEPSEEK 相关 key 能读到纯属 shell 恰好 export。
-这里在 import 时一次性加载项目根 .env（override=True，以后出现者为准），
-所有新配置项（推送/调度/持仓源/LLM）都从这里读，避免散落各处。
+优先级（从高到低）：shell 显式传入的环境变量 > .env 文件值 > 代码默认值。
+  * start_all(.bat|.sh) 传 fake/engine 时会把 ADAPTER_RUNNER 注入子进程环境，
+    必须让它优先于 .env 文件里的同名字段，所以 load_dotenv 用 override=False。
 """
 
 import os
@@ -12,7 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent  # TradingAgents-CN/
-load_dotenv(ROOT / ".env", override=True)
+load_dotenv(ROOT / ".env", override=False)
 
 
 class Settings:
