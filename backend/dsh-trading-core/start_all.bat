@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 setlocal enabledelayedexpansion
 rem ============================================================
 rem  dsh-trading-core one-click start (Windows)
