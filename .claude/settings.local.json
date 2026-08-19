@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node /Users/xiexin/project/pa-investment-research/scripts/sync-upstream.mjs && git -C /Users/xiexin/project/pa-investment-research status --porcelain --untracked-files=no)",
+      "Bash(chmod +x /Users/xiexin/project/pa-investment-research/scripts/sync-upstream.sh && bash /Users/xiexin/project/pa-investment-research/scripts/sync-upstream.sh)",
+      "Read(//Users/xiexin/.zshrc.d/**)",
+      "Read(//Users/xiexin/.zsh/**)"
+    ]
+  }
+}
