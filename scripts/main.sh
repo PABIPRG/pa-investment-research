@@ -11,7 +11,11 @@ cd "$ROOT"
 
 # --- Register scripts here: "name|description|script path (relative to root)"
 SCRIPTS=(
+  "init|初始化项目（前端安装依赖并构建）|scripts/init.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
+  "dev-web|启动前端 Web 开发服务|cd frontend && pnpm run dev:web"
+  "start-electron|构建并启动 Electron 桌面端|cd frontend && pnpm run start:electron"
+  "start-electron-dev|直接启动 Electron 桌面端（不构建，需先初始化）|cd frontend && pnpm --filter @deepseek-ai/dsh-electron run start"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)
@@ -44,9 +48,13 @@ draw_menu() {
 }
 
 run_script() {
-  local path="$1"; shift || true
+  local target="$1"; shift || true
   echo
-  bash "$ROOT/$path" "$@"
+  if [[ "$target" == *.sh ]]; then
+    bash "$ROOT/$target" "$@"
+  else
+    bash -c "$target"
+  fi
 }
 
 # Direct dispatch: bash scripts/main.sh <name> [args...]
@@ -77,8 +85,8 @@ if [[ -t 0 ]]; then
       $'\x1b')
         read -rsn2 -t 1 seq || seq=""
         case "$seq" in
-          '[A') SEL=$(( (SEL - 1 + ${#SCRIPTS[@]}) % ${#SCRIPTS[@]} )) ;;
-          '[B') SEL=$(( (SEL + 1) % ${#SCRIPTS[@]} )) ;;
+          '[A'|'OA') SEL=$(( (SEL - 1 + ${#SCRIPTS[@]}) % ${#SCRIPTS[@]} )) ;;
+          '[B'|'OB') SEL=$(( (SEL + 1) % ${#SCRIPTS[@]} )) ;;
         esac
         ;;
       j) SEL=$(( (SEL + 1) % ${#SCRIPTS[@]} )) ;;
