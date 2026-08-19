@@ -46,22 +46,15 @@ tradingagents/            TradingAgents-CN 引擎核心（裁剪后）
 
 ## 快速开始
 
-### 1. 准备环境
+### 1. 初始化（一次性）
 
 ```bash
 cd dsh-trading-core
-python -m venv env
-env/Scripts/python.exe -m pip install -r requirements.txt   # Windows
+./init.sh            # macOS/Linux：建 venv + 装依赖 + 生成 .env
+init.bat             # Windows：同上（国内网络可加 mirror 参数走清华镜像）
 ```
 
-### 2. 配置
-
-```bash
-cp .env.example .env      # 填 DEEPSEEK_API_KEY 等
-# 或直接沿用旧配置：把可用 .env 拷进来（适配器只读其中一部分，见下表）
-```
-
-关键配置（完整模板见 [.env.example](.env.example)）：
+装完编辑 `.env` 填入 `DEEPSEEK_API_KEY`。关键配置（完整模板见 [.env.example](.env.example)）：
 
 | 键 | 说明 | 默认 |
 |---|---|---|
@@ -74,11 +67,18 @@ cp .env.example .env      # 填 DEEPSEEK_API_KEY 等
 | `NO_PROXY` | 国内行情站直连白名单（东财/新浪等） | 见模板 |
 | `BRIEF_*` | 简报推送/定时（可选） | 关 |
 
-### 3. 启动
+### 2. 启动
 
-```bat
-start_all.bat
+```bash
+./start.sh           # macOS/Linux
+start_all.bat        # Windows：一键起适配器(:8000) + dsh UI(:3080)
 ```
+
+脚本自动跳过已在运行的服务、等待端口就绪；传 `fake` 参数则以假任务模式起适配器（联调用）。
+
+- 停止：`./stop_all.sh` / `stop_all.bat`
+- 验证：`./verify.sh` / `verify.bat`（健康检查 + 插件冒烟）
+- 日志：`logs/adapter.log`、`logs/dsh.log`
 
 或手动：
 
@@ -93,6 +93,7 @@ npx @deepseek-ai/dsh web --patch dsh-plugin/cordis.yml
 在 dsh Settings→Models 配置 DeepSeek API Key 后，对话里直接说「**分析一下 600519**」即可。
 
 > Windows 提示：dsh 的 cordis loader 只接受 `file://` URL，`cordis.yml` 里已写好（中文用户名需 URL 编码）；插件源码相对导入带 `.ts` 后缀。
+> ⚠️ dsh 必须从一个**没有 `.env` 的目录**启动（新版 dsh 扫描 cwd 的 `.env`，遇 `DEEPSEEK_BASE_URL` 直接拒绝启动）。启动脚本已自动处理；手动启动时见 [docs/跨环境运行.md](docs/跨环境运行.md) 坑 #2。
 
 ## 工具与参数
 
@@ -132,11 +133,22 @@ dsh-trading-core/
 ├── docs/               # 风险偏好框架说明、集成设计参考
 ├── env/                # Python 虚拟环境（gitignore）
 ├── data/  logs/        # 运行时数据与日志（gitignore）
-├── start_all.bat       # 一键启动适配器 + dsh Web UI
+├── init.bat / init.sh          # 一次性初始化（venv + 依赖 + .env）
+├── start_all.bat / start.sh    # 一键启动适配器 + dsh Web UI
+├── stop_all.bat / stop_all.sh  # 停止服务
+├── verify.bat / verify.sh      # 健康检查 + 插件冒烟
 └── requirements.txt / .env.example / .env
 ```
 
 ## 验证
+
+```bash
+# 快速验证（适配器需已启动）：健康检查 + 插件冒烟
+./verify.sh           # macOS/Linux
+verify.bat            # Windows
+```
+
+或手动：
 
 ```bash
 # 插件加载冒烟（9 工具）与类型检查
