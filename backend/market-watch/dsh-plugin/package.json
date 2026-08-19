@@ -1,0 +1,22 @@
+{
+  "name": "@local/market-watch",
+  "version": "0.1.0",
+  "description": "盘中盯盘 Agent（market-watch）for DeepSeek Harness (dsh)：条件触发 + 异动扫描 + 技术信号 + 新闻速递 + LLM 简报",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx test/plugin-load.smoke.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.0.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.12",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,21 @@
+# 本地配置
+.env
+
+# Python
+env/
+__pycache__/
+*.pyc
+
+# 运行时数据（自选/规则/触发/新闻/简报）
+data/
+
+# 日志
+logs/
+
+# node
+dsh-plugin/node_modules/
+dsh-plugin/package-lock.json
+
+# IDE
+.idea/
+.vscode/

@@ -1,0 +1,13 @@
+# market-watch 盘中盯盘依赖（Python 3.10+）
+akshare>=1.18.0          # 行情/新闻/交易日历（含 baostock 之外的免费数据源）
+baostock>=0.8.9          # K线 fallback
+pandas>=2.0
+numpy
+requests
+python-dotenv
+openai>=1.0.0,<2.0.0     # LLM 触发解读 / 新闻摘要 / 简报
+fastapi
+uvicorn[standard]
+pydantic>=2.0
+apscheduler>=3.10        # 盘中轮询 / 新闻速递 / 盘前盘后简报调度
+tzdata                   # Windows 下 zoneinfo 必需

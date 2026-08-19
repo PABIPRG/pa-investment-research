@@ -12,6 +12,10 @@ cd "$ROOT"
 # --- Register scripts here: "name|description|script path (relative to root)"
 SCRIPTS=(
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
+  "market-watch-init|market-watch 初始化(venv+依赖+.env)|backend/market-watch/init.sh"
+  "market-watch-start|market-watch 启动(:8100 adapter + :3081 dsh)|backend/market-watch/start.sh"
+  "market-watch-stop|market-watch 停止(:8100/:3081)|backend/market-watch/stop_all.sh"
+  "market-watch-verify|market-watch 验证(health+插件冒烟)|backend/market-watch/verify.sh"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)

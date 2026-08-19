@@ -7,6 +7,7 @@
 | 模块 | 职责 | 端口 | 启动方式 | 技术栈 |
 |---|---|---|---|---|
 | [dsh-trading-core](./dsh-trading-core) | 多智能体 A 股分析引擎，作为 dsh 插件运行（无状态 FastAPI 适配器） | 8000（uvicorn 默认） | 见其 [README](./dsh-trading-core/README.md) | Python + FastAPI |
+| [market-watch](./market-watch) | 盘中实时盯盘 Agent：条件触发告警、异动扫描、技术信号、新闻速递、LLM 盘前/盘后简报与触发解读，作为 dsh 插件运行 | 8100（uvicorn 默认） | 见其 [README](./market-watch/README.md) | Python + FastAPI |
 
 > 新增模块时在此登记一行，端口先到先得。
 
@@ -15,6 +16,7 @@
 | 端口 | 模块 |
 |---|---|
 | 8000 | dsh-trading-core（adapter） |
+| 8100 | market-watch（adapter） |
 
 建议新模块从 **8100** 起分配，间隔 10 预留。
 
