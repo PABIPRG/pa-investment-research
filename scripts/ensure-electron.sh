@@ -33,9 +33,11 @@ case "$(uname -m)" in
   *) ARCH="$(uname -m)" ;;
 esac
 
-# Already installed? (same check as electron's install.js)
+# Already installed? (same check as electron's install.js, which strips a leading
+# "v" via replace(/^v/, '') — electron 43+ zips ship "43.2.0", not "v43.2.0")
+INSTALLED_VER="$(cat "$DIST/version" 2>/dev/null || true)"
 if [[ -f "$DIST/version" && -f "$ELECTRON_DIR/path.txt" && -e "$DIST/$EXE" ]] \
-   && [[ "$(cat "$DIST/version")" == "v$VERSION" ]] \
+   && [[ "${INSTALLED_VER#v}" == "$VERSION" ]] \
    && [[ "$(cat "$ELECTRON_DIR/path.txt")" == "$EXE" ]]; then
   exit 0
 fi
