@@ -36,7 +36,9 @@ import {
 
 export const name = 'investment-market-watch'
 
+/** Market-watch adapter connection settings. */
 export interface Config {
+  /** Adapter origin used by all synchronous JSON tools. Defaults to `http://127.0.0.1:8100`. */
   adapterBaseUrl?: string
 }
 
@@ -96,7 +98,7 @@ export function apply(ctx: Context, config: Config): void {
         ],
       },
       ...present('加入自选'),
-      execute: (args) => watchAdd(base, {
+      execute: args => watchAdd(base, {
         code: args.code,
         ...(args.name === undefined ? {} : { name: args.name }),
       }),
@@ -121,7 +123,7 @@ export function apply(ctx: Context, config: Config): void {
         ],
       },
       ...present('移除自选'),
-      execute: (args) => watchRemove(base, { code: args.code }),
+      execute: args => watchRemove(base, { code: args.code }),
     }),
   )
 
@@ -175,7 +177,7 @@ export function apply(ctx: Context, config: Config): void {
         render: (_args, value) => [{ type: 'text' as const, text: `✅ 规则已创建：${(value as { id: string }).id}` }],
       },
       ...present('新建盯盘规则'),
-      execute: (args) =>
+      execute: args =>
         addAlert(base, {
           name: args.name,
           ...(args.ticker === undefined ? {} : { ticker: args.ticker }),
@@ -223,7 +225,7 @@ export function apply(ctx: Context, config: Config): void {
         ],
       },
       ...present('删除规则'),
-      execute: (args) => removeAlert(base, args.id),
+      execute: args => removeAlert(base, args.id),
     }),
   )
 
@@ -253,7 +255,7 @@ export function apply(ctx: Context, config: Config): void {
         render: (_args, value) => [{ type: 'text' as const, text: renderScan(value as Record<string, unknown>) }],
       },
       ...present('异动扫描'),
-      execute: (args) => scanMovers(base, {
+      execute: args => scanMovers(base, {
         kind: args.kind ?? 'gainers',
         top_n: args.top_n ?? 10,
         ...(args.min_amount_yi === undefined ? {} : { min_amount_yi: args.min_amount_yi }),
@@ -309,7 +311,7 @@ export function apply(ctx: Context, config: Config): void {
         render: (_args, value) => [{ type: 'text' as const, text: renderTechSignal(value as Record<string, unknown>) }],
       },
       ...present('技术信号'),
-      execute: (args) => techSignal(base, {
+      execute: args => techSignal(base, {
         code: args.code,
         ...(args.lookback === undefined ? {} : { lookback: args.lookback }),
       }),
@@ -364,7 +366,7 @@ export function apply(ctx: Context, config: Config): void {
         render: (_args, value) => [{ type: 'text' as const, text: renderBrief(value as Record<string, unknown>) }],
       },
       ...present('简报'),
-      execute: (args) => dailyBrief(base, { period: args.period ?? 'pre', manual: args.manual ?? false }),
+      execute: args => dailyBrief(base, { period: args.period ?? 'pre', manual: args.manual ?? false }),
     }),
   )
 }

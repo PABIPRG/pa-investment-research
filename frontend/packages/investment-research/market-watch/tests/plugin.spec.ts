@@ -60,7 +60,11 @@ describe('market-watch function plugin', () => {
       return new Response('{"ok":true,"code":"600519","name":"茅台","items":[],"count":0,"removed":true,"id":"a1"}')
     }))
     const byName = new Map(install().map(tool => [tool.name, tool]))
-    expect([...byName.values()].map(({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema }))).toEqual(MARKET_CONTRACTS)
+    expect(
+      [...byName.values()].map(
+        ({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema }),
+      ),
+    ).toEqual(MARKET_CONTRACTS)
 
     const presentationArgs: Record<string, Record<string, unknown>> = {
       watch_add: { code: '600519' },

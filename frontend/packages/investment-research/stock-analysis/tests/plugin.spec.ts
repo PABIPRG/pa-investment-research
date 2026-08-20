@@ -94,7 +94,9 @@ describe('stock-analysis function plugin', () => {
     }))
     const tools = install()
     const byName = new Map(tools.map(tool => [tool.name, tool]))
-    expect(tools.map(({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema }))).toEqual(STOCK_CONTRACTS)
+    expect(
+      tools.map(({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema })),
+    ).toEqual(STOCK_CONTRACTS)
     const exec = { signal: new AbortController().signal }
 
     const presentationArgs: Record<string, Record<string, unknown>> = {
@@ -225,7 +227,7 @@ describe('stock-analysis function plugin', () => {
 
   it('retains presenter and saved-holdings fallbacks behind the validated public tool wrapper', async () => {
     vi.resetModules()
-    vi.doMock('@deepseek-ai/dsh-tools', async importOriginal => {
+    vi.doMock('@deepseek-ai/dsh-tools', async (importOriginal) => {
       const actual = await importOriginal<typeof import('@deepseek-ai/dsh-tools')>()
       return { ...actual, defineTool: <T>(definition: T) => definition }
     })

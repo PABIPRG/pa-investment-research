@@ -42,11 +42,17 @@ import {
 
 export const name = 'investment-stock-analysis'
 
+/** Stock-analysis adapter, streaming, and optional in-chat brief settings. */
 export interface Config {
+  /** Adapter origin used by all stock-analysis tools. Defaults to `http://127.0.0.1:8000`. */
   adapterBaseUrl?: string
+  /** Maximum SSE task duration in milliseconds. Defaults to 600000. */
   streamTimeoutMs?: number
+  /** Enable periodic brief delivery to root agent sessions. Defaults to false. */
   enableInChatPush?: boolean
+  /** Requested brief polling interval in milliseconds. Defaults to 120000 and is clamped to at least 30000. */
   pushPollMs?: number
+  /** Root agent session ids eligible for brief delivery; an empty list selects all active roots. */
   pushSessions?: string[]
 }
 
@@ -56,6 +62,14 @@ interface ResolvedConfig {
   enableInChatPush: boolean
   pushPollMs: number
   pushSessions: string[]
+}
+
+function optionalText(value: string | undefined): string {
+  return value ?? ''
+}
+
+function stringValue(value: unknown): string {
+  return String(value)
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -155,9 +169,9 @@ export function apply(ctx: Context, config: Config): void {
         presentationMeta: (_args, value) =>
           renderSignalCard((value as AnalyzeResult).signal),
       },
-      presentCall: (args) => ({
+      presentCall: args => ({
         card: 'generic',
-        title: `📈 分析 ${String((args as { ticker?: string }).ticker ?? '')}`,
+        title: `📈 分析 ${stringValue(optionalText(args.ticker))}`,
         kind: 'other',
         rawInput: args,
       }),
@@ -238,9 +252,9 @@ export function apply(ctx: Context, config: Config): void {
         ],
         presentationMeta: (_args, value) => renderHoldingsCard((value as { signal: HoldingsSignal }).signal),
       },
-      presentCall: (args) => ({
+      presentCall: args => ({
         card: 'generic',
-        title: `🧺 分析持仓（${String((args as { mode?: string }).mode ?? 'deep')}）`,
+        title: `🧺 分析持仓（${stringValue(args.mode ?? 'deep')}）`,
         kind: 'other',
         rawInput: args,
       }),
@@ -298,9 +312,9 @@ export function apply(ctx: Context, config: Config): void {
         ],
         presentationMeta: (_args, value) => renderBriefCard((value as { signal: BriefSignal }).signal),
       },
-      presentCall: (args) => ({
+      presentCall: args => ({
         card: 'generic',
-        title: `📊 ${String((args as { period?: string }).period ?? 'now')} 简报`,
+        title: `📊 ${stringValue(args.period ?? 'now')} 简报`,
         kind: 'other',
         rawInput: args,
       }),
@@ -338,7 +352,7 @@ export function apply(ctx: Context, config: Config): void {
           properties: { saved: { type: 'number', description: '保存条数' } },
         },
         render: (_args, value) => [
-          { type: 'text', text: `已保存 ${String((value as { saved?: number }).saved ?? 0)} 只自选股。` },
+          { type: 'text', text: `已保存 ${String((value).saved ?? 0)} 只自选股。` },
         ],
       },
       presentCall: () => ({ card: 'generic', title: '⭐ 设置自选列表', kind: 'other' }),
@@ -375,7 +389,7 @@ export function apply(ctx: Context, config: Config): void {
           properties: { saved: { type: 'number', description: '保存条数' } },
         },
         render: (_args, value) => [
-          { type: 'text', text: `已保存 ${String((value as { saved?: number }).saved ?? 0)} 条持仓。` },
+          { type: 'text', text: `已保存 ${String((value).saved ?? 0)} 条持仓。` },
         ],
       },
       presentCall: () => ({ card: 'generic', title: '💼 保存持仓', kind: 'other' }),
@@ -403,7 +417,7 @@ export function apply(ctx: Context, config: Config): void {
           properties: { tickers: { type: 'array', items: { type: 'string' }, description: '自选股票代码列表' } },
         },
         render: (_args, value) => [
-          { type: 'text', text: `自选股：${((value as { tickers?: string[] }).tickers ?? []).join('、') || '（空）'}` },
+          { type: 'text', text: `自选股：${((value).tickers ?? []).join('、') || '（空）'}` },
         ],
       },
       presentCall: () => ({ card: 'generic', title: '⭐ 读取自选列表', kind: 'other' }),
@@ -443,7 +457,7 @@ export function apply(ctx: Context, config: Config): void {
           },
         },
         render: (_args, value) => {
-          const v = value as { risk_profile?: string; label?: string }
+          const v = value
           return [
             {
               type: 'text' as const,
@@ -456,10 +470,10 @@ export function apply(ctx: Context, config: Config): void {
       presentResult: (_args, result) => ({
         card: 'generic',
         title: '风险偏好已更新',
-        content: [{ type: 'text', text: String((result as { label?: string }).label ?? '') }],
+        content: [{ type: 'text', text: stringValue((result as { label?: string }).label ?? '') }],
       }),
       async execute(args, exec) {
-        const riskProfile = String((args as { risk_profile: string }).risk_profile)
+        const riskProfile = stringValue(args.risk_profile)
         return (await setRiskProfile(resolvedConfig.adapterBaseUrl, riskProfile, exec.signal)) as {
           risk_profile?: string
           label?: string
@@ -483,7 +497,7 @@ export function apply(ctx: Context, config: Config): void {
           },
         },
         render: (_args, value) => {
-          const v = value as { risk_profile?: string; label?: string }
+          const v = value
           return [
             {
               type: 'text' as const,
@@ -496,7 +510,7 @@ export function apply(ctx: Context, config: Config): void {
       presentResult: (_args, result) => ({
         card: 'generic',
         title: '风险偏好',
-        content: [{ type: 'text', text: String((result as { label?: string }).label ?? '') }],
+        content: [{ type: 'text', text: stringValue((result as { label?: string }).label ?? '') }],
       }),
       async execute(_args, exec) {
         return (await getRiskProfile(resolvedConfig.adapterBaseUrl, exec.signal)) as {
@@ -542,7 +556,7 @@ export function apply(ctx: Context, config: Config): void {
       presentResult: (_args, result) => ({
         card: 'generic',
         title: '最近简报',
-        content: [{ type: 'text', text: String((result as { id?: string }).id ?? '暂无简报') }],
+        content: [{ type: 'text', text: stringValue((result as { id?: string }).id ?? '暂无简报') }],
       }),
       async execute(_args, exec) {
         return (await getLatestBrief(resolvedConfig.adapterBaseUrl, exec.signal)) as {

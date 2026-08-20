@@ -2,6 +2,7 @@
 // 把适配器返回的统一 Signal + 分步报告渲染为决策摘要卡 + 折叠报告。
 // 纯函数（dsh 要求在 live streaming 与 replay 中都只依赖入参）。
 
+/** Decision fields returned by the stock-analysis adapter. */
 export interface Signal {
   signal_type?: string
   ticker?: string
@@ -17,6 +18,7 @@ export interface Signal {
   calibration_note?: string
 }
 
+/** Stock-analysis signal plus its lossless staged reports and metrics. */
 export interface AnalyzeResult {
   signal: Signal
   reports?: Record<string, string>
@@ -35,26 +37,39 @@ const RISK_PROFILE_LABEL: Record<string, string> = {
   aggressive: '进取型',
 }
 
+/**
+ * Resolve a known risk-profile key while preserving an unknown adapter value.
+ * @param profile - Adapter profile key or display value.
+ * @returns Chinese label, preserved unknown value, or an empty string when omitted.
+ */
 export function profileLabel(profile?: string): string {
   return profile ? (RISK_PROFILE_LABEL[profile] ?? profile) : ''
 }
 
 function fmtNum(n: number | null | undefined, digits = 2): string {
-  return n == null ? '—' : Number(n).toFixed(digits)
+  return n == null ? '—' : numericValue(n).toFixed(digits)
 }
 
 function pct(n: number | null | undefined): string {
-  return n == null ? '—' : `${(Number(n) * 100).toFixed(0)}%`
+  return n == null ? '—' : `${(numericValue(n) * 100).toFixed(0)}%`
 }
 
-/** 决策摘要卡（顶部） */
+function numericValue(value: unknown): number {
+  return Number(value)
+}
+
+/**
+ * Render the decision summary used at the top of model and UI output.
+ * @param s - Adapter decision signal.
+ * @returns Chinese Markdown with price, confidence, risk, and available annotations.
+ */
 export function renderSignalCard(s: Signal): string {
   const action = ACTION_EMOJI[s.action ?? ''] ?? s.action ?? '—'
   const lines = [
     `## ${action} · ${s.company_name ?? s.ticker ?? ''}`,
     '',
-    `| 目标价 | 置信度 | 风险分 |`,
-    `|---|---|---|`,
+    '| 目标价 | 置信度 | 风险分 |',
+    '|---|---|---|',
     `| ¥${fmtNum(s.target_price)} | ${pct(s.confidence)} | ${pct(s.risk_score)} |`,
   ]
   if (s.risk_profile) {
@@ -72,7 +87,11 @@ export function renderSignalCard(s: Signal): string {
   return lines.join('\n')
 }
 
-/** 折叠的分步报告（模型看到的完整 Markdown） */
+/**
+ * Render the complete model-visible stock-analysis report in its stable stage order.
+ * @param r - Decision signal and optional staged Markdown reports.
+ * @returns Chinese Markdown containing the summary and every non-empty known report.
+ */
 export function renderFullReport(r: AnalyzeResult): string {
   const parts: string[] = [renderSignalCard(r.signal)]
   const reports = r.reports ?? {}
@@ -88,19 +107,24 @@ export function renderFullReport(r: AnalyzeResult): string {
   for (const [key, label] of order) {
     const text = reports[key]
     if (text && text.trim()) {
-      parts.push('', `---`, '', `## ${label}`, '', text.trim())
+      parts.push('', '---', '', `## ${label}`, '', text.trim())
     }
   }
   return parts.join('\n')
 }
 
-/** UI 结果卡：只放决策摘要，报告折叠进原始结果 */
+/**
+ * Render the compact UI result card without duplicating staged reports.
+ * @param r - Stock-analysis result.
+ * @returns The same decision summary used by the full report.
+ */
 export function renderResultCard(r: AnalyzeResult): string {
   return renderSignalCard(r.signal)
 }
 
 // ---- 功能3 持仓分析 / 功能4 简报渲染 ------------------------------------
 
+/** One portfolio risk-budget excess reported by the adapter. */
 export interface RiskBreach {
   indicator?: string
   label?: string
@@ -109,6 +133,7 @@ export interface RiskBreach {
   excess?: number
 }
 
+/** Portfolio totals, risk measures, breaches, and per-position analysis. */
 export interface HoldingsSignal {
   signal_type?: string
   mode?: string
@@ -144,6 +169,7 @@ export interface HoldingsSignal {
   >
 }
 
+/** One opportunity listed in a generated market brief. */
 export interface BriefOpportunity {
   kind?: string
   title?: string
@@ -151,6 +177,7 @@ export interface BriefOpportunity {
   risk_level?: string
 }
 
+/** Generated market-brief metadata, Markdown summary, and opportunities. */
 export interface BriefSignal {
   signal_type?: string
   period?: string
@@ -167,13 +194,17 @@ const BREACH_LABELS: Record<string, string> = {
   beta: '组合 β',
 }
 
-/** 持仓分析 UI 卡：组合概览。 */
+/**
+ * Render the portfolio overview used by the holdings-analysis UI card.
+ * @param s - Holdings signal returned by the adapter.
+ * @returns Chinese Markdown with totals, risk-budget breaches, suggestions, and sector exposure.
+ */
 export function renderHoldingsCard(s: HoldingsSignal): string {
   const lines = [
     `## 🧺 持仓组合概览（${s.mode === 'deep' ? '深度逐股分析' : '快速定量'} · ${s.n_positions ?? 0} 只）`,
     '',
-    `| 总市值 | 总成本 | 浮动盈亏 | 加权风险 | 组合波动 | 集中度 HHI |`,
-    `|---|---|---|---|---|---|`,
+    '| 总市值 | 总成本 | 浮动盈亏 | 加权风险 | 组合波动 | 集中度 HHI |',
+    '|---|---|---|---|---|---|',
     `| ¥${fmtNum(s.total_market_value, 0)} | ¥${fmtNum(s.total_cost, 0)} | ` +
       `¥${fmtNum(s.floating_pnl, 0)}（${pct(s.floating_pnl_pct)}） | ` +
       `${fmtNum(s.weighted_risk_score)} | ${pct(s.portfolio_annualized_vol)} | ${fmtNum(s.concentration_hhi, 3)} |`,
@@ -199,12 +230,16 @@ export function renderHoldingsCard(s: HoldingsSignal): string {
   }
   const sectors = s.sector_exposure ?? []
   if (sectors.length) {
-    lines.push('', '**行业暴露：** ' + sectors.map((x) => `${x.industry} ${(x.weight * 100).toFixed(1)}%`).join(' · '))
+    lines.push('', '**行业暴露：** ' + sectors.map(x => `${x.industry} ${(x.weight * 100).toFixed(1)}%`).join(' · '))
   }
   return lines.join('\n')
 }
 
-/** 持仓分析完整报告（优先用适配器生成的报告 markdown）。 */
+/**
+ * Render the holdings report, preferring adapter-authored portfolio Markdown.
+ * @param r - Holdings signal and optional staged reports.
+ * @returns Adapter Markdown when present, otherwise a deterministic portfolio table.
+ */
 export function renderHoldingsReport(r: { signal: HoldingsSignal; reports?: Record<string, string> }): string {
   const md = r.reports?.portfolio
   if (md && md.trim()) return md.trim()
@@ -223,15 +258,24 @@ export function renderHoldingsReport(r: { signal: HoldingsSignal; reports?: Reco
   return parts.join('\n')
 }
 
-/** 简报 UI 卡 + 完整内容（summary 即 Markdown）。 */
+/**
+ * Render the compact UI heading for a generated market brief.
+ * @param s - Brief metadata and opportunities.
+ * @returns Chinese Markdown heading with period, date, risk profile, and opportunity count.
+ */
 export function renderBriefCard(s: BriefSignal): string {
   const label = s.period === 'pre_market' ? '盘前' : s.period === 'post_market' ? '盘后' : '盘中'
   const pf = s.risk_profile ? ` · ${profileLabel(s.risk_profile)}` : ''
   return `## 📊 A股${label}简报 · ${s.trade_date ?? ''}${pf}（${s.opportunities?.length ?? 0} 个机会点）`
 }
 
+/**
+ * Render the complete brief, preferring the adapter-authored Markdown summary.
+ * @param r - Brief signal and optional reports.
+ * @returns Adapter Markdown when present, otherwise a deterministic opportunity list.
+ */
 export function renderBrief(r: { signal: BriefSignal; reports?: Record<string, string> }): string {
-  const md = r.signal?.summary
+  const md = r.signal.summary
   if (md && md.trim()) return md.trim()
   const s = r.signal
   const parts = [renderBriefCard(s), '']

@@ -20,6 +20,8 @@ import {
   renderHoldingsCard,
   renderHoldingsReport,
   renderSignalCard,
+  type BriefSignal,
+  type HoldingsSignal,
 } from '../src/render.ts'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 
@@ -90,7 +92,7 @@ async function main() {
   console.log(`✅ GET /brief/latest → id=${brief.id ?? '（暂无）'} dsh_pushed=${brief.dsh_pushed}`)
   if (brief.id) {
     console.log('\n===== renderBriefCard（简报卡）=====')
-    console.log(renderBriefCard(brief as never))
+    console.log(renderBriefCard(brief))
   }
 
   // ── 4) market_brief（可选，RUN_BRIEF=1）───────────────────────────
@@ -98,13 +100,13 @@ async function main() {
     console.log('\n── 市场简报（RUN_BRIEF=1）──')
     const bTask = await startTask(BASE, '/brief', { period: 'now', scope: 'all' }, sink.signal)
     const bRes = (await consumeSse(`${BASE}/analyze/${bTask}/stream`, sink, timeoutMs)) as {
-      signal: Record<string, unknown>
+      signal: BriefSignal & { opportunities: unknown[] }
     }
-    const summary = String(bRes.signal?.summary ?? '')
+    const summary = bRes.signal.summary ?? ''
     console.log(`✅ POST /brief → period=${bRes.signal.period} trade_date=${bRes.signal.trade_date}`)
     console.log(`   summary 长度=${summary.length} 机会点=${(bRes.signal.opportunities as unknown[]).length}`)
     console.log('\n===== renderBrief 开头（模型侧完整简报）=====')
-    console.log(renderBrief(bRes as never).split('\n').slice(0, 20).join('\n'))
+    console.log(renderBrief(bRes).split('\n').slice(0, 20).join('\n'))
     if (!summary) failures.push('简报 summary 为空')
   } else {
     console.log('（跳过 /brief：RUN_BRIEF=1 开启）')
@@ -127,21 +129,22 @@ async function main() {
       sink.signal,
     )
     const hRes = (await consumeSse(`${BASE}/analyze/${hTask}/stream`, sink, timeoutMs)) as {
-      signal: Record<string, unknown>
+      signal: HoldingsSignal
+      reports?: Record<string, string>
     }
     console.log(
       `✅ POST /holdings/analyze → 市值=${hRes.signal.total_market_value} HHI=${hRes.signal.concentration_hhi} risk_profile=${hRes.signal.risk_profile}`,
     )
     console.log('\n===== renderHoldingsCard（持仓卡）=====')
-    console.log(renderHoldingsCard(hRes.signal as never))
+    console.log(renderHoldingsCard(hRes.signal))
     console.log('\n===== renderHoldingsReport 开头=====')
-    console.log(renderHoldingsReport(hRes as never).split('\n').slice(0, 15).join('\n'))
+    console.log(renderHoldingsReport(hRes).split('\n').slice(0, 15).join('\n'))
     if (!hRes.signal?.total_market_value) failures.push('持仓 signal 缺 total_market_value')
     if (hRes.signal?.risk_profile !== 'conservative') {
       failures.push(`持仓 risk_profile 期望 conservative 实得 ${hRes.signal?.risk_profile}`)
     }
-    const per = hRes.signal?.per_stock as Record<string, { risk_level?: string }> | undefined
-    if (!per || !Object.values(per).some((p) => p.risk_level)) failures.push('逐股缺 risk_level 标签')
+    const per = hRes.signal.per_stock
+    if (!per || !Object.values(per).some(p => p.risk_level)) failures.push('逐股缺 risk_level 标签')
   } else {
     console.log('（跳过 /holdings/analyze：RUN_HOLDINGS=1 开启）')
   }
@@ -170,7 +173,7 @@ async function main() {
   console.log('\n✅ 全部通过')
 }
 
-main().catch((e) => {
-  console.error('❌', e)
+main().catch((error: unknown) => {
+  console.error('❌', error)
   process.exit(1)
 })

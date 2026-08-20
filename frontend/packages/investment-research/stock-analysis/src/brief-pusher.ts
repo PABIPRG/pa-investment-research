@@ -1,6 +1,6 @@
 // 阶段F：dsh 对话内主动推送简报（可选增强）
 //
-// 轮询适配器 /brief/latest → 未 dsh-pushed 的简报 → ctx.agents.roots() 逐 agent
+// 轮询适配器 /brief/latest → 未 dsh-pushed 的简报 → ctx.get('agents').roots() 逐 agent
 // followup 播报 → 成功后 POST /brief/{id}/dsh-pushed 去重。重启可重放：`dsh_pushed`
 // 标记持久化在适配器侧，已播报的简报不会重复推送。
 //
@@ -10,13 +10,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { getLatestBrief, httpJson } from './client.ts'
 
+/** In-chat brief polling and audience settings. */
 export interface BriefPusherConfig {
+  /** Adapter origin used for brief reads and delivery markers. */
   adapterBaseUrl: string
-  /** 是否开启 dsh 对话内定时播报。默认 false（外部推送由适配器 scheduler 负责）。 */
+  /** Enable periodic in-chat delivery; external channels remain adapter-owned. */
   enableInChatPush: boolean
-  /** 轮询周期 ms，最小 30s。 */
+  /** Requested polling interval in milliseconds, clamped to at least 30000. */
   pushPollMs: number
-  /** 播报目标会话 id 列表；空数组 = 所有活跃会话。 */
+  /** Target session ids; an empty list selects every active root agent. */
   pushSessions: string[]
 }
 
@@ -30,10 +32,21 @@ interface LatestBrief {
 
 const PERIOD_LABEL: Record<string, string> = { pre_market: '盘前', post_market: '盘后', now: '盘中' }
 
+function briefBody(label: string, tradeDate: string | undefined, summary: string | undefined): string {
+  return `${label}简报 · ${tradeDate ?? ''}\n\n${summary ?? ''}`.trim()
+}
+
+/**
+ * Start effect-owned brief polling when in-chat delivery is enabled.
+ * The effect polls immediately and then at the clamped interval, skips overlap, marks only delivered briefs,
+ * contains per-session and polling failures, and clears its timer during disposal.
+ * @param ctx - Plugin context supplying agents, logging, and effect disposal.
+ * @param config - Resolved adapter, interval, enablement, and audience settings.
+ */
 export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void {
   if (!config.enableInChatPush) return
-  if (!ctx.agents) {
-    ctx.logger?.warn?.('[stock-analysis] 对话内播报已开启但 agents 服务不可用，忽略')
+  if (ctx.get('agents') === undefined) {
+    ctx.logger.warn('[stock-analysis] 对话内播报已开启但 agents 服务不可用，忽略')
     return
   }
 
@@ -48,7 +61,7 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
       if (!brief.id || brief.dsh_pushed) return
 
       const label = PERIOD_LABEL[brief.period ?? ''] ?? '盘中'
-      const body = `${label}简报 · ${brief.trade_date ?? ''}\n\n${brief.summary ?? ''}`.trim()
+      const body = briefBody(label, brief.trade_date, brief.summary)
       if (!body) return
 
       const msg = createUserMessage({
@@ -56,10 +69,10 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
         source: { kind: 'plugin', plugin: 'stock-analysis' },
       })
 
-      const roots = ctx.agents?.roots?.() ?? []
+      const roots = ctx.get('agents')?.roots() ?? []
       const targets =
         config.pushSessions.length > 0
-          ? roots.filter((agent) => config.pushSessions.includes(String(agent.id)))
+          ? roots.filter(agent => config.pushSessions.includes(String(agent.id)))
           : roots
       let sent = 0
       for (const agent of targets) {
@@ -77,7 +90,7 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
           'POST',
           undefined,
         )
-        ctx.logger?.info?.(`[stock-analysis] 已向 ${sent} 个会话播报简报 ${brief.id}`)
+        ctx.logger.info(`[stock-analysis] 已向 ${sent} 个会话播报简报 ${brief.id}`)
       }
     } catch {
       /* 轮询失败静默，下个周期重试 */
@@ -88,8 +101,12 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
 
   // 绑定到上下文生命周期：dispose 时自动清掉定时器
   ctx.effect(() => {
-    const timer = setInterval(deliver, pollMs)
+    const timer = setInterval(() => {
+      void deliver()
+    }, pollMs)
     void deliver() // 启动立即试一次：dsh 打开时若有未播报的盘前简报则补播
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+    }
   })
 }

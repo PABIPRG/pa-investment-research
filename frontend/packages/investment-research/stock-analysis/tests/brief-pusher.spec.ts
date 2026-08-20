@@ -29,12 +29,12 @@ describe('stock-analysis brief pusher', () => {
       return new Response(JSON.stringify({ ok: true }))
     }))
     setupBriefPusher({
-      agents: {
+      get: () => ({
         roots: () => [
           { id: 'allowed', followup(message: { content: Array<{ text: string }> }) { delivered.push(message.content[0]!.text) } },
           { id: 'other', followup() { throw new Error('must not be selected') } },
         ],
-      },
+      }),
       effect(callback: () => () => void) { effects.push(callback) },
       logger: { info() {} },
     } as never, {
@@ -59,9 +59,14 @@ describe('stock-analysis brief pusher', () => {
   it('does not push an already marked brief and warns when agents are unavailable', () => {
     const effects: unknown[] = []
     const warnings: string[] = []
-    setupBriefPusher({ effect(callback: unknown) { effects.push(callback) }, logger: { warn(message: string) { warnings.push(message) } } } as never, {
-      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
-    })
+    setupBriefPusher(
+      {
+        get() { return undefined },
+        effect(callback: unknown) { effects.push(callback) },
+        logger: { warn(message: string) { warnings.push(message) } },
+      } as never,
+      { adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [] },
+    )
     expect(effects).toEqual([])
     expect(warnings.join('')).toContain('agents 服务不可用')
   })
@@ -80,7 +85,7 @@ describe('stock-analysis brief pusher', () => {
       return new Response('{}')
     }))
     setupBriefPusher({
-      agents: { roots: () => [{ id: 'bad', followup() { throw new Error('offline') } }] },
+      get: () => ({ roots: () => [{ id: 'bad', followup() { throw new Error('offline') } }] }),
       effect(callback: () => () => void) { effects.push(callback) },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
@@ -102,8 +107,9 @@ describe('stock-analysis brief pusher', () => {
       return new Response('{}')
     }))
     setupBriefPusher({
-      agents: { roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] },
+      get: () => ({ roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] }),
       effect(callback: () => () => void) { effects.push(callback) },
+      logger: { info() {} },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
     })
@@ -128,7 +134,7 @@ describe('stock-analysis brief pusher', () => {
     }))
     vi.spyOn(String.prototype, 'trim').mockReturnValue('')
     setupBriefPusher({
-      agents: { roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] },
+      get: () => ({ roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] }),
       effect(callback: () => () => void) { effects.push(callback) },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
@@ -146,9 +152,9 @@ describe('stock-analysis brief pusher', () => {
     vi.useFakeTimers()
     const effects: Array<() => (() => void)> = []
     let beginFetch!: () => void
-    const fetchStarted = new Promise<void>(resolve => { beginFetch = resolve })
+    const fetchStarted = new Promise<void>((resolve) => { beginFetch = resolve })
     let finishFetch!: () => void
-    const fetchFinished = new Promise<void>(resolve => { finishFetch = resolve })
+    const fetchFinished = new Promise<void>((resolve) => { finishFetch = resolve })
     vi.stubGlobal('fetch', vi.fn(async () => {
       beginFetch()
       await fetchFinished
@@ -156,7 +162,7 @@ describe('stock-analysis brief pusher', () => {
     }))
     let agentLookups = 0
     const ctx = {
-      get agents() {
+      get() {
         agentLookups++
         return agentLookups === 1 ? { roots: () => [] } : undefined
       },
