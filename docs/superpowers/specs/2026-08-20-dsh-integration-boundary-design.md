@@ -1,4 +1,4 @@
-# DSH Integration Boundary and Cross-Platform Runtime Design
+# DSH Integration Boundary, Native Composition, and Python Runtime Design
 
 ## Status
 
@@ -24,6 +24,8 @@ The existing top-level `frontend/` directory is the DeepSeek Harness source work
 - Keep backend application code Python-only.
 - Give product-specific dsh integration code an explicit TypeScript workspace outside both backend services and the upstream-style frontend workspace.
 - Make supported startup and verification flows equivalent on macOS and Windows.
+- Use dsh Profiles, plugin Bundles, Cordis services, and Agent Presets as the composition model instead of introducing a parallel module launcher.
+- Automatically start the Python services required by an active capability while retaining an external-service deployment mode.
 - Provide one pure TypeScript HTTP/SSE client that can be reused by a dsh plugin and a future UI or host proxy.
 - Preserve backend API behavior while changing ownership and physical layout.
 - Make local paths and generated configuration machine-local rather than committed absolute paths.
@@ -57,11 +59,18 @@ pa-investment-research/
 ├── integrations/
 │   └── dsh/                             # Product-owned TypeScript workspace
 │       ├── packages/
+│       │   ├── python-runtime/
 │       │   ├── trading-adapter-client/
 │       │   ├── stock-analysis-plugin/
 │       │   └── market-watch-plugin/
+│       ├── bundles/
+│       │   └── investment-research/
+│       ├── agent-presets/
+│       │   ├── stock-research/
+│       │   ├── market-monitor/
+│       │   └── investment-full/
 │       ├── scripts/
-│       │   └── runtime.ts
+│       │   └── sync-profile.ts
 │       ├── package.json
 │       ├── pnpm-lock.yaml
 │       └── pnpm-workspace.yaml
@@ -71,54 +80,109 @@ pa-investment-research/
 The package names will be:
 
 - `@pa-investment/trading-adapter-client`
+- `@pa-investment/dsh-python-runtime`
 - `@pa-investment/dsh-stock-analysis`
 - `@pa-investment/dsh-market-watch`
+- `@pa-investment/dsh-investment-research`
 
-All three packages are private workspace packages. The workspace pins its package manager and every dsh dependency to exact versions. The migration preserves the dsh version proven by the team's current working reference environment; version discovery is a preflight check, not an opportunity to upgrade. If the current version cannot be established reproducibly, implementation pauses for an explicit version decision.
+All packages are private workspace packages. The workspace pins its package manager and every dsh dependency to exact versions. The migration preserves the dsh version proven by the team's current working reference environment; version discovery is a preflight check, not an opportunity to upgrade. If the current version cannot be established reproducibly, implementation pauses for an explicit version decision.
 
 ### Dependency rules
 
 ```text
-Future UI or host proxy ─┐
-                        ├─> trading-adapter-client ─HTTP/SSE─> dsh-trading-core
-Stock analysis plugin ──┘
+DSH Profile: investment-research
+├── Host plane
+│   ├── python-runtime
+│   ├── trading-core backend definition
+│   └── market-watch backend definition
+└── Agent Presets
+    ├── stock-research  ─> stock-analysis-plugin ─> trading-core
+    ├── market-monitor ─> market-watch-plugin ────> market-watch
+    └── investment-full
+        ├── stock-analysis-plugin ────────────────> trading-core
+        └── market-watch-plugin ──────────────────> market-watch
 
-Market watch plugin ─────────────HTTP───────────────> market-watch
+Future standalone UI or host proxy
+└── trading-adapter-client ─HTTP/SSE─> dsh-trading-core
 ```
 
 - `trading-adapter-client` may depend on platform-neutral TypeScript libraries, but never on dsh packages, browser globals, React, or plugin lifecycle APIs.
 - `stock-analysis-plugin` owns dsh registration, `agent.inject()`, rendering, and mapping transport progress into dsh progress events.
 - `market-watch-plugin` remains a direct consumer of the market-watch API until reuse justifies a separate client package.
+- `python-runtime` is a host-plane Cordis service. It owns Python process discovery, startup, health, logs, ownership, and disposal, but contains no business analysis logic.
+- Model-facing business plugins are mounted by Agent Presets rather than globally by the Profile. A session therefore sees only the tools in its selected preset.
+- The optional stock brief pusher is not allowed to enumerate and notify unrelated preset sessions from an agent-plane plugin. It moves to an explicit host-plane entry or remains disabled until it can target sessions by composed preset.
 - Python services do not import, install, build, or launch the TypeScript workspace.
 - `frontend/` does not depend on product-specific integration packages as part of this migration.
 
-## Cross-Platform Runtime Design
+## DSH-Native Composition
 
-`integrations/dsh/scripts/runtime.ts` is the single source of truth for combined local orchestration. Thin `start.sh`/`stop.sh` and `start.bat`/`stop.bat` wrappers may invoke the same pnpm scripts, but contain no path or lifecycle logic.
+### Deployment profile and bundle
 
-The primary documented interface is a pnpm command, not direct execution of a shell file. This avoids making the normal workflow depend on Git executable-bit behavior on Windows. Convenience shell wrappers are committed with the executable bit set and tested on macOS; batch wrappers are tested on Windows.
+The everyday entry point is the existing dsh CLI:
 
-The runtime command supports `start`, `stop`, `status`, and `verify`, with `fake`, `engine`, and `dry-run` runner modes where applicable.
+```sh
+dsh --profile investment-research
+```
 
-It is responsible for:
+The machine-local Profile lives at `$DSH_HOME/profiles/investment-research`. Its ordered bundle list includes the dsh base and Web application bundles plus `@pa-investment/dsh-investment-research`. The product bundle inserts only host-plane entries: the Python runtime service, backend definitions, and any explicitly host-scoped integrations. It does not globally insert model-facing stock or market-watch tools.
 
-- Resolving the repository root from the script location rather than the caller's current directory.
-- Selecting `env/bin/python` on macOS/Linux and `env\\Scripts\\python.exe` on Windows.
-- Failing with a clear initialization command when the selected Python interpreter does not exist.
-- Building plugin entry URLs with Node's `pathToFileURL`; string concatenation for `file://` URLs is forbidden.
-- Generating a machine-local Cordis patch at `integrations/dsh/.runtime/cordis.local.yml`; `.runtime/` is ignored by Git.
-- Passing an ordinary absolute path to dsh's `--patch` argument while storing plugin entry names inside the patch as valid `file://` URLs.
-- Starting dsh from an OS temporary directory that does not contain the repository `.env`, so dsh cannot accidentally consume backend environment variables.
-- Tracking child process IDs and logs under `.runtime/` and shutting down only processes it started.
-- Checking port availability before startup and health endpoints after startup.
-- Preserving actionable child-process errors and returning a non-zero exit code on partial startup.
-- Handling `SIGINT`, `SIGTERM`, and Windows termination without leaving owned processes running.
+`integrations/dsh/scripts/sync-profile.ts` is an idempotent setup/update command, not an application launcher. It uses dsh's existing `plugin --profile` flow to create or reconcile the Profile, install the Web application and local product Bundle, and materialize the repository-owned Agent Preset templates into the dsh user preset root. Normal start, configuration dump, patch precedence, signal handling, and dsh shutdown remain owned by dsh.
 
-Generated state is disposable. No absolute developer path, process ID, secret, or generated Cordis patch is committed.
+Current dsh always supplies its own shipped preset root and appends `$DSH_HOME/.agent-presets` as the writable user root. It does not expose a bundle-contributed preset-root layer. Therefore the repository keeps canonical templates under `integrations/dsh/agent-presets`, while `sync-profile.ts` writes machine-local copies under `$DSH_HOME/.agent-presets`. Those copies use loader-resolvable package entries or URLs generated with `pathToFileURL`; committed templates contain no developer absolute path. Synchronization fails on a locally modified destination instead of overwriting user work silently.
 
-Backend initialization remains backend-owned and platform-specific only at the wrapper edge. It creates the Python environment, installs `requirements.txt`, and creates a local `.env` from the example when absent. It must not run npm or pnpm.
+### Agent presets
 
-Repository-level `.gitattributes` rules normalize source and shell scripts to LF and Windows batch files to CRLF. Scripts do not rely on shell syntax shared by name but interpreted differently across platforms. Permission repair instructions may be documented for exceptional checkouts, but the supported pnpm entry point must work without `chmod`.
+The initial preset catalog is:
+
+| Preset | Model-facing business plugins | Python dependencies |
+| --- | --- | --- |
+| `stock-research` | stock analysis | `trading-core` |
+| `market-monitor` | market watch | `market-watch` |
+| `investment-full` | stock analysis and market watch | `trading-core`, `market-watch` |
+
+The preset is selected when a new dsh session is created. It composes tools and prompt contributions through the existing agent scope chain. It does not own registries, persistence, Web infrastructure, or process-global services. A running session remains on the preset from which it was composed, matching dsh's existing semantics.
+
+An Agent Preset is a complete `agent.cordis.yml`, not an overlay that inherits another preset. Each product preset therefore carries the pinned, reviewed dsh baseline capabilities it needs plus its business plugin rows. The synchronizer verifies the expected dsh baseline version and template fingerprint; a dsh upgrade requires an explicit preset regeneration and review instead of silently drifting from `standard`.
+
+Adding a future capability means adding a plugin, a backend definition when required, and references from the presets that should expose it. It does not require another launcher flag or a new combined shell script.
+
+## Python Runtime Service
+
+`@pa-investment/dsh-python-runtime` provides the namespaced host service `ctx.paPythonRuntime`. Backend-definition entries register stable ids such as `trading-core` and `market-watch`. Agent-plane tool plugins inject the runtime service and acquire their backend id inside a Cordis effect before registering tools.
+
+The first active preset that requests a backend triggers acquisition. Concurrent acquisitions are single-flight and share one process. A successful acquisition returns a lease containing the verified base URL; the business plugin passes that URL into its API client instead of rediscovering configuration. The plugin becomes ACTIVE only after health succeeds; an unavailable dependency fails preset composition instead of publishing tools that cannot work. Repeated sessions and presets share the healthy backend.
+
+Releasing a lease decrements the backend reference count. The runtime stops an owned managed child only after its final lease is released or the host service is disposed; an attached external process is never stopped. Registering the same backend id with a conflicting command, health URL, or mode fails loudly during host composition.
+
+Each backend definition supports two modes:
+
+- `managed` is the current default. The runtime locates the project interpreter, starts the Python API, waits for health, captures logs, and stops only the child it owns.
+- `external` never spawns or stops Python. It validates the configured base URL and allows the same tool plugin and preset to connect to a separately managed service.
+
+`ADAPTER_RUNNER=fake|engine` remains an existing Python backend setting. It is passed to a managed child or configured in the external service; it is not promoted into a dsh Profile, Preset, or launcher dimension.
+
+### Managed lifecycle
+
+For a managed backend the service:
+
+1. Resolves the repository and backend path from installed package metadata or the synchronized local workspace link, never from the caller's current directory.
+2. Selects `env/bin/python` on macOS/Linux and `env\\Scripts\\python.exe` on Windows.
+3. Checks the configured base URL before spawning. If an already-healthy service is present, it attaches without claiming process ownership.
+4. If the port is occupied but health or service identity does not match, it fails without terminating the unknown process.
+5. Spawns the API with an explicit working directory and child-only environment. Backend `.env` values are never merged into the parent dsh process.
+6. Waits for health with a bounded timeout. Early exit or timeout preserves the relevant log tail, terminates the owned child, and rejects acquisition.
+7. Registers asynchronous cleanup through `ctx.effect()`. Profile shutdown, dependency loss, or hot replacement waits for owned children to exit, escalating termination only after a bounded grace period.
+
+The runtime records process state and logs under a machine-local dsh state directory. No absolute path, PID, secret, or generated profile is committed. Stale state is advisory only: process identity and health must be revalidated before any stop operation.
+
+An unknown backend id, missing interpreter, malformed definition, external health failure, or managed startup failure is reported as a named capability-acquisition error. The message includes the backend id, attempted health URL, and an actionable initialization or log location, while excluding secrets and the full child environment. Preset mounting then follows dsh's existing fail-loud rollback behavior.
+
+### Cross-platform repository rules
+
+Backend initialization remains backend-owned. It creates the Python environment, installs `requirements.txt`, and creates a local `.env` from the example when absent. It must not run npm or pnpm.
+
+The primary workflows are pnpm and dsh commands, not direct execution of shell files. Repository-level `.gitattributes` rules normalize source and shell scripts to LF and Windows batch files to CRLF. Any convenience wrappers contain no lifecycle or path logic, and the supported workflow works without `chmod`.
 
 ## TypeScript Client Design
 
@@ -184,17 +248,21 @@ Acceptance checks:
 - No TypeScript, Node package manifest, lockfile, Cordis patch, or dsh plugin directory remains below `backend/`.
 - Documentation contains no obsolete repository path or Windows-only command presented as cross-platform.
 
-### Phase 2: Centralize cross-platform runtime
+### Phase 2: Establish dsh-native composition and Python lifecycle
 
-Implement `runtime.ts`, thin platform wrappers, generated Cordis configuration, health checks, and process ownership. Replace broken or duplicated combined-start instructions with the workspace commands.
+Create the investment-research Bundle, Profile synchronizer, three Agent Preset templates, and host-plane Python runtime service. Change the model-facing plugins to acquire their declared Python backend before tool registration. Keep the backend HTTP APIs unchanged.
 
 Acceptance checks:
 
-- `dry-run` snapshots resolve valid macOS and Windows Python paths and plugin URLs without launching processes.
-- macOS and Windows both complete `start`, `status`, `verify`, and `stop` using the documented commands.
+- `dsh --profile investment-research --dump-config` shows the Web application, product Bundle, Python runtime, and backend definitions without globally mounting business tools.
+- A new `stock-research`, `market-monitor`, or `investment-full` session exposes exactly the tools declared by that Agent Preset.
+- The first preset requiring a managed backend starts it automatically; concurrent requests do not spawn duplicates.
+- `external` mode performs health validation without spawning or stopping the configured service.
+- macOS and Windows both synchronize the Profile, discover Python, activate each preset, and shut down cleanly using the documented commands.
 - Moving or cloning the repository to a path containing spaces requires no committed configuration edit.
-- Starting dsh does not load the backend `.env` implicitly.
-- A busy port, missing virtual environment, failed backend health check, or failed dsh child produces a clear non-zero failure and cleans up owned children.
+- Starting dsh does not load backend `.env` values into the parent process implicitly.
+- A busy port, missing virtual environment, failed backend health check, or failed child produces a clear composition failure and cleans up only owned children.
+- Re-running Profile synchronization is idempotent and refuses to overwrite a locally modified Agent Preset.
 
 ### Phase 3: Extract the reusable client
 
@@ -215,11 +283,13 @@ The minimum supported matrix is:
 | --- | --- | --- |
 | Python environment discovery | `env/bin/python` | `env\\Scripts\\python.exe` |
 | Repository path with spaces | Required | Required |
-| Cordis plugin URL | `pathToFileURL` | `pathToFileURL` |
-| Fake runner smoke test | Required | Required |
-| Engine runner startup and health | Required | Required |
-| dsh start from clean temporary cwd | Required | Required |
-| Graceful stop and stale-state cleanup | Required | Required |
+| Profile synchronization | Required | Required |
+| Cordis plugin URL when generated | `pathToFileURL` | `pathToFileURL` |
+| Preset tool isolation | Required | Required |
+| Managed fake-runner smoke test | Required | Required |
+| Managed engine startup and health | Required | Required |
+| External-service attach | Required | Required |
+| Graceful dsh disposal and stale-state cleanup | Required | Required |
 
 CI should run static checks and deterministic unit tests on both operating systems. Engine and dsh integration tests may require environment credentials and can run as an explicit smoke job, but the fake runner path must be credential-free.
 
@@ -227,7 +297,7 @@ CI should run static checks and deterministic unit tests on both operating syste
 
 - `backend/dsh-trading-core/README.md` documents only Python initialization, configuration, API startup, and API verification.
 - `backend/market-watch/README.md` documents only the Python service.
-- `integrations/dsh/README.md` documents pnpm setup, plugin development, generated runtime state, combined startup, and macOS/Windows commands.
+- `integrations/dsh/README.md` documents pnpm setup, Profile synchronization, Bundle and Preset ownership, plugin development, Python lifecycle modes, generated state, and macOS/Windows commands.
 - API/SSE contract details have one canonical source next to the Python adapter; the TypeScript package links to it and verifies compatibility in tests.
 
 ## Risks and Mitigations
@@ -235,10 +305,12 @@ CI should run static checks and deterministic unit tests on both operating syste
 - **Lost file history:** use `git mv` and keep Phase 1 mechanical so Git can detect renames.
 - **Accidental dsh upgrade:** resolve and pin the already-proven version before changing runtime behavior.
 - **Windows URL/path regressions:** use Node URL/path APIs and test a path containing spaces on Windows.
+- **Preset-root limitation:** keep canonical templates in the repository and synchronize guarded copies to dsh's existing user preset root; never patch dsh core to invent another root mechanism in this migration.
+- **Preset scope leakage:** keep model-facing registrations in the agent plane and move any process-wide polling or broadcast behavior to an explicit host-plane entry.
 - **Stale child processes:** record ownership, validate process identity before stopping it, and clean state after exit.
 - **Contract drift:** keep Python as the authoritative API and test the TypeScript client against captured contract fixtures plus a fake-runner smoke test.
 - **Scope creep into frontend:** prohibit changes under `frontend/` unless a later, separately designed consumer integration requires them.
 
 ## Completion Criteria
 
-The migration is complete when backend directories are Python-only under the definition above, the two dsh plugins build from `integrations/dsh`, the shared stock-analysis client is dsh-independent, no committed machine-specific path remains, and the documented lifecycle succeeds on both macOS and Windows with the same high-level commands.
+The migration is complete when backend directories are Python-only under the definition above; the two business plugins, product Bundle, Python runtime, and Agent Presets live under `integrations/dsh`; the shared stock-analysis client is dsh-independent; no committed machine-specific path remains; each preset exposes only its declared tools; and managed plus external lifecycle checks succeed on both macOS and Windows through the native dsh Profile flow.
