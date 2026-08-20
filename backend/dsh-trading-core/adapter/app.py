@@ -12,18 +12,23 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 from .analyzer import TaskManager
+from .backtest_engine import compute_summary
+from .backtest_runner import BacktestRunner
 from .brief_engine import BriefRunner
+from .decision_recorder import load_evaluated_results
 from .holdings_runner import HoldingsRunner
 from .risk_profiles import get_risk_profile, profile
 from .runner import EngineRunner, FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .schemas import (
     AnalyzeRequest,
+    BacktestRunRequest,
     BriefRequest,
     HoldingsRequest,
     RiskProfileRequest,
@@ -46,10 +51,12 @@ def _build_registry() -> dict:
     stock_runner = FakeRunner() if fake else EngineRunner()
     holdings_runner = FakeHoldingsRunner() if fake else HoldingsRunner()
     brief_runner = FakeBriefRunner() if fake else BriefRunner()
+    # 回测无 LLM（纯逻辑 + baostock），fake 模式也走真逻辑，便于链路自测
     return {
         "stock": stock_runner,
         "holdings": holdings_runner,
         "brief": brief_runner,
+        "backtest": BacktestRunner(),
     }
 
 
@@ -180,6 +187,34 @@ def create_app() -> FastAPI:
         store.update("briefs", brief_id, dsh_pushed=True)
         return {"id": brief_id, "dsh_pushed": True}
 
+    # ---- 策略回测（基于历史决策的前瞻评估） ----------------------------
+
+    @app.post("/backtest/run", response_model=dict)
+    async def backtest_run(req: BacktestRunRequest):
+        """启动回测任务，返回 task_id（SSE/result 复用 /analyze/{id}/*）。"""
+        task_id = manager.start(req.model_dump(), task_type="backtest")
+        return {"task_id": task_id}
+
+    @app.get("/backtest/results", response_model=dict)
+    async def backtest_results(limit: int = 20):
+        """最近的回测运行记录（created_at 倒序）。"""
+        store = JsonStore()
+        runs = store.all("backtests")
+        recs = sorted(
+            runs.values(), key=lambda r: r.get("created_at", ""), reverse=True
+        )[: max(1, min(limit, 200))]
+        return {"count": len(recs), "runs": recs}
+
+    @app.get("/backtest/performance", response_model=dict)
+    async def backtest_performance(code: Optional[str] = None):
+        """从 decisions.eval_meta 重算整体表现（无需重跑行情）。"""
+        return _performance_summary(code)
+
+    @app.get("/backtest/performance/{code}", response_model=dict)
+    async def backtest_performance_code(code: str):
+        """别名：单只股票的整体表现。"""
+        return _performance_summary(code)
+
     @app.get("/analyze/{task_id}/stream")
     async def stream(task_id: str):
         """SSE 进度流：stage/result/error/done 事件，15s 心跳保活。"""
@@ -206,6 +241,18 @@ def create_app() -> FastAPI:
         return manager.status(task_id)
 
     return app
+
+
+def _performance_summary(code: Optional[str]) -> dict:
+    """从 decisions.eval_meta.last_eval 重算整体表现 summary。"""
+    items = load_evaluated_results(code=code)
+    summary = compute_summary(
+        items,
+        source="persisted",
+        n_decisions_total=len(items),
+        n_candidates_evaluated=0,
+    )
+    return {"code": code or "all", "n_items": len(items), "summary": summary}
 
 
 async def _sse_gen(manager: TaskManager, task_id: str):

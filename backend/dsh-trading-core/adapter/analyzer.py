@@ -17,6 +17,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
+from .decision_recorder import DecisionRecorder
 from .runner import FakeRunner
 
 
@@ -66,6 +67,12 @@ class TaskManager:
         try:
             result = runner.run(
                 params, lambda msg: self._put_stage(task_id, msg)
+            )
+            # 决策记录：仅 stock 分析落盘结构化 signal（回测主数据源）；
+            # FakeRunner 记 source="fake" 作无 LLM 演示种子。
+            DecisionRecorder().maybe_record(
+                self._task_types.get(task_id), params, result,
+                source="fake" if getattr(runner, "name", "") == "fake" else "engine",
             )
             self._results[task_id] = result
             self._status[task_id] = "done"
