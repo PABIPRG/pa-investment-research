@@ -2,7 +2,7 @@
 """盯盘 Agent 适配器：同步 FastAPI，端口 8100。
 
 所有盯盘操作均为秒级（实时快照 TTL 缓存复用），无需 SSE/TaskManager。
-端点在 adapter/README 与 dsh-plugin 的 11 个工具一一对应。
+端点与 frontend/packages/investment-research/market-watch 中的宿主侧工具一一对应。
 """
 
 import logging
