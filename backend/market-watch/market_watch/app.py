@@ -10,6 +10,7 @@ import time
 import uuid
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import briefs, news, quotes, rules, scanner, scheduler
@@ -25,6 +26,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 logger = logging.getLogger("market_watch.app")
 
 app = FastAPI(title="Market Watch Adapter", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 store = JsonStore()
 
 
