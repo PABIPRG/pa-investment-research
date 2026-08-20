@@ -4,7 +4,7 @@
 
 **Goal:** 在不改变已批准架构与 Python 业务 API 的前提下，把两个投研 dsh 插件迁入 `frontend` workspace，建立可组合的 Bundle/Profile 和安全的 Python Runtime，以 Electron 作为最终桌面调用入口，再把股票 HTTP/SSE 传输层提取成平台中立客户端。
 
-**Architecture:** 保持 `backend/` 纯 Python；所有 Node、TypeScript、Cordis 与 dsh 组合代码归属 `frontend/packages/investment-research`。`ctx.investmentPythonRuntime` 统一管理 managed/external 后端租约、健康身份、进程所有权、日志与释放；三个 Bundle 由 `investment-research` Profile 按固定顺序组合；Electron 在该 Profile 之后继续应用现有 `apps/electron/electron.patch.yml`，以原生 IPC/目录选择器替换浏览器载体；股票插件最终只保留 dsh 工具注册、进度注入与渲染。
+**Architecture:** 保持 `backend/` 纯 Python；投研 Node、TypeScript 与 Cordis 业务实现归属 `frontend/packages/investment-research`，三个纯组合 Bundle 归属现有 `frontend/packages/bundle`。`ctx.investmentPythonRuntime` 统一管理 managed/external 后端租约、健康身份、进程所有权、日志与释放；三个 Bundle 由 `investment-research` Profile 按固定顺序组合；Electron 在该 Profile 之后继续应用现有 `apps/electron/electron.patch.yml`，以原生 IPC/目录选择器替换浏览器载体；股票插件最终只保留 dsh 工具注册、进度注入与渲染。
 
 **Tech Stack:** Python 3 + FastAPI/Uvicorn；TypeScript 5、Node.js `^22.19.0 || >=24.0.0`、pnpm `11.7.0`；Cordis、Schemastery、Vitest、tsdown；GitHub Actions 的 macOS/Windows 确定性矩阵。
 
@@ -177,7 +177,6 @@ git commit -m "refactor: move investment plugins into frontend"
 - Modify: `frontend/packages/investment-research/market-watch/package.json`
 - Modify: `frontend/packages/investment-research/market-watch/tsconfig.json`
 - Create: `frontend/packages/investment-research/market-watch/src/invariant.ts`
-- Delete: `frontend/packages/investment-research/market-watch/package-lock.json`
 - Delete: `frontend/packages/investment-research/market-watch/cordis.yml`
 - Move: `frontend/packages/investment-research/market-watch/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/market-watch/tests/loader-composition.spec.ts`
 - Create: `frontend/packages/investment-research/market-watch/tests/client.spec.ts`
@@ -623,24 +622,24 @@ git commit -m "feat: acquire the market backend through runtime"
 
 **Files:**
 
-- Create: `frontend/packages/investment-research/runtime-bundle/package.json`
-- Create: `frontend/packages/investment-research/runtime-bundle/tsconfig.json`
-- Create: `frontend/packages/investment-research/runtime-bundle/cordis.patch.yml`
-- Create: `frontend/packages/investment-research/runtime-bundle/src/index.ts`
-- Create: `frontend/packages/investment-research/runtime-bundle/src/invariant.ts`
-- Create: `frontend/packages/investment-research/runtime-bundle/tests/bundle.spec.ts`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/package.json`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/tsconfig.json`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/cordis.patch.yml`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/src/index.ts`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/src/invariant.ts`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/tests/bundle.spec.ts`
-- Create: `frontend/packages/investment-research/market-watch-bundle/package.json`
-- Create: `frontend/packages/investment-research/market-watch-bundle/tsconfig.json`
-- Create: `frontend/packages/investment-research/market-watch-bundle/cordis.patch.yml`
-- Create: `frontend/packages/investment-research/market-watch-bundle/src/index.ts`
-- Create: `frontend/packages/investment-research/market-watch-bundle/src/invariant.ts`
-- Create: `frontend/packages/investment-research/market-watch-bundle/tests/bundle.spec.ts`
+- Create: `frontend/packages/bundle/investment-runtime/package.json`
+- Create: `frontend/packages/bundle/investment-runtime/tsconfig.json`
+- Create: `frontend/packages/bundle/investment-runtime/cordis.patch.yml`
+- Create: `frontend/packages/bundle/investment-runtime/src/index.ts`
+- Create: `frontend/packages/bundle/investment-runtime/src/invariant.ts`
+- Create: `frontend/packages/bundle/investment-runtime/tests/bundle.spec.ts`
+- Create: `frontend/packages/bundle/investment-stock-analysis/package.json`
+- Create: `frontend/packages/bundle/investment-stock-analysis/tsconfig.json`
+- Create: `frontend/packages/bundle/investment-stock-analysis/cordis.patch.yml`
+- Create: `frontend/packages/bundle/investment-stock-analysis/src/index.ts`
+- Create: `frontend/packages/bundle/investment-stock-analysis/src/invariant.ts`
+- Create: `frontend/packages/bundle/investment-stock-analysis/tests/bundle.spec.ts`
+- Create: `frontend/packages/bundle/investment-market-watch/package.json`
+- Create: `frontend/packages/bundle/investment-market-watch/tsconfig.json`
+- Create: `frontend/packages/bundle/investment-market-watch/cordis.patch.yml`
+- Create: `frontend/packages/bundle/investment-market-watch/src/index.ts`
+- Create: `frontend/packages/bundle/investment-market-watch/src/invariant.ts`
+- Create: `frontend/packages/bundle/investment-market-watch/tests/bundle.spec.ts`
 - Modify: `frontend/scripts/check-workspace-constraints.ts`
 - Modify: `frontend/knip.json`
 - Modify: `frontend/tsconfig.host.json`
@@ -669,7 +668,7 @@ git commit -m "feat: acquire the market backend through runtime"
 - [ ] 运行：
 
 ```sh
-pnpm exec vitest run packages/investment-research/*-bundle/tests/bundle.spec.ts
+pnpm exec vitest run packages/bundle/investment-*/tests/bundle.spec.ts
 pnpm run verify-cordis-config
 pnpm run constraints
 pnpm run knip
@@ -678,7 +677,7 @@ pnpm run knip
 - [ ] 提交：
 
 ```sh
-git add frontend/packages/investment-research/*-bundle frontend/scripts/check-workspace-constraints.ts frontend/knip.json frontend/tsconfig.host.json frontend/pnpm-lock.yaml
+git add frontend/packages/bundle/investment-* frontend/scripts/check-workspace-constraints.ts frontend/knip.json frontend/tsconfig.host.json frontend/pnpm-lock.yaml
 git commit -m "feat: add investment research bundles"
 ```
 
@@ -857,15 +856,15 @@ git commit -m "test: cover investment runtime across platforms"
 - Create: `frontend/packages/investment-research/python-runtime/README.md`
 - Create: `frontend/packages/investment-research/python-runtime/README.zh.md`
 - Create: `frontend/packages/investment-research/python-runtime/README.i18n.yaml`
-- Create: `frontend/packages/investment-research/runtime-bundle/README.md`
-- Create: `frontend/packages/investment-research/runtime-bundle/README.zh.md`
-- Create: `frontend/packages/investment-research/runtime-bundle/README.i18n.yaml`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/README.md`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/README.zh.md`
-- Create: `frontend/packages/investment-research/stock-analysis-bundle/README.i18n.yaml`
-- Create: `frontend/packages/investment-research/market-watch-bundle/README.md`
-- Create: `frontend/packages/investment-research/market-watch-bundle/README.zh.md`
-- Create: `frontend/packages/investment-research/market-watch-bundle/README.i18n.yaml`
+- Create: `frontend/packages/bundle/investment-runtime/README.md`
+- Create: `frontend/packages/bundle/investment-runtime/README.zh.md`
+- Create: `frontend/packages/bundle/investment-runtime/README.i18n.yaml`
+- Create: `frontend/packages/bundle/investment-stock-analysis/README.md`
+- Create: `frontend/packages/bundle/investment-stock-analysis/README.zh.md`
+- Create: `frontend/packages/bundle/investment-stock-analysis/README.i18n.yaml`
+- Create: `frontend/packages/bundle/investment-market-watch/README.md`
+- Create: `frontend/packages/bundle/investment-market-watch/README.zh.md`
+- Create: `frontend/packages/bundle/investment-market-watch/README.i18n.yaml`
 - Modify: `frontend/packages/investment-research/README.md`
 - Modify: `frontend/packages/investment-research/README.zh.md`
 - Modify: `frontend/packages/investment-research/README.i18n.yaml`
@@ -1201,7 +1200,7 @@ rg -n 'T[B]D|PLACEHOLD[E]R|X[X]X|FIXM[E]' \
 
 - [ ] 三个 PR 按顺序合并，各自 CI 通过，无跨阶段偷跑。
 - [ ] backend 纯 Python检查通过，两个健康身份稳定。
-- [ ] 七个核心/迁入 package 与三个 Bundle 满足 workspace、build、publish、invariant、README、coverage。
+- [ ] 四个核心/迁入 package 与三个 Bundle 满足 workspace、build、publish、invariant、README、coverage。
 - [ ] `dsh --profile investment-research --dump-default-config` 展开五层固定顺序；`dsh electron --profile investment-research` 以 Electron 启动同一组合并叠加原生 patch；业务 Bundle 可独立移除，缺 Runtime 明确失败。
 - [ ] managed/external、匹配附着、未知端口、owned-only termination、state/log、quiescent dispose 在 macOS/Windows 有实际证据。
 - [ ] adapter-client 主入口零 Cordis/dsh/React/浏览器全局，SSE/HTTP/error 全矩阵通过。
