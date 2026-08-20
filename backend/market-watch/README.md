@@ -33,13 +33,13 @@ The service reads `MW_` settings from `.env`. `MW_SCHEDULE_ENABLED` defaults to 
 | Setting | Default | Effect |
 | --- | --- | --- |
 | `MW_LLM_ENABLED` | `false` | Enables LLM interpretations, news summaries, and briefs when `DEEPSEEK_API_KEY` is available. |
-| `MW_PUSH_ENABLED` | `false` | Enables outbound Server酱 or WeCom notifications; configure `MW_PUSH_CHANNELS` plus the matching credential. |
+| `MW_PUSH_ENABLED` | `false` | Enables outbound Server酱 or WeCom notifications when the corresponding credential is present. `MW_PUSH_CHANNELS` is optional: leave it empty to enable every credentialed channel, or set it to restrict delivery to `serverchan` and/or `wecom`. |
 | `MW_POLL_INTERVAL` | `30` | Intraday rule-evaluation interval in seconds. |
 | `MW_NEWS_ENABLED` | `false` | Enables news job; `MW_NEWS_INTERVAL_MIN` defaults to `60`. |
 | `MW_PRE_BRIEF_ENABLED` / `MW_POST_BRIEF_ENABLED` | `false` / `false` | Enables the 08:50 pre-market or 15:30 post-market brief respectively; times are configurable. |
 | `MW_QUOTE_CACHE_TTL` | `60` | Whole-market snapshot cache duration in seconds. |
 
-The scheduler observes trading-day and trading-session guards. `POST /scheduler/tick` runs one watch cycle manually while still applying cooldown and daily-cap rules.
+The default `_poll_job()` only calls `in_trading_session()`: it skips weekends and non-trading hours, but does not use an exchange-holiday calendar to exclude a weekday market closure. `latest_trade_date()` must not be treated as proof that today is an exchange trading day. Set `MW_SCHEDULE_ENABLED=false` explicitly for a closure when polling must not run. `POST /scheduler/tick` runs one watch cycle manually while still applying cooldown and daily-cap rules.
 
 ## Market-data limits and units
 
