@@ -16,7 +16,6 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from .brief_engine import BriefRunner, _is_trading_day
 from .config import settings
 from .push import PusherManager
 from .store import JsonStore
@@ -28,6 +27,7 @@ _TIMEZONE = os.getenv("TIMEZONE", "Asia/Shanghai")
 
 def _run_brief_job(period: str) -> None:
     """一次定时简报：判交易日 → 幂等 → 生成 → 推送。"""
+    from .brief_engine import BriefRunner, _is_trading_day  # lazy: fake 模式不需要 openai
     store = JsonStore()
     today = datetime.now().strftime("%Y-%m-%d")
 

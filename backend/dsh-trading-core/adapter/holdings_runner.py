@@ -22,7 +22,6 @@ from datetime import date, timedelta
 from typing import Callable
 
 from .config import settings
-from .engine_bridge import EngineRunner, resolve_company_name
 from .risk_profiles import get_risk_profile, profile, risk_level_for
 from .schemas import HoldingItem
 
@@ -62,13 +61,19 @@ def _a_share_code(ticker: str) -> str:
     return f"sh.{t}"
 
 
-def _bs_hist(code: str, start: str, end: str) -> list:
-    """带锁 baostock 前复权日线，返回 [{"date", "close"}, ...] 升序。
+def _bs_hist(code: str, start: str, end: str, fields: str = "date,close") -> list:
+    """带锁 baostock 前复权日线，返回 [{"date", <各列>}, ...] 升序。
 
-    网络现实（本机实测）：eastmoney HTTP 间歇性被墙/限流，baostock
-    socket 稳定且与引擎数据源一致（data_source_manager 也走 BAOSTOCK）。
+    fields 默认 "date,close"（向后兼容 holdings/brief 调用）；回测引擎用
+    "date,open,high,low,close" 取止损/止盈命中所需的 OHLC。数值列为 float，
+    停牌/无数据返回 None。网络现实（本机实测）：eastmoney HTTP 间歇性被墙/
+    限流，baostock socket 稳定且与引擎数据源一致（data_source_manager 也走 BAOSTOCK）。
     """
     import baostock as bs
+
+    names = [n.strip() for n in fields.split(",") if n.strip()]
+    if not names or names[0] != "date":
+        raise ValueError(f"baostock fields 必须以 date 开头: {fields!r}")
 
     with _bs_lock:
         lg = bs.login()
@@ -76,14 +81,25 @@ def _bs_hist(code: str, start: str, end: str) -> list:
             raise HoldingDataError(f"baostock 登录失败: {lg.error_msg}")
         try:
             rs = bs.query_history_k_data_plus(
-                code, "date,close",
+                code, fields,
                 start_date=start, end_date=end, frequency="d", adjustflag="2",
             )
             rows = []
             while rs.error_code == "0" and rs.next():
                 r = rs.get_row_data()
-                if r and r[0]:
-                    rows.append({"date": r[0], "close": float(r[1])})
+                if not r or not r[0]:
+                    continue
+                row: dict = {"date": r[0]}
+                for i, name in enumerate(names[1:], start=1):
+                    raw = r[i] if i < len(r) else ""
+                    if raw in ("", None):
+                        row[name] = None
+                    else:
+                        try:
+                            row[name] = float(raw)
+                        except (TypeError, ValueError):
+                            row[name] = None
+                rows.append(row)
             if rs.error_code != "0":
                 raise HoldingDataError(f"baostock 查询失败({code}): {rs.error_msg}")
             return rows
@@ -272,6 +288,7 @@ class HoldingsRunner:
             per_stock, vol, hhi, profile_key
         )
 
+        from .engine_bridge import resolve_company_name  # lazy: fake 模式不需要
         signal = {
             "signal_type": "portfolio",
             "holdings": [h.model_dump() for h in holdings],
@@ -325,6 +342,7 @@ class HoldingsRunner:
     # ---- L2 深度：逐股引擎并行（quick）────────────────────────────────
 
     def _l2_deep(self, holdings, params, progress_cb) -> dict:
+        from .engine_bridge import EngineRunner  # lazy: fake 模式不需要
         engine = EngineRunner()
 
         def analyze(h: HoldingItem) -> tuple[str, dict]:

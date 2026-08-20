@@ -10,11 +10,21 @@ rem Usage: start_all.bat [fake]
 rem ============================================================
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
-set "PATCH=%ROOT%dsh-plugin\cordis.yml"
 set "DSH_RUN=%TEMP%\dsh-run-pa"
 set "LOGS=%ROOT%logs"
 if not exist "%LOGS%" mkdir "%LOGS%" 2>nul
 if not exist "%DSH_RUN%" mkdir "%DSH_RUN%" 2>nul
+
+rem ---------- 生成 cordis.yml（替换占位符为本机绝对路径）----------
+rem cordis.yml 模板里用 {{PLUGIN_URL}} 占位，这里动态生成 file:// URL
+rem dsh 在 %TEMP% 下运行，loader 需要绝对 file:// URL，不能用相对路径
+set "PLUGIN_SRC=%ROOT%dsh-plugin\src\index.ts"
+set "PATCH=%DSH_RUN%\cordis.yml"
+powershell -NoProfile -Command ^
+  "$root = '%ROOT%' -replace '\\','/';" ^
+  "$url = 'file:///' + ($root + 'dsh-plugin/src/index.ts');" ^
+  "$tpl = Get-Content '%ROOT%dsh-plugin\cordis.yml' -Raw -Encoding UTF8;" ^
+  "$tpl -replace '\{\{PLUGIN_URL\}\}', $url | Set-Content '%PATCH%' -Encoding UTF8 -NoNewline"
 
 echo ================================================================
 echo   dsh-trading-core start
@@ -22,8 +32,17 @@ echo ================================================================
 echo.
 
 rem ---------- prechecks ----------
-if not exist "env\Scripts\python.exe" (
-    echo [ERROR] venv "env" not found. Run init.bat first.
+rem Python 解释器选择：优先用已激活的 conda 环境，其次用项目 venv env
+if defined CONDA_PREFIX (
+    set "PY=python"
+    echo [OK] Using conda env: %CONDA_PREFIX%
+) else if exist "env\Scripts\python.exe" (
+    set "PY=env\Scripts\python.exe"
+    echo [OK] Using project venv: env
+) else (
+    echo [ERROR] No Python found. Either:
+    echo         1. conda activate mytrdsys  ^(recommended, full deps installed^)
+    echo         2. Run init.bat to create venv "env"
     exit /b 1
 )
 if not exist ".env" (
@@ -39,7 +58,7 @@ if not errorlevel 1 (
     echo [OK] adapter already running - :8000
 ) else (
     echo [1/2] Starting adapter - :8000, %RUNNER% mode...
-    start "dsh-trading-core-adapter" /min cmd /c "cd /d ""%ROOT%"" && set ADAPTER_RUNNER=%RUNNER%&& set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& env\Scripts\python.exe -m uvicorn adapter.app:app --host 127.0.0.1 --port 8000 --log-level warning > ""%LOGS%\adapter.log"" 2>&1"
+    start "dsh-trading-core-adapter" /min cmd /c "cd /d ""%ROOT%"" && set ADAPTER_RUNNER=%RUNNER%&& set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& %PY% -m uvicorn adapter.app:app --host 127.0.0.1 --port 8000 --log-level warning > ""%LOGS%\adapter.log"" 2>&1"
     call :wait_port 8000 "adapter"
     if errorlevel 1 exit /b 1
 )

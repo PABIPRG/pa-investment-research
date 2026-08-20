@@ -12,18 +12,20 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 from .analyzer import TaskManager
-from .brief_engine import BriefRunner
-from .holdings_runner import HoldingsRunner
+from .backtest_engine import compute_summary
+from .decision_recorder import load_evaluated_results
 from .risk_profiles import get_risk_profile, profile
-from .runner import EngineRunner, FakeBriefRunner, FakeHoldingsRunner, FakeRunner
+from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .schemas import (
     AnalyzeRequest,
+    BacktestRunRequest,
     BriefRequest,
     HoldingsRequest,
     RiskProfileRequest,
@@ -41,15 +43,30 @@ def _build_registry() -> dict:
     fake 用于链路自测（三个类型都走假任务）；engine 模式 stock 走真引擎，
     holdings 走 HoldingsRunner（L1 定量 + deep 逐股引擎），
     brief 阶段 D 替换为 BriefRunner（暂用 fake 占位保证可用）。
+
+    lazy import：engine 模式的 Runner 只在非 fake 时才导入，
+    使 fake 模式不需要安装 langgraph/chromadb 等引擎依赖。
     """
     fake = os.getenv("ADAPTER_RUNNER", "engine").lower() == "fake"
-    stock_runner = FakeRunner() if fake else EngineRunner()
-    holdings_runner = FakeHoldingsRunner() if fake else HoldingsRunner()
-    brief_runner = FakeBriefRunner() if fake else BriefRunner()
+    if fake:
+        stock_runner = FakeRunner()
+        holdings_runner = FakeHoldingsRunner()
+        brief_runner = FakeBriefRunner()
+    else:
+        from .runner import EngineRunner
+        from .holdings_runner import HoldingsRunner
+        from .brief_engine import BriefRunner
+        stock_runner = EngineRunner()
+        holdings_runner = HoldingsRunner()
+        brief_runner = BriefRunner()
+    # 回测无 LLM（纯逻辑 + baostock），fake 模式也走真逻辑，便于链路自测；
+    # lazy import 保持 fake 模式不加载引擎重依赖（langgraph/chromadb 等）
+    from .backtest_runner import BacktestRunner
     return {
         "stock": stock_runner,
         "holdings": holdings_runner,
         "brief": brief_runner,
+        "backtest": BacktestRunner(),
     }
 
 
@@ -180,6 +197,34 @@ def create_app() -> FastAPI:
         store.update("briefs", brief_id, dsh_pushed=True)
         return {"id": brief_id, "dsh_pushed": True}
 
+    # ---- 策略回测（基于历史决策的前瞻评估） ----------------------------
+
+    @app.post("/backtest/run", response_model=dict)
+    async def backtest_run(req: BacktestRunRequest):
+        """启动回测任务，返回 task_id（SSE/result 复用 /analyze/{id}/*）。"""
+        task_id = manager.start(req.model_dump(), task_type="backtest")
+        return {"task_id": task_id}
+
+    @app.get("/backtest/results", response_model=dict)
+    async def backtest_results(limit: int = 20):
+        """最近的回测运行记录（created_at 倒序）。"""
+        store = JsonStore()
+        runs = store.all("backtests")
+        recs = sorted(
+            runs.values(), key=lambda r: r.get("created_at", ""), reverse=True
+        )[: max(1, min(limit, 200))]
+        return {"count": len(recs), "runs": recs}
+
+    @app.get("/backtest/performance", response_model=dict)
+    async def backtest_performance(code: Optional[str] = None):
+        """从 decisions.eval_meta 重算整体表现（无需重跑行情）。"""
+        return _performance_summary(code)
+
+    @app.get("/backtest/performance/{code}", response_model=dict)
+    async def backtest_performance_code(code: str):
+        """别名：单只股票的整体表现。"""
+        return _performance_summary(code)
+
     @app.get("/analyze/{task_id}/stream")
     async def stream(task_id: str):
         """SSE 进度流：stage/result/error/done 事件，15s 心跳保活。"""
@@ -208,18 +253,47 @@ def create_app() -> FastAPI:
     return app
 
 
+def _performance_summary(code: Optional[str]) -> dict:
+    """从 decisions.eval_meta.last_eval 重算整体表现 summary。"""
+    items = load_evaluated_results(code=code)
+    summary = compute_summary(
+        items,
+        source="persisted",
+        n_decisions_total=len(items),
+        n_candidates_evaluated=0,
+    )
+    return {"code": code or "all", "n_items": len(items), "summary": summary}
+
+
 async def _sse_gen(manager: TaskManager, task_id: str):
-    """把内部事件 dict 转成 SSE 命名字段（event: stage / data: {...}）。"""
+    """把内部事件 dict 转成 SSE 命名字段（event: stage / data: {...}）。
+
+    事件协议（节点跟踪方案 §4）：
+      - pipeline:  任务启动时一次，下发管道清单（phases/total_steps）
+      - stage:     节点完成，结构化字段（node_id/phase/status/step_index/elapsed_ms）
+      - trace:     agent 产出内容摘要（content_preview/content_len）
+      - progress:  进度条百分比（percent/phase）
+      - result:    最终结果（signal/reports）
+      - error:     异常
+      - done:      流结束
+
+    向后兼容：旧 str-based stage 事件（node/message）仍然透传。
+    """
     async for ev in manager.stream_events(task_id):
         ev_type = ev.get("type", "stage")
         payload = {k: v for k, v in ev.items() if k != "type"}
-        # 只发需要下发的字段
+
         if ev_type == "stage":
-            data = {"node": payload.get("node"), "message": payload.get("message")}
+            # 结构化 stage：透传全部字段；旧 str 事件只有 node/message 也会透传
+            data = payload
         elif ev_type == "result":
             data = payload.get("data") or {}
         elif ev_type == "error":
-            data = {"message": payload.get("message", "未知错误")}
+            data = {"message": payload.get("message", "未知错误"),
+                    **({"node_id": payload["node_id"]} if "node_id" in payload else {})}
+        elif ev_type in ("pipeline", "trace", "progress"):
+            # 新增事件类型：全量透传
+            data = payload
         else:  # done / heartbeat
             data = {}
         yield {"event": ev_type, "data": json.dumps(data, ensure_ascii=False)}

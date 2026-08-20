@@ -69,6 +69,37 @@ class BriefRequest(BaseModel):
     )
 
 
+class BacktestRunRequest(BaseModel):
+    """POST /backtest/run 请求体：基于历史决策的前瞻回测。"""
+
+    code: Optional[str] = Field(
+        default=None, description="仅回测该股票代码（如 600519）"
+    )
+    force: bool = Field(
+        default=False, description="强制重评估（忽略同版本同窗口的已评估缓存）"
+    )
+    eval_window_days: int = Field(
+        default=10, ge=1, le=120,
+        description="评估窗口（入场后前景交易日数）",
+    )
+    min_age_days: int = Field(
+        default=14, ge=0, le=365,
+        description="决策最小年龄（自然日）；0=不限制（含今天）",
+    )
+    analysis_date_from: Optional[str] = Field(
+        default=None, description="决策分析日期下界 YYYY-MM-DD"
+    )
+    analysis_date_to: Optional[str] = Field(
+        default=None, description="决策分析日期上界 YYYY-MM-DD"
+    )
+    limit: int = Field(default=200, ge=1, le=2000, description="最多评估决策条数")
+    stop_loss_pct: float = Field(default=5.0, description="止损幅度（%）")
+    take_profit_pct: float = Field(default=10.0, description="止盈幅度（%）")
+    neutral_band_pct: float = Field(
+        default=2.0, description="中性带（%），|区间收益|低于此视为方向中性"
+    )
+
+
 class WatchlistRequest(BaseModel):
     """POST /watchlist 请求体：整体替换自选列表"""
 

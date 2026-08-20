@@ -188,6 +188,70 @@ def _create_provider_pair(
     return deep_llm, quick_llm
 
 
+# ---- 节点跟踪元数据（节点跟踪方案 §3-4）------------------------------------
+# node_id → {label, phase, type}：用于 stage/progress 事件的结构化字段
+NODE_META = {
+    # 分析师团队
+    "Market Analyst":       {"label": "📊 市场分析师",   "phase": "analysts", "type": "analyst"},
+    "Fundamentals Analyst": {"label": "💼 基本面分析师",  "phase": "analysts", "type": "analyst"},
+    "News Analyst":         {"label": "📰 新闻分析师",   "phase": "analysts", "type": "analyst"},
+    "Social Analyst":       {"label": "💬 情绪分析师",   "phase": "analysts", "type": "analyst"},
+    # 研究辩论团队
+    "Bull Researcher":     {"label": "🐂 看涨研究员",   "phase": "research", "type": "debater"},
+    "Bear Researcher":      {"label": "🐻 看跌研究员",   "phase": "research", "type": "debater"},
+    "Research Manager":     {"label": "👔 研究经理",     "phase": "research", "type": "judge"},
+    # 交易员
+    "Trader":               {"label": "📈 交易员",       "phase": "trader",   "type": "trader"},
+    # 风险辩论团队
+    "Risky Analyst":        {"label": "🔥 激进风险",     "phase": "risk",     "type": "debater"},
+    "Safe Analyst":         {"label": "🛡️ 保守风险",    "phase": "risk",     "type": "debater"},
+    "Neutral Analyst":      {"label": "⚖️ 中性风险",     "phase": "risk",     "type": "debater"},
+    "Risk Judge":           {"label": "🎯 风险经理",     "phase": "risk",     "type": "judge"},
+}
+
+# node_id → 内容提取规格：从 chunk 的 state_update 中提取 agent 产出文本
+# - str: 直接取 node_update[field]
+# - tuple: 嵌套取 node_update[outer][inner]
+NODE_TRACE_MAP = {
+    "Market Analyst":       "market_report",
+    "Fundamentals Analyst": "fundamentals_report",
+    "News Analyst":         "news_report",
+    "Social Analyst":       "sentiment_report",
+    "Bull Researcher":      ("investment_debate_state", "current_response"),
+    "Bear Researcher":      ("investment_debate_state", "current_response"),
+    "Research Manager":     "investment_plan",
+    "Trader":               "trader_investment_plan",
+    "Risky Analyst":        ("risk_debate_state", "current_risky_response"),
+    "Safe Analyst":         ("risk_debate_state", "current_safe_response"),
+    "Neutral Analyst":      ("risk_debate_state", "current_neutral_response"),
+    "Risk Judge":           "final_trade_decision",
+}
+
+# node_id → trace 的 content_type 分类（前端据此选择渲染样式）
+NODE_CONTENT_TYPE = {
+    "Market Analyst": "report",       "Fundamentals Analyst": "report",
+    "News Analyst": "report",         "Social Analyst": "report",
+    "Bull Researcher": "debate",      "Bear Researcher": "debate",
+    "Research Manager": "decision",   "Trader": "decision",
+    "Risky Analyst": "debate",        "Safe Analyst": "debate",
+    "Neutral Analyst": "debate",      "Risk Judge": "decision",
+}
+
+# 不发送跟踪事件的节点（工具节点 / 消息清理节点）
+_SKIPPED_NODES = {
+    "tools_market", "tools_fundamentals", "tools_news", "tools_social",
+    "Msg Clear Market", "Msg Clear Fundamentals", "Msg Clear News", "Msg Clear Social",
+}
+
+# 阶段 → 进度百分比区间 [start, end]，用于 progress 事件
+_PHASE_PERCENT = {
+    "analysts": (0, 36),
+    "research": (36, 64),
+    "trader": (64, 73),
+    "risk": (73, 100),
+}
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -206,6 +270,7 @@ class TradingAgentsGraph:
         """
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
+        self.selected_analysts = list(selected_analysts)  # 节点跟踪：计算 total_steps 用
 
         # Update the interface's config
         set_config(self.config)
@@ -719,6 +784,11 @@ class TradingAgentsGraph:
         current_node_start = None  # 当前节点开始时间
         current_node_name = None  # 当前节点名称
 
+        # 节点跟踪：进度计数器 + 节点耗时基线（updates 模式下 chunk 到达 = 节点完成）
+        self._progress_step = 0
+        self._progress_total = self._compute_total_steps()
+        self._progress_last_ts = total_start_time  # 上一个 chunk 到达时间，用于算当前节点耗时
+
         # 保存task_id用于后续保存性能数据
         self._current_task_id = task_id
 
@@ -874,89 +944,150 @@ class TradingAgentsGraph:
         return final_state, decision
 
     def _send_progress_update(self, chunk, progress_callback):
-        """发送进度更新到回调函数
+        """发送结构化进度事件到回调函数（节点跟踪方案 §4-5）。
 
-        LangGraph stream 返回的 chunk 格式：{node_name: {...}}
-        节点名称示例：
-        - "Market Analyst", "Fundamentals Analyst", "News Analyst", "Social Analyst"
-        - "tools_market", "tools_fundamentals", "tools_news", "tools_social"
-        - "Msg Clear Market", "Msg Clear Fundamentals", etc.
-        - "Bull Researcher", "Bear Researcher", "Research Manager"
-        - "Trader"
-        - "Risky Analyst", "Safe Analyst", "Neutral Analyst", "Risk Judge"
+        LangGraph stream (updates 模式) chunk 到达 = 该节点已完成。
+        每个非工具节点产出 3 类事件（dict 载荷，向后兼容 str 回调）：
+          - stage:   {node_id, node_label, phase, status:"done", step_index, total_steps, elapsed_ms, message}
+          - trace:   {node_id, content_type, content_preview, content_len}  （提取 agent 产出文本）
+          - progress: {percent, phase, message, step_index, total_steps}
+
+        向后兼容：progress_callback 若是旧 str 回调（如 FakeRunner），由适配器侧
+        _put_stage 做 str/dict 分发，不会崩溃。
         """
         try:
-            # 从chunk中提取当前执行的节点信息
             if not isinstance(chunk, dict):
                 return
 
-            # 获取第一个非特殊键作为节点名
+            # 取第一个非特殊键作为节点名
             node_name = None
             for key in chunk.keys():
                 if not key.startswith('__'):
                     node_name = key
                     break
-
             if not node_name:
                 return
 
-            logger.info(f"🔍 [Progress] 节点名称: {node_name}")
-
-            # 检查是否为结束节点
+            # 结束节点：发最终进度
             if '__end__' in chunk:
-                logger.info(f"📊 [Progress] 检测到__end__节点")
-                progress_callback("📊 生成报告")
+                logger.info("📊 [Progress] 检测到 __end__，发送最终进度")
+                progress_callback({
+                    "type": "progress",
+                    "percent": 100,
+                    "phase": "done",
+                    "message": "📊 生成报告",
+                    "step_index": self._progress_total,
+                    "total_steps": self._progress_total,
+                    "ts": time.time(),
+                })
                 return
 
-            # 节点名称映射表（匹配 LangGraph 实际节点名）
-            node_mapping = {
-                # 分析师节点
-                'Market Analyst': "📊 市场分析师",
-                'Fundamentals Analyst': "💼 基本面分析师",
-                'News Analyst': "📰 新闻分析师",
-                'Social Analyst': "💬 社交媒体分析师",
-                # 工具节点（不发送进度更新，避免重复）
-                'tools_market': None,
-                'tools_fundamentals': None,
-                'tools_news': None,
-                'tools_social': None,
-                # 消息清理节点（不发送进度更新）
-                'Msg Clear Market': None,
-                'Msg Clear Fundamentals': None,
-                'Msg Clear News': None,
-                'Msg Clear Social': None,
-                # 研究员节点
-                'Bull Researcher': "🐂 看涨研究员",
-                'Bear Researcher': "🐻 看跌研究员",
-                'Research Manager': "👔 研究经理",
-                # 交易员节点
-                'Trader': "💼 交易员决策",
-                # 风险评估节点
-                'Risky Analyst': "🔥 激进风险评估",
-                'Safe Analyst': "🛡️ 保守风险评估",
-                'Neutral Analyst': "⚖️ 中性风险评估",
-                'Risk Judge': "🎯 风险经理",
-            }
-
-            # 查找映射的消息
-            message = node_mapping.get(node_name)
-
-            if message is None:
-                # None 表示跳过（工具节点、消息清理节点）
+            # 跳过工具节点 / 消息清理节点
+            if node_name in _SKIPPED_NODES:
                 logger.debug(f"⏭️ [Progress] 跳过节点: {node_name}")
                 return
 
-            if message:
-                # 发送进度更新
-                logger.info(f"📤 [Progress] 发送进度更新: {message}")
-                progress_callback(message)
-            else:
-                # 未知节点，使用节点名称
-                logger.warning(f"⚠️ [Progress] 未知节点: {node_name}")
-                progress_callback(f"🔍 {node_name}")
+            # 计算节点耗时（updates 模式：上一个 chunk 到本 chunk 的间隔 ≈ 本节点耗时）
+            now = time.time()
+            elapsed_ms = int((now - self._progress_last_ts) * 1000)
+            self._progress_last_ts = now
+            self._progress_step += 1
+
+            meta = NODE_META.get(node_name, {})
+            node_label = meta.get("label", f"� {node_name}")
+            phase = meta.get("phase", "other")
+            total = self._progress_total
+            step = self._progress_step
+
+            # ---- 1) stage 事件：节点完成 ----
+            stage_event = {
+                "type": "stage",
+                "node_id": node_name,
+                "node_label": node_label,
+                "phase": phase,
+                "status": "done",
+                "step_index": step,
+                "total_steps": total,
+                "elapsed_ms": elapsed_ms,
+                "message": node_label,  # 向后兼容：旧 str 消费者可读此字段
+                "ts": now,
+            }
+            progress_callback(stage_event)
+            logger.info(f"📤 [Progress] stage done: {node_name} ({elapsed_ms}ms, step {step}/{total})")
+
+            # ---- 2) trace 事件：提取 agent 产出内容 ----
+            node_update = chunk.get(node_name) or {}
+            content = self._extract_node_output(node_name, node_update)
+            if content and isinstance(content, str) and content.strip():
+                trace_event = {
+                    "type": "trace",
+                    "node_id": node_name,
+                    "node_label": node_label,
+                    "content_type": NODE_CONTENT_TYPE.get(node_name, "text"),
+                    "content_preview": content[:500],
+                    "content_len": len(content),
+                    "ts": now,
+                }
+                progress_callback(trace_event)
+                logger.info(f"📋 [Progress] trace: {node_name} 产出 {len(content)} 字符")
+
+            # ---- 3) progress 事件：进度条百分比 ----
+            percent = self._compute_percent(step, total, phase)
+            progress_callback({
+                "type": "progress",
+                "percent": percent,
+                "phase": phase,
+                "message": node_label,
+                "step_index": step,
+                "total_steps": total,
+                "ts": now,
+            })
 
         except Exception as e:
             logger.error(f"❌ 进度更新失败: {e}", exc_info=True)
+
+    def _extract_node_output(self, node_name: str, node_update: dict) -> str:
+        """从 chunk 的 state_update 中提取 agent 产出文本（节点跟踪方案 §5.2）。
+
+        Args:
+            node_name: 节点 ID（如 "Market Analyst"）
+            node_update: 该节点返回的 state_update dict（chunk[node_name]）
+
+        Returns:
+            产出文本；无法提取时返回空串。
+        """
+        field = NODE_TRACE_MAP.get(node_name)
+        if not field or not isinstance(node_update, dict):
+            return ""
+        try:
+            if isinstance(field, tuple):
+                outer, inner = field
+                return str((node_update.get(outer) or {}).get(inner, "") or "")
+            val = node_update.get(field, "")
+            return str(val) if val else ""
+        except Exception as e:
+            logger.debug(f"⚠️ [trace] 提取 {node_name} 内容失败: {e}")
+            return ""
+
+    def _compute_total_steps(self) -> int:
+        """根据 config 的辩论轮次和选中分析师数估算总步数（用于进度条）。"""
+        n_analysts = len(self.selected_analysts)
+        max_debate = self.config.get("max_debate_rounds", 1)
+        max_risk = self.config.get("max_risk_discuss_rounds", 1)
+        # 研究辩论：每轮 Bull+Bear，最后 Research Manager
+        n_research = max_debate * 2 + 1
+        n_trader = 1
+        # 风险辩论：每轮 Risky+Safe+Neutral，最后 Risk Judge
+        n_risk = max_risk * 3 + 1
+        return n_analysts + n_research + n_trader + n_risk
+
+    def _compute_percent(self, step: int, total: int, phase: str) -> int:
+        """计算进度百分比：阶段内线性插值，落在 _PHASE_PERCENT 区间内。"""
+        lo, hi = _PHASE_PERCENT.get(phase, (0, 100))
+        if total <= 0:
+            return lo
+        # 按 step 在 [0, total] 的位置，映射到 [lo, hi]
+        return int(lo + (hi - lo) * step / total)
 
     def _build_performance_data(self, node_timings: Dict[str, float], total_elapsed: float) -> Dict[str, Any]:
         """构建性能数据结构

@@ -20,6 +20,8 @@ SCRIPTS=(
   "dev-web|启动前端 Web 开发服务|cd frontend && pnpm run dev:web"
   "start-electron|构建并启动 Electron 桌面端|scripts/run-electron.sh build"
   "start-electron-dev|直接启动 Electron 桌面端（不构建，需先初始化）|scripts/run-electron.sh dev"
+  "product-start|产品壳一键启动(:8000 :8100 :8090 UI)|product/start.sh"
+  "product-stop|产品壳停止(:8000/:8100/:8090)|product/stop.sh"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)
