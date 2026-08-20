@@ -26,7 +26,28 @@ On Windows, use `init.bat`, `start_all.bat`, and `verify.bat`. These wrappers st
 - Market data: `POST /scan`, `GET /overview`, `POST /tech-signal`, `POST /news/express`.
 - Briefs: `POST /brief/generate`, `GET /brief/latest`.
 
-The service reads `MW_` settings from `.env`; optional scheduled jobs and outbound notifications remain disabled by default.
+## Scheduler, notifications, and configuration
+
+The service reads `MW_` settings from `.env`. `MW_SCHEDULE_ENABLED` defaults to `true`: it enables the 30-second intraday polling job by default. Set `MW_SCHEDULE_ENABLED=false` to disable all scheduler jobs explicitly. Individual jobs remain opt-in where appropriate:
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `MW_LLM_ENABLED` | `false` | Enables LLM interpretations, news summaries, and briefs when `DEEPSEEK_API_KEY` is available. |
+| `MW_PUSH_ENABLED` | `false` | Enables outbound Server酱 or WeCom notifications; configure `MW_PUSH_CHANNELS` plus the matching credential. |
+| `MW_POLL_INTERVAL` | `30` | Intraday rule-evaluation interval in seconds. |
+| `MW_NEWS_ENABLED` | `false` | Enables news job; `MW_NEWS_INTERVAL_MIN` defaults to `60`. |
+| `MW_PRE_BRIEF_ENABLED` / `MW_POST_BRIEF_ENABLED` | `false` / `false` | Enables the 08:50 pre-market or 15:30 post-market brief respectively; times are configurable. |
+| `MW_QUOTE_CACHE_TTL` | `60` | Whole-market snapshot cache duration in seconds. |
+
+The scheduler observes trading-day and trading-session guards. `POST /scheduler/tick` runs one watch cycle manually while still applying cooldown and daily-cap rules.
+
+## Market-data limits and units
+
+The Eastmoney snapshot is paginated across the whole market (55+ requests). A short `MW_QUOTE_CACHE_TTL` can trigger push2 rate limiting, so keep the default 60 seconds unless the data-source cost is understood. When Eastmoney is rate limited or unavailable, the service falls back to Sina snapshots; Sina does not provide volume ratio or turnover, so those fields may be `null`. K-line retrieval falls back from akshare to baostock.
+
+`amount` rule thresholds and scan filters use **亿元**. `pct_change` and `turnover` use percentage-number values (for example, `5.32` means +5.32%); `volume_ratio` is unitless. baostock uses a global socket and is protected by an internal lock, so its calls are serialized. Windows installations retain the `tzdata` requirement for `zoneinfo`.
+
+The module-level configuration loads `.env` before akshare is used. Keep `eastmoney.com` and `push2.eastmoney.com` in `NO_PROXY`; routing them through a system proxy can break the direct market-data connection.
 
 ## Product integration
 

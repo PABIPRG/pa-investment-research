@@ -19,7 +19,7 @@ if /i not "%RUNNER%"=="fake" if /i not "%RUNNER%"=="engine" (
     exit /b 1
 )
 
-curl -s http://127.0.0.1:8000/health >nul 2>&1
+curl -fsS http://127.0.0.1:8000/health >nul 2>&1
 if not errorlevel 1 (
     echo [OK] trading-core API already running on :8000
     exit /b 0
@@ -39,7 +39,7 @@ if !tries! gtr 120 (
     exit /b 1
 )
 timeout /t 1 /nobreak >nul
-curl -s http://127.0.0.1:8000/health >nul 2>&1
+curl -fsS http://127.0.0.1:8000/health >nul 2>&1
 if errorlevel 1 goto wait_loop
 echo [OK] trading-core API ready on :8000
 exit /b 0

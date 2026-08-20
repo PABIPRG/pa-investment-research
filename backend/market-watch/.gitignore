@@ -12,10 +12,6 @@ data/
 # 日志
 logs/
 
-# node
-dsh-plugin/node_modules/
-dsh-plugin/package-lock.json
-
 # IDE
 .idea/
 .vscode/
