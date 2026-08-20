@@ -33,6 +33,11 @@ const ticker = process.env.TICKER ?? '600519'
 const timeoutMs = Number(process.env.SSE_TIMEOUT_MS ?? 60_000)
 const runBrief = process.env.RUN_BRIEF === '1'
 const runHoldings = process.env.RUN_HOLDINGS === '1'
+const enabledSseFlowCount = 1 + (runBrief ? 1 : 0) + (runHoldings ? 1 : 0)
+const HTTP_AND_CLEANUP_GRACE_MS = 30_000
+// Vitest needs one total budget for all enabled workflows. Each consumeSse call
+// keeps timeoutMs as its independent per-stream deadline.
+const e2eTotalTimeoutMs = enabledSseFlowCount * timeoutMs + HTTP_AND_CLEANUP_GRACE_MS
 
 describe.skipIf(!adapterUrl)('stock-analysis adapter e2e', () => {
   it('verifies all six adapter workflows', async () => {
@@ -185,5 +190,5 @@ describe.skipIf(!adapterUrl)('stock-analysis adapter e2e', () => {
     expect(restored.risk_profile).toBe(original.risk_profile)
 
     console.log('\n✅ 全部通过')
-  })
+  }, e2eTotalTimeoutMs)
 })
