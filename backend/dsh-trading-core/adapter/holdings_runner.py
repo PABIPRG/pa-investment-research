@@ -22,7 +22,6 @@ from datetime import date, timedelta
 from typing import Callable
 
 from .config import settings
-from .engine_bridge import EngineRunner, resolve_company_name
 from .risk_profiles import get_risk_profile, profile, risk_level_for
 from .schemas import HoldingItem
 
@@ -289,6 +288,7 @@ class HoldingsRunner:
             per_stock, vol, hhi, profile_key
         )
 
+        from .engine_bridge import resolve_company_name  # lazy: fake 模式不需要
         signal = {
             "signal_type": "portfolio",
             "holdings": [h.model_dump() for h in holdings],
@@ -342,6 +342,7 @@ class HoldingsRunner:
     # ---- L2 深度：逐股引擎并行（quick）────────────────────────────────
 
     def _l2_deep(self, holdings, params, progress_cb) -> dict:
+        from .engine_bridge import EngineRunner  # lazy: fake 模式不需要
         engine = EngineRunner()
 
         def analyze(h: HoldingItem) -> tuple[str, dict]:

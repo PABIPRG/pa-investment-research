@@ -25,7 +25,6 @@ from .backtest_engine import (
 )
 from .config import settings
 from .decision_recorder import DecisionRecorder
-from .holdings_runner import HoldingDataError, _a_share_code, _bs_hist
 from .store import JsonStore
 
 ENGINE_VERSION = "v1"
@@ -237,7 +236,13 @@ class BacktestRunner:
     # ---- 行情 / 持久化 --------------------------------------------------
 
     def _fetch_hist(self, ticker: str, min_trade_date: str) -> Optional[list]:
-        """拉取单只股票前复权日线（date,open,high,low,close）。带锁串行，缓存 in-run。"""
+        """拉取单只股票前复权日线（date,open,high,low,close）。带锁串行，缓存 in-run。
+
+        holdings_runner 延迟到方法内导入：该模块会拖 engine_bridge → tradingagents
+        重依赖，保持 app._build_registry 的 lazy 设计（fake 模式不加载引擎依赖）。
+        """
+        from .holdings_runner import HoldingDataError, _a_share_code, _bs_hist
+
         if ticker in self._hist_cache:
             return self._hist_cache[ticker]
         try:

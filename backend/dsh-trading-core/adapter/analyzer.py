@@ -65,6 +65,10 @@ class TaskManager:
     def _run_sync(self, task_id: str, params: dict, runner) -> None:
         """worker 线程：跑同步 runner，产出进度事件与最终结果。"""
         try:
+            # 任务启动：先下发管道清单（前端据此渲染步骤器）
+            manifest = self._safe_manifest(runner, params)
+            if manifest:
+                self._put(task_id, manifest)
             result = runner.run(
                 params, lambda msg: self._put_stage(task_id, msg)
             )
@@ -84,6 +88,16 @@ class TaskManager:
         finally:
             self._put(task_id, {"type": "done"})
 
+    def _safe_manifest(self, runner, params: dict) -> dict | None:
+        """安全获取 runner 的 pipeline_manifest（Runner 未实现时返回 None）。"""
+        try:
+            fn = getattr(runner, "pipeline_manifest", None)
+            if fn is None:
+                return None
+            return fn(params)
+        except Exception:
+            return None
+
     # ---- 查询 -----------------------------------------------------------
 
     def exists(self, task_id: str) -> bool:
@@ -102,9 +116,17 @@ class TaskManager:
 
     # ---- 线程安全投递 ----------------------------------------------------
 
-    def _put_stage(self, task_id: str, message: str) -> None:
-        """引擎 progress_callback：纯文本透传为 stage 事件。"""
-        self._put(task_id, {"type": "stage", "node": None, "message": message, "ts": time.time()})
+    def _put_stage(self, task_id: str, event) -> None:
+        """引擎 progress_callback：兼容 str（旧 Runner）和 dict（新结构化事件）。
+
+        - str：旧 FakeRunner / 旧引擎纯文本 → 包装成 legacy stage 事件
+        - dict：新 trading_graph 结构化事件 → 补 ts 后透传（type 已由引擎侧填写）
+        """
+        if isinstance(event, dict):
+            ev = {"ts": time.time(), **event}
+        else:  # str 或其他 → 向后兼容
+            ev = {"type": "stage", "node": None, "message": str(event), "ts": time.time()}
+        self._put(task_id, ev)
 
     def _put(self, task_id: str, event: dict) -> None:
         """worker 线程 → 主事件循环队列（线程安全）。"""

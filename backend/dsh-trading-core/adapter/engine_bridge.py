@@ -84,6 +84,62 @@ class EngineRunner:
         )
         return build_signal_result(params, state, decision, profile_key)
 
+    def pipeline_manifest(self, params: dict) -> dict:
+        """返回管道清单（节点跟踪方案 §3），前端据此渲染步骤器。
+
+        清单的 total_steps 与 TradingAgentsGraph._compute_total_steps() 公式一致，
+        保证 manifest 声明的步数与 stage 事件里的 total_steps 字段对齐。
+        """
+        from tradingagents.graph.trading_graph import NODE_META
+
+        config = self._build_config(params)
+        max_debate = config.get("max_debate_rounds", 1)
+        max_risk = config.get("max_risk_discuss_rounds", 1)
+
+        # 分析师节点（默认全选，顺序与 graph 默认 selected_analysts 一致）
+        _key_to_id = {
+            "market": "Market Analyst",
+            "social": "Social Analyst",
+            "news": "News Analyst",
+            "fundamentals": "Fundamentals Analyst",
+        }
+        analyst_nodes = [
+            {"id": nid, "label": NODE_META[nid]["label"], "type": "analyst"}
+            for nid in (_key_to_id[k] for k in ["market", "social", "news", "fundamentals"])
+        ]
+
+        n_analysts = len(analyst_nodes)
+        total = n_analysts + max_debate * 2 + 1 + 1 + max_risk * 3 + 1
+
+        def _node(nid, ntype, rounds=None):
+            d = {"id": nid, "label": NODE_META[nid]["label"], "type": ntype}
+            if rounds is not None:
+                d["rounds"] = rounds
+            return d
+
+        return {
+            "type": "pipeline",
+            "ticker": params.get("ticker", ""),
+            "phases": [
+                {"phase": "analysts", "label": "数据采集与分析师团队", "nodes": analyst_nodes},
+                {"phase": "research", "label": "多空辩论", "nodes": [
+                    _node("Bull Researcher", "debater", max_debate),
+                    _node("Bear Researcher", "debater", max_debate),
+                    _node("Research Manager", "judge"),
+                ]},
+                {"phase": "trader", "label": "交易决策", "nodes": [
+                    _node("Trader", "trader"),
+                ]},
+                {"phase": "risk", "label": "风险辩论", "nodes": [
+                    _node("Risky Analyst", "debater", max_risk),
+                    _node("Safe Analyst", "debater", max_risk),
+                    _node("Neutral Analyst", "debater", max_risk),
+                    _node("Risk Judge", "judge"),
+                ]},
+            ],
+            "total_steps": total,
+        }
+
 
 def build_signal_result(params: dict, state: dict, decision: dict, profile_key: str = "balanced") -> dict:
     """把引擎的 final_state + decision 组装成统一的 Signal 载荷（集成方案 §3.4）。"""

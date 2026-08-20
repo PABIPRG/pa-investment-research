@@ -20,12 +20,9 @@ from sse_starlette.sse import EventSourceResponse
 
 from .analyzer import TaskManager
 from .backtest_engine import compute_summary
-from .backtest_runner import BacktestRunner
-from .brief_engine import BriefRunner
 from .decision_recorder import load_evaluated_results
-from .holdings_runner import HoldingsRunner
 from .risk_profiles import get_risk_profile, profile
-from .runner import EngineRunner, FakeBriefRunner, FakeHoldingsRunner, FakeRunner
+from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .schemas import (
     AnalyzeRequest,
     BacktestRunRequest,
@@ -46,12 +43,25 @@ def _build_registry() -> dict:
     fake 用于链路自测（三个类型都走假任务）；engine 模式 stock 走真引擎，
     holdings 走 HoldingsRunner（L1 定量 + deep 逐股引擎），
     brief 阶段 D 替换为 BriefRunner（暂用 fake 占位保证可用）。
+
+    lazy import：engine 模式的 Runner 只在非 fake 时才导入，
+    使 fake 模式不需要安装 langgraph/chromadb 等引擎依赖。
     """
     fake = os.getenv("ADAPTER_RUNNER", "engine").lower() == "fake"
-    stock_runner = FakeRunner() if fake else EngineRunner()
-    holdings_runner = FakeHoldingsRunner() if fake else HoldingsRunner()
-    brief_runner = FakeBriefRunner() if fake else BriefRunner()
-    # 回测无 LLM（纯逻辑 + baostock），fake 模式也走真逻辑，便于链路自测
+    if fake:
+        stock_runner = FakeRunner()
+        holdings_runner = FakeHoldingsRunner()
+        brief_runner = FakeBriefRunner()
+    else:
+        from .runner import EngineRunner
+        from .holdings_runner import HoldingsRunner
+        from .brief_engine import BriefRunner
+        stock_runner = EngineRunner()
+        holdings_runner = HoldingsRunner()
+        brief_runner = BriefRunner()
+    # 回测无 LLM（纯逻辑 + baostock），fake 模式也走真逻辑，便于链路自测；
+    # lazy import 保持 fake 模式不加载引擎重依赖（langgraph/chromadb 等）
+    from .backtest_runner import BacktestRunner
     return {
         "stock": stock_runner,
         "holdings": holdings_runner,
@@ -256,17 +266,34 @@ def _performance_summary(code: Optional[str]) -> dict:
 
 
 async def _sse_gen(manager: TaskManager, task_id: str):
-    """把内部事件 dict 转成 SSE 命名字段（event: stage / data: {...}）。"""
+    """把内部事件 dict 转成 SSE 命名字段（event: stage / data: {...}）。
+
+    事件协议（节点跟踪方案 §4）：
+      - pipeline:  任务启动时一次，下发管道清单（phases/total_steps）
+      - stage:     节点完成，结构化字段（node_id/phase/status/step_index/elapsed_ms）
+      - trace:     agent 产出内容摘要（content_preview/content_len）
+      - progress:  进度条百分比（percent/phase）
+      - result:    最终结果（signal/reports）
+      - error:     异常
+      - done:      流结束
+
+    向后兼容：旧 str-based stage 事件（node/message）仍然透传。
+    """
     async for ev in manager.stream_events(task_id):
         ev_type = ev.get("type", "stage")
         payload = {k: v for k, v in ev.items() if k != "type"}
-        # 只发需要下发的字段
+
         if ev_type == "stage":
-            data = {"node": payload.get("node"), "message": payload.get("message")}
+            # 结构化 stage：透传全部字段；旧 str 事件只有 node/message 也会透传
+            data = payload
         elif ev_type == "result":
             data = payload.get("data") or {}
         elif ev_type == "error":
-            data = {"message": payload.get("message", "未知错误")}
+            data = {"message": payload.get("message", "未知错误"),
+                    **({"node_id": payload["node_id"]} if "node_id" in payload else {})}
+        elif ev_type in ("pipeline", "trace", "progress"):
+            # 新增事件类型：全量透传
+            data = payload
         else:  # done / heartbeat
             data = {}
         yield {"event": ev_type, "data": json.dumps(data, ensure_ascii=False)}
