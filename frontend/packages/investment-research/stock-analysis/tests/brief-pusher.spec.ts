@@ -3,6 +3,7 @@ import { setupBriefPusher } from '../src/brief-pusher.ts'
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -15,7 +16,7 @@ describe('stock-analysis brief pusher', () => {
     expect(effects).toEqual([])
   })
 
-  it('polls at the minimum interval, follows the allowlist and marks only delivered briefs', async () => {
+  it('polls at the minimum interval, follows the allowlist, and disposer stops later polls', async () => {
     vi.useFakeTimers()
     const effects: Array<() => (() => void)> = []
     const delivered: string[] = []
@@ -42,10 +43,17 @@ describe('stock-analysis brief pusher', () => {
 
     const dispose = effects[0]!()
     await vi.advanceTimersByTimeAsync(0)
-    dispose()
 
     expect(delivered).toEqual(['[插件播报 · 盘前简报]\n盘前简报 · 2026-08-20\n\n关注白酒'])
     expect(calls).toContainEqual(['http://adapter.test/brief/brief%2Fa/dsh-pushed', 'POST'])
+    const initialPolls = calls.filter(([url]) => url.endsWith('/brief/latest')).length
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(calls.filter(([url]) => url.endsWith('/brief/latest'))).toHaveLength(initialPolls)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(calls.filter(([url]) => url.endsWith('/brief/latest'))).toHaveLength(initialPolls + 1)
+    dispose()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls.filter(([url]) => url.endsWith('/brief/latest'))).toHaveLength(initialPolls + 1)
   })
 
   it('does not push an already marked brief and warns when agents are unavailable', () => {
@@ -83,7 +91,7 @@ describe('stock-analysis brief pusher', () => {
     expect(marks).toBe(expectedMarks)
   })
 
-  it('does not broadcast or mark a brief with no substantive summary', async () => {
+  it('preserves the legacy title-only delivery for a whitespace-only brief', async () => {
     vi.useFakeTimers()
     const effects: Array<() => (() => void)> = []
     const delivered: unknown[] = []
@@ -93,6 +101,32 @@ describe('stock-analysis brief pusher', () => {
       marks++
       return new Response('{}')
     }))
+    setupBriefPusher({
+      agents: { roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] },
+      effect(callback: () => () => void) { effects.push(callback) },
+    } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+
+    const dispose = effects[0]!()
+    await vi.advanceTimersByTimeAsync(0)
+    dispose()
+
+    expect(delivered).toHaveLength(1)
+    expect(marks).toBe(1)
+  })
+
+  it('keeps the defensive empty-body guard for malformed string normalization', async () => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => void)> = []
+    const delivered: unknown[] = []
+    let marks = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/brief/latest')) return new Response(JSON.stringify({ id: 'malformed' }))
+      marks++
+      return new Response('{}')
+    }))
+    vi.spyOn(String.prototype, 'trim').mockReturnValue('')
     setupBriefPusher({
       agents: { roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] },
       effect(callback: () => () => void) { effects.push(callback) },
