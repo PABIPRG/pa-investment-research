@@ -98,6 +98,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         return {
+            "service": "trading-core",
             "status": "ok",
             "runners": {k: v.name for k, v in manager.registry.items()},
         }
