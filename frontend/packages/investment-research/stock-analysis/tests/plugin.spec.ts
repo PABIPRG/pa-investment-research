@@ -193,19 +193,26 @@ describe('stock-analysis function plugin', () => {
     await defaults.get('market_brief')!.execute({}, exec)
     await defaults.get('set_holdings')!.execute({ holdings: [] }, exec)
 
-    expect(requests.slice(0, 12).map(([url, method, body]) => [url.replace('http://adapter.test', ''), method, body])).toEqual([
-      ['/analyze', 'POST', '{"ticker":"600519","date":"2026-08-20","research_depth":"deep","config_overrides":{"rounds":2},"risk_profile":"balanced"}'],
-      ['/analyze/t1/stream', 'GET', undefined],
-      ['/holdings/analyze', 'POST', '{"mode":"quick","holdings":[{"ticker":"600519","quantity":1,"cost_price":10}],"use_saved":false,"risk_profile":"conservative"}'],
-      ['/analyze/t1/stream', 'GET', undefined],
-      ['/brief', 'POST', '{"period":"post_market","scope":"watchlist","tickers":["600519"],"risk_profile":"aggressive"}'],
-      ['/analyze/t1/stream', 'GET', undefined],
-      ['/watchlist', 'POST', '{"tickers":["600519"]}'],
-      ['/holdings/save', 'POST', '{"holdings":[{"ticker":"600519","quantity":1,"cost_price":10}]}'],
-      ['/watchlist', 'GET', undefined],
-      ['/risk_profile', 'POST', '{"risk_profile":"aggressive"}'],
-      ['/risk_profile', 'GET', undefined],
-      ['/brief/latest', 'GET', undefined],
+    expect(requests).toEqual([
+      ['http://adapter.test/analyze', 'POST', '{"ticker":"600519","date":"2026-08-20","research_depth":"deep","config_overrides":{"rounds":2},"risk_profile":"balanced"}'],
+      ['http://adapter.test/analyze/t1/stream', 'GET', undefined],
+      ['http://adapter.test/holdings/analyze', 'POST', '{"mode":"quick","holdings":[{"ticker":"600519","quantity":1,"cost_price":10}],"use_saved":false,"risk_profile":"conservative"}'],
+      ['http://adapter.test/analyze/t1/stream', 'GET', undefined],
+      ['http://adapter.test/brief', 'POST', '{"period":"post_market","scope":"watchlist","tickers":["600519"],"risk_profile":"aggressive"}'],
+      ['http://adapter.test/analyze/t1/stream', 'GET', undefined],
+      ['http://adapter.test/watchlist', 'POST', '{"tickers":["600519"]}'],
+      ['http://adapter.test/holdings/save', 'POST', '{"holdings":[{"ticker":"600519","quantity":1,"cost_price":10}]}'],
+      ['http://adapter.test/watchlist', 'GET', undefined],
+      ['http://adapter.test/risk_profile', 'POST', '{"risk_profile":"aggressive"}'],
+      ['http://adapter.test/risk_profile', 'GET', undefined],
+      ['http://adapter.test/brief/latest', 'GET', undefined],
+      ['http://127.0.0.1:8000/analyze', 'POST', '{"ticker":"600519"}'],
+      ['http://127.0.0.1:8000/analyze/t1/stream', 'GET', undefined],
+      ['http://127.0.0.1:8000/holdings/analyze', 'POST', '{"mode":"deep"}'],
+      ['http://127.0.0.1:8000/analyze/t1/stream', 'GET', undefined],
+      ['http://127.0.0.1:8000/brief', 'POST', '{"period":"now"}'],
+      ['http://127.0.0.1:8000/analyze/t1/stream', 'GET', undefined],
+      ['http://127.0.0.1:8000/holdings/save', 'POST', '{"holdings":[]}'],
     ])
   })
 
