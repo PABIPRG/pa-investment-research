@@ -40,9 +40,17 @@ import {
   type HoldingsSignal,
 } from './render.ts'
 
-export const name = 'stock-analysis'
+export const name = 'investment-stock-analysis'
 
 export interface Config {
+  adapterBaseUrl?: string
+  streamTimeoutMs?: number
+  enableInChatPush?: boolean
+  pushPollMs?: number
+  pushSessions?: string[]
+}
+
+interface ResolvedConfig {
   adapterBaseUrl: string
   streamTimeoutMs: number
   enableInChatPush: boolean
@@ -69,7 +77,7 @@ const RISK_PROFILE_PARAM = {
 
 /** 通用流式任务：POST 启动 → SSE 消费 → 返回 lossless 结果。 */
 async function runStreamingTask(
-  config: Config,
+  config: ResolvedConfig,
   exec: ToolRunContext,
   path: string,
   body: Record<string, unknown>,
@@ -83,15 +91,26 @@ async function runStreamingTask(
   return result as { signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }
 }
 
-export function apply(ctx: Context, config: Config) {
+export function apply(ctx: Context, config: Config): void {
+  const resolvedConfig = {
+    adapterBaseUrl: config.adapterBaseUrl ?? 'http://127.0.0.1:8000',
+    streamTimeoutMs: config.streamTimeoutMs ?? 600_000,
+    enableInChatPush: config.enableInChatPush ?? false,
+    pushPollMs: config.pushPollMs ?? 120_000,
+    pushSessions: config.pushSessions ?? [],
+  }
   setupBriefPusher(ctx, {
-    adapterBaseUrl: config.adapterBaseUrl,
-    enableInChatPush: config.enableInChatPush,
-    pushPollMs: config.pushPollMs,
-    pushSessions: config.pushSessions,
+    adapterBaseUrl: resolvedConfig.adapterBaseUrl,
+    enableInChatPush: resolvedConfig.enableInChatPush,
+    pushPollMs: resolvedConfig.pushPollMs,
+    pushSessions: resolvedConfig.pushSessions,
   })
 
-  ctx.tools.register(
+  const register = (tool: Parameters<Context['tools']['register']>[0]): void => {
+    ctx.effect(() => ctx.tools.register(tool))
+  }
+
+  register(
     defineTool({
       name: 'analyze_stock',
       description:
@@ -165,14 +184,14 @@ export function apply(ctx: Context, config: Config) {
         if (args.config_overrides !== undefined) body.config_overrides = args.config_overrides
         if (args.risk_profile !== undefined) body.risk_profile = args.risk_profile
 
-        const taskId = await startAnalysis(config.adapterBaseUrl, body, exec.signal)
+        const taskId = await startAnalysis(resolvedConfig.adapterBaseUrl, body, exec.signal)
 
         // 2) 消费 SSE 进度流，逐阶段注入模型上下文
         // consumeSse 内部会逐阶段 injectProgress 到模型上下文
         const result = await consumeSse(
-          `${config.adapterBaseUrl}/analyze/${taskId}/stream`,
+          `${resolvedConfig.adapterBaseUrl}/analyze/${taskId}/stream`,
           exec,
-          config.streamTimeoutMs,
+          resolvedConfig.streamTimeoutMs,
         )
         // 适配器返回体是 lossless JSON；render/presentationMeta 内再按 AnalyzeResult 读取
         return result as { signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }
@@ -181,7 +200,7 @@ export function apply(ctx: Context, config: Config) {
   )
 
   // ── 功能3：持仓风险分析（analyze_holdings）────────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'analyze_holdings',
       description:
@@ -235,13 +254,13 @@ export function apply(ctx: Context, config: Config) {
         if (args.holdings !== undefined) body.holdings = args.holdings
         if (args.use_saved !== undefined) body.use_saved = args.use_saved
         if (args.risk_profile !== undefined) body.risk_profile = args.risk_profile
-        return runStreamingTask(config, exec, '/holdings/analyze', body)
+        return runStreamingTask(resolvedConfig, exec, '/holdings/analyze', body)
       },
     }),
   )
 
   // ── 功能4：市场简报（market_brief）──────────────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'market_brief',
       description:
@@ -295,13 +314,13 @@ export function apply(ctx: Context, config: Config) {
         if (args.scope !== undefined) body.scope = args.scope
         if (args.tickers !== undefined) body.tickers = args.tickers
         if (args.risk_profile !== undefined) body.risk_profile = args.risk_profile
-        return runStreamingTask(config, exec, '/brief', body)
+        return runStreamingTask(resolvedConfig, exec, '/brief', body)
       },
     }),
   )
 
   // ── 自选列表（set_watchlist / get_watchlist）────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'set_watchlist',
       description: '整体替换自选股票列表（覆盖 600519、000858 等），供简报/持仓分析的 watchlist 维度使用。',
@@ -330,13 +349,13 @@ export function apply(ctx: Context, config: Config) {
       }),
       async execute(args, exec) {
         const tickers = (args as { tickers: string[] }).tickers
-        return (await setWatchlist(config.adapterBaseUrl, tickers, exec.signal)) as { saved?: number }
+        return (await setWatchlist(resolvedConfig.adapterBaseUrl, tickers, exec.signal)) as { saved?: number }
       },
     }),
   )
 
   // ── 持仓保存（set_holdings，供 analyze_holdings 的 use_saved 复用）──
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'set_holdings',
       description:
@@ -367,12 +386,12 @@ export function apply(ctx: Context, config: Config) {
       }),
       async execute(args, exec) {
         const holdings = ((args as { holdings: unknown }).holdings ?? []) as HoldingInput[]
-        return (await saveHoldings(config.adapterBaseUrl, holdings, exec.signal)) as { saved?: number }
+        return (await saveHoldings(resolvedConfig.adapterBaseUrl, holdings, exec.signal)) as { saved?: number }
       },
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'get_watchlist',
       description: '读取当前自选股票列表。',
@@ -394,13 +413,13 @@ export function apply(ctx: Context, config: Config) {
         content: [{ type: 'text', text: JSON.stringify((result as { tickers?: string[] }).tickers ?? []) }],
       }),
       async execute(_args, exec) {
-        return (await getWatchlist(config.adapterBaseUrl, exec.signal)) as { tickers?: string[] }
+        return (await getWatchlist(resolvedConfig.adapterBaseUrl, exec.signal)) as { tickers?: string[] }
       },
     }),
   )
 
   // ── 风险偏好画像（set_risk_profile / get_risk_profile）────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'set_risk_profile',
       description:
@@ -441,7 +460,7 @@ export function apply(ctx: Context, config: Config) {
       }),
       async execute(args, exec) {
         const riskProfile = String((args as { risk_profile: string }).risk_profile)
-        return (await setRiskProfile(config.adapterBaseUrl, riskProfile, exec.signal)) as {
+        return (await setRiskProfile(resolvedConfig.adapterBaseUrl, riskProfile, exec.signal)) as {
           risk_profile?: string
           label?: string
         }
@@ -449,7 +468,7 @@ export function apply(ctx: Context, config: Config) {
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'get_risk_profile',
       description: '读取当前保存的风险偏好画像（conservative/balanced/aggressive）及中文名。',
@@ -480,7 +499,7 @@ export function apply(ctx: Context, config: Config) {
         content: [{ type: 'text', text: String((result as { label?: string }).label ?? '') }],
       }),
       async execute(_args, exec) {
-        return (await getRiskProfile(config.adapterBaseUrl, exec.signal)) as {
+        return (await getRiskProfile(resolvedConfig.adapterBaseUrl, exec.signal)) as {
           risk_profile?: string
           label?: string
         }
@@ -489,7 +508,7 @@ export function apply(ctx: Context, config: Config) {
   )
 
   // ── 简报读取（get_latest_brief，供对话内推送/主动查询）────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'get_latest_brief',
       description: '读取最近一次生成的市场简报（含是否已在 dsh 对话内播报的标记）。',
@@ -526,7 +545,7 @@ export function apply(ctx: Context, config: Config) {
         content: [{ type: 'text', text: String((result as { id?: string }).id ?? '暂无简报') }],
       }),
       async execute(_args, exec) {
-        return (await getLatestBrief(config.adapterBaseUrl, exec.signal)) as {
+        return (await getLatestBrief(resolvedConfig.adapterBaseUrl, exec.signal)) as {
           id?: string
           period?: string
           trade_date?: string

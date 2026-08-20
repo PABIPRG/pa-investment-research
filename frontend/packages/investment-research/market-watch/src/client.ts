@@ -10,12 +10,13 @@ export async function httpJson<T = unknown>(
   body?: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  })
+  const init: RequestInit = { method }
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  if (signal !== undefined) init.signal = signal
+  const res = await fetch(`${baseUrl}${path}`, init)
   if (!res.ok) {
     throw new Error(`适配器 HTTP ${res.status}: ${await res.text()}`)
   }

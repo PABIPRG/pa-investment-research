@@ -47,9 +47,11 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
       const brief = (await getLatestBrief(config.adapterBaseUrl)) as LatestBrief
       if (!brief.id || brief.dsh_pushed) return
 
+      const summary = brief.summary?.trim()
+      // 没有正文的轮询结果不是可播报简报，不能只推送标题并标记已读。
+      if (!summary) return
       const label = PERIOD_LABEL[brief.period ?? ''] ?? '盘中'
-      const body = `${label}简报 · ${brief.trade_date ?? ''}\n\n${brief.summary ?? ''}`.trim()
-      if (!body) return
+      const body = `${label}简报 · ${brief.trade_date ?? ''}\n\n${summary}`
 
       const msg = createUserMessage({
         content: [{ type: 'text', text: `[插件播报 · ${label}简报]\n${body}` }],

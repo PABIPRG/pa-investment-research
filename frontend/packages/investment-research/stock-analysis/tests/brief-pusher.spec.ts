@@ -1,0 +1,144 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { setupBriefPusher } from '../src/brief-pusher.ts'
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
+
+describe('stock-analysis brief pusher', () => {
+  it('is disabled by default without creating a polling effect', () => {
+    const effects: Array<() => (() => void)> = []
+    setupBriefPusher({ effect(callback: () => () => void) { effects.push(callback) } } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: false, pushPollMs: 1, pushSessions: [],
+    })
+    expect(effects).toEqual([])
+  })
+
+  it('polls at the minimum interval, follows the allowlist and marks only delivered briefs', async () => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => void)> = []
+    const delivered: string[] = []
+    const calls: Array<[string, string | undefined]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init?.method])
+      if (url.endsWith('/brief/latest')) {
+        return new Response(JSON.stringify({ id: 'brief/a', period: 'pre_market', trade_date: '2026-08-20', summary: '关注白酒' }))
+      }
+      return new Response(JSON.stringify({ ok: true }))
+    }))
+    setupBriefPusher({
+      agents: {
+        roots: () => [
+          { id: 'allowed', followup(message: { content: Array<{ text: string }> }) { delivered.push(message.content[0]!.text) } },
+          { id: 'other', followup() { throw new Error('must not be selected') } },
+        ],
+      },
+      effect(callback: () => () => void) { effects.push(callback) },
+      logger: { info() {} },
+    } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 1, pushSessions: ['allowed'],
+    })
+
+    const dispose = effects[0]!()
+    await vi.advanceTimersByTimeAsync(0)
+    dispose()
+
+    expect(delivered).toEqual(['[插件播报 · 盘前简报]\n盘前简报 · 2026-08-20\n\n关注白酒'])
+    expect(calls).toContainEqual(['http://adapter.test/brief/brief%2Fa/dsh-pushed', 'POST'])
+  })
+
+  it('does not push an already marked brief and warns when agents are unavailable', () => {
+    const effects: unknown[] = []
+    const warnings: string[] = []
+    setupBriefPusher({ effect(callback: unknown) { effects.push(callback) }, logger: { warn(message: string) { warnings.push(message) } } } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+    expect(effects).toEqual([])
+    expect(warnings.join('')).toContain('agents 服务不可用')
+  })
+
+  it.each([
+    ['missing identity', {}, 0],
+    ['already pushed', { id: 'b1', dsh_pushed: true }, 0],
+    ['failed delivery', { id: 'b1', period: 'other', summary: '内容' }, 0],
+  ])('does not mark %s without a completed delivery', async (_label, brief, expectedMarks) => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => void)> = []
+    let marks = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/brief/latest')) return new Response(JSON.stringify(brief))
+      marks++
+      return new Response('{}')
+    }))
+    setupBriefPusher({
+      agents: { roots: () => [{ id: 'bad', followup() { throw new Error('offline') } }] },
+      effect(callback: () => () => void) { effects.push(callback) },
+    } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+    const dispose = effects[0]!()
+    await vi.advanceTimersByTimeAsync(0)
+    dispose()
+    expect(marks).toBe(expectedMarks)
+  })
+
+  it('does not broadcast or mark a brief with no substantive summary', async () => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => void)> = []
+    const delivered: unknown[] = []
+    let marks = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/brief/latest')) return new Response(JSON.stringify({ id: 'empty', period: 'now', summary: '   ' }))
+      marks++
+      return new Response('{}')
+    }))
+    setupBriefPusher({
+      agents: { roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] },
+      effect(callback: () => () => void) { effects.push(callback) },
+    } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+
+    const dispose = effects[0]!()
+    await vi.advanceTimersByTimeAsync(0)
+    dispose()
+
+    expect(delivered).toEqual([])
+    expect(marks).toBe(0)
+  })
+
+  it('skips a concurrent poll and safely handles an agents service that disappears during delivery', async () => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => void)> = []
+    let beginFetch!: () => void
+    const fetchStarted = new Promise<void>(resolve => { beginFetch = resolve })
+    let finishFetch!: () => void
+    const fetchFinished = new Promise<void>(resolve => { finishFetch = resolve })
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      beginFetch()
+      await fetchFinished
+      return new Response(JSON.stringify({ id: 'brief', summary: '正文' }))
+    }))
+    let agentLookups = 0
+    const ctx = {
+      get agents() {
+        agentLookups++
+        return agentLookups === 1 ? { roots: () => [] } : undefined
+      },
+      effect(callback: () => () => void) { effects.push(callback) },
+    }
+    setupBriefPusher(ctx as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+
+    const dispose = effects[0]!()
+    await fetchStarted
+    await vi.advanceTimersByTimeAsync(30_000)
+    finishFetch()
+    await vi.advanceTimersByTimeAsync(0)
+    dispose()
+
+    expect(agentLookups).toBeGreaterThan(1)
+  })
+})

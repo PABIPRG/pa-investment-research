@@ -56,12 +56,13 @@ export async function httpJson(
   body?: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const res = await fetch(`${baseUrl}${path}`, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
-  })
+  const init: RequestInit = { method }
+  if (body !== undefined) {
+    init.headers = { 'Content-Type': 'application/json' }
+    init.body = JSON.stringify(body)
+  }
+  if (signal !== undefined) init.signal = signal
+  const res = await fetch(`${baseUrl}${path}`, init)
   if (!res.ok) {
     throw new Error(`适配器 HTTP ${res.status}: ${await res.text()}`)
   }
@@ -145,7 +146,10 @@ function parseFrame(raw: string): SseFrame {
     else if (line.startsWith('data:')) data = line.slice(5).trim()
     // 忽略注释（心跳 ping）与未知字段
   }
-  return { event, data }
+  return {
+    ...(event === undefined ? {} : { event }),
+    ...(data === undefined ? {} : { data }),
+  }
 }
 
 /**

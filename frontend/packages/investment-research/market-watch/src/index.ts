@@ -34,10 +34,10 @@ import {
   renderWatchlist,
 } from './render.ts'
 
-export const name = 'market-watch'
+export const name = 'investment-market-watch'
 
 export interface Config {
-  adapterBaseUrl: string
+  adapterBaseUrl?: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -63,11 +63,14 @@ function present(title: string) {
   }
 }
 
-export function apply(ctx: Context, config: Config) {
-  const base = config.adapterBaseUrl
+export function apply(ctx: Context, config: Config): void {
+  const base = config.adapterBaseUrl ?? 'http://127.0.0.1:8100'
+  const register = (tool: Parameters<Context['tools']['register']>[0]): void => {
+    ctx.effect(() => ctx.tools.register(tool))
+  }
 
   // ── 自选 ──────────────────────────────────────────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'watch_add',
       description:
@@ -93,11 +96,14 @@ export function apply(ctx: Context, config: Config) {
         ],
       },
       ...present('加入自选'),
-      execute: (args) => watchAdd(base, { code: args.code, name: args.name }),
+      execute: (args) => watchAdd(base, {
+        code: args.code,
+        ...(args.name === undefined ? {} : { name: args.name }),
+      }),
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'watch_remove',
       description: '从盯盘自选列表移除一只股票。',
@@ -119,7 +125,7 @@ export function apply(ctx: Context, config: Config) {
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'watch_list',
       description: '列出当前盯盘自选列表。',
@@ -141,7 +147,7 @@ export function apply(ctx: Context, config: Config) {
   )
 
   // ── 盯盘规则 ──────────────────────────────────────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'add_alert',
       description:
@@ -172,16 +178,16 @@ export function apply(ctx: Context, config: Config) {
       execute: (args) =>
         addAlert(base, {
           name: args.name,
-          ticker: args.ticker,
-          combine: args.combine,
+          ...(args.ticker === undefined ? {} : { ticker: args.ticker }),
+          ...(args.combine === undefined ? {} : { combine: args.combine }),
           conditions: args.conditions as unknown as AlertConditionInput[],
-          cooldown_min: args.cooldown_min,
-          daily_cap: args.daily_cap,
+          ...(args.cooldown_min === undefined ? {} : { cooldown_min: args.cooldown_min }),
+          ...(args.daily_cap === undefined ? {} : { daily_cap: args.daily_cap }),
         }),
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'list_alerts',
       description: '列出全部盯盘规则（含启用状态 / 冷却 / 每日上限）。',
@@ -199,7 +205,7 @@ export function apply(ctx: Context, config: Config) {
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'remove_alert',
       description: '删除一条盯盘规则（id 来自 list_alerts）。',
@@ -222,7 +228,7 @@ export function apply(ctx: Context, config: Config) {
   )
 
   // ── 扫描 / 面板 / 技术信号 ─────────────────────────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'scan_movers',
       description:
@@ -247,11 +253,15 @@ export function apply(ctx: Context, config: Config) {
         render: (_args, value) => [{ type: 'text' as const, text: renderScan(value as Record<string, unknown>) }],
       },
       ...present('异动扫描'),
-      execute: (args) => scanMovers(base, { kind: args.kind ?? 'gainers', top_n: args.top_n ?? 10, min_amount_yi: args.min_amount_yi }),
+      execute: (args) => scanMovers(base, {
+        kind: args.kind ?? 'gainers',
+        top_n: args.top_n ?? 10,
+        ...(args.min_amount_yi === undefined ? {} : { min_amount_yi: args.min_amount_yi }),
+      }),
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'watch_overview',
       description:
@@ -275,7 +285,7 @@ export function apply(ctx: Context, config: Config) {
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'tech_signal',
       description:
@@ -299,12 +309,15 @@ export function apply(ctx: Context, config: Config) {
         render: (_args, value) => [{ type: 'text' as const, text: renderTechSignal(value as Record<string, unknown>) }],
       },
       ...present('技术信号'),
-      execute: (args) => techSignal(base, { code: args.code, lookback: args.lookback }),
+      execute: (args) => techSignal(base, {
+        code: args.code,
+        ...(args.lookback === undefined ? {} : { lookback: args.lookback }),
+      }),
     }),
   )
 
   // ── 新闻 / 简报 ────────────────────────────────────────────────────────
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'news_express',
       description:
@@ -328,7 +341,7 @@ export function apply(ctx: Context, config: Config) {
     }),
   )
 
-  ctx.tools.register(
+  register(
     defineTool({
       name: 'daily_brief',
       description:
