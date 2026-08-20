@@ -81,9 +81,9 @@ describe('stock-analysis function plugin', () => {
   })
 
   it('keeps schema names and maps every tool argument to the existing adapter endpoint', async () => {
-    const requests: Array<[string, string | undefined]> = []
+    const requests: Array<[string, string, string | undefined]> = []
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      requests.push([url, init?.body as string | undefined])
+      requests.push([url, init?.method ?? 'GET', init?.body as string | undefined])
       if (url.endsWith('/stream')) {
         return new Response('event: result\ndata: {"signal":{},"reports":{},"performance_metrics":{}}\n\nevent: done\ndata: {}\n\n')
       }
@@ -108,24 +108,38 @@ describe('stock-analysis function plugin', () => {
       get_risk_profile: {},
       get_latest_brief: {},
     }
-    const presentationTitles = {
-      analyze_stock: '📈 分析 600519', analyze_holdings: '🧺 分析持仓（deep）', market_brief: '📊 now 简报',
-      set_watchlist: '⭐ 设置自选列表', set_holdings: '💼 保存持仓', get_watchlist: '⭐ 读取自选列表',
-      set_risk_profile: '🎯 设置风险偏好', get_risk_profile: '🎯 读取风险偏好', get_latest_brief: '📥 读取最近简报',
+    const callViews = {
+      analyze_stock: { card: 'generic', title: '📈 分析 600519', kind: 'other', rawInput: presentationArgs.analyze_stock },
+      analyze_holdings: { card: 'generic', title: '🧺 分析持仓（deep）', kind: 'other', rawInput: presentationArgs.analyze_holdings },
+      market_brief: { card: 'generic', title: '📊 now 简报', kind: 'other', rawInput: presentationArgs.market_brief },
+      set_watchlist: { card: 'generic', title: '⭐ 设置自选列表', kind: 'other' },
+      set_holdings: { card: 'generic', title: '💼 保存持仓', kind: 'other' },
+      get_watchlist: { card: 'generic', title: '⭐ 读取自选列表', kind: 'other' },
+      set_risk_profile: { card: 'generic', title: '🎯 设置风险偏好', kind: 'other' },
+      get_risk_profile: { card: 'generic', title: '🎯 读取风险偏好', kind: 'other' },
+      get_latest_brief: { card: 'generic', title: '📥 读取最近简报', kind: 'other' },
     }
-    const fallbackResultText = {
+    const resultTitles = {
+      analyze_stock: 'AI 多智能体分析完成', analyze_holdings: '持仓风险分析完成', market_brief: '市场简报已生成',
+      set_watchlist: '自选列表已更新', set_holdings: '持仓已保存', get_watchlist: '自选列表',
+      set_risk_profile: '风险偏好已更新', get_risk_profile: '风险偏好', get_latest_brief: '最近简报',
+    }
+    const resultText = {
       analyze_stock: '分析完成。查看模型回复中的完整决策与分步报告。', analyze_holdings: '组合市值/浮盈/集中度/逐股风险已生成。',
       market_brief: '查看模型回复中的完整简报与机会点。', set_watchlist: '已保存 0 只自选股。', set_holdings: '已保存 0 条持仓。',
       get_watchlist: '[]', set_risk_profile: '', get_risk_profile: '', get_latest_brief: '暂无简报',
     }
     for (const tool of tools) {
       const args = presentationArgs[tool.name]!
-      expect(tool.presentCall?.(args)).toMatchObject({ card: 'generic', kind: 'other', title: presentationTitles[tool.name as keyof typeof presentationTitles] })
-      expect(tool.presentResult?.(args, { meta: '完成' })).toMatchObject({ card: 'generic', content: [{ type: 'text' }] })
+      const toolName = tool.name as keyof typeof callViews
+      expect(tool.presentCall?.(args)).toEqual(callViews[toolName])
+      expect(tool.presentResult?.(args, { meta: '完成' })).toEqual({
+        card: 'generic', title: resultTitles[toolName], content: [{ type: 'text', text: toolName === 'analyze_stock' ? '完成' : resultText[toolName] }],
+      })
       expect(tool.presentResult?.(args, {})).toEqual({
         card: 'generic',
-        title: tool.name === 'analyze_stock' ? 'AI 多智能体分析完成' : tool.name === 'analyze_holdings' ? '持仓风险分析完成' : tool.name === 'market_brief' ? '市场简报已生成' : tool.name === 'set_watchlist' ? '自选列表已更新' : tool.name === 'set_holdings' ? '持仓已保存' : tool.name === 'get_watchlist' ? '自选列表' : tool.name === 'set_risk_profile' ? '风险偏好已更新' : tool.name === 'get_risk_profile' ? '风险偏好' : '最近简报',
-        content: [{ type: 'text', text: fallbackResultText[tool.name as keyof typeof fallbackResultText] }],
+        title: resultTitles[toolName],
+        content: [{ type: 'text', text: resultText[toolName] }],
       })
       expect(tool.output.render?.(args, {
         signal: {}, reports: {}, performance_metrics: {}, saved: 1, tickers: [], holdings: [],
@@ -153,13 +167,14 @@ describe('stock-analysis function plugin', () => {
       const tool = byName.get(toolName)!
       const args = presentationArgs[toolName]!
       expect(tool.output.render?.(args, value)).toEqual([{ type: 'text', text: renderedText[toolName as keyof typeof renderedText] }])
-      if (toolName === 'analyze_stock' || toolName === 'analyze_holdings' || toolName === 'market_brief') {
-        const meta = tool.output.presentationMeta?.(args, value)
-        expect(meta).toEqual(expect.any(String))
-        expect(meta).toContain(toolName === 'analyze_stock' ? '600519' : toolName === 'analyze_holdings' ? '持仓组合概览' : 'A股盘中简报')
-      } else {
-        expect(tool.output.presentationMeta).toBeUndefined()
+      const presentationMeta = {
+        analyze_stock: '## — · 600519\n\n| 目标价 | 置信度 | 风险分 |\n|---|---|---|\n| ¥— | — | — |',
+        analyze_holdings: '## 🧺 持仓组合概览（快速定量 · 0 只）\n\n| 总市值 | 总成本 | 浮动盈亏 | 加权风险 | 组合波动 | 集中度 HHI |\n|---|---|---|---|---|---|\n| ¥— | ¥— | ¥—（—） | — | — | — |',
+        market_brief: '## 📊 A股盘中简报 · （0 个机会点）',
       }
+      if (toolName in presentationMeta) {
+        expect(tool.output.presentationMeta?.(args, value)).toEqual(presentationMeta[toolName as keyof typeof presentationMeta])
+      } else expect(tool.output.presentationMeta).toBeUndefined()
     }
 
     await byName.get('analyze_stock')!.execute({ ticker: '600519', date: '2026-08-20', research_depth: 'deep', config_overrides: { rounds: 2 }, risk_profile: 'balanced' }, exec)
@@ -178,19 +193,19 @@ describe('stock-analysis function plugin', () => {
     await defaults.get('market_brief')!.execute({}, exec)
     await defaults.get('set_holdings')!.execute({ holdings: [] }, exec)
 
-    expect(requests.slice(0, 12).map(([url, body]) => [url.replace('http://adapter.test', ''), body])).toEqual([
-      ['/analyze', '{"ticker":"600519","date":"2026-08-20","research_depth":"deep","config_overrides":{"rounds":2},"risk_profile":"balanced"}'],
-      ['/analyze/t1/stream', undefined],
-      ['/holdings/analyze', '{"mode":"quick","holdings":[{"ticker":"600519","quantity":1,"cost_price":10}],"use_saved":false,"risk_profile":"conservative"}'],
-      ['/analyze/t1/stream', undefined],
-      ['/brief', '{"period":"post_market","scope":"watchlist","tickers":["600519"],"risk_profile":"aggressive"}'],
-      ['/analyze/t1/stream', undefined],
-      ['/watchlist', '{"tickers":["600519"]}'],
-      ['/holdings/save', '{"holdings":[{"ticker":"600519","quantity":1,"cost_price":10}]}'],
-      ['/watchlist', undefined],
-      ['/risk_profile', '{"risk_profile":"aggressive"}'],
-      ['/risk_profile', undefined],
-      ['/brief/latest', undefined],
+    expect(requests.slice(0, 12).map(([url, method, body]) => [url.replace('http://adapter.test', ''), method, body])).toEqual([
+      ['/analyze', 'POST', '{"ticker":"600519","date":"2026-08-20","research_depth":"deep","config_overrides":{"rounds":2},"risk_profile":"balanced"}'],
+      ['/analyze/t1/stream', 'GET', undefined],
+      ['/holdings/analyze', 'POST', '{"mode":"quick","holdings":[{"ticker":"600519","quantity":1,"cost_price":10}],"use_saved":false,"risk_profile":"conservative"}'],
+      ['/analyze/t1/stream', 'GET', undefined],
+      ['/brief', 'POST', '{"period":"post_market","scope":"watchlist","tickers":["600519"],"risk_profile":"aggressive"}'],
+      ['/analyze/t1/stream', 'GET', undefined],
+      ['/watchlist', 'POST', '{"tickers":["600519"]}'],
+      ['/holdings/save', 'POST', '{"holdings":[{"ticker":"600519","quantity":1,"cost_price":10}]}'],
+      ['/watchlist', 'GET', undefined],
+      ['/risk_profile', 'POST', '{"risk_profile":"aggressive"}'],
+      ['/risk_profile', 'GET', undefined],
+      ['/brief/latest', 'GET', undefined],
     ])
   })
 
@@ -209,9 +224,9 @@ describe('stock-analysis function plugin', () => {
     })
     const rawPlugin = await import('../src/index.ts')
     const rawTools: Array<Record<string, unknown>> = []
-    const requests: Array<[string, string | undefined]> = []
+    const requests: Array<[string, string, string | undefined]> = []
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
-      requests.push([url, init?.body as string | undefined])
+      requests.push([url, init?.method ?? 'GET', init?.body as string | undefined])
       return new Response('{"saved":0}')
     }))
     rawPlugin.apply({
@@ -228,6 +243,6 @@ describe('stock-analysis function plugin', () => {
       { holdings: undefined },
       { signal: new AbortController().signal },
     )).resolves.toEqual({ saved: 0 })
-    expect(requests).toEqual([['http://127.0.0.1:8000/holdings/save', '{"holdings":[]}']])
+    expect(requests).toEqual([['http://127.0.0.1:8000/holdings/save', 'POST', '{"holdings":[]}']])
   })
 })
