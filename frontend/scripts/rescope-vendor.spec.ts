@@ -109,4 +109,31 @@ describe('rewriteVendorReferences', () => {
       lines: 4,
     })
   })
+
+  it('不把字符串和 Markdown 正文中的产品标识当作模块说明符', () => {
+    const code = 'const note = "import \'cordis/request-run\'"'
+    expect(rewriteVendorReferences(
+      code,
+      'packages/extensions/cordis-host-runner/src/index.ts',
+    )).toEqual({ text: code, lines: 0 })
+
+    const prose = 'This event comes from `cordis/request-run`.'
+    expect(rewriteVendorReferences(prose, 'docs/example.md')).toEqual({
+      text: prose,
+      lines: 0,
+    })
+  })
+
+  it('在 Markdown 代码块中重写跨行模块说明符', () => {
+    const markdown = [
+      '```ts',
+      'import { Context } from',
+      "  'cordis'",
+      '```',
+    ].join('\n')
+    expect(rewriteVendorReferences(markdown, 'README.md')).toEqual({
+      text: markdown.replace("'cordis'", "'@deepseek-ai/cordis'"),
+      lines: 1,
+    })
+  })
 })

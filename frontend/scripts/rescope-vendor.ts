@@ -32,6 +32,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 const root = resolve(import.meta.dirname, '..')
 
@@ -540,58 +541,50 @@ function productToken(file: string, pattern: Pattern, subpath: string): boolean 
     || (token === 'cordis' && BARE_CORDIS_PRODUCT_FILES.has(file))
 }
 
-function skipTriviaBackward(text: string, initialOffset: number): number {
-  let offset = initialOffset
-  while (true) {
-    const before = offset
-    while (offset > 0 && /\s/.test(text[offset - 1] ?? '')) offset -= 1
+function moduleLoadCall(node: ts.CallExpression): boolean {
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return true
+  if (ts.isIdentifier(node.expression)) return node.expression.text === 'require'
+  return ts.isPropertyAccessExpression(node.expression)
+    && ts.isIdentifier(node.expression.expression)
+    && node.expression.expression.text === 'require'
+    && node.expression.name.text === 'resolve'
+}
 
-    if (text.slice(offset - 2, offset) === '*/') {
-      const commentStart = text.lastIndexOf('/*', offset - 2)
-      if (commentStart >= 0) offset = commentStart
+function moduleSpecifierOffsets(text: string, file: string): ReadonlySet<number> {
+  const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+  const offsets = new Set<number>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node)) {
+      const parent = node.parent
+      const moduleSpecifier = (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent))
+        && parent.moduleSpecifier === node
+      const externalReference = ts.isExternalModuleReference(parent) && parent.expression === node
+      const callArgument = ts.isCallExpression(parent)
+        && parent.arguments[0] === node
+        && moduleLoadCall(parent)
+      const importType = ts.isLiteralTypeNode(parent)
+        && ts.isImportTypeNode(parent.parent)
+        && parent.parent.argument === parent
+      const ambientModule = ts.isModuleDeclaration(parent) && parent.name === node
+      if (moduleSpecifier || externalReference || callArgument || importType || ambientModule) {
+        offsets.add(node.getStart(sourceFile))
+      }
     }
-    else {
-      const lineStart = text.lastIndexOf('\n', offset - 1) + 1
-      const commentStart = text.lastIndexOf('//', offset - 1)
-      if (commentStart >= lineStart) offset = commentStart
-    }
-
-    if (offset === before) return offset
+    ts.forEachChild(node, visit)
   }
+  visit(sourceFile)
+  return offsets
 }
 
-function identifierBackward(text: string, initialOffset: number): { start: number; value: string } {
-  let start = initialOffset
-  while (start > 0 && /[$\w]/.test(text[start - 1] ?? '')) start -= 1
-  return { start, value: text.slice(start, initialOffset) }
-}
-
-function moduleSpecifier(text: string, offset: number): boolean {
-  let cursor = skipTriviaBackward(text, offset)
-  if (text[cursor - 1] !== '(') {
-    const { value } = identifierBackward(text, cursor)
-    return value === 'from' || value === 'import'
-  }
-
-  cursor = skipTriviaBackward(text, cursor - 1)
-  let identifier = identifierBackward(text, cursor)
-  if (identifier.value === 'import' || identifier.value === 'require') return true
-  if (identifier.value !== 'resolve') return false
-
-  cursor = skipTriviaBackward(text, identifier.start)
-  if (text[cursor - 1] !== '.') return false
-  cursor = skipTriviaBackward(text, cursor - 1)
-  identifier = identifierBackward(text, cursor)
-  return identifier.value === 'require'
-}
-
-function rewriteLine(line: string, file: string, all: readonly Pattern[], precedingText: string): string {
-  let out = line
+function rewriteChunk(text: string, file: string, all: readonly Pattern[], code: boolean): string {
+  let out = text
   for (const pattern of all) {
     if (skipped(file, pattern)) continue
+    const moduleSpecifiers = code && pattern.from === 'cordis'
+      ? moduleSpecifierOffsets(out, file)
+      : new Set<number>()
     out = out.replace(pattern.token, (match, quote: string, subpath: string, offset: number) => {
-      if (!moduleSpecifier(`${precedingText}${out}`, precedingText.length + offset)
-        && productToken(file, pattern, subpath)) return match
+      if (!moduleSpecifiers.has(offset) && productToken(file, pattern, subpath)) return match
       return `${quote}${pattern.to}${subpath}${quote}`
     })
     out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
@@ -613,27 +606,33 @@ function rewriteLine(line: string, file: string, all: readonly Pattern[], preced
 function rewrite(text: string, file: string, all: readonly Pattern[]): { text: string; lines: number } {
   const markdown = file.endsWith('.md')
   const prose = markdown && file.startsWith('docs/')
+  if (!markdown) {
+    const out = rewriteChunk(text, file, all, true)
+    const lines = text.split('\n').filter((line, index) => line !== out.split('\n')[index]).length
+    return { text: out, lines }
+  }
+
   let insideFence = false
-  let lines = 0
-  let precedingText = ''
-  const out = text.split('\n').map((line) => {
-    if (markdown) {
-      if (/^\s*```/.test(line)) {
-        insideFence = !insideFence
-        precedingText += `${line}\n`
-        return line
-      }
-      if (!insideFence && !prose) {
-        precedingText += `${line}\n`
-        return line
-      }
+  let segmentStart = 0
+  const out = text.split('\n')
+  const rewriteSegment = (end: number): void => {
+    if (segmentStart >= end) return
+    if (!insideFence && !prose) return
+    const before = out.slice(segmentStart, end).join('\n')
+    const after = rewriteChunk(before, file, all, insideFence)
+    out.splice(segmentStart, end - segmentStart, ...after.split('\n'))
+  }
+  for (let index = 0; index < out.length; index += 1) {
+    if (/^\s*```/.test(out[index] ?? '')) {
+      rewriteSegment(index)
+      insideFence = !insideFence
+      segmentStart = index + 1
     }
-    const next = rewriteLine(line, file, all, precedingText)
-    if (next !== line) lines += 1
-    precedingText += `${next}\n`
-    return next
-  })
-  return { text: out.join('\n'), lines }
+  }
+  rewriteSegment(out.length)
+  const output = out.join('\n')
+  const lines = text.split('\n').filter((line, index) => line !== out[index]).length
+  return { text: output, lines }
 }
 
 /**
