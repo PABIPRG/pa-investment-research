@@ -2,6 +2,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { InvestmentBackendManager } from './runtime.ts'
 import type {
   Config,
@@ -43,9 +44,9 @@ export class InvestmentPythonRuntime extends Service {
 
   static Config: z<Config> = z.object({
     dshHome: z.string(),
-    startupTimeoutMs: z.number().step(1).min(1).default(30_000),
-    healthPollMs: z.number().step(1).min(1).default(250),
-    shutdownGraceMs: z.number().step(1).min(1).default(5_000),
+    startupTimeoutMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(30_000),
+    healthPollMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(250),
+    shutdownGraceMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(5_000),
     logTailBytes: z.number().step(1).min(1).default(65_536),
     logMaxBytes: z.number().step(1).min(1).default(4_194_304),
   })

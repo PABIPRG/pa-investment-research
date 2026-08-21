@@ -53,6 +53,9 @@ describe('InvestmentPythonRuntime public API', () => {
       logTailBytes: 4,
       logMaxBytes: 5,
     })
+    for (const field of ['startupTimeoutMs', 'healthPollMs', 'shutdownGraceMs'] as const) {
+      expect(() => InvestmentPythonRuntime.Config({ [field]: 2_147_483_648 })).toThrow()
+    }
   })
 
   it('registers an external backend and returns an idempotently releasable verified lease', async () => {
