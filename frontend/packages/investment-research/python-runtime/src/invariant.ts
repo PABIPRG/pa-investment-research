@@ -14,7 +14,10 @@ export const inject = ['invariants']
  * Verify ownership, refcount, and single-flight relations without touching
  * the operating system or treating persisted pids as authority.
  */
-const installInvariant: InvariantInstaller = (ctx, fail) => {
+const install: InvariantInstaller = Object.assign((
+  ctx: Parameters<InvariantInstaller>[0],
+  fail: Parameters<InvariantInstaller>[1],
+) => {
   const snapshot = ctx.investmentPythonRuntime.invariantSnapshot()
   const running = new Set(snapshot.active.map(entry => entry.definition.id))
   for (const entry of snapshot.active) {
@@ -32,8 +35,7 @@ const installInvariant: InvariantInstaller = (ctx, fail) => {
   for (const id of snapshot.flights) {
     if (running.has(id)) fail(`investment Python backend "${id}" is both starting and running`)
   }
-}
-const install: InvariantInstaller = Object.assign(installInvariant, {
+}, {
   inject: ['investmentPythonRuntime'] as const,
 })
 
