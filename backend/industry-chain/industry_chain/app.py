@@ -97,9 +97,10 @@ def graph_network(
     min_degree: int = Query(3, ge=0, le=500, description="最低度数（连线数）"),
     min_market_cap: float = Query(0, ge=0, description="最低市值（亿元，0=不限）"),
     min_share: float = Query(10, ge=0, le=100, description="连线最低权重 %（0=不限）"),
+    subject_only: int = Query(0, ge=0, le=1, description="只保留核心公司（is_subject），滤掉供应商/原材料等外部实体"),
 ):
     """全局网络切片：服务端过滤后返回渲染子集（浏览器不拉 14.8MB 全量）。"""
     try:
-        return graph.graph_network(min_degree, min_market_cap, min_share)
+        return graph.graph_network(min_degree, min_market_cap, min_share, bool(subject_only))
     except FileNotFoundError as exc:
         raise _data_or_503(exc)

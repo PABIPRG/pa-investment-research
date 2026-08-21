@@ -336,6 +336,7 @@ def graph_network(
     min_degree: int = 3,
     min_market_cap: float = 0,
     min_share: float = 10,
+    subject_only: bool = False,
 ) -> dict:
     net = network()
     raw_nodes = net["nodes"]
@@ -343,6 +344,8 @@ def graph_network(
 
     filtered_nodes = []
     for n in raw_nodes:
+        if subject_only and not n.get("is_subject"):
+            continue  # 只要核心公司，滤掉供应商/原材料等外部实体
         deg = n.get("degree") if n.get("degree") is not None else 0
         if deg < min_degree:
             continue
