@@ -1,20 +1,20 @@
-# DSH 投资研究插件迁移 Implementation Plan
+# DSH 投资研究插件迁移实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **供智能体执行者阅读：** 必须使用子技能 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，逐项执行本计划。各步骤使用复选框（`- [ ]`）语法跟踪状态。
 
-**Goal:** 在不改变已批准架构与 Python 业务 API 的前提下，把两个投研 dsh 插件迁入 `frontend` workspace，建立可组合的 Bundle/Profile 和安全的 Python Runtime，以 Electron 作为最终桌面调用入口，再把股票 HTTP/SSE 传输层提取成平台中立客户端。
+**目标：** 在不改变已批准架构与 Python 业务 API 的前提下，把两个投研 dsh 插件迁入 `frontend` workspace，建立可组合的 Bundle/Profile 和安全的 Python Runtime，以 Electron 作为最终桌面调用入口，再把股票 HTTP/SSE 传输层提取成平台中立客户端。
 
-**Architecture:** 保持 `backend/` 纯 Python；投研 Node、TypeScript 与 Cordis 业务实现归属 `frontend/packages/investment-research`，三个纯组合 Bundle 归属现有 `frontend/packages/bundle`。`ctx.investmentPythonRuntime` 统一管理 managed/external 后端租约、健康身份、进程所有权、日志与释放；三个 Bundle 由 `investment-research` Profile 按固定顺序组合；Electron 在该 Profile 之后继续应用现有 `apps/electron/electron.patch.yml`，以原生 IPC/目录选择器替换浏览器载体；股票插件最终只保留 dsh 工具注册、进度注入与渲染。
+**架构：** 保持 `backend/` 纯 Python；投研 Node、TypeScript 与 Cordis 业务实现归属 `frontend/packages/investment-research`，三个纯组合 Bundle 归属现有 `frontend/packages/bundle`。`ctx.investmentPythonRuntime` 统一管理 managed/external 后端租约、健康身份、进程所有权、日志与释放；三个 Bundle 由 `investment-research` Profile 按固定顺序组合；Electron 在该 Profile 之后继续应用现有 `apps/electron/electron.patch.yml`，以原生 IPC/目录选择器替换浏览器载体；股票插件最终只保留 dsh 工具注册、进度注入与渲染。
 
-**Tech Stack:** Python 3 + FastAPI/Uvicorn；TypeScript 5、Node.js `^22.19.0 || >=24.0.0`、pnpm `11.7.0`；Cordis、Schemastery、Vitest、tsdown；GitHub Actions 的 macOS/Windows 确定性矩阵。
+**技术栈：** Python 3 + FastAPI/Uvicorn；TypeScript 5、Node.js `^22.19.0 || >=24.0.0`、pnpm `11.7.0`；Cordis、Schemastery、Vitest、tsdown；GitHub Actions 的 macOS/Windows 确定性矩阵。
 
-**Spec:** `docs/superpowers/specs/2026-08-20-dsh-integration-boundary-design.md`
+**架构规格：** `docs/superpowers/specs/2026-08-20-dsh-integration-boundary-design.md`
 
-**Requirement amendment (2026-08-20):** 用户明确最终调用面必须基于 Electron。因此产品启动命令为 `dsh electron --profile investment-research`；仅用于检查合成配置的命令仍为 `dsh --profile investment-research --dump-default-config`。这是一项入口修正，不新增 Electron 专用 Bundle，也不改变已批准的五层 Profile 顺序。
+**需求修订（2026-08-20）：** 用户明确最终调用面必须基于 Electron。因此产品启动命令为 `dsh electron --profile investment-research`；仅用于检查合成配置的命令仍为 `dsh --profile investment-research --dump-default-config`。这是一项入口修正，不新增 Electron 专用 Bundle，也不改变已批准的五层 Profile 顺序。
 
-**Status:** 用户已于 2026-08-20 批准实施。执行须遵守本计划的三 PR 顺序、任务验证与提交边界。
+**状态：** 用户已于 2026-08-20 批准实施。执行须遵守本计划的三 PR 顺序、任务验证与提交边界。
 
-## Global Constraints
+## 全局约束
 
 - 已批准架构是实施输入，不在执行中重开 Profile/Bundle/Runtime/目录边界设计。
 - Electron 是最终产品壳层；不得把浏览器 Web server 入口作为交付入口。`dsh electron` 保持默认 `web` Profile 的向后兼容，投研桌面入口显式使用 `dsh electron --profile investment-research`。
@@ -58,17 +58,17 @@
 
 # PR 1：物理迁移与 frontend workspace 接入
 
-## Task 1：先固定 Python 健康身份契约
+## 任务 1：先固定 Python 健康身份契约
 
-**Files:**
+**文件：**
 
-- Create: `backend/dsh-trading-core/tests/__init__.py`
-- Create: `backend/dsh-trading-core/tests/test_health_contract.py`
-- Create: `backend/market-watch/tests/__init__.py`
-- Create: `backend/market-watch/tests/test_health_contract.py`
-- Modify: `backend/dsh-trading-core/adapter/app.py`
+- 新建： `backend/dsh-trading-core/tests/__init__.py`
+- 新建： `backend/dsh-trading-core/tests/test_health_contract.py`
+- 新建： `backend/market-watch/tests/__init__.py`
+- 新建： `backend/market-watch/tests/test_health_contract.py`
+- 修改： `backend/dsh-trading-core/adapter/app.py`
 
-**Interfaces:**
+**接口：**
 
 ```json
 {"service":"trading-core","status":"ok","runners":{"stock":"fake","holdings":"fake","brief":"fake"}}
@@ -105,28 +105,28 @@ git add backend/dsh-trading-core/adapter/app.py backend/dsh-trading-core/tests b
 git commit -m "test: pin investment backend health identities"
 ```
 
-## Task 2：用纯机械提交保留文件历史
+## 任务 2：用纯机械提交保留文件历史
 
-**Files:**
+**文件：**
 
-- Move: `backend/dsh-trading-core/dsh-plugin/README.md` → `frontend/packages/investment-research/stock-analysis/README.md`
-- Move: `backend/dsh-trading-core/dsh-plugin/cordis.yml` → `frontend/packages/investment-research/stock-analysis/cordis.yml`
-- Move: `backend/dsh-trading-core/dsh-plugin/package-lock.json` → `frontend/packages/investment-research/stock-analysis/package-lock.json`
-- Move: `backend/dsh-trading-core/dsh-plugin/package.json` → `frontend/packages/investment-research/stock-analysis/package.json`
-- Move: `backend/dsh-trading-core/dsh-plugin/src/brief-pusher.ts` → `frontend/packages/investment-research/stock-analysis/src/brief-pusher.ts`
-- Move: `backend/dsh-trading-core/dsh-plugin/src/client.ts` → `frontend/packages/investment-research/stock-analysis/src/client.ts`
-- Move: `backend/dsh-trading-core/dsh-plugin/src/index.ts` → `frontend/packages/investment-research/stock-analysis/src/index.ts`
-- Move: `backend/dsh-trading-core/dsh-plugin/src/render.ts` → `frontend/packages/investment-research/stock-analysis/src/render.ts`
-- Move: `backend/dsh-trading-core/dsh-plugin/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/stock-analysis/test/plugin-load.smoke.ts`
-- Move: `backend/dsh-trading-core/dsh-plugin/test/plugin.e2e.ts` → `frontend/packages/investment-research/stock-analysis/test/plugin.e2e.ts`
-- Move: `backend/dsh-trading-core/dsh-plugin/tsconfig.json` → `frontend/packages/investment-research/stock-analysis/tsconfig.json`
-- Move: `backend/market-watch/dsh-plugin/cordis.yml` → `frontend/packages/investment-research/market-watch/cordis.yml`
-- Move: `backend/market-watch/dsh-plugin/package.json` → `frontend/packages/investment-research/market-watch/package.json`
-- Move: `backend/market-watch/dsh-plugin/src/client.ts` → `frontend/packages/investment-research/market-watch/src/client.ts`
-- Move: `backend/market-watch/dsh-plugin/src/index.ts` → `frontend/packages/investment-research/market-watch/src/index.ts`
-- Move: `backend/market-watch/dsh-plugin/src/render.ts` → `frontend/packages/investment-research/market-watch/src/render.ts`
-- Move: `backend/market-watch/dsh-plugin/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/market-watch/test/plugin-load.smoke.ts`
-- Move: `backend/market-watch/dsh-plugin/tsconfig.json` → `frontend/packages/investment-research/market-watch/tsconfig.json`
+- 移动： `backend/dsh-trading-core/dsh-plugin/README.md` → `frontend/packages/investment-research/stock-analysis/README.md`
+- 移动： `backend/dsh-trading-core/dsh-plugin/cordis.yml` → `frontend/packages/investment-research/stock-analysis/cordis.yml`
+- 移动： `backend/dsh-trading-core/dsh-plugin/package-lock.json` → `frontend/packages/investment-research/stock-analysis/package-lock.json`
+- 移动： `backend/dsh-trading-core/dsh-plugin/package.json` → `frontend/packages/investment-research/stock-analysis/package.json`
+- 移动： `backend/dsh-trading-core/dsh-plugin/src/brief-pusher.ts` → `frontend/packages/investment-research/stock-analysis/src/brief-pusher.ts`
+- 移动： `backend/dsh-trading-core/dsh-plugin/src/client.ts` → `frontend/packages/investment-research/stock-analysis/src/client.ts`
+- 移动： `backend/dsh-trading-core/dsh-plugin/src/index.ts` → `frontend/packages/investment-research/stock-analysis/src/index.ts`
+- 移动： `backend/dsh-trading-core/dsh-plugin/src/render.ts` → `frontend/packages/investment-research/stock-analysis/src/render.ts`
+- 移动： `backend/dsh-trading-core/dsh-plugin/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/stock-analysis/test/plugin-load.smoke.ts`
+- 移动： `backend/dsh-trading-core/dsh-plugin/test/plugin.e2e.ts` → `frontend/packages/investment-research/stock-analysis/test/plugin.e2e.ts`
+- 移动： `backend/dsh-trading-core/dsh-plugin/tsconfig.json` → `frontend/packages/investment-research/stock-analysis/tsconfig.json`
+- 移动： `backend/market-watch/dsh-plugin/cordis.yml` → `frontend/packages/investment-research/market-watch/cordis.yml`
+- 移动： `backend/market-watch/dsh-plugin/package.json` → `frontend/packages/investment-research/market-watch/package.json`
+- 移动： `backend/market-watch/dsh-plugin/src/client.ts` → `frontend/packages/investment-research/market-watch/src/client.ts`
+- 移动： `backend/market-watch/dsh-plugin/src/index.ts` → `frontend/packages/investment-research/market-watch/src/index.ts`
+- 移动： `backend/market-watch/dsh-plugin/src/render.ts` → `frontend/packages/investment-research/market-watch/src/render.ts`
+- 移动： `backend/market-watch/dsh-plugin/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/market-watch/test/plugin-load.smoke.ts`
+- 移动： `backend/market-watch/dsh-plugin/tsconfig.json` → `frontend/packages/investment-research/market-watch/tsconfig.json`
 
 - [ ] 记录移动前清单与干净状态：
 
@@ -159,35 +159,35 @@ git add -A backend/dsh-trading-core/dsh-plugin backend/market-watch/dsh-plugin f
 git commit -m "refactor: move investment plugins into frontend"
 ```
 
-## Task 3：把迁入代码改造成合规 Host workspace 包
+## 任务 3：把迁入代码改造成合规 Host workspace 包
 
-**Files:**
+**文件：**
 
-- Modify: `frontend/packages/investment-research/stock-analysis/package.json`
-- Modify: `frontend/packages/investment-research/stock-analysis/tsconfig.json`
-- Create: `frontend/packages/investment-research/stock-analysis/src/invariant.ts`
-- Delete: `frontend/packages/investment-research/stock-analysis/package-lock.json`
-- Delete: `frontend/packages/investment-research/stock-analysis/cordis.yml`
-- Move: `frontend/packages/investment-research/stock-analysis/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/stock-analysis/tests/loader-composition.spec.ts`
-- Move: `frontend/packages/investment-research/stock-analysis/test/plugin.e2e.ts` → `frontend/packages/investment-research/stock-analysis/tests/adapter.e2e.ts`
-- Create: `frontend/packages/investment-research/stock-analysis/tests/client.spec.ts`
-- Create: `frontend/packages/investment-research/stock-analysis/tests/render.spec.ts`
-- Create: `frontend/packages/investment-research/stock-analysis/tests/brief-pusher.spec.ts`
-- Create: `frontend/packages/investment-research/stock-analysis/tests/plugin.spec.ts`
-- Modify: `frontend/packages/investment-research/market-watch/package.json`
-- Modify: `frontend/packages/investment-research/market-watch/tsconfig.json`
-- Create: `frontend/packages/investment-research/market-watch/src/invariant.ts`
-- Delete: `frontend/packages/investment-research/market-watch/cordis.yml`
-- Move: `frontend/packages/investment-research/market-watch/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/market-watch/tests/loader-composition.spec.ts`
-- Create: `frontend/packages/investment-research/market-watch/tests/client.spec.ts`
-- Create: `frontend/packages/investment-research/market-watch/tests/render.spec.ts`
-- Create: `frontend/packages/investment-research/market-watch/tests/plugin.spec.ts`
-- Modify: `frontend/tsconfig.base.json`
-- Modify: `frontend/tsconfig.host.json`
-- Modify: `frontend/pnpm-workspace.yaml`
-- Modify: `frontend/pnpm-lock.yaml`
+- 修改： `frontend/packages/investment-research/stock-analysis/package.json`
+- 修改： `frontend/packages/investment-research/stock-analysis/tsconfig.json`
+- 新建： `frontend/packages/investment-research/stock-analysis/src/invariant.ts`
+- 删除： `frontend/packages/investment-research/stock-analysis/package-lock.json`
+- 删除： `frontend/packages/investment-research/stock-analysis/cordis.yml`
+- 移动： `frontend/packages/investment-research/stock-analysis/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/stock-analysis/tests/loader-composition.spec.ts`
+- 移动： `frontend/packages/investment-research/stock-analysis/test/plugin.e2e.ts` → `frontend/packages/investment-research/stock-analysis/tests/adapter.e2e.ts`
+- 新建： `frontend/packages/investment-research/stock-analysis/tests/client.spec.ts`
+- 新建： `frontend/packages/investment-research/stock-analysis/tests/render.spec.ts`
+- 新建： `frontend/packages/investment-research/stock-analysis/tests/brief-pusher.spec.ts`
+- 新建： `frontend/packages/investment-research/stock-analysis/tests/plugin.spec.ts`
+- 修改： `frontend/packages/investment-research/market-watch/package.json`
+- 修改： `frontend/packages/investment-research/market-watch/tsconfig.json`
+- 新建： `frontend/packages/investment-research/market-watch/src/invariant.ts`
+- 删除： `frontend/packages/investment-research/market-watch/cordis.yml`
+- 移动： `frontend/packages/investment-research/market-watch/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/market-watch/tests/loader-composition.spec.ts`
+- 新建： `frontend/packages/investment-research/market-watch/tests/client.spec.ts`
+- 新建： `frontend/packages/investment-research/market-watch/tests/render.spec.ts`
+- 新建： `frontend/packages/investment-research/market-watch/tests/plugin.spec.ts`
+- 修改： `frontend/tsconfig.base.json`
+- 修改： `frontend/tsconfig.host.json`
+- 修改： `frontend/pnpm-workspace.yaml`
+- 修改： `frontend/pnpm-lock.yaml`
 
-**Preserved function-plugin API:**
+**保留的函数插件 API：**
 
 ```ts
 export const name = 'investment-stock-analysis'
@@ -246,31 +246,31 @@ git add frontend/packages/investment-research frontend/tsconfig.base.json fronte
 git commit -m "build: register investment research packages"
 ```
 
-## Task 4：清除 backend 的 Node/dsh 管理职责
+## 任务 4：清除 backend 的 Node/dsh 管理职责
 
-**Files:**
+**文件：**
 
-- Modify: `backend/dsh-trading-core/init.sh`
-- Modify: `backend/dsh-trading-core/init.bat`
-- Modify: `backend/dsh-trading-core/verify.sh`
-- Modify: `backend/dsh-trading-core/verify.bat`
-- Modify: `backend/dsh-trading-core/start.sh`
-- Modify: `backend/dsh-trading-core/start_all.bat`
-- Modify: `backend/dsh-trading-core/stop_all.sh`
-- Modify: `backend/dsh-trading-core/stop_all.bat`
-- Modify: `backend/market-watch/init.sh`
-- Modify: `backend/market-watch/init.bat`
-- Modify: `backend/market-watch/verify.sh`
-- Modify: `backend/market-watch/verify.bat`
-- Modify: `backend/market-watch/start.sh`
-- Modify: `backend/market-watch/start_all.bat`
-- Modify: `backend/market-watch/stop_all.sh`
-- Modify: `backend/market-watch/stop_all.bat`
-- Modify: `backend/dsh-trading-core/README.md`
-- Modify: `backend/dsh-trading-core/docs/前端接入指南.md`
-- Modify: `backend/dsh-trading-core/docs/跨环境运行.md`
-- Modify: `backend/dsh-trading-core/docs/风险偏好分析框架.md`
-- Modify: `backend/market-watch/README.md`
+- 修改： `backend/dsh-trading-core/init.sh`
+- 修改： `backend/dsh-trading-core/init.bat`
+- 修改： `backend/dsh-trading-core/verify.sh`
+- 修改： `backend/dsh-trading-core/verify.bat`
+- 修改： `backend/dsh-trading-core/start.sh`
+- 修改： `backend/dsh-trading-core/start_all.bat`
+- 修改： `backend/dsh-trading-core/stop_all.sh`
+- 修改： `backend/dsh-trading-core/stop_all.bat`
+- 修改： `backend/market-watch/init.sh`
+- 修改： `backend/market-watch/init.bat`
+- 修改： `backend/market-watch/verify.sh`
+- 修改： `backend/market-watch/verify.bat`
+- 修改： `backend/market-watch/start.sh`
+- 修改： `backend/market-watch/start_all.bat`
+- 修改： `backend/market-watch/stop_all.sh`
+- 修改： `backend/market-watch/stop_all.bat`
+- 修改： `backend/dsh-trading-core/README.md`
+- 修改： `backend/dsh-trading-core/docs/前端接入指南.md`
+- 修改： `backend/dsh-trading-core/docs/跨环境运行.md`
+- 修改： `backend/dsh-trading-core/docs/风险偏好分析框架.md`
+- 修改： `backend/market-watch/README.md`
 
 - [ ] 先保存失败输出：
 
@@ -298,34 +298,34 @@ git add backend
 git commit -m "refactor: keep investment backends Python-only"
 ```
 
-## Task 5：阶段一目录文档、生成目录与 Agent Note
+## 任务 5：阶段一目录文档、生成目录与 Agent Note
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/README.md`
-- Create: `frontend/packages/investment-research/README.zh.md`
-- Create: `frontend/packages/investment-research/README.i18n.yaml`
-- Rewrite: `frontend/packages/investment-research/stock-analysis/README.md`
-- Create: `frontend/packages/investment-research/stock-analysis/README.zh.md`
-- Create: `frontend/packages/investment-research/stock-analysis/README.i18n.yaml`
-- Create: `frontend/packages/investment-research/market-watch/README.md`
-- Create: `frontend/packages/investment-research/market-watch/README.zh.md`
-- Create: `frontend/packages/investment-research/market-watch/README.i18n.yaml`
-- Modify: `frontend/packages/README.md`
-- Modify: `frontend/packages/README.zh.md`
-- Modify: `frontend/packages/README.i18n.yaml`
-- Modify: `frontend/docs/tool-catalog.md`
-- Modify: `frontend/docs/tool-catalog.zh.md`
-- Modify: `frontend/docs/tool-catalog.i18n.yaml`
-- Modify: `frontend/docs/config-catalog.md`
-- Modify: `frontend/docs/config-catalog.zh.md`
-- Modify: `frontend/docs/config-catalog.i18n.yaml`
-- Modify: `frontend/docs/module-graph.md`
-- Modify: `frontend/docs/module-graph.zh.md`
-- Modify: `frontend/docs/module-graph.i18n.yaml`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.md`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.zh.md`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.i18n.yaml`
+- 新建： `frontend/packages/investment-research/README.md`
+- 新建： `frontend/packages/investment-research/README.zh.md`
+- 新建： `frontend/packages/investment-research/README.i18n.yaml`
+- 重写： `frontend/packages/investment-research/stock-analysis/README.md`
+- 新建： `frontend/packages/investment-research/stock-analysis/README.zh.md`
+- 新建： `frontend/packages/investment-research/stock-analysis/README.i18n.yaml`
+- 新建： `frontend/packages/investment-research/market-watch/README.md`
+- 新建： `frontend/packages/investment-research/market-watch/README.zh.md`
+- 新建： `frontend/packages/investment-research/market-watch/README.i18n.yaml`
+- 修改： `frontend/packages/README.md`
+- 修改： `frontend/packages/README.zh.md`
+- 修改： `frontend/packages/README.i18n.yaml`
+- 修改： `frontend/docs/tool-catalog.md`
+- 修改： `frontend/docs/tool-catalog.zh.md`
+- 修改： `frontend/docs/tool-catalog.i18n.yaml`
+- 修改： `frontend/docs/config-catalog.md`
+- 修改： `frontend/docs/config-catalog.zh.md`
+- 修改： `frontend/docs/config-catalog.i18n.yaml`
+- 修改： `frontend/docs/module-graph.md`
+- 修改： `frontend/docs/module-graph.zh.md`
+- 修改： `frontend/docs/module-graph.i18n.yaml`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.md`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.zh.md`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.i18n.yaml`
 
 - [ ] 先跑 `pnpm run doc-sync`，预期因缺 README 配对、目录索引和 generated catalog 漂移失败。
 - [ ] 组 README 只描述阶段一已有的 stock/market；包 README 写工具、配置、effect、错误、model-visible behavior、限制和测试，不预先宣称 Runtime/Profile/client 已实现。
@@ -346,7 +346,7 @@ git add frontend/packages frontend/docs frontend/.agents/notes/implemented/archi
 git commit -m "docs: document investment package ownership"
 ```
 
-## Task 6：PR 1 验收
+## 任务 6：PR 1 验收
 
 - [ ] 从根目录验证纯 Python 与 history follow；从 frontend 运行：
 
@@ -367,25 +367,25 @@ pnpm run doc-sync
 
 # PR 2：Python Runtime、Bundle、Profile 与跨平台组合
 
-## Task 7：以失败测试定义 Runtime 公共契约与路径解析
+## 任务 7：以失败测试定义 Runtime 公共契约与路径解析
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/python-runtime/package.json`
-- Create: `frontend/packages/investment-research/python-runtime/tsconfig.json`
-- Create: `frontend/packages/investment-research/python-runtime/src/types.ts`
-- Create: `frontend/packages/investment-research/python-runtime/src/path.ts`
-- Create: `frontend/packages/investment-research/python-runtime/src/health.ts`
-- Create: `frontend/packages/investment-research/python-runtime/src/index.ts`
-- Create: `frontend/packages/investment-research/python-runtime/src/invariant.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/path.spec.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/health.spec.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/public-api.spec.ts`
-- Modify: `frontend/tsconfig.base.json`
-- Modify: `frontend/tsconfig.host.json`
-- Modify: `frontend/pnpm-lock.yaml`
+- 新建： `frontend/packages/investment-research/python-runtime/package.json`
+- 新建： `frontend/packages/investment-research/python-runtime/tsconfig.json`
+- 新建： `frontend/packages/investment-research/python-runtime/src/types.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/path.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/health.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/index.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/invariant.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/path.spec.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/health.spec.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/public-api.spec.ts`
+- 修改： `frontend/tsconfig.base.json`
+- 修改： `frontend/tsconfig.host.json`
+- 修改： `frontend/pnpm-lock.yaml`
 
-**Interfaces:**
+**接口：**
 
 ```ts
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -469,19 +469,19 @@ git add frontend/packages/investment-research/python-runtime frontend/tsconfig.b
 git commit -m "feat: define investment Python runtime contract"
 ```
 
-## Task 8：实现 single-flight、进程所有权、日志与 quiescent teardown
+## 任务 8：实现 single-flight、进程所有权、日志与 quiescent teardown
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/python-runtime/src/log.ts`
-- Create: `frontend/packages/investment-research/python-runtime/src/state.ts`
-- Create: `frontend/packages/investment-research/python-runtime/src/runtime.ts`
-- Modify: `frontend/packages/investment-research/python-runtime/src/index.ts`
-- Modify: `frontend/packages/investment-research/python-runtime/src/invariant.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/runtime.spec.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/log.spec.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/state.spec.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/fixtures/fake-handle.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/log.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/state.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/src/runtime.ts`
+- 修改： `frontend/packages/investment-research/python-runtime/src/index.ts`
+- 修改： `frontend/packages/investment-research/python-runtime/src/invariant.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/runtime.spec.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/log.spec.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/state.spec.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/fixtures/fake-handle.ts`
 
 ```ts
 interface OwnedBackendState {
@@ -527,17 +527,17 @@ git add frontend/packages/investment-research/python-runtime
 git commit -m "feat: manage investment Python backends safely"
 ```
 
-## Task 9：股票插件通过 Runtime 获取后端
+## 任务 9：股票插件通过 Runtime 获取后端
 
-**Files:**
+**文件：**
 
-- Modify: `frontend/packages/investment-research/stock-analysis/package.json`
-- Modify: `frontend/packages/investment-research/stock-analysis/tsconfig.json`
-- Modify: `frontend/packages/investment-research/stock-analysis/src/index.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/src/brief-pusher.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/tests/plugin.spec.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/tests/loader-composition.spec.ts`
-- Create: `frontend/packages/investment-research/stock-analysis/tests/runtime-composition.spec.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/package.json`
+- 修改： `frontend/packages/investment-research/stock-analysis/tsconfig.json`
+- 修改： `frontend/packages/investment-research/stock-analysis/src/index.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/src/brief-pusher.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/tests/plugin.spec.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/tests/loader-composition.spec.ts`
+- 新建： `frontend/packages/investment-research/stock-analysis/tests/runtime-composition.spec.ts`
 
 ```ts
 export interface Config {
@@ -577,16 +577,16 @@ git add frontend/packages/investment-research/stock-analysis frontend/pnpm-lock.
 git commit -m "feat: acquire the trading backend through runtime"
 ```
 
-## Task 10：market-watch 插件通过 Runtime 获取后端
+## 任务 10：market-watch 插件通过 Runtime 获取后端
 
-**Files:**
+**文件：**
 
-- Modify: `frontend/packages/investment-research/market-watch/package.json`
-- Modify: `frontend/packages/investment-research/market-watch/tsconfig.json`
-- Modify: `frontend/packages/investment-research/market-watch/src/index.ts`
-- Modify: `frontend/packages/investment-research/market-watch/tests/plugin.spec.ts`
-- Modify: `frontend/packages/investment-research/market-watch/tests/loader-composition.spec.ts`
-- Create: `frontend/packages/investment-research/market-watch/tests/runtime-composition.spec.ts`
+- 修改： `frontend/packages/investment-research/market-watch/package.json`
+- 修改： `frontend/packages/investment-research/market-watch/tsconfig.json`
+- 修改： `frontend/packages/investment-research/market-watch/src/index.ts`
+- 修改： `frontend/packages/investment-research/market-watch/tests/plugin.spec.ts`
+- 修改： `frontend/packages/investment-research/market-watch/tests/loader-composition.spec.ts`
+- 新建： `frontend/packages/investment-research/market-watch/tests/runtime-composition.spec.ts`
 
 ```ts
 export interface Config {
@@ -618,34 +618,34 @@ git add frontend/packages/investment-research/market-watch frontend/pnpm-lock.ya
 git commit -m "feat: acquire the market backend through runtime"
 ```
 
-## Task 11：创建三个可独立增删的 Bundle
+## 任务 11：创建三个可独立增删的 Bundle
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/bundle/investment-runtime/package.json`
-- Create: `frontend/packages/bundle/investment-runtime/tsconfig.json`
-- Create: `frontend/packages/bundle/investment-runtime/cordis.patch.yml`
-- Create: `frontend/packages/bundle/investment-runtime/src/index.ts`
-- Create: `frontend/packages/bundle/investment-runtime/src/invariant.ts`
-- Create: `frontend/packages/bundle/investment-runtime/tests/bundle.spec.ts`
-- Create: `frontend/packages/bundle/investment-stock-analysis/package.json`
-- Create: `frontend/packages/bundle/investment-stock-analysis/tsconfig.json`
-- Create: `frontend/packages/bundle/investment-stock-analysis/cordis.patch.yml`
-- Create: `frontend/packages/bundle/investment-stock-analysis/src/index.ts`
-- Create: `frontend/packages/bundle/investment-stock-analysis/src/invariant.ts`
-- Create: `frontend/packages/bundle/investment-stock-analysis/tests/bundle.spec.ts`
-- Create: `frontend/packages/bundle/investment-market-watch/package.json`
-- Create: `frontend/packages/bundle/investment-market-watch/tsconfig.json`
-- Create: `frontend/packages/bundle/investment-market-watch/cordis.patch.yml`
-- Create: `frontend/packages/bundle/investment-market-watch/src/index.ts`
-- Create: `frontend/packages/bundle/investment-market-watch/src/invariant.ts`
-- Create: `frontend/packages/bundle/investment-market-watch/tests/bundle.spec.ts`
-- Modify: `frontend/scripts/check-workspace-constraints.ts`
-- Modify: `frontend/knip.json`
-- Modify: `frontend/tsconfig.host.json`
-- Modify: `frontend/pnpm-lock.yaml`
+- 新建： `frontend/packages/bundle/investment-runtime/package.json`
+- 新建： `frontend/packages/bundle/investment-runtime/tsconfig.json`
+- 新建： `frontend/packages/bundle/investment-runtime/cordis.patch.yml`
+- 新建： `frontend/packages/bundle/investment-runtime/src/index.ts`
+- 新建： `frontend/packages/bundle/investment-runtime/src/invariant.ts`
+- 新建： `frontend/packages/bundle/investment-runtime/tests/bundle.spec.ts`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/package.json`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/tsconfig.json`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/cordis.patch.yml`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/src/index.ts`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/src/invariant.ts`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/tests/bundle.spec.ts`
+- 新建： `frontend/packages/bundle/investment-market-watch/package.json`
+- 新建： `frontend/packages/bundle/investment-market-watch/tsconfig.json`
+- 新建： `frontend/packages/bundle/investment-market-watch/cordis.patch.yml`
+- 新建： `frontend/packages/bundle/investment-market-watch/src/index.ts`
+- 新建： `frontend/packages/bundle/investment-market-watch/src/invariant.ts`
+- 新建： `frontend/packages/bundle/investment-market-watch/tests/bundle.spec.ts`
+- 修改： `frontend/scripts/check-workspace-constraints.ts`
+- 修改： `frontend/knip.json`
+- 修改： `frontend/tsconfig.host.json`
+- 修改： `frontend/pnpm-lock.yaml`
 
-**Patch rows:**
+**补丁行：**
 
 ```yaml
 - id: investment-python-runtime
@@ -681,29 +681,29 @@ git add frontend/packages/bundle/investment-* frontend/scripts/check-workspace-c
 git commit -m "feat: add investment research bundles"
 ```
 
-## Task 12：注册 Profile、贯通 Electron 启动参数并闭合安装依赖
+## 任务 12：注册 Profile、贯通 Electron 启动参数并闭合安装依赖
 
-**Files:**
+**文件：**
 
-- Modify: `frontend/packages/boot/app-boot/src/profile.ts`
-- Modify: `frontend/packages/boot/app-boot/tests/profile.spec.ts`
-- Modify: `frontend/apps/cli/package.json`
-- Modify: `frontend/apps/cli/tsconfig.json`
-- Modify: `frontend/apps/cli/src/args.ts`
-- Modify: `frontend/apps/cli/src/bin.ts`
-- Modify: `frontend/apps/cli/src/electron.ts`
-- Modify: `frontend/apps/cli/tests/args.spec.ts`
-- Modify: `frontend/apps/cli/tests/built-bin.e2e.ts`
-- Modify: `frontend/apps/cli/tests/electron-launch.spec.ts`
-- Modify: `frontend/apps/electron/package.json`
-- Modify: `frontend/apps/electron/tsconfig.json`
-- Create: `frontend/apps/electron/src/args.ts`
-- Modify: `frontend/apps/electron/src/main.ts`
-- Create: `frontend/apps/electron/tests/args.spec.ts`
-- Modify: `frontend/apps/electron/tests/main-startup.spec.ts`
-- Modify: `frontend/pnpm-lock.yaml`
+- 修改： `frontend/packages/boot/app-boot/src/profile.ts`
+- 修改： `frontend/packages/boot/app-boot/tests/profile.spec.ts`
+- 修改： `frontend/apps/cli/package.json`
+- 修改： `frontend/apps/cli/tsconfig.json`
+- 修改： `frontend/apps/cli/src/args.ts`
+- 修改： `frontend/apps/cli/src/bin.ts`
+- 修改： `frontend/apps/cli/src/electron.ts`
+- 修改： `frontend/apps/cli/tests/args.spec.ts`
+- 修改： `frontend/apps/cli/tests/built-bin.e2e.ts`
+- 修改： `frontend/apps/cli/tests/electron-launch.spec.ts`
+- 修改： `frontend/apps/electron/package.json`
+- 修改： `frontend/apps/electron/tsconfig.json`
+- 新建： `frontend/apps/electron/src/args.ts`
+- 修改： `frontend/apps/electron/src/main.ts`
+- 新建： `frontend/apps/electron/tests/args.spec.ts`
+- 修改： `frontend/apps/electron/tests/main-startup.spec.ts`
+- 修改： `frontend/pnpm-lock.yaml`
 
-**Exact template value:**
+**精确模板值：**
 
 ```ts
 'investment-research': [
@@ -715,7 +715,7 @@ git commit -m "feat: add investment research bundles"
 ]
 ```
 
-**Electron invocation contract:**
+**Electron 调用契约：**
 
 ```ts
 interface ElectronInvocation {
@@ -732,7 +732,7 @@ export function resolveElectronProfile(argv?: readonly string[]): string
 export function runElectronApplication(options?: ElectronLaunchOptions): Promise<number>
 ```
 
-**End-to-end startup semantics:**
+**端到端启动语义：**
 
 ```text
 dsh electron --profile investment-research
@@ -775,25 +775,25 @@ git add frontend/packages/boot/app-boot frontend/apps/cli frontend/apps/electron
 git commit -m "feat: launch the investment profile in Electron"
 ```
 
-## Task 13：keyless snapshot 与 macOS/Windows managed 矩阵
+## 任务 13：keyless snapshot 与 macOS/Windows managed 矩阵
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/python-runtime/tests/fixtures/fake-project/uvicorn/__main__.py`
-- Create: `frontend/packages/investment-research/python-runtime/tests/fixtures/fake-project/fake_service.py`
-- Create: `frontend/packages/investment-research/python-runtime/tests/managed-fake-runner.e2e.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/profile-composition.e2e.ts`
-- Create: `frontend/packages/investment-research/python-runtime/tests/managed-engine.smoke.ts`
-- Create: `frontend/apps/electron/tests/investment-profile.e2e.ts`
-- Create: `frontend/examples/headless-agent/investment-research.cordis.snapshot.yml`
-- Create: `frontend/examples/headless-agent/tests/fixtures/investment-adapters.ts`
-- Create: `frontend/examples/headless-agent/tests/snapshots/investment-research/input.json`
-- Create: `frontend/examples/headless-agent/tests/snapshots/investment-research/session.jsonl`
-- Create: `frontend/examples/headless-agent/tests/snapshots/investment-research/stream-json.expected.jsonl`
-- Modify: `frontend/examples/headless-agent/tests/headless.snapshot.ts`
-- Modify: `frontend/package.json`
-- Modify: `frontend/.github/workflows/ci.yml`
-- Create: `frontend/.github/workflows/investment-engine-smoke.yml`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/fixtures/fake-project/uvicorn/__main__.py`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/fixtures/fake-project/fake_service.py`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/managed-fake-runner.e2e.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/profile-composition.e2e.ts`
+- 新建： `frontend/packages/investment-research/python-runtime/tests/managed-engine.smoke.ts`
+- 新建： `frontend/apps/electron/tests/investment-profile.e2e.ts`
+- 新建： `frontend/examples/headless-agent/investment-research.cordis.snapshot.yml`
+- 新建： `frontend/examples/headless-agent/tests/fixtures/investment-adapters.ts`
+- 新建： `frontend/examples/headless-agent/tests/snapshots/investment-research/input.json`
+- 新建： `frontend/examples/headless-agent/tests/snapshots/investment-research/session.jsonl`
+- 新建： `frontend/examples/headless-agent/tests/snapshots/investment-research/stream-json.expected.jsonl`
+- 修改： `frontend/examples/headless-agent/tests/headless.snapshot.ts`
+- 修改： `frontend/package.json`
+- 修改： `frontend/.github/workflows/ci.yml`
+- 新建： `frontend/.github/workflows/investment-engine-smoke.yml`
 
 - [ ] managed e2e 在带空格 temp project 创建真实 venv，复制 stdlib-only fake uvicorn/service；用真实 LocalSubprocessRuntime 验证 fake env、health、log/state、release 端口关闭、state 清理、无残留树。
 - [ ] profile composition 用两个 project/port 由真实 Loader 挂载 runtime+stock+market，调用至少一个股票和一个盯盘工具；另测 external attach、未知 identity、bundle 删除、Profile dump。
@@ -849,61 +849,61 @@ git add frontend/packages/investment-research/python-runtime/tests frontend/apps
 git commit -m "test: cover investment runtime across platforms"
 ```
 
-## Task 14：Runtime/Profile/Bundle 文档与 Agent Note
+## 任务 14：Runtime/Profile/Bundle 文档与 Agent Note
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/python-runtime/README.md`
-- Create: `frontend/packages/investment-research/python-runtime/README.zh.md`
-- Create: `frontend/packages/investment-research/python-runtime/README.i18n.yaml`
-- Create: `frontend/packages/bundle/investment-runtime/README.md`
-- Create: `frontend/packages/bundle/investment-runtime/README.zh.md`
-- Create: `frontend/packages/bundle/investment-runtime/README.i18n.yaml`
-- Create: `frontend/packages/bundle/investment-stock-analysis/README.md`
-- Create: `frontend/packages/bundle/investment-stock-analysis/README.zh.md`
-- Create: `frontend/packages/bundle/investment-stock-analysis/README.i18n.yaml`
-- Create: `frontend/packages/bundle/investment-market-watch/README.md`
-- Create: `frontend/packages/bundle/investment-market-watch/README.zh.md`
-- Create: `frontend/packages/bundle/investment-market-watch/README.i18n.yaml`
-- Modify: `frontend/packages/investment-research/README.md`
-- Modify: `frontend/packages/investment-research/README.zh.md`
-- Modify: `frontend/packages/investment-research/README.i18n.yaml`
-- Modify: `frontend/packages/investment-research/stock-analysis/README.md`
-- Modify: `frontend/packages/investment-research/stock-analysis/README.zh.md`
-- Modify: `frontend/packages/investment-research/stock-analysis/README.i18n.yaml`
-- Modify: `frontend/packages/investment-research/market-watch/README.md`
-- Modify: `frontend/packages/investment-research/market-watch/README.zh.md`
-- Modify: `frontend/packages/investment-research/market-watch/README.i18n.yaml`
-- Modify: `frontend/packages/bundle/README.md`
-- Modify: `frontend/packages/bundle/README.zh.md`
-- Modify: `frontend/packages/bundle/README.i18n.yaml`
-- Modify: `frontend/packages/boot/app-boot/README.md`
-- Modify: `frontend/packages/boot/app-boot/README.zh.md`
-- Modify: `frontend/packages/boot/app-boot/README.i18n.yaml`
-- Modify: `frontend/apps/cli/reference/README.md`
-- Modify: `frontend/apps/cli/reference/README.zh.md`
-- Modify: `frontend/apps/cli/reference/README.i18n.yaml`
-- Modify: `frontend/apps/electron/README.md`
-- Modify: `frontend/apps/electron/README.zh.md`
-- Modify: `frontend/apps/electron/README.i18n.yaml`
-- Create: `frontend/docs/subsystems/investment-research.md`
-- Create: `frontend/docs/subsystems/investment-research.zh.md`
-- Create: `frontend/docs/subsystems/investment-research.i18n.yaml`
-- Modify: `frontend/docs/subsystems/README.md`
-- Modify: `frontend/docs/subsystems/README.zh.md`
-- Modify: `frontend/docs/subsystems/README.i18n.yaml`
-- Modify: `frontend/scripts/gen-cordis-catalog.ts`
-- Modify: `frontend/scripts/type-equiv.manifest.json`
-- Modify: `frontend/scripts/verify-package-readme-model-experience.ts`
-- Modify: `frontend/docs/config-catalog.md`
-- Modify: `frontend/docs/config-catalog.zh.md`
-- Modify: `frontend/docs/config-catalog.i18n.yaml`
-- Modify: `frontend/docs/module-graph.md`
-- Modify: `frontend/docs/module-graph.zh.md`
-- Modify: `frontend/docs/module-graph.i18n.yaml`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.md`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.zh.md`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.i18n.yaml`
+- 新建： `frontend/packages/investment-research/python-runtime/README.md`
+- 新建： `frontend/packages/investment-research/python-runtime/README.zh.md`
+- 新建： `frontend/packages/investment-research/python-runtime/README.i18n.yaml`
+- 新建： `frontend/packages/bundle/investment-runtime/README.md`
+- 新建： `frontend/packages/bundle/investment-runtime/README.zh.md`
+- 新建： `frontend/packages/bundle/investment-runtime/README.i18n.yaml`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/README.md`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/README.zh.md`
+- 新建： `frontend/packages/bundle/investment-stock-analysis/README.i18n.yaml`
+- 新建： `frontend/packages/bundle/investment-market-watch/README.md`
+- 新建： `frontend/packages/bundle/investment-market-watch/README.zh.md`
+- 新建： `frontend/packages/bundle/investment-market-watch/README.i18n.yaml`
+- 修改： `frontend/packages/investment-research/README.md`
+- 修改： `frontend/packages/investment-research/README.zh.md`
+- 修改： `frontend/packages/investment-research/README.i18n.yaml`
+- 修改： `frontend/packages/investment-research/stock-analysis/README.md`
+- 修改： `frontend/packages/investment-research/stock-analysis/README.zh.md`
+- 修改： `frontend/packages/investment-research/stock-analysis/README.i18n.yaml`
+- 修改： `frontend/packages/investment-research/market-watch/README.md`
+- 修改： `frontend/packages/investment-research/market-watch/README.zh.md`
+- 修改： `frontend/packages/investment-research/market-watch/README.i18n.yaml`
+- 修改： `frontend/packages/bundle/README.md`
+- 修改： `frontend/packages/bundle/README.zh.md`
+- 修改： `frontend/packages/bundle/README.i18n.yaml`
+- 修改： `frontend/packages/boot/app-boot/README.md`
+- 修改： `frontend/packages/boot/app-boot/README.zh.md`
+- 修改： `frontend/packages/boot/app-boot/README.i18n.yaml`
+- 修改： `frontend/apps/cli/reference/README.md`
+- 修改： `frontend/apps/cli/reference/README.zh.md`
+- 修改： `frontend/apps/cli/reference/README.i18n.yaml`
+- 修改： `frontend/apps/electron/README.md`
+- 修改： `frontend/apps/electron/README.zh.md`
+- 修改： `frontend/apps/electron/README.i18n.yaml`
+- 新建： `frontend/docs/subsystems/investment-research.md`
+- 新建： `frontend/docs/subsystems/investment-research.zh.md`
+- 新建： `frontend/docs/subsystems/investment-research.i18n.yaml`
+- 修改： `frontend/docs/subsystems/README.md`
+- 修改： `frontend/docs/subsystems/README.zh.md`
+- 修改： `frontend/docs/subsystems/README.i18n.yaml`
+- 修改： `frontend/scripts/gen-cordis-catalog.ts`
+- 修改： `frontend/scripts/type-equiv.manifest.json`
+- 修改： `frontend/scripts/verify-package-readme-model-experience.ts`
+- 修改： `frontend/docs/config-catalog.md`
+- 修改： `frontend/docs/config-catalog.zh.md`
+- 修改： `frontend/docs/config-catalog.i18n.yaml`
+- 修改： `frontend/docs/module-graph.md`
+- 修改： `frontend/docs/module-graph.zh.md`
+- 修改： `frontend/docs/module-graph.i18n.yaml`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.md`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.zh.md`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.i18n.yaml`
 
 - [ ] SERVICE_PAGE 加 `investmentPythonRuntime: 'investment-research.md'`；subsystem 页以 `ts public-api` 固定 Runtime，并在 type-equiv manifest 登记。
 - [ ] README/model allowlist：runtime 为 none；bundles 为 indirect；stock/market 保留完整 model-visible section，不进 allowlist。
@@ -916,7 +916,7 @@ git add frontend/packages frontend/apps/cli/reference frontend/apps/electron/REA
 git commit -m "docs: document the investment runtime profile"
 ```
 
-## Task 15：PR 2 验收
+## 任务 15：PR 2 验收
 
 - [ ] 运行投研包 focused coverage、真实 Loader/Profile、Electron args/main/composition、built CLI config dump、snapshot、当前 OS matrix、build/hygiene/doc-sync。
 - [ ] 启动链签收：`dsh electron --profile investment-research` 把 Profile 名从 CLI 传到 Electron 主进程；主进程以该 Profile 调用 `runProfile`，随后应用且只应用现有 `electron.patch.yml`；`dsh electron` 仍选择 `web`。
@@ -928,25 +928,25 @@ git commit -m "docs: document the investment runtime profile"
 
 # PR 3：提取平台中立 Adapter Client
 
-## Task 16：先定义错误分类、HTTP 与 SSE 失败矩阵
+## 任务 16：先定义错误分类、HTTP 与 SSE 失败矩阵
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/adapter-client/package.json`
-- Create: `frontend/packages/investment-research/adapter-client/tsconfig.json`
-- Create: `frontend/packages/investment-research/adapter-client/src/contracts.ts`
-- Create: `frontend/packages/investment-research/adapter-client/src/http.ts`
-- Create: `frontend/packages/investment-research/adapter-client/src/sse.ts`
-- Create: `frontend/packages/investment-research/adapter-client/src/index.ts`
-- Create: `frontend/packages/investment-research/adapter-client/src/invariant.ts`
-- Create: `frontend/packages/investment-research/adapter-client/tests/http.spec.ts`
-- Create: `frontend/packages/investment-research/adapter-client/tests/sse.spec.ts`
-- Create: `frontend/packages/investment-research/adapter-client/tests/boundary.spec.ts`
-- Modify: `frontend/tsconfig.base.json`
-- Modify: `frontend/tsconfig.host.json`
-- Modify: `frontend/pnpm-lock.yaml`
+- 新建： `frontend/packages/investment-research/adapter-client/package.json`
+- 新建： `frontend/packages/investment-research/adapter-client/tsconfig.json`
+- 新建： `frontend/packages/investment-research/adapter-client/src/contracts.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/src/http.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/src/sse.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/src/index.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/src/invariant.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/tests/http.spec.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/tests/sse.spec.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/tests/boundary.spec.ts`
+- 修改： `frontend/tsconfig.base.json`
+- 修改： `frontend/tsconfig.host.json`
+- 修改： `frontend/pnpm-lock.yaml`
 
-**Error contract:**
+**错误契约：**
 
 ```ts
 export type AdapterClientErrorCode =
@@ -1025,15 +1025,15 @@ git add frontend/packages/investment-research/adapter-client frontend/tsconfig.b
 git commit -m "feat: add the investment adapter transport core"
 ```
 
-## Task 17：实现 Trading Adapter Client 完整 API
+## 任务 17：实现 Trading Adapter Client 完整 API
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/adapter-client/src/tradingAdapterClient.ts`
-- Create: `frontend/packages/investment-research/adapter-client/tests/tradingAdapterClient.spec.ts`
-- Modify: `frontend/packages/investment-research/adapter-client/src/index.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/src/tradingAdapterClient.ts`
+- 新建： `frontend/packages/investment-research/adapter-client/tests/tradingAdapterClient.spec.ts`
+- 修改： `frontend/packages/investment-research/adapter-client/src/index.ts`
 
-**Public API:**
+**公共 API：**
 
 ```ts
 export interface TradingAdapterClientOptions {
@@ -1069,19 +1069,19 @@ git add frontend/packages/investment-research/adapter-client
 git commit -m "feat: implement the trading adapter client"
 ```
 
-## Task 18：股票插件切换到纯客户端并证明行为不变
+## 任务 18：股票插件切换到纯客户端并证明行为不变
 
-**Files:**
+**文件：**
 
-- Modify: `frontend/packages/investment-research/stock-analysis/package.json`
-- Modify: `frontend/packages/investment-research/stock-analysis/tsconfig.json`
-- Modify: `frontend/packages/investment-research/stock-analysis/src/index.ts`
-- Delete: `frontend/packages/investment-research/stock-analysis/src/client.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/tests/client.spec.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/tests/plugin.spec.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/tests/loader-composition.spec.ts`
-- Modify: `frontend/packages/investment-research/stock-analysis/tests/runtime-composition.spec.ts`
-- Modify: `frontend/pnpm-lock.yaml`
+- 修改： `frontend/packages/investment-research/stock-analysis/package.json`
+- 修改： `frontend/packages/investment-research/stock-analysis/tsconfig.json`
+- 修改： `frontend/packages/investment-research/stock-analysis/src/index.ts`
+- 删除： `frontend/packages/investment-research/stock-analysis/src/client.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/tests/client.spec.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/tests/plugin.spec.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/tests/loader-composition.spec.ts`
+- 修改： `frontend/packages/investment-research/stock-analysis/tests/runtime-composition.spec.ts`
+- 修改： `frontend/pnpm-lock.yaml`
 
 - [ ] 先把 stock tests import 指向 adapter-client，并 spy：插件显式把 `globalThis.fetch` 作为参数传入；`agent.inject()` 只存在 plugin progress callback；render 输入与阶段二 snapshot 相同。
 - [ ] 运行 stock tests，预期仍用本地 client 而失败新断言。
@@ -1106,29 +1106,29 @@ git add frontend/packages/investment-research/stock-analysis frontend/pnpm-lock.
 git commit -m "refactor: use the shared trading adapter client"
 ```
 
-## Task 19：adapter-client 文档、catalog 与 Agent Note
+## 任务 19：adapter-client 文档、catalog 与 Agent Note
 
-**Files:**
+**文件：**
 
-- Create: `frontend/packages/investment-research/adapter-client/README.md`
-- Create: `frontend/packages/investment-research/adapter-client/README.zh.md`
-- Create: `frontend/packages/investment-research/adapter-client/README.i18n.yaml`
-- Modify: `frontend/packages/investment-research/README.md`
-- Modify: `frontend/packages/investment-research/README.zh.md`
-- Modify: `frontend/packages/investment-research/README.i18n.yaml`
-- Modify: `frontend/packages/investment-research/stock-analysis/README.md`
-- Modify: `frontend/packages/investment-research/stock-analysis/README.zh.md`
-- Modify: `frontend/packages/investment-research/stock-analysis/README.i18n.yaml`
-- Modify: `frontend/scripts/verify-package-readme-model-experience.ts`
-- Modify if generated output changes: `frontend/docs/config-catalog.md`
-- Modify if generated output changes: `frontend/docs/config-catalog.zh.md`
-- Modify if generated output changes: `frontend/docs/config-catalog.i18n.yaml`
-- Modify if generated output changes: `frontend/docs/module-graph.md`
-- Modify if generated output changes: `frontend/docs/module-graph.zh.md`
-- Modify if generated output changes: `frontend/docs/module-graph.i18n.yaml`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-adapter-client.md`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-adapter-client.zh.md`
-- Create: `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-adapter-client.i18n.yaml`
+- 新建： `frontend/packages/investment-research/adapter-client/README.md`
+- 新建： `frontend/packages/investment-research/adapter-client/README.zh.md`
+- 新建： `frontend/packages/investment-research/adapter-client/README.i18n.yaml`
+- 修改： `frontend/packages/investment-research/README.md`
+- 修改： `frontend/packages/investment-research/README.zh.md`
+- 修改： `frontend/packages/investment-research/README.i18n.yaml`
+- 修改： `frontend/packages/investment-research/stock-analysis/README.md`
+- 修改： `frontend/packages/investment-research/stock-analysis/README.zh.md`
+- 修改： `frontend/packages/investment-research/stock-analysis/README.i18n.yaml`
+- 修改： `frontend/scripts/verify-package-readme-model-experience.ts`
+- 若生成结果变化则修改： `frontend/docs/config-catalog.md`
+- 若生成结果变化则修改： `frontend/docs/config-catalog.zh.md`
+- 若生成结果变化则修改： `frontend/docs/config-catalog.i18n.yaml`
+- 若生成结果变化则修改： `frontend/docs/module-graph.md`
+- 若生成结果变化则修改： `frontend/docs/module-graph.zh.md`
+- 若生成结果变化则修改： `frontend/docs/module-graph.i18n.yaml`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-adapter-client.md`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-adapter-client.zh.md`
+- 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-adapter-client.i18n.yaml`
 
 - [ ] adapter README 记录 injected fetch/baseURL、API、SSE、错误 code、cancel/timeout、非浏览器绑定、限制；model allowlist 标记 none，说明 model-visible 渲染归 stock plugin。
 - [ ] stock README 链到 adapter client，工具/render/lifecycle 仍归自身；组 README 加 adapter-client，不把 market client 误写为已提取。
@@ -1141,7 +1141,7 @@ git add frontend/packages/investment-research frontend/docs frontend/scripts/ver
 git commit -m "docs: document the investment adapter client"
 ```
 
-## Task 20：最终验证、占位项扫描与 PR 3 评审
+## 任务 20：最终验证、占位项扫描与 PR 3 评审
 
 - [ ] 单元/组合/snapshot：
 
