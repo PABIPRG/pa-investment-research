@@ -29,9 +29,15 @@ def get_client() -> OpenAI:
     return _client
 
 
-def summarize(system: str, user: str, max_tokens: int = 1500) -> str:
-    """system/user 提示 → 返回模型生成的文本。失败抛异常（上层负责降级）。"""
-    resp = get_client().chat.completions.create(
+def summarize(
+    system: str, user: str, max_tokens: int = 1500, response_format: str | None = None
+) -> str:
+    """system/user 提示 → 返回模型生成的文本。失败抛异常（上层负责降级）。
+
+    response_format 非 None 时传给 create（DeepSeek 支持 "json_object"），
+    返回仍是 str，由调用方自行 json.loads。向后兼容：默认 None 行为不变。
+    """
+    kwargs = dict(
         model=settings.llm_model,
         messages=[
             {"role": "system", "content": system},
@@ -40,4 +46,7 @@ def summarize(system: str, user: str, max_tokens: int = 1500) -> str:
         max_tokens=max_tokens,
         temperature=0.4,
     )
+    if response_format:
+        kwargs["response_format"] = {"type": response_format}
+    resp = get_client().chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()

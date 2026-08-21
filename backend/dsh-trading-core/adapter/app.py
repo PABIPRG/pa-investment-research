@@ -12,12 +12,14 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
+from . import kyc as kyc_mod
 from .analyzer import TaskManager
 from .backtest_engine import compute_summary
 from .decision_recorder import load_evaluated_results
@@ -28,6 +30,9 @@ from .schemas import (
     BacktestRunRequest,
     BriefRequest,
     HoldingsRequest,
+    KycAdjustRequest,
+    KycParseRequest,
+    KycQuestionnaireRequest,
     RiskProfileRequest,
     WatchlistRequest,
 )
@@ -158,6 +163,82 @@ def create_app() -> FastAPI:
             "risk_profile": req.risk_profile,
             "label": profile(req.risk_profile)["label"],
         }
+
+    # ---- KYC：风险偏好问卷 / 滑块微调 / 语音文本解析 -----------------------
+
+    @app.get("/kyc/profile", response_model=dict)
+    async def kyc_profile_get():
+        """KYC 现状 + 题组 schema + 阈值（前端以此为唯一事实源渲染）。"""
+        return kyc_mod.build_kyc_view(JsonStore())
+
+    @app.post("/kyc/questionnaire", response_model=dict)
+    async def kyc_questionnaire(req: KycQuestionnaireRequest):
+        """提交问卷 → 计分 → 写 preferences.kyc + risk_profile（推断即生效）。"""
+        try:
+            result = kyc_mod.score_questionnaire(
+                [a.model_dump() for a in req.answers], req.tier
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        store = JsonStore()
+        old_profile = store.get("preferences", "risk_profile")
+        # 全新 KYC 记录：重做问卷 = 重新推断，清空此前的滑块微调
+        #（微调是叠加在最近一次推断之上的覆盖层）
+        kyc = {
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "method": req.method,
+            "version": 1,
+            "score": result["score"],
+            "inferred_profile": result["profile"],
+            "answers": [a.model_dump() for a in req.answers],
+            "manual_adjust": None,
+            "voice_source": req.voice_source,
+        }
+        store.set("preferences", "kyc", kyc)
+        if old_profile:
+            store.set("preferences", "last_profile", old_profile)
+        store.set("preferences", "risk_profile", result["profile"])
+        return {
+            "profile": result["profile"],
+            "label": profile(result["profile"])["label"],
+            "score": result["score"],
+            "inferred_profile": result["profile"],
+            "mapping": result["mapping"],
+        }
+
+    @app.post("/kyc/adjust", response_model=dict)
+    async def kyc_adjust(req: KycAdjustRequest):
+        """滑块微调已推断画像：更新 risk_profile，保留 kyc.inferred_profile。"""
+        store = JsonStore()
+        kyc = store.get("preferences", "kyc") or {}
+        if not kyc.get("inferred_profile"):
+            raise HTTPException(
+                status_code=409,
+                detail="尚未完成风险问卷，请先提交问卷再微调",
+            )
+        adjust = req.model_dump()
+        profile_key = kyc_mod.apply_manual_adjust(kyc, adjust)
+        old_profile = store.get("preferences", "risk_profile")
+        kyc["manual_adjust"] = adjust
+        kyc["status"] = "adjusted"
+        store.set("preferences", "kyc", kyc)
+        if old_profile:
+            store.set("preferences", "last_profile", old_profile)
+        store.set("preferences", "risk_profile", profile_key)
+        return {
+            "profile": profile_key,
+            "label": profile(profile_key)["label"],
+            "manual_adjust": adjust,
+        }
+
+    @app.post("/kyc/parse", response_model=dict)
+    async def kyc_parse(req: KycParseRequest):
+        """整段自然语言（语音转写/手打）→ 结构化问卷答案（LLM + 关键词降级）。"""
+        if not req.text or not req.text.strip():
+            raise HTTPException(status_code=422, detail="文本不能为空")
+        answers, source = kyc_mod.parse_preferences_to_answers(req.text)
+        return {"answers": answers, "text": req.text, "source": source}
 
     @app.post("/brief", response_model=dict)
     async def brief(req: BriefRequest):

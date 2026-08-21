@@ -29,6 +29,10 @@
 | 12 | GET | `/analyze/{task_id}` | 查询任务状态 | JSON |
 | 13 | GET | `/analyze/{task_id}/stream` | SSE 进度流（stage/result/error/done） | `text/event-stream` |
 | 14 | GET | `/analyze/{task_id}/result` | 取最终结果（未完成返回 409） | JSON |
+| 15 | GET | `/kyc/profile` | 读取 KYC 现状 + 题组 schema + 阈值 + 各档护栏 | JSON |
+| 16 | POST | `/kyc/questionnaire` | 提交风险问卷 → 计分 → 写入生效画像 | JSON |
+| 17 | POST | `/kyc/adjust` | 滑块微调已推断画像 | JSON |
+| 18 | POST | `/kyc/parse` | 整段自然语言/语音转写 → 结构化问卷答案 | JSON |
 
 > 三个长任务（`/analyze`、`/holdings/analyze`、`/brief`）共用同一套 `task_id` + SSE + status + result 基础设施，路径前缀均为 `/analyze/{task_id}/...`。
 
@@ -59,7 +63,8 @@ SSE 事件序列：stage* → result → done   （成功）
 |---|---|---|
 | 404 | 任务/简报不存在 | `{"detail": "任务不存在"}` / `{"detail": "简报不存在"}` |
 | 409 | 结果未就绪（`/analyze/{id}/result` 提前取） | `{"detail": "任务尚未完成"}` |
-| 422 | 请求体校验失败（Pydantic） | FastAPI 标准 422 |
+| 409 | `/kyc/adjust` 但尚未完成问卷 | `{"detail": "尚未完成风险问卷，请先提交问卷再微调"}` |
+| 422 | 请求体校验失败（Pydantic）/ 问卷答案非法 / 解析空文本 | FastAPI 标准 422 |
 | 500 | 引擎异常（已被捕获转 `failed`，通常不抛 500） | — |
 
 ### 2.3 风险偏好
@@ -624,6 +629,170 @@ done
 **状态约束**：任务未完成返回 `409 {"detail": "任务尚未完成"}`；不存在返回 `404`。
 
 > 推荐：优先消费 SSE 的 `result` 帧；`/result` 适合「事后取」场景（如简报拉取后回查）。
+
+---
+
+### 3.15 GET `/kyc/profile` — KYC 现状
+
+返回 KYC 记录 + 题组 schema + 计分阈值 + 各档护栏，是产品壳 `#/kyc` 渲染的唯一事实源。
+
+**测试 curl**
+
+```bash
+curl http://127.0.0.1:8000/kyc/profile
+```
+
+**响应** `200`
+
+```jsonc
+{
+  "status": "not_started",          // not_started | completed | adjusted
+  "inferred_profile": null,         // 问卷/语音推断画像（不被微调污染）
+  "effective_profile": "balanced",  // 当前生效画像（risk_profile）
+  "effective_label": "稳健型",
+  "score": null,                    // 问卷原始总分
+  "answers": [],
+  "manual_adjust": null,            // 滑块微调记录
+  "completed_at": null,
+  "method": null,                   // questionnaire | voice
+  "voice_source": null,
+  "last_profile": null,             // 上次画像
+  "tiers": { "quick": ["horizon", "loss_tolerance", "goal"], "full": [8 个 qid] },
+  "question_bank": { "horizon": { "qid": "horizon", "title": "...", "options": [{"label", "score"}] }, ... },
+  "bands": { "conservative": {"min": 1, "max": 18, ...}, "balanced": {...}, "aggressive": {...} },
+  "profile_labels": { "conservative": "保守型", "balanced": "稳健型", "aggressive": "进取型" },
+  "profiles_detail": { "conservative": { "label", "desc", "risk_budget", "risk_bands", "guardrail", "brief_max_risk" }, ... }
+}
+```
+
+---
+
+### 3.16 POST `/kyc/questionnaire` — 提交风险问卷
+
+计分后写入 `preferences.kyc`（全新记录，清空此前滑块微调）并更新 `preferences.risk_profile`（即生效画像）。
+
+**请求体** `KycQuestionnaireRequest`
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `answers` | `KyAnswer[]` | ✅ | — | 覆盖该档全部题目的答案 |
+| `tier` | string | ✅ | — | `quick`（3 题）/ `full`（8 题） |
+| `method` | string | | `"questionnaire"` | `questionnaire` / `voice` |
+| `voice_source` | string | | `null` | 语音作答时保存的原始转写 |
+
+**`KyAnswer`**：`{ qid: string, label: string, score: 1-5 }`（`qid` 与 `label` 必须在题组内，否则 422）。
+
+**测试 curl**（Windows 下可用 `curl.exe --data-binary @body.json` 传 UTF-8 中文，避免命令行编码问题）
+
+```bash
+# 场景1：三问速测（全部保守答案 → 保守型）
+curl -X POST http://127.0.0.1:8000/kyc/questionnaire \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tier":"quick",
+    "answers":[
+      {"qid":"horizon","label":"3个月以内","score":1},
+      {"qid":"loss_tolerance","label":"不能接受亏损，保本第一","score":1},
+      {"qid":"goal","label":"本金安全，稳定跑赢存款","score":1}
+    ]
+  }'
+
+# 场景2：完整 8 题（全部进取答案 → 进取型，满分 40）
+curl -X POST http://127.0.0.1:8000/kyc/questionnaire \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tier":"full",
+    "method":"voice",
+    "voice_source":"我很能承担风险，全部选最激进",
+    "answers":[{"qid":"horizon","label":"5年以上","score":5}, ... 其余 7 题同理 ...]
+  }'
+```
+
+**响应** `200`
+
+```json
+{
+  "profile": "conservative",
+  "label": "保守型",
+  "score": 3,
+  "inferred_profile": "conservative",
+  "mapping": { "conservative": {"min": 1, "max": 7}, "balanced": {"min": 8, "max": 11}, "aggressive": {"min": 12, "max": 15} }
+}
+```
+
+答案缺题 / `qid`/`label`/`score` 非法：`422 {"detail": "问卷缺少题目: ..."}`。
+
+---
+
+### 3.17 POST `/kyc/adjust` — 滑块微调
+
+在问卷推断画像基础上微调生效画像，保留 `kyc.inferred_profile`。需先完成问卷，否则 `409`。
+
+**请求体** `KycAdjustRequest`
+
+| 字段 | 类型 | 必填 | 默认 | 说明 |
+|---|---|---|---|---|
+| `risk_tolerance` | number | | `0.5` | 风险承受能力 0~1（0=保守 / 0.5=稳健 / 1=进取） |
+| `horizon_years` | number | | `3` | 投资期限（年），辅助约束：<2 年最多到稳健，≥5 年至少稳健 |
+| `note` | string | | `""` | 调整说明 |
+
+**测试 curl**
+
+```bash
+# 场景1：偏激进（0.8 → 进取型）
+curl -X POST http://127.0.0.1:8000/kyc/adjust \
+  -H "Content-Type: application/json" \
+  -d '{"risk_tolerance":0.8,"horizon_years":3,"note":"提高风险承受"}'
+
+# 场景2：激进但仅 1 年（期限约束 → 封顶稳健型）
+curl -X POST http://127.0.0.1:8000/kyc/adjust \
+  -H "Content-Type: application/json" \
+  -d '{"risk_tolerance":0.9,"horizon_years":1}'
+```
+
+**响应** `200`
+
+```json
+{ "profile": "aggressive", "label": "进取型", "manual_adjust": {"risk_tolerance": 0.8, "horizon_years": 3, "note": "提高风险承受"} }
+```
+
+未完成问卷：`409 {"detail": "尚未完成风险问卷，请先提交问卷再微调"}`。
+
+---
+
+### 3.18 POST `/kyc/parse` — 自然语言 → 问卷答案
+
+把整段自然语言（语音转写 / 手打）解析为结构化问卷答案，供前端预填后由用户确认提交。有 `DEEPSEEK_API_KEY` 走 LLM，否则降级到中文关键词规则。
+
+**请求体** `KycParseRequest`
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `text` | string | ✅ | 自然语言描述（非空） |
+
+**测试 curl**
+
+```bash
+curl -X POST http://127.0.0.1:8000/kyc/parse \
+  -H "Content-Type: application/json" \
+  -d '{"text":"我的钱要放三年以上，能接受20%左右亏损，希望稳健增值，收入稳定，有三四年投资经验，亏了能拿住，比较懂股票风险，偏好股债均衡配置"}'
+```
+
+**响应** `200`
+
+```jsonc
+{
+  "answers": [
+    { "qid": "horizon", "label": "3-5年", "score": 4 },
+    { "qid": "loss_tolerance", "label": "20%左右", "score": 4 },
+    ...  // 无法判断的题目省略
+  ],
+  "text": "我的钱要放三年以上，...",
+  "source": "llm"        // llm | rules
+}
+```
+
+空文本：`422 {"detail": "文本不能为空"}`。
 
 ---
 
