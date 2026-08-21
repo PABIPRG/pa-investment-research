@@ -106,6 +106,30 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   { file: 'scripts/gen-doc-graphs.ts', upstream: ['cordis'] },
 ]
 
+/** Cordis extension event ids that share the package's prefix by design. */
+const CORDIS_PRODUCT_TOKENS = new Set([
+  'cordis/',
+  'cordis/*',
+  'cordis/dynamic-package',
+  'cordis/dynamic-retract',
+  'cordis/inspect-query',
+  'cordis/inspect-query-resolved',
+  'cordis/request-run',
+  'cordis/request-run-resolved',
+])
+
+/** Files whose bare `cordis` literal is product data, not a package specifier. */
+const BARE_CORDIS_PRODUCT_FILES = new Set([
+  'packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisActionRow.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisDefineRow.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisPanel.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisRunRow.tsx',
+  'packages/extensions/ui-cordis/src/client/index.ts',
+  'packages/extensions/ui-cordis/src/client/locales.ts',
+  'scripts/gen-cordis-catalog.ts',
+])
+
 /** A string that must appear exactly `count` times once the rescope has run. */
 interface PostCondition {
   readonly file: string
@@ -463,6 +487,7 @@ const VENDORED_LIBRARY = /^@deepseek-ai\\/(cosmokit|schemastery)(\\/|$)/
 /** Files the rescope must never rewrite. */
 function excluded(file: string): boolean {
   if (file === 'scripts/rescope-vendor.ts') return true // the mapping itself
+  if (file === 'scripts/rescope-vendor.spec.ts') return true // intentional pre-rescope fixtures
   if (file.startsWith('.agents/notes/')) return true // notes record what was true when written
   // Recorded model payloads quote documentation verbatim, so they must mirror the
   // sources on disk — including the notes this rescope leaves alone.
@@ -507,11 +532,22 @@ function skipped(file: string, pattern: Pattern): boolean {
   return GENERIC_SKIPS.some(skip => skip.file === file && skip.upstream.includes(pattern.upstream))
 }
 
+function productToken(file: string, pattern: Pattern, subpath: string): boolean {
+  if (pattern.from !== 'cordis') return false
+  const escapedQuote = subpath.endsWith('\\') ? subpath.slice(0, -1) : subpath
+  const token = `${pattern.from}${escapedQuote}`
+  return CORDIS_PRODUCT_TOKENS.has(token)
+    || (token === 'cordis' && BARE_CORDIS_PRODUCT_FILES.has(file))
+}
+
 function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
   let out = line
   for (const pattern of all) {
     if (skipped(file, pattern)) continue
-    out = out.replace(pattern.token, (_match, quote: string, subpath: string) => `${quote}${pattern.to}${subpath}${quote}`)
+    out = out.replace(pattern.token, (match, quote: string, subpath: string) => {
+      if (productToken(file, pattern, subpath)) return match
+      return `${quote}${pattern.to}${subpath}${quote}`
+    })
     out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
   }
   return out
@@ -546,6 +582,17 @@ function rewrite(text: string, file: string, all: readonly Pattern[]): { text: s
     return next
   })
   return { text: out.join('\n'), lines }
+}
+
+/**
+ * Rewrite package-name references in one tracked file using the forward
+ * rescope mapping while preserving product identifiers that share a prefix.
+ * @param text - Complete file contents.
+ * @param file - Repository-relative path used by the contextual exclusions.
+ * @returns Rewritten text and the number of changed lines.
+ */
+export function rewriteVendorReferences(text: string, file: string): { text: string; lines: number } {
+  return rewrite(text, file, patterns(false))
 }
 
 function classify(file: string): string {
@@ -642,7 +689,9 @@ function main(): void {
   for (const file of files) {
     const path = resolve(root, file)
     const before = readFileSync(path, 'utf8')
-    const { text: after, lines } = rewrite(before, file, all)
+    const { text: after, lines } = reverse
+      ? rewrite(before, file, all)
+      : rewriteVendorReferences(before, file)
     if (after === before) continue
     outstanding.push(file)
     const kind = classify(file)

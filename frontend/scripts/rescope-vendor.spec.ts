@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { exactEditState } from './rescope-vendor.ts'
+import { exactEditState, rewriteVendorReferences } from './rescope-vendor.ts'
 
 const ANCHOR = '\n## Sync procedure'
 const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
@@ -37,5 +37,29 @@ describe('exactEditState', () => {
     // A moved or partially applied site: neither state is complete.
     expect(exactEditState('a = 1\nb = 2\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
     expect(exactEditState('x\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
+  })
+})
+
+describe('rewriteVendorReferences', () => {
+  it('重写 Cordis 包引用，但保留扩展事件和本地化标识', () => {
+    expect(rewriteVendorReferences([
+      "import { Context } from 'cordis'",
+      "ctx.emit('cordis/request-run', {})",
+      "const prefix = 'cordis/'",
+      "const signature = '\\'cordis/request-run\\'(request: Request): void'",
+    ].join('\n'), 'packages/extensions/cordis-host-runner/src/index.ts')).toEqual({
+      text: [
+        "import { Context } from '@deepseek-ai/cordis'",
+        "ctx.emit('cordis/request-run', {})",
+        "const prefix = 'cordis/'",
+        "const signature = '\\'cordis/request-run\\'(request: Request): void'",
+      ].join('\n'),
+      lines: 1,
+    })
+
+    expect(rewriteVendorReferences(
+      "const NS = 'cordis'",
+      'packages/extensions/ui-cordis/src/client/locales.ts',
+    )).toEqual({ text: "const NS = 'cordis'", lines: 0 })
   })
 })
