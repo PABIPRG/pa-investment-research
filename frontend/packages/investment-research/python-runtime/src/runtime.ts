@@ -52,13 +52,17 @@ interface StartupFlight {
   waiters: number
 }
 
+function asError(reason: unknown): Error {
+  return reason instanceof Error ? reason : new Error(String(reason))
+}
+
 function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (signal === undefined) return promise
   signal.throwIfAborted()
   return new Promise<T>((resolve, reject) => {
     const aborted = (): void => {
       signal.removeEventListener('abort', aborted)
-      reject(signal.reason)
+      reject(asError(signal.reason))
     }
     signal.addEventListener('abort', aborted, { once: true })
     void promise.then(
@@ -68,7 +72,7 @@ function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T
       },
       (error: unknown) => {
         signal.removeEventListener('abort', aborted)
-        reject(error)
+        reject(asError(error))
       },
     )
   })
@@ -173,6 +177,7 @@ export class InvestmentBackendManager {
     const stopping = this.stopping.get(id)
     if (stopping !== undefined) {
       await waitWithSignal(stopping, signal)
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- disposal can race the awaited teardown.
       if (this.disposed) throw new Error('investment Python runtime is disposed')
     }
 
@@ -192,8 +197,8 @@ export class InvestmentBackendManager {
       let flight = this.flights.get(id)
       if (flight === undefined) {
         const controller = new AbortController()
-        let created: StartupFlight
-        const promise = this.start(registered.definition, controller.signal)
+        const created = { controller, waiters: 0 } as StartupFlight
+        created.promise = this.start(registered.definition, controller.signal)
           .then(async (started) => {
             /* v8 ignore next -- start observes the internal signal; this closes only its final publication race. */
             if (this.disposed || created.waiters === 0) {
@@ -208,8 +213,7 @@ export class InvestmentBackendManager {
             /* v8 ignore next -- no replacement flight can publish until this flight removes itself. */
             if (this.flights.get(id) === created) this.flights.delete(id)
           })
-        created = { controller, promise, waiters: 0 }
-        void promise.catch(() => {})
+        void created.promise.catch(() => {})
         flight = created
         this.flights.set(id, flight)
       }
@@ -231,8 +235,7 @@ export class InvestmentBackendManager {
   }
 
   private track<T>(operation: Promise<T>): Promise<T> {
-    let tracked: Promise<T>
-    tracked = operation.finally(() => { this.operations.delete(tracked) })
+    const tracked = operation.finally(() => { this.operations.delete(tracked) })
     this.operations.add(tracked)
     /* v8 ignore next -- prevents an abandoned caller race from becoming an unhandled rejection. */
     void tracked.catch(() => {})
@@ -392,7 +395,7 @@ export class InvestmentBackendManager {
     const exit = await Promise.allSettled([handle.waitForExit()])
     await Promise.allSettled([drain()])
     const failure = exit[0]
-    if (failure?.status === 'rejected') throw failure.reason
+    if (failure.status === 'rejected') throw failure.reason
   }
 
   private async stop(entry: ActiveEntry): Promise<void> {
@@ -424,7 +427,7 @@ export class InvestmentBackendManager {
       this.active.delete(entry.definition.id)
     }))
     const failures = results.filter(result => result.status === 'rejected')
-    if (failures.length > 0) throw new AggregateError(failures.map(result => result.reason), 'investment Python runtime disposal failed')
+    if (failures.length > 0) throw new AggregateError(failures.map(result => asError(result.reason)), 'investment Python runtime disposal failed')
   }
 
   /**

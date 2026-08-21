@@ -292,6 +292,26 @@ describe('InvestmentBackendManager', () => {
     expect(disposed).toBe(true)
   })
 
+  it('normalizes a non-Error caller cancellation while probing an active entry', async () => {
+    const gate = Promise.withResolvers<BackendHealthResult>()
+    const current = await harness()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => probes++ === 0 ? healthy : gate.promise,
+    })
+    manager.register({ ...definition, mode: 'external' })
+    await manager.acquire('trading-core')
+    const controller = new AbortController()
+    const acquiring = manager.acquire('trading-core', controller.signal)
+    await Promise.resolve()
+    controller.abort('caller cancelled')
+    await expect(acquiring).rejects.toThrow('caller cancelled')
+    gate.resolve(healthy)
+    await manager.dispose()
+  })
+
   it('disposal blocks new acquires and awaits owned process-tree exit', async () => {
     const { manager, handle } = await harness([refused, healthy])
     manager.register(definition)
@@ -454,7 +474,7 @@ describe('InvestmentBackendManager', () => {
     expect(stateFailure.handle.waitForExitCalls).toBe(1)
   })
 
-  it('clears state and reports a process-tree wait failure from release', async () => {
+  it('reports a process-tree wait failure while retaining owned state for retry', async () => {
     const current = await harness([refused, healthy])
     current.manager.register(definition)
     const lease = await current.manager.acquire('trading-core')
@@ -462,6 +482,7 @@ describe('InvestmentBackendManager', () => {
     current.handle.fail(new Error('tree wait failed'))
     await expect(lease.release()).rejects.toThrow('tree wait failed')
     expect(current.manager.invariantSnapshot().active).toHaveLength(1)
+    await expect(access(ownedBackendStatePath(current.home, 'trading-core'))).resolves.toBeUndefined()
     await expect(current.manager.dispose()).rejects.toThrow('runtime disposal failed')
     expect(current.manager.invariantSnapshot().active).toHaveLength(1)
   })
