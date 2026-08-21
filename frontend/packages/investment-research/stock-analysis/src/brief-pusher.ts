@@ -42,6 +42,7 @@ function briefBody(label: string, tradeDate: string | undefined, summary: string
  * contains per-session and polling failures, and clears its timer during disposal.
  * @param ctx - Plugin context supplying agents, logging, and effect disposal.
  * @param config - Resolved adapter, interval, enablement, and audience settings.
+ * @returns timer disposer when enabled, otherwise undefined.
  */
 export function createBriefPusher(ctx: Context, config: BriefPusherConfig): (() => void) | undefined {
   if (!config.enableInChatPush) return undefined
@@ -106,7 +107,11 @@ export function createBriefPusher(ctx: Context, config: BriefPusherConfig): (() 
   return () => { clearInterval(timer) }
 }
 
-/** Start effect-owned polling for callers that do not compose a larger ordered lifecycle. */
+/**
+ * Start effect-owned polling for callers that do not compose a larger ordered lifecycle.
+ * @param ctx - Plugin context supplying agents and effect disposal.
+ * @param config - Resolved adapter, interval, enablement, and audience settings.
+ */
 export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void {
   const dispose = createBriefPusher(ctx, config)
   if (dispose !== undefined) ctx.effect(() => dispose)
