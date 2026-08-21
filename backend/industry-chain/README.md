@@ -21,7 +21,8 @@
 | `GET /health` | 健康检查 |
 | `GET /stats` | 图统计（节点/边/公司/社区） |
 | `GET /companies?keyword=&limit=` | 公司搜索（名称/代码/行业模糊） |
-| `GET /companies/{code}` | 公司档案（行业/市值/描述/上下游计数） |
+| `GET /companies/{code}` | 核心公司档案（行业/市值/描述/上下游计数） |
+| `GET /graph/entity/{key}` | 通用实体档案：核心公司完整档案；非核心实体（供应商/客户）聚合全图关系档案 |
 | `GET /graph/single/{code}` | 单公司 5 列：供应商 → 原材料 → 核心公司 → 主营产品 → 下游客户 |
 | `GET /graph/chain/{code}?depth_up=&depth_down=&top_up=&top_down=` | 产业链展开：BFS 上下游逐层、每层 TOP-N、环回去重 |
 | `GET /graph/network?min_degree=&min_market_cap=&min_share=` | 全局网络切片（服务端过滤，客户端不拉全量） |

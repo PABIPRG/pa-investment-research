@@ -93,6 +93,88 @@ def _view(code: str) -> dict | None:
     return view_companies().get(code)
 
 
+# ---- 非核心实体聚合索引 / 通用档案 -----------------------------------------
+
+
+@lru_cache(maxsize=1)
+def _external_index() -> dict:
+    """非核心实体 key(id/name) → {id, name, as_supplier:[], as_customer:[]}
+
+    只聚合并跳过核心公司自身（自环）。注意 view-data-all 里同一家公司
+    同时以 code 和 name 两个 key 出现，故按真实 code 去重只处理一次。
+    实体只以供应商/客户身份散落在其它公司的 materials/products 记录里，
+    没有独立档案；本索引用于生成「全图关系档案」。"""
+    idx: dict[str, dict] = {}
+    seen: set[str] = set()
+    for _k, c in view_companies().items():
+        ccode = c.get("code") or c.get("id")
+        if not ccode or ccode in seen:
+            continue  # 同一家公司（code/name 双 key）只处理一次
+        seen.add(ccode)
+        cname = c.get("name")
+        for m in c.get("materials") or []:
+            for s in m.get("suppliers") or []:
+                if s.get("name") in (cname, ccode) or s.get("id") in (cname, ccode):
+                    continue  # 自环
+                key = s.get("id") or s.get("name")
+                if not key:
+                    continue
+                rec = idx.setdefault(key, {"id": s.get("id"), "name": s.get("name"), "as_supplier": [], "as_customer": []})
+                rec["as_supplier"].append(
+                    {
+                        "company_code": ccode,
+                        "company_name": cname,
+                        "item": m.get("name"),
+                        "share": s.get("share"),
+                        "type": s.get("type") or "direct",
+                        "note": s.get("note"),
+                    }
+                )
+        for p in c.get("products") or []:
+            for cu in p.get("customers") or []:
+                if cu.get("name") in (cname, ccode) or cu.get("id") in (cname, ccode):
+                    continue
+                key = cu.get("id") or cu.get("name")
+                if not key:
+                    continue
+                rec = idx.setdefault(key, {"id": cu.get("id"), "name": cu.get("name"), "as_supplier": [], "as_customer": []})
+                rec["as_customer"].append(
+                    {
+                        "company_code": ccode,
+                        "company_name": cname,
+                        "item": p.get("name"),
+                        "share": cu.get("share"),
+                        "type": cu.get("type") or "direct",
+                        "note": cu.get("note"),
+                    }
+                )
+    return idx
+
+
+def entity_profile(key: str) -> dict | None:
+    """通用实体档案：核心公司返回完整档案；非核心实体返回全图关系档案。
+
+    key 可为核心公司 code/name，或外部实体的 id/name（中文已 URL 解码）。
+    """
+    code = _resolve_code(key)
+    if code:
+        p = company_profile(code)
+        if p:
+            p["is_subject"] = True
+            return p
+    rec = _external_index().get(key)
+    if rec:
+        return {
+            "id": rec.get("id"),
+            "name": rec.get("name"),
+            "is_subject": False,
+            "appearance_count": len(rec["as_supplier"]) + len(rec["as_customer"]),
+            "as_supplier": rec["as_supplier"],
+            "as_customer": rec["as_customer"],
+        }
+    return None
+
+
 # ---- 公司搜索 / 档案 -----------------------------------------------------
 
 

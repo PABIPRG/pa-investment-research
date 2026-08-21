@@ -66,6 +66,16 @@ def company_detail(code: str):
     return _company_or_404(code, p)
 
 
+@app.get("/graph/entity/{key}")
+def graph_entity(key: str):
+    """通用实体档案：核心公司返回完整档案；非核心实体返回全图关系档案。"""
+    try:
+        e = graph.entity_profile(key)
+    except FileNotFoundError as exc:
+        raise _data_or_503(exc)
+    return _company_or_404(key, e)
+
+
 @app.get("/graph/single/{code}")
 def graph_single(code: str):
     """单公司 5 列产业链：供应商 → 原材料 → 核心公司 → 主营产品 → 下游客户。"""
