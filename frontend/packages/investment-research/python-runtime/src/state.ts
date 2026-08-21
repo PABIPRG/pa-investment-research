@@ -21,7 +21,12 @@ export type OwnedBackendStateRead =
   | Readonly<{ kind: 'stale'; raw: unknown }>
   | Readonly<{ kind: 'current'; state: OwnedBackendState }>
 
-/** Resolve one backend's state file beneath DSH_HOME. */
+/**
+ * Resolve one backend's state file beneath DSH_HOME.
+ * @param dshHome - explicit Harness home.
+ * @param id - backend whose state path is required.
+ * @returns stable runtime state path.
+ */
 export function ownedBackendStatePath(dshHome: string, id: InvestmentBackendId): string {
   return join(dshHome, 'investment-research', id, 'runtime.json')
 }
@@ -45,12 +50,20 @@ function isOwnedBackendState(value: unknown): value is OwnedBackendState {
     && typeof value.startedAt === 'string'
 }
 
-/** Atomically publish owner-only runtime state. */
+/**
+ * Atomically publish owner-only runtime state.
+ * @param path - exact state file path.
+ * @param state - current in-memory owned process identity.
+ */
 export async function writeOwnedBackendState(path: string, state: OwnedBackendState): Promise<void> {
   await writeFileAtomic(path, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
 }
 
-/** Read state as diagnostics; a stale pid is never an authority to terminate anything. */
+/**
+ * Read state as diagnostics; a stale pid is never an authority to terminate anything.
+ * @param path - exact state file path.
+ * @returns classified diagnostic state without process authority.
+ */
 export async function readOwnedBackendState(path: string): Promise<OwnedBackendStateRead> {
   let text: string
   try {
@@ -78,7 +91,12 @@ function stateMatches(left: OwnedBackendState, right: OwnedBackendState): boolea
     && left.startedAt === right.startedAt
 }
 
-/** Remove state only when it still names the exact in-memory owned process. */
+/**
+ * Remove state only when it still names the exact in-memory owned process.
+ * @param path - exact state file path.
+ * @param expected - current in-memory owned process identity.
+ * @returns whether the matching record was removed.
+ */
 export async function clearOwnedBackendState(path: string, expected: OwnedBackendState): Promise<boolean> {
   const current = await readOwnedBackendState(path)
   if (current.kind !== 'current' || !stateMatches(current.state, expected)) return false

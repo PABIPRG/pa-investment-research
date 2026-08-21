@@ -80,6 +80,7 @@ export class InvestmentBackendManager {
   private readonly config: RuntimeConfig
   private readonly checkHealth: HealthCheck
   private readonly resolvePaths: (definition: PythonBackendDefinition) => ResolvedBackendPaths
+  /** Injectable filesystem and timing operations retained for deterministic lifecycle tests. */
   readonly internals: {
     executableExists: (path: string) => Promise<boolean>
     sleep: (ms: number) => Promise<void>
@@ -98,7 +99,11 @@ export class InvestmentBackendManager {
     }
   }
 
-  /** Register one definition; identical owners share a count and conflicts fail. */
+  /**
+   * Register one definition; identical owners share a count and conflicts fail.
+   * @param definition - complete backend identity and launch facts.
+   * @returns idempotent disposer for this registration.
+   */
   register(definition: PythonBackendDefinition): () => void {
     if (this.disposed) throw new Error('investment Python runtime is disposed')
     const current = this.definitions.get(definition.id)
@@ -122,7 +127,12 @@ export class InvestmentBackendManager {
     }
   }
 
-  /** Acquire a verified backend through a per-id single flight. */
+  /**
+   * Acquire a verified backend through a per-id single flight.
+   * @param id - registered backend id.
+   * @param signal - optional acquisition cancellation.
+   * @returns one caller-owned verified backend lease.
+   */
   async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease> {
     if (this.disposed) throw new Error('investment Python runtime is disposed')
     signal?.throwIfAborted()
@@ -284,7 +294,10 @@ export class InvestmentBackendManager {
     await Promise.all(entries.map(entry => this.stop(entry)))
   }
 
-  /** Snapshot mutable relations for the invariant companion. */
+  /**
+   * Read mutable lifecycle relations for the invariant companion.
+   * @returns mutable lifecycle relations for the invariant companion.
+   */
   invariantSnapshot(): Readonly<{
     active: readonly ActiveEntry[]
     flights: readonly InvestmentBackendId[]
