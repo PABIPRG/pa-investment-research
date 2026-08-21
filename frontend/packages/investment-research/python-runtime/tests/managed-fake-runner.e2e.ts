@@ -20,7 +20,7 @@ async function importLocalRuntime(): Promise<typeof import('../../../subprocess/
   const dlopen: typeof process.dlopen = process.dlopen.bind(process)
   process.dlopen = ((module, filename, flags) => {
     if (filename.includes('node-pty') && filename.endsWith('.node')) {
-      module.exports = {}
+      (module as { exports: unknown }).exports = {}
       return
     }
     dlopen(module, filename, flags)
