@@ -1,5 +1,7 @@
 # DSH 投研插件迁移 Handoff
 
+> **历史交接提示：** 本文记录 PR1 实施前状态。PR1 已于 2026-08-21 合入 `master`；开始 PR2 时请改读 [DSH 投研插件迁移 PR2 交接](2026-08-21-dsh-investment-plugin-migration-pr2-handoff.md)。以下正文保留为原始调查记录，不再代表当前进度。
+
 ## 交接状态
 
 - 日期：2026-08-20
