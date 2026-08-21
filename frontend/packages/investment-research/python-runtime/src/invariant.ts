@@ -11,10 +11,29 @@ export const name = 'investment-python-runtime-invariant'
 export const inject = ['invariants']
 
 /**
- * No runtime invariant: pure resolution and health classification own no
- * mutable cross-service relation; lifecycle-owned process state is separate.
+ * Verify ownership, refcount, and single-flight relations without touching
+ * the operating system or treating persisted pids as authority.
  */
-const install: InvariantInstaller = () => {}
+const installInvariant: InvariantInstaller = (ctx, fail) => {
+  const snapshot = ctx.investmentPythonRuntime.invariantSnapshot()
+  const running = new Set(snapshot.active.map(entry => entry.definition.id))
+  for (const entry of snapshot.active) {
+    const id = entry.definition.id
+    if (entry.refs < 0) fail(`investment Python backend "${id}" has a negative lease count`)
+    if (entry.ownership === 'owned' && entry.handle === undefined) {
+      fail(`investment Python backend "${id}" is owned without a live handle`)
+    }
+    if (entry.ownership !== 'owned' && entry.handle !== undefined) {
+      fail(`investment Python backend "${id}" is attached with an owned handle`)
+    }
+  }
+  for (const id of snapshot.flights) {
+    if (running.has(id)) fail(`investment Python backend "${id}" is both starting and running`)
+  }
+}
+const install: InvariantInstaller = Object.assign(installInvariant, {
+  inject: ['investmentPythonRuntime'] as const,
+})
 
 /**
  * Register this package's invariant companion.
