@@ -35,10 +35,15 @@ const MARKET_CONTRACTS = [
 
 afterEach(() => vi.unstubAllGlobals())
 
-function install(config: Plugin.Config = { adapterBaseUrl: 'http://market.test' }): RegisteredTool[] {
+async function install(config: Plugin.Config = { backendMode: 'external', backendBaseUrl: 'http://market.test' }): Promise<RegisteredTool[]> {
   const tools: RegisteredTool[] = []
-  Plugin.apply({
-    effect(callback: () => () => void) { callback() },
+  let baseUrl = config.backendBaseUrl ?? 'http://127.0.0.1:8100'
+  await Plugin.apply({
+    async effect(callback: () => Promise<() => void>) { return callback() },
+    investmentPythonRuntime: {
+      register(definition: { baseUrl: string }) { baseUrl = definition.baseUrl; return () => {} },
+      async acquire() { return { id: 'market-watch', baseUrl, ownership: 'external', async release() {} } },
+    },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
   } as never, config)
   return tools
@@ -48,7 +53,7 @@ describe('market-watch function plugin', () => {
   it('has the preserved named function-plugin API', () => {
     const config: Plugin.Config = {}
     expect(Plugin.name).toBe('investment-market-watch')
-    expect(Plugin.inject).toEqual(['tools'])
+    expect(Plugin.inject).toEqual(['tools', 'investmentPythonRuntime'])
     expect(Plugin.apply).toBeTypeOf('function')
     expect(config).toEqual({})
   })
@@ -59,7 +64,7 @@ describe('market-watch function plugin', () => {
       calls.push([url, init?.method, init?.body as string | undefined])
       return new Response('{"ok":true,"code":"600519","name":"茅台","items":[],"count":0,"removed":true,"id":"a1"}')
     }))
-    const byName = new Map(install().map(tool => [tool.name, tool]))
+    const byName = new Map((await install()).map(tool => [tool.name, tool]))
     expect(
       [...byName.values()].map(
         ({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema }),
@@ -129,7 +134,7 @@ describe('market-watch function plugin', () => {
     await byName.get('news_express')!.execute({})
     await byName.get('daily_brief')!.execute({ period: 'post', manual: true })
 
-    const defaults = new Map(install({}).map(tool => [tool.name, tool]))
+    const defaults = new Map((await install({})).map(tool => [tool.name, tool]))
     await defaults.get('watch_add')!.execute({ code: '600519' })
     await defaults.get('add_alert')!.execute({ name: '默认规则', conditions: [] })
     await defaults.get('scan_movers')!.execute({})
@@ -151,8 +156,8 @@ describe('market-watch function plugin', () => {
     ])
   })
 
-  it('keeps success, empty and error result rendering within the tool presentation', () => {
-    const byName = new Map(install().map(tool => [tool.name, tool]))
+  it('keeps success, empty and error result rendering within the tool presentation', async () => {
+    const byName = new Map((await install()).map(tool => [tool.name, tool]))
     expect(byName.get('watch_add')!.output.render?.({}, { name: '茅台', code: '600519' })).toEqual([{ type: 'text', text: '✅ 已加入自选 茅台（600519）' }])
     expect(byName.get('watch_remove')!.output.render?.({}, { code: '600519', removed: false })).toEqual([{ type: 'text', text: '600519 不在自选' }])
     expect(byName.get('remove_alert')!.output.render?.({}, { id: 'a1', removed: true })).toEqual([{ type: 'text', text: '🗑 已删除规则 a1' }])

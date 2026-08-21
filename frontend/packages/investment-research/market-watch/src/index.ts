@@ -10,6 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { PythonBackendDefinition, PythonBackendLease } from '@deepseek-ai/dsh-investment-python-runtime'
 import {
   addAlert,
   dailyBrief,
@@ -38,15 +39,21 @@ export const name = 'investment-market-watch'
 
 /** Market-watch adapter connection settings. */
 export interface Config {
-  /** Adapter origin used by all synchronous JSON tools. Defaults to `http://127.0.0.1:8100`. */
-  adapterBaseUrl?: string
+  /** Runtime ownership mode. Defaults to managed. */
+  backendMode?: 'managed' | 'external'
+  /** Backend origin verified by the runtime. Defaults to `http://127.0.0.1:8100`. */
+  backendBaseUrl?: string
+  /** Explicit absolute market-watch checkout when repository discovery is unavailable. */
+  backendProjectDir?: string
 }
 
 export const Config: Schema<Config> = Schema.object({
-  adapterBaseUrl: Schema.string().default('http://127.0.0.1:8100'),
+  backendMode: Schema.union(['managed', 'external']).default('managed'),
+  backendBaseUrl: Schema.string().default('http://127.0.0.1:8100'),
+  backendProjectDir: Schema.string(),
 })
 
-export const inject = ['tools']
+export const inject = ['tools', 'investmentPythonRuntime']
 
 // 轻量工具通用卡片（无 LLM 流式阶段，一个文本卡即可）
 function present(title: string) {
@@ -65,12 +72,16 @@ function present(title: string) {
   }
 }
 
-export function apply(ctx: Context, config: Config): void {
-  const base = config.adapterBaseUrl ?? 'http://127.0.0.1:8100'
+function setupTools(ctx: Context, base: string): () => void {
+  const toolDisposers: Array<() => void> = []
   const register = (tool: Parameters<Context['tools']['register']>[0]): void => {
-    ctx.effect(() => ctx.tools.register(tool))
+    toolDisposers.push(ctx.tools.register(tool))
+  }
+  const disposeTools = (): void => {
+    for (const dispose of toolDisposers.reverse()) dispose()
   }
 
+  try {
   // ── 自选 ──────────────────────────────────────────────────────────────
   register(
     defineTool({
@@ -369,4 +380,56 @@ export function apply(ctx: Context, config: Config): void {
       execute: args => dailyBrief(base, { period: args.period ?? 'pre', manual: args.manual ?? false }),
     }),
   )
+  return disposeTools
+  } catch (error) {
+    disposeTools()
+    throw error
+  }
+}
+
+function marketWatchBackend(config: Config): PythonBackendDefinition {
+  return {
+    id: 'market-watch',
+    service: 'market-watch',
+    mode: config.backendMode ?? 'managed',
+    baseUrl: config.backendBaseUrl ?? 'http://127.0.0.1:8100',
+    ...(config.backendProjectDir === undefined ? {} : { projectDir: config.backendProjectDir }),
+    repositoryPath: ['backend', 'market-watch'],
+    module: 'market_watch.app:app',
+    healthPath: '/health',
+    healthOk: { ok: true },
+    initCommand: { posix: './init.sh', windows: 'init.bat' },
+  }
+}
+
+/** Register, acquire, expose tools, and tear down the market backend in one ordered effect. */
+export async function apply(ctx: Context, config: Config = {}): Promise<void> {
+  await ctx.effect(async () => {
+    const unregister = ctx.investmentPythonRuntime.register(marketWatchBackend(config))
+    let lease: PythonBackendLease | undefined
+    let disposeTools: (() => void) | undefined
+    try {
+      lease = await ctx.investmentPythonRuntime.acquire('market-watch')
+      disposeTools = setupTools(ctx, lease.baseUrl)
+      return async () => {
+        try {
+          disposeTools?.()
+        } finally {
+          try {
+            await lease?.release()
+          } finally {
+            unregister()
+          }
+        }
+      }
+    } catch (error) {
+      try {
+        disposeTools?.()
+        await lease?.release()
+      } finally {
+        unregister()
+      }
+      throw error
+    }
+  }, 'investment market-watch runtime lifecycle')
 }
