@@ -40,7 +40,7 @@ declare module '@deepseek-ai/cordis' {
 
 /** Runtime service that verifies registered investment Python backends and leases their URLs. */
 export class InvestmentPythonRuntime extends Service {
-  static inject = ['subprocess'] as const
+  static inject = ['subprocess']
 
   static Config: z<Config> = z.object({
     dshHome: z.string(),
