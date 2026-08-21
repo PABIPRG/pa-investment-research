@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """industry-chain 配置：统一从模块根 .env 加载（前缀 IC_）。
 
-纯静态图谱数据模块，无外部行情/LLM 依赖；只有服务端口与种子数据目录两处配置。
+核心为静态图谱数据模块（服务端口 + 种子数据目录）；研报管线另需 LLM 配置
+（DEEPSEEK key 从 dsh-trading-core/.env 复制，仅本地 .env 保留真实值）。
 import 时一次性 load_dotenv(override=True)，保证任何调用前环境变量就绪。
 """
 
@@ -25,6 +26,10 @@ class Settings:
         self.seed_base_url = os.getenv(
             "IC_SEED_BASE_URL", "https://villadora.github.io/iducsite/data"
         )
+        # 研报管线 LLM（DeepSeek；key 从 dsh-trading-core/.env 复制到本地 .env）
+        self.deepseek_api_key = os.getenv("IC_DEEPSEEK_API_KEY", "")
+        self.deepseek_base_url = os.getenv("IC_DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        self.llm_model = os.getenv("IC_LLM_MODEL", "deepseek-chat")
 
 
 settings = Settings()

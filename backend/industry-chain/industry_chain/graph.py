@@ -17,6 +17,7 @@ import threading
 from functools import lru_cache
 
 from .config import settings
+from . import merge, universe
 
 _lock = threading.Lock()
 _caches: dict[str, object] = {}
@@ -36,6 +37,17 @@ def _load(name: str):
     return _caches[name]
 
 
+def invalidate() -> None:
+    """清空全部缓存（原始数据 + 派生索引 + overlay 叠加），供数据变更后让新数据生效。"""
+    with _lock:
+        _caches.clear()
+        _view_name_index.cache_clear()
+        _cap_index.cache_clear()
+        _external_index.cache_clear()
+        _view_merged.cache_clear()
+        _overlay.cache_clear()
+
+
 # ---- 数据访问 ------------------------------------------------------------
 
 
@@ -43,8 +55,67 @@ def companies() -> list:
     return _load("companies.json")
 
 
+@lru_cache(maxsize=1)
+def _overlay() -> dict:
+    """研报 overlay 增量（data/reports/overlay.json）。运行期不变，重启后生效。"""
+    return merge.load_overlay()
+
+
+def _merge_named(lst: list, item: dict, child_key: str) -> None:
+    """按 name 把 overlay 条目合并进列表（同名则 child_key 子项按 name 去重追加）。"""
+    exist = next((x for x in lst if x.get("name") == item.get("name")), None)
+    if exist is None:
+        lst.append(item)
+        return
+    have = [c.get("name") for c in (exist.get(child_key) or [])]
+    for c in item.get(child_key) or []:
+        if c.get("name") and c["name"] not in have:
+            exist.setdefault(child_key, []).append(c)
+            have.append(c["name"])
+
+
+def _apply_overlay(rec: dict, extra: dict) -> dict:
+    """单公司记录叠加 overlay 增量（materials/products 合并 + related/metrics 字段）。"""
+    materials = list(rec.get("materials") or [])
+    products = list(rec.get("products") or [])
+    for m in extra.get("materials") or []:
+        if m.get("name"):
+            _merge_named(materials, m, "suppliers")
+    for p in extra.get("products") or []:
+        if p.get("name"):
+            _merge_named(products, p, "customers")
+    out = dict(rec)
+    out["materials"] = materials
+    out["products"] = products
+    if extra.get("related") is not None:
+        out["related"] = extra["related"]
+    if extra.get("metrics") is not None:
+        out["metrics"] = extra["metrics"]
+    return out
+
+
+@lru_cache(maxsize=1)
+def _view_merged() -> dict:
+    """view-data-all 公司记录 + 研报 overlay 叠加。
+
+    只对 overlay 命中的 code 做 record 级合并（外层浅拷贝），大文件本体不复制。
+    view_companies / 各类索引（含 _external_index）都以本函数为源，研报增量自动生效。
+    """
+    base = _load("view-data-all.json")["companies"]
+    ov = _overlay()
+    if not ov:
+        return base
+    merged = dict(base)
+    for code, extra in ov.items():
+        rec = base.get(code)
+        if rec is None:
+            continue  # 图谱外公司（纯兜底 A 股）不走图谱叠加
+        merged[code] = _apply_overlay(rec, extra)
+    return merged
+
+
 def view_companies() -> dict:
-    return _load("view-data-all.json")["companies"]
+    return _view_merged()
 
 
 def network() -> dict:
@@ -120,6 +191,8 @@ def _external_index() -> dict:
                 if not key:
                     continue
                 rec = idx.setdefault(key, {"id": s.get("id"), "name": s.get("name"), "as_supplier": [], "as_customer": []})
+                if s.get("name") and s.get("name") != key:
+                    idx.setdefault(s["name"], rec)  # name 别名 → 同一档案
                 rec["as_supplier"].append(
                     {
                         "company_code": ccode,
@@ -138,6 +211,8 @@ def _external_index() -> dict:
                 if not key:
                     continue
                 rec = idx.setdefault(key, {"id": cu.get("id"), "name": cu.get("name"), "as_supplier": [], "as_customer": []})
+                if cu.get("name") and cu.get("name") != key:
+                    idx.setdefault(cu["name"], rec)  # name 别名 → 同一档案
                 rec["as_customer"].append(
                     {
                         "company_code": ccode,
@@ -152,9 +227,9 @@ def _external_index() -> dict:
 
 
 def entity_profile(key: str) -> dict | None:
-    """通用实体档案：核心公司返回完整档案；非核心实体返回全图关系档案。
+    """通用实体档案：核心公司 → 完整档案；非核心实体 → 全图关系档案；A 股兜底 → 基础档案。
 
-    key 可为核心公司 code/name，或外部实体的 id/name（中文已 URL 解码）。
+    判定顺序：图谱核心公司（code/name）→ 图谱非核心实体（key）→ 全 A 股兜底（6/8 位数字 code）。
     """
     code = _resolve_code(key)
     if code:
@@ -164,6 +239,8 @@ def entity_profile(key: str) -> dict | None:
             return p
     rec = _external_index().get(key)
     if rec:
+        # 研报 overlay：以实体 id（code）为 key 读取，补充经营指标/关联公司/自有业务
+        ov = _overlay().get(rec.get("id")) or {}
         return {
             "id": rec.get("id"),
             "name": rec.get("name"),
@@ -171,7 +248,31 @@ def entity_profile(key: str) -> dict | None:
             "appearance_count": len(rec["as_supplier"]) + len(rec["as_customer"]),
             "as_supplier": rec["as_supplier"],
             "as_customer": rec["as_customer"],
+            "metrics": ov.get("metrics") or [],
+            "related": ov.get("related") or [],
+            "report_materials": ov.get("materials") or [],
+            "report_products": ov.get("products") or [],
         }
+    # 全 A 股兜底：图谱外的 A 股公司（6/8 位数字代码）给基础档案
+    if key.isdigit() and len(key) in (6, 8):
+        u = universe.universe_index().get(key)
+        if u:
+            ov = _overlay().get(key) or {}
+            return {
+                "code": u["code"],
+                "name": u["name"],
+                "industry": u.get("industry") or "",
+                "market_cap": u.get("market_cap"),
+                "board": u.get("board"),
+                "is_subject": False,
+                "source": "a_share_universe",
+                "appearance_count": 0,
+                "as_supplier": [],
+                "as_customer": [],
+                "metrics": ov.get("metrics") or [],
+                "related": ov.get("related") or [],
+                "note": "全 A 股基础档案：暂无关产业链数据（该股尚未被研报/图谱覆盖）",
+            }
     return None
 
 
@@ -206,6 +307,7 @@ def company_profile(code: str) -> dict | None:
     if not c:
         return None
     cap = _cap_index().get(code) or {}
+    ov = _overlay().get(code) or {}
     up = _direct_upstream_list(code)
     down = _direct_downstream_list(code)
     return {
@@ -222,6 +324,8 @@ def company_profile(code: str) -> dict | None:
         "product_count": len(c.get("products") or []),
         "supplier_count": len(up),
         "customer_count": len(down),
+        "related": ov.get("related") or [],
+        "metrics": ov.get("metrics") or [],
     }
 
 

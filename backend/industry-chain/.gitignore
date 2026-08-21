@@ -12,3 +12,7 @@ data/seed/
 
 # 环境变量（含密钥，勿提交）
 .env
+
+# 研报管线产物（可重建，不进 git）
+data/reports/
+data/a_share_universe.json
