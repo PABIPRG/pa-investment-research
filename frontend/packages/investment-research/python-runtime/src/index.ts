@@ -83,7 +83,10 @@ export class InvestmentPythonRuntime extends Service {
     return this.manager.acquire(id, signal)
   }
 
-  /** Mutable lifecycle snapshot consumed by the invariant companion. */
+  /**
+   * Read the mutable lifecycle relations consumed by the invariant companion.
+   * @returns active backend entries and backend ids with in-flight acquisition.
+   */
   invariantSnapshot(): ReturnType<InvestmentBackendManager['invariantSnapshot']> {
     return this.manager.invariantSnapshot()
   }
