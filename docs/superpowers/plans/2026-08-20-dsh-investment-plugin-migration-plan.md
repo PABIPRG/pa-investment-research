@@ -376,6 +376,17 @@ pnpm run doc-sync
 - [x] 扩展修复后重新运行 `pnpm run hygiene` 与 `pnpm run doc-sync`；两条聚合命令均须自然结束且
   退出码为 0。随后重新运行阶段一聚焦覆盖率、完整构建、两个 Python 后端验证、8 个 shell
   wrapper 语法检查及无 `ADAPTER_URL` 的 e2e 自跳过。
+- [x] 发布前独立审查发现 stock adapter e2e 会覆盖持久 watchlist；先用失败测试锁定成功与回读
+  异常路径，再以 `finally` 恢复原列表。同时把 `adapter.e2e.ts` 登记为 Knip e2e 入口，保持无
+  `ADAPTER_URL` 时一个测试自跳过。提交边界：
+  `8865de2a1c fix: address PR1 review findings`。
+- [x] 发布前独立审查继续证明 `rescope-vendor` 的单行前缀猜测无法同时正确处理多行/注释 import、
+  嵌套字符串和 Markdown 正文。先分别保存回归测试 RED，再使用 TypeScript AST 精确识别代码中的
+  模块说明符；Markdown 正文保留 Cordis 产品 token，代码块仍支持跨行 import。提交边界：
+  `0f682a08cc fix: detect multiline Cordis imports` 与
+  `340ac881d5 fix: parse Cordis module specifiers`。
+- [x] 同一位独立审查者复核最终提交，确认所有 Critical/Important 已关闭，结论为
+  `Ready to merge: Yes`。
 
 ---
 
