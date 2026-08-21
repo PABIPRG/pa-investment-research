@@ -1,0 +1,34 @@
+- id: base
+  name: '@deepseek-ai/cordis-plugin-include'
+  config:
+    path: ./cordis.yml
+    patches:
+      - id: llm-deepseek
+        name: '@deepseek-ai/dsh-llm-deepseek'
+        disabled: true
+      - id: persistence
+        name: '@deepseek-ai/dsh-session-persistence-jsonl'
+        config:
+          root: './.sessions'
+          compression: none
+      - id: subprocess
+        disabled: true
+      - insert:
+          - id: investment-adapters
+            name: './tests/fixtures/investment-adapters.ts'
+          - id: investment-python-runtime
+            name: '../../packages/investment-research/python-runtime/src/index.ts'
+          - id: investment-stock-analysis
+            name: '../../packages/investment-research/stock-analysis/src/index.ts'
+            inject: [investmentAdapters]
+            config:
+              backendMode: external
+              backendBaseUrl: !!js process.env.DSH_INVESTMENT_TRADING_URL
+          - id: investment-market-watch
+            name: '../../packages/investment-research/market-watch/src/index.ts'
+            inject: [investmentAdapters]
+            config:
+              backendMode: external
+              backendBaseUrl: !!js process.env.DSH_INVESTMENT_MARKET_URL
+          - id: llm-replay
+            name: '@deepseek-ai/dsh-llm-replay'

@@ -325,6 +325,45 @@ jobs:
       targets: node24-linux-x64
       ci: true
 
+  investment-runtime-matrix:
+    if: github.event_name == 'pull_request'
+    name: investment runtime / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-python@v6.3.0
+        with:
+          python-version: '3.10'
+
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run investment runtime matrix
+        env:
+          DSH_INVESTMENT_TEST_PYTHON: python
+        run: pnpm run test:investment-runtime:matrix
+
   # The required pull-request Windows signal: the two blocking win32 surfaces
   # (workspace build, production site) execute with real, checksum-verified
   # Windows Node under Wine on standard hosted Linux. The independent
@@ -928,7 +967,7 @@ jobs:
           && github.event.pull_request.user.login != 'dependabot[bot]'
           && fromJSON('["self-hosted", "linux", "x64", "vm-backup"]')
           || 'ubuntu-latest' }}
-    needs: [node-24, node-24-coverage, node-24-consumers, node-compat, python-sdk, python-runtime, windows]
+    needs: [node-24, node-24-coverage, node-24-consumers, node-compat, python-sdk, python-runtime, investment-runtime-matrix, windows]
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Fail if any needed job did not succeed
