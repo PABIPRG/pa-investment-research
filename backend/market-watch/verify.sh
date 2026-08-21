@@ -1,27 +1,7 @@
 #!/usr/bin/env bash
-# ============================================================
-#  market-watch 验证脚本（macOS / Linux）
-#   1. 适配器健康检查
-#   2. 插件冒烟测试（11 工具注册即通过）
-# ============================================================
+# Verify the Python health contract and imports only.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-echo "== market-watch 验证 =="
-echo
-echo "[1/2] 适配器健康检查 ..."
-if ! curl -sf http://127.0.0.1:8100/health; then
-    echo
-    echo "  [错误] 适配器未运行，请先 ./start.sh" >&2
-    exit 1
-fi
-echo
-
-echo "[2/2] 插件冒烟测试 ..."
-if [ -d dsh-plugin ]; then
-    ( cd dsh-plugin && npx tsx test/plugin-load.smoke.ts ) || echo "  [警告] 插件冒烟测试失败"
-else
-    echo "  dsh-plugin 目录不存在，跳过"
-fi
-echo
-echo "== 验证完成 =="
+env/bin/python -m unittest tests/test_health_contract.py
+env/bin/python -c "import fastapi, uvicorn; from market_watch.app import app; print('Python imports OK')"

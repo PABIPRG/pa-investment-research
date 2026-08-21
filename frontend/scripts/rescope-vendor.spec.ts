@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { exactEditState } from './rescope-vendor.ts'
+import { exactEditState, rewriteVendorReferences } from './rescope-vendor.ts'
 
 const ANCHOR = '\n## Sync procedure'
 const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
@@ -37,5 +37,103 @@ describe('exactEditState', () => {
     // A moved or partially applied site: neither state is complete.
     expect(exactEditState('a = 1\nb = 2\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
     expect(exactEditState('x\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
+  })
+})
+
+describe('rewriteVendorReferences', () => {
+  it('重写 Cordis 包引用，但保留扩展事件和本地化标识', () => {
+    expect(rewriteVendorReferences([
+      "import { Context } from 'cordis'",
+      "ctx.emit('cordis/request-run', {})",
+      "const prefix = 'cordis/'",
+      "const signature = '\\'cordis/request-run\\'(request: Request): void'",
+    ].join('\n'), 'packages/extensions/cordis-host-runner/src/index.ts')).toEqual({
+      text: [
+        "import { Context } from '@deepseek-ai/cordis'",
+        "ctx.emit('cordis/request-run', {})",
+        "const prefix = 'cordis/'",
+        "const signature = '\\'cordis/request-run\\'(request: Request): void'",
+      ].join('\n'),
+      lines: 1,
+    })
+
+    expect(rewriteVendorReferences(
+      [
+        "import { Context } from 'cordis'",
+        "const NS = 'cordis'",
+      ].join('\n'),
+      'packages/extensions/ui-cordis/src/client/locales.ts',
+    )).toEqual({
+      text: [
+        "import { Context } from '@deepseek-ai/cordis'",
+        "const NS = 'cordis'",
+      ].join('\n'),
+      lines: 1,
+    })
+  })
+
+  it('即使子路径形似产品事件，也重写模块说明符', () => {
+    expect(rewriteVendorReferences(
+      "import run from 'cordis/request-run'",
+      'packages/extensions/cordis-host-runner/src/index.ts',
+    )).toEqual({
+      text: "import run from '@deepseek-ai/cordis/request-run'",
+      lines: 1,
+    })
+  })
+
+  it('跨越换行和注释识别模块说明符', () => {
+    const source = [
+      'import {',
+      '  Context,',
+      '} from',
+      "  'cordis'",
+      '',
+      'const run = import /* dynamic */ (',
+      "  'cordis/request-run'",
+      ')',
+      '',
+      "import { Context } from /* comment */ 'cordis'",
+      '',
+      'export { Context } from // line comment',
+      "  'cordis'",
+    ].join('\n')
+
+    expect(rewriteVendorReferences(
+      source,
+      'packages/extensions/ui-cordis/src/client/locales.ts',
+    )).toEqual({
+      text: source
+        .replaceAll("'cordis'", "'@deepseek-ai/cordis'")
+        .replace("'cordis/request-run'", "'@deepseek-ai/cordis/request-run'"),
+      lines: 4,
+    })
+  })
+
+  it('不把字符串和 Markdown 正文中的产品标识当作模块说明符', () => {
+    const code = 'const note = "import \'cordis/request-run\'"'
+    expect(rewriteVendorReferences(
+      code,
+      'packages/extensions/cordis-host-runner/src/index.ts',
+    )).toEqual({ text: code, lines: 0 })
+
+    const prose = 'This event comes from `cordis/request-run`.'
+    expect(rewriteVendorReferences(prose, 'docs/example.md')).toEqual({
+      text: prose,
+      lines: 0,
+    })
+  })
+
+  it('在 Markdown 代码块中重写跨行模块说明符', () => {
+    const markdown = [
+      '```ts',
+      'import { Context } from',
+      "  'cordis'",
+      '```',
+    ].join('\n')
+    expect(rewriteVendorReferences(markdown, 'README.md')).toEqual({
+      text: markdown.replace("'cordis'", "'@deepseek-ai/cordis'"),
+      lines: 1,
+    })
   })
 })

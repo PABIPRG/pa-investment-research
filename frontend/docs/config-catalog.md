@@ -835,6 +835,46 @@ export interface Config {
 
 Source: [`packages/runtime-diagnostics/invariants/src/index.ts:15`](../packages/runtime-diagnostics/invariants/src/index.ts)
 
+<a id="deepseek-aidsh-investment-market-watch"></a>
+
+## `@deepseek-ai/dsh-investment-market-watch`
+
+Requires: `tools`
+
+```ts config-catalog
+/** Market-watch adapter connection settings. */
+export interface Config {
+  /** Adapter origin used by all synchronous JSON tools. Defaults to `http://127.0.0.1:8100`. */
+  adapterBaseUrl?: string
+}
+```
+
+Source: [`packages/investment-research/market-watch/src/index.ts:40`](../packages/investment-research/market-watch/src/index.ts)
+
+<a id="deepseek-aidsh-investment-stock-analysis"></a>
+
+## `@deepseek-ai/dsh-investment-stock-analysis`
+
+Requires: `tools` · `agents`
+
+```ts config-catalog
+/** Stock-analysis adapter, streaming, and optional in-chat brief settings. */
+export interface Config {
+  /** Adapter origin used by all stock-analysis tools. Defaults to `http://127.0.0.1:8000`. */
+  adapterBaseUrl?: string
+  /** Maximum SSE task duration in milliseconds. Defaults to 600000. */
+  streamTimeoutMs?: number
+  /** Enable periodic brief delivery to root agent sessions. Defaults to false. */
+  enableInChatPush?: boolean
+  /** Requested brief polling interval in milliseconds. Defaults to 120000 and is clamped to at least 30000. */
+  pushPollMs?: number
+  /** Root agent session ids eligible for brief delivery; an empty list selects all active roots. */
+  pushSessions?: string[]
+}
+```
+
+Source: [`packages/investment-research/stock-analysis/src/index.ts:46`](../packages/investment-research/stock-analysis/src/index.ts)
+
 <a id="deepseek-aidsh-jobs-local"></a>
 
 ## `@deepseek-ai/dsh-jobs-local`

@@ -222,6 +222,10 @@ flowchart TD
     pkg_user_approval["user-approval"]
     pkg_user_questions["user-questions"]
   end
+  subgraph group_investment_research["packages/investment-research"]
+    pkg_investment_market_watch["investment-market-watch"]
+    pkg_investment_stock_analysis["investment-stock-analysis"]
+  end
   subgraph group_jobs["packages/jobs"]
     pkg_jobs["jobs"]
     pkg_jobs_local["jobs-local"]
@@ -858,6 +862,14 @@ flowchart TD
   pkg_tool_ask_user --> pkg_invariants
   pkg_tool_ask_user --> pkg_tools
   pkg_tool_ask_user --> pkg_user_questions
+  pkg_investment_market_watch --> pkg_invariants
+  pkg_investment_market_watch --> pkg_session
+  pkg_investment_market_watch --> pkg_tools
+  pkg_investment_stock_analysis --> pkg_agent
+  pkg_investment_stock_analysis --> pkg_invariants
+  pkg_investment_stock_analysis --> pkg_llm
+  pkg_investment_stock_analysis --> pkg_session
+  pkg_investment_stock_analysis --> pkg_tools
   pkg_tool_jobs --> pkg_agent
   pkg_tool_jobs --> pkg_invariants
   pkg_tool_jobs --> pkg_jobs
@@ -1562,6 +1574,8 @@ flowchart TD
 | [`repeat-tool-reminder`](../packages/guard/repeat-tool-reminder) | `guard` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`tools`](../packages/core/tools) |
 | [`tool-call-timeout-policy`](../packages/guard/timeout-policy) | `guard` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |
 | [`tool-ask-user`](../packages/interaction/tool-ask-user) | `interaction` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`tools`](../packages/core/tools), [`user-questions`](../packages/interaction/user-questions) |
+| [`investment-market-watch`](../packages/investment-research/market-watch) | `investment-research` | [`invariants`](../packages/runtime-diagnostics/invariants), [`session`](../packages/core/session), [`tools`](../packages/core/tools) |
+| [`investment-stock-analysis`](../packages/investment-research/stock-analysis) | `investment-research` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`tools`](../packages/core/tools) |
 | [`tool-jobs`](../packages/jobs/tool-jobs) | `jobs` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`jobs`](../packages/jobs/jobs), [`llm`](../packages/llm/llm), [`output-retention`](../packages/util/output-retention), [`system-prompt`](../packages/core/system-prompt), [`tools`](../packages/core/tools) |
 | [`tool-lsp`](../packages/lsp/tool-lsp) | `lsp` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`lsp`](../packages/lsp/lsp), [`system-prompt`](../packages/core/system-prompt), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |
 | [`mcp-client`](../packages/mcp/mcp-client) | `mcp` | [`attachment`](../packages/attachment/attachment), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`subprocess`](../packages/subprocess/subprocess), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |

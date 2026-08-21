@@ -32,6 +32,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 const root = resolve(import.meta.dirname, '..')
 
@@ -105,6 +106,30 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   { file: 'scripts/gen-module-graph.ts', upstream: ['cordis'] },
   { file: 'scripts/gen-doc-graphs.ts', upstream: ['cordis'] },
 ]
+
+/** Cordis extension event ids that share the package's prefix by design. */
+const CORDIS_PRODUCT_TOKENS = new Set([
+  'cordis/',
+  'cordis/*',
+  'cordis/dynamic-package',
+  'cordis/dynamic-retract',
+  'cordis/inspect-query',
+  'cordis/inspect-query-resolved',
+  'cordis/request-run',
+  'cordis/request-run-resolved',
+])
+
+/** Files whose bare `cordis` literal is product data, not a package specifier. */
+const BARE_CORDIS_PRODUCT_FILES = new Set([
+  'packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisActionRow.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisDefineRow.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisPanel.tsx',
+  'packages/extensions/ui-cordis/src/client/CordisRunRow.tsx',
+  'packages/extensions/ui-cordis/src/client/index.ts',
+  'packages/extensions/ui-cordis/src/client/locales.ts',
+  'scripts/gen-cordis-catalog.ts',
+])
 
 /** A string that must appear exactly `count` times once the rescope has run. */
 interface PostCondition {
@@ -463,6 +488,7 @@ const VENDORED_LIBRARY = /^@deepseek-ai\\/(cosmokit|schemastery)(\\/|$)/
 /** Files the rescope must never rewrite. */
 function excluded(file: string): boolean {
   if (file === 'scripts/rescope-vendor.ts') return true // the mapping itself
+  if (file === 'scripts/rescope-vendor.spec.ts') return true // intentional pre-rescope fixtures
   if (file.startsWith('.agents/notes/')) return true // notes record what was true when written
   // Recorded model payloads quote documentation verbatim, so they must mirror the
   // sources on disk — including the notes this rescope leaves alone.
@@ -507,11 +533,60 @@ function skipped(file: string, pattern: Pattern): boolean {
   return GENERIC_SKIPS.some(skip => skip.file === file && skip.upstream.includes(pattern.upstream))
 }
 
-function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
-  let out = line
+function productToken(file: string, pattern: Pattern, subpath: string): boolean {
+  if (pattern.from !== 'cordis') return false
+  const escapedQuote = subpath.endsWith('\\') ? subpath.slice(0, -1) : subpath
+  const token = `${pattern.from}${escapedQuote}`
+  return CORDIS_PRODUCT_TOKENS.has(token)
+    || (token === 'cordis' && BARE_CORDIS_PRODUCT_FILES.has(file))
+}
+
+function moduleLoadCall(node: ts.CallExpression): boolean {
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) return true
+  if (ts.isIdentifier(node.expression)) return node.expression.text === 'require'
+  return ts.isPropertyAccessExpression(node.expression)
+    && ts.isIdentifier(node.expression.expression)
+    && node.expression.expression.text === 'require'
+    && node.expression.name.text === 'resolve'
+}
+
+function moduleSpecifierOffsets(text: string, file: string): ReadonlySet<number> {
+  const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
+  const offsets = new Set<number>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node)) {
+      const parent = node.parent
+      const moduleSpecifier = (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent))
+        && parent.moduleSpecifier === node
+      const externalReference = ts.isExternalModuleReference(parent) && parent.expression === node
+      const callArgument = ts.isCallExpression(parent)
+        && parent.arguments[0] === node
+        && moduleLoadCall(parent)
+      const importType = ts.isLiteralTypeNode(parent)
+        && ts.isImportTypeNode(parent.parent)
+        && parent.parent.argument === parent
+      const ambientModule = ts.isModuleDeclaration(parent) && parent.name === node
+      if (moduleSpecifier || externalReference || callArgument || importType || ambientModule) {
+        offsets.add(node.getStart(sourceFile))
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return offsets
+}
+
+function rewriteChunk(text: string, file: string, all: readonly Pattern[], code: boolean): string {
+  let out = text
   for (const pattern of all) {
     if (skipped(file, pattern)) continue
-    out = out.replace(pattern.token, (_match, quote: string, subpath: string) => `${quote}${pattern.to}${subpath}${quote}`)
+    const moduleSpecifiers = code && pattern.from === 'cordis'
+      ? moduleSpecifierOffsets(out, file)
+      : new Set<number>()
+    out = out.replace(pattern.token, (match, quote: string, subpath: string, offset: number) => {
+      if (!moduleSpecifiers.has(offset) && productToken(file, pattern, subpath)) return match
+      return `${quote}${pattern.to}${subpath}${quote}`
+    })
     out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
   }
   return out
@@ -531,21 +606,44 @@ function rewriteLine(line: string, file: string, all: readonly Pattern[]): strin
 function rewrite(text: string, file: string, all: readonly Pattern[]): { text: string; lines: number } {
   const markdown = file.endsWith('.md')
   const prose = markdown && file.startsWith('docs/')
+  if (!markdown) {
+    const out = rewriteChunk(text, file, all, true)
+    const lines = text.split('\n').filter((line, index) => line !== out.split('\n')[index]).length
+    return { text: out, lines }
+  }
+
   let insideFence = false
-  let lines = 0
-  const out = text.split('\n').map((line) => {
-    if (markdown) {
-      if (/^\s*```/.test(line)) {
-        insideFence = !insideFence
-        return line
-      }
-      if (!insideFence && !prose) return line
+  let segmentStart = 0
+  const out = text.split('\n')
+  const rewriteSegment = (end: number): void => {
+    if (segmentStart >= end) return
+    if (!insideFence && !prose) return
+    const before = out.slice(segmentStart, end).join('\n')
+    const after = rewriteChunk(before, file, all, insideFence)
+    out.splice(segmentStart, end - segmentStart, ...after.split('\n'))
+  }
+  for (let index = 0; index < out.length; index += 1) {
+    if (/^\s*```/.test(out[index] ?? '')) {
+      rewriteSegment(index)
+      insideFence = !insideFence
+      segmentStart = index + 1
     }
-    const next = rewriteLine(line, file, all)
-    if (next !== line) lines += 1
-    return next
-  })
-  return { text: out.join('\n'), lines }
+  }
+  rewriteSegment(out.length)
+  const output = out.join('\n')
+  const lines = text.split('\n').filter((line, index) => line !== out[index]).length
+  return { text: output, lines }
+}
+
+/**
+ * Rewrite package-name references in one tracked file using the forward
+ * rescope mapping while preserving product identifiers that share a prefix.
+ * @param text - Complete file contents.
+ * @param file - Repository-relative path used by the contextual exclusions.
+ * @returns Rewritten text and the number of changed lines.
+ */
+export function rewriteVendorReferences(text: string, file: string): { text: string; lines: number } {
+  return rewrite(text, file, patterns(false))
 }
 
 function classify(file: string): string {
@@ -642,7 +740,9 @@ function main(): void {
   for (const file of files) {
     const path = resolve(root, file)
     const before = readFileSync(path, 'utf8')
-    const { text: after, lines } = rewrite(before, file, all)
+    const { text: after, lines } = reverse
+      ? rewrite(before, file, all)
+      : rewriteVendorReferences(before, file)
     if (after === before) continue
     outstanding.push(file)
     const kind = classify(file)

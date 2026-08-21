@@ -252,6 +252,16 @@
         "tests/**/*.ts"
       ]
     },
+    "packages/investment-research/stock-analysis": {
+      "entry": [
+        "tests/**/*.spec.ts",
+        "tests/**/*.e2e.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.ts"
+      ]
+    },
     "packages/core/tools": {
       "entry": [
         "tests/**/*.spec.ts"
