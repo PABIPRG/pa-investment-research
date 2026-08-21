@@ -8,7 +8,7 @@ const PACKAGE_NAME = '@deepseek-ai/dsh-investment-runtime-bundle'
 export const name = 'investment-runtime-bundle-invariant'
 export const inject = ['invariants']
 
-// This package owns no runtime state: it only publishes cordis.patch.yml.
+// No runtime invariant: this package only publishes cordis.patch.yml.
 const install: InvariantInstaller = () => {}
 
 export const apply = (ctx: Context): Promise<() => void> =>
