@@ -114,6 +114,45 @@ class RiskProfileRequest(BaseModel):
     )
 
 
+class KyAnswer(BaseModel):
+    """KYC 单题答案：题目 ID + 选项文本 + 得分（1-5）。"""
+
+    qid: str = Field(description="题目 ID（见 QUESTION_BANK，如 horizon/loss_tolerance）")
+    label: str = Field(description="选项文本")
+    score: int = Field(ge=1, le=5, description="选项得分")
+
+
+class KycQuestionnaireRequest(BaseModel):
+    """POST /kyc/questionnaire 请求体：提交问卷答案。"""
+
+    answers: list[KyAnswer] = Field(description="覆盖该档全部题目的答案列表")
+    tier: Literal["quick", "full"] = Field(description="问卷档位: quick=三问速测, full=8 题完整")
+    method: Literal["questionnaire", "voice"] = Field(
+        default="questionnaire", description="作答方式: questionnaire=手动点选, voice=语音"
+    )
+    voice_source: Optional[str] = Field(
+        default=None, description="语音作答时保存的原始转写文本"
+    )
+
+
+class KycAdjustRequest(BaseModel):
+    """POST /kyc/adjust 请求体：滑块微调已推断画像。"""
+
+    risk_tolerance: float = Field(
+        default=0.5, ge=0, le=1, description="风险承受能力 0-1（0=保守 / 0.5=稳健 / 1=进取）"
+    )
+    horizon_years: int = Field(
+        default=3, ge=1, le=10, description="投资期限（年），作辅助约束"
+    )
+    note: str = Field(default="", description="调整说明（可选）")
+
+
+class KycParseRequest(BaseModel):
+    """POST /kyc/parse 请求体：整段自然语言 → 结构化问卷答案。"""
+
+    text: str = Field(min_length=1, description="自然语言描述（语音转写或手打）")
+
+
 class TaskStarted(BaseModel):
     """POST /analyze 响应"""
 

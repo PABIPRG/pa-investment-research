@@ -17,11 +17,15 @@ SCRIPTS=(
   "market-watch-start|market-watch 启动(:8100 adapter + :3081 dsh)|backend/market-watch/start.sh"
   "market-watch-stop|market-watch 停止(:8100/:3081)|backend/market-watch/stop_all.sh"
   "market-watch-verify|market-watch 验证(health+插件冒烟)|backend/market-watch/verify.sh"
+  "industry-chain-init|industry-chain 初始化(venv+依赖+.env+种子数据)|backend/industry-chain/init.sh"
+  "industry-chain-start|industry-chain 启动(:8200 adapter + :3082 dsh)|backend/industry-chain/start.sh"
+  "industry-chain-stop|industry-chain 停止(:8200/:3082)|backend/industry-chain/stop_all.sh"
+  "industry-chain-verify|industry-chain 验证(health+插件冒烟)|backend/industry-chain/verify.sh"
   "dev-web|启动前端 Web 开发服务|cd frontend && pnpm run dev:web"
   "start-electron|构建并启动 Electron 桌面端|scripts/run-electron.sh build"
   "start-electron-dev|直接启动 Electron 桌面端（不构建，需先初始化）|scripts/run-electron.sh dev"
-  "product-start|产品壳一键启动(:8000 :8100 :8090 UI)|product/start.sh"
-  "product-stop|产品壳停止(:8000/:8100/:8090)|product/stop.sh"
+  "product-start|产品壳一键启动(:8000 :8100 :8200 :8090 UI)|product/start.sh"
+  "product-stop|产品壳停止(:8000/:8100/:8200/:8090)|product/stop.sh"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)

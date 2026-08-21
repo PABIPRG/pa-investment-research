@@ -1,0 +1,14 @@
+# industry-chain 本地环境
+env/
+__pycache__/
+*.pyc
+logs/
+
+# dsh-plugin npm 依赖
+dsh-plugin/node_modules/
+
+# 种子数据（可刷新，不进 git）：运行 init.sh 或 scripts/fetch_seed_data.py 下载
+data/seed/
+
+# 环境变量（含密钥，勿提交）
+.env
