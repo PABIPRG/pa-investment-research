@@ -81,4 +81,32 @@ describe('rewriteVendorReferences', () => {
       lines: 1,
     })
   })
+
+  it('跨越换行和注释识别模块说明符', () => {
+    const source = [
+      'import {',
+      '  Context,',
+      '} from',
+      "  'cordis'",
+      '',
+      'const run = import /* dynamic */ (',
+      "  'cordis/request-run'",
+      ')',
+      '',
+      "import { Context } from /* comment */ 'cordis'",
+      '',
+      'export { Context } from // line comment',
+      "  'cordis'",
+    ].join('\n')
+
+    expect(rewriteVendorReferences(
+      source,
+      'packages/extensions/ui-cordis/src/client/locales.ts',
+    )).toEqual({
+      text: source
+        .replaceAll("'cordis'", "'@deepseek-ai/cordis'")
+        .replace("'cordis/request-run'", "'@deepseek-ai/cordis/request-run'"),
+      lines: 4,
+    })
+  })
 })

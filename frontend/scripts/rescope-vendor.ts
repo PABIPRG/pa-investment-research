@@ -540,18 +540,58 @@ function productToken(file: string, pattern: Pattern, subpath: string): boolean 
     || (token === 'cordis' && BARE_CORDIS_PRODUCT_FILES.has(file))
 }
 
-function moduleSpecifier(line: string, offset: number): boolean {
-  const prefix = line.slice(0, offset)
-  return /\b(?:from|import)\s*$/.test(prefix)
-    || /\b(?:import|require)(?:\.resolve)?\s*\(\s*$/.test(prefix)
+function skipTriviaBackward(text: string, initialOffset: number): number {
+  let offset = initialOffset
+  while (true) {
+    const before = offset
+    while (offset > 0 && /\s/.test(text[offset - 1] ?? '')) offset -= 1
+
+    if (text.slice(offset - 2, offset) === '*/') {
+      const commentStart = text.lastIndexOf('/*', offset - 2)
+      if (commentStart >= 0) offset = commentStart
+    }
+    else {
+      const lineStart = text.lastIndexOf('\n', offset - 1) + 1
+      const commentStart = text.lastIndexOf('//', offset - 1)
+      if (commentStart >= lineStart) offset = commentStart
+    }
+
+    if (offset === before) return offset
+  }
 }
 
-function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
+function identifierBackward(text: string, initialOffset: number): { start: number; value: string } {
+  let start = initialOffset
+  while (start > 0 && /[$\w]/.test(text[start - 1] ?? '')) start -= 1
+  return { start, value: text.slice(start, initialOffset) }
+}
+
+function moduleSpecifier(text: string, offset: number): boolean {
+  let cursor = skipTriviaBackward(text, offset)
+  if (text[cursor - 1] !== '(') {
+    const { value } = identifierBackward(text, cursor)
+    return value === 'from' || value === 'import'
+  }
+
+  cursor = skipTriviaBackward(text, cursor - 1)
+  let identifier = identifierBackward(text, cursor)
+  if (identifier.value === 'import' || identifier.value === 'require') return true
+  if (identifier.value !== 'resolve') return false
+
+  cursor = skipTriviaBackward(text, identifier.start)
+  if (text[cursor - 1] !== '.') return false
+  cursor = skipTriviaBackward(text, cursor - 1)
+  identifier = identifierBackward(text, cursor)
+  return identifier.value === 'require'
+}
+
+function rewriteLine(line: string, file: string, all: readonly Pattern[], precedingText: string): string {
   let out = line
   for (const pattern of all) {
     if (skipped(file, pattern)) continue
     out = out.replace(pattern.token, (match, quote: string, subpath: string, offset: number) => {
-      if (!moduleSpecifier(out, offset) && productToken(file, pattern, subpath)) return match
+      if (!moduleSpecifier(`${precedingText}${out}`, precedingText.length + offset)
+        && productToken(file, pattern, subpath)) return match
       return `${quote}${pattern.to}${subpath}${quote}`
     })
     out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
@@ -575,16 +615,22 @@ function rewrite(text: string, file: string, all: readonly Pattern[]): { text: s
   const prose = markdown && file.startsWith('docs/')
   let insideFence = false
   let lines = 0
+  let precedingText = ''
   const out = text.split('\n').map((line) => {
     if (markdown) {
       if (/^\s*```/.test(line)) {
         insideFence = !insideFence
+        precedingText += `${line}\n`
         return line
       }
-      if (!insideFence && !prose) return line
+      if (!insideFence && !prose) {
+        precedingText += `${line}\n`
+        return line
+      }
     }
-    const next = rewriteLine(line, file, all)
+    const next = rewriteLine(line, file, all, precedingText)
     if (next !== line) lines += 1
+    precedingText += `${next}\n`
     return next
   })
   return { text: out.join('\n'), lines }
