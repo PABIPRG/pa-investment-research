@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Electron desktop application for DeepSeek Harness. It boots the shipped `web` profile, serves the Host and a relative-path build of the existing Web renderer from its own `dsh://app` URL scheme, and carries the event downlinks over IPC. The desktop application therefore uses the same profile, client plugins, sessions, settings, and `$DSH_HOME` as `dsh web` without opening a listening port.
+Electron desktop application for DeepSeek Harness. It boots the selected profile (`web` by default), serves the Host and a relative-path build of the existing Web renderer from its own `dsh://app` URL scheme, and carries the event downlinks over IPC. The desktop application therefore reuses the selected profile's client plugins, sessions, settings, and `$DSH_HOME` while its native patch removes the Web listening carrier.
 
 ## Launch from source
 
@@ -12,9 +12,16 @@ From the repository root:
 pnpm install
 pnpm run build
 pnpm dsh electron
+pnpm dsh electron --profile investment-research
 ```
 
-`electron` is an application selector, not a profile name: `dsh --profile electron` looks for a user profile and does not launch the desktop runtime. `pnpm dsh electron` checks the built main process, sandboxed preload, and renderer, then starts the application through its local Electron executable without rebuilding. `pnpm run start:electron` remains the build-and-launch convenience command; `pnpm --filter @deepseek-ai/dsh-electron run start` launches existing artifacts directly.
+`electron` is an application selector, not a profile name: `dsh --profile electron` looks for a user profile and does not launch the desktop runtime. `pnpm dsh electron` checks the built main process, sandboxed preload, and renderer, then starts the default `web` profile through its local Electron executable without rebuilding. `pnpm dsh electron --profile investment-research` is the product entry for the five-layer investment profile; use `pnpm dsh --profile investment-research --dump-default-config` separately for configuration diagnostics. `pnpm run start:electron` remains the build-and-launch convenience command; `pnpm --filter @deepseek-ai/dsh-electron run start` launches existing artifacts directly.
+
+## Investment backend deployment
+
+The shipped business rows default to `managed`: stock analysis uses `http://127.0.0.1:8000`, market watch uses `http://127.0.0.1:8100`, and source launches discover their projects in this repository. A packaged or relocated deployment sets each row's absolute `backendProjectDir`; an independently supervised endpoint uses `backendMode: external` plus `backendBaseUrl`, which verifies identity but never starts or stops the process. These fields belong in `$DSH_HOME/profiles/investment-research/cordis.patch.yml`; remember that a row patch replaces its complete `config`.
+
+A missing managed virtual environment fails with the project directory and `./init.sh` or `init.bat` instruction; startup never installs it. Runtime logs and diagnostic state live under `$DSH_HOME/investment-research/<backend-id>/`, and state never authorizes PID takeover. Stock-analysis in-chat brief delivery defaults to `enableInChatPush: false`; Python scheduler and external delivery settings stay backend-owned. See the [Runtime package contract](../../packages/investment-research/python-runtime/README.md) for paths, retention, and ownership details.
 
 ## Package the application
 
@@ -29,7 +36,7 @@ pnpm run make:electron
 
 ## Runtime structure
 
-- `electron.patch.yml` disables the Web server, static Web runtime, Web Connection provider, adaptive browser directory picker, and client HMR, then mounts the native directory-picker pair and Electron Connection provider.
+- The main process resolves exactly one `--profile <name>` argument (`web` when absent), passes that profile to `runProfile`, and then applies only `electron.patch.yml`. For `investment-research`, the profile first composes base → web-app → investment-runtime → investment-stock-analysis → investment-market-watch; the Electron patch then disables the Web server, static Web runtime, Web Connection provider, adaptive browser directory picker, and client HMR before mounting the native directory-picker pair and Electron Connection provider.
 - The main and preload bundles leave the `electron` module external because the Electron executable provides it at runtime.
 - The ESM main module schedules application startup without top-level-awaiting `app.whenReady()`, allowing Electron's readiness event to run after initial module evaluation. Registering the `dsh` scheme as standard, secure, and Fetch-capable happens during that module evaluation, because Electron accepts the privilege list only before readiness.
 - The profile installation anchor resolves bare plugins from the healed profile dependency directory. App boot uses public Node resolution when Electron does not expose Node's internal module loader.
@@ -38,6 +45,12 @@ pnpm run make:electron
 - The main process validates every IPC stream request and accepts messages only from the window's main frame. Navigation stays on the renderer document; HTTP(S) links open externally.
 
 Client-plugin HMR and live profile-patch watching are not active in the desktop application because Electron does not expose the Node loader internals required by Cordis HMR. Rebuild and restart Electron after changing a client bundle; restart it after changing either `cordis.patch.yml` layer.
+
+## macOS native-addon startup
+
+A source checkout copied or downloaded by a GUI client can carry `com.apple.quarantine` onto installed native dependencies. If macOS reports that `pty.node` cannot be verified, finish the dialog and quit that launch; do not move the file to Trash. Confirm that the addon came from this lockfile and a trusted checkout, then reinstall dependencies from a checkout that does not carry quarantine, or have an administrator clear the attribute only from the verified local dependency under the organization's policy. `xattr -p com.apple.quarantine <path-to-pty.node>` is a read-only diagnostic. The application never clears quarantine automatically.
+
+This warning occurs while the shared local subprocess provider eagerly loads `node-pty`; it is not a Python backend health or virtual-environment failure. A distributable macOS application must sign and notarize the application and native addons; the current Forge ZIP is unsigned, so clearing quarantine in a developer checkout is not a production distribution fix.
 
 ## Model Experience
 

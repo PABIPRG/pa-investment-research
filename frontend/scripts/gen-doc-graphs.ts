@@ -372,6 +372,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'The bash executors, the PTY shell backend, the LSP host, and the out-of-process ACP, Codex, and Claude Code subagent backends spawn through ctx.subprocess; the service owns process coordinates, tree/session lifetime, stdio dispositions, terminal mechanics, and kill escalation.',
   },
   {
+    key: 'investmentPythonRuntime',
+    pkg: 'investment-python-runtime',
+    title: 'Investment Python backend lifecycle',
+    mode: 'core',
+    consumers: ['investment-stock-analysis', 'investment-market-watch'],
+    note: 'Business plugins register complete backend definitions and acquire verified reference-counted leases; the service starts and joins only subprocess handles it owns.',
+  },
+  {
     key: 'shell',
     pkg: 'shell',
     title: 'Bash executor seam',

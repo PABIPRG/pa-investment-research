@@ -1,0 +1,48 @@
+# @deepseek-ai/dsh-investment-python-runtime
+
+English | [中文](README.zh.md)
+
+Host Service for registering, verifying, and leasing the Python endpoints used by investment-research plugins. `ctx.investmentPythonRuntime` centralizes backend identity, path resolution, health checks, subprocess ownership, diagnostics, and teardown; business plugins register complete definitions and use the verified `baseUrl` from a lease instead of starting Python or reading ports themselves.
+
+## Configuration
+
+| Key | Default | Meaning |
+|---|---|---|
+| `dshHome` | `$DSH_HOME`, else `~/.dsh` | Root for owner-only logs and runtime state. |
+| `startupTimeoutMs` | `30000` | Maximum managed startup duration. |
+| `healthPollMs` | `250` | Delay between startup health probes. |
+| `shutdownGraceMs` | `5000` | Grace passed to the subprocess tree termination ladder. |
+| `logTailBytes` | `65536` | Maximum retained diagnostic tail included in startup errors. |
+| `logMaxBytes` | `4194304` | Active backend log size that triggers one-file rotation on the next start. |
+
+## Backend lifecycle
+
+`managed` is the default business-plugin mode. The runtime validates a loopback HTTP URL, resolves the backend directory without using the caller's working directory, verifies the project virtual-environment interpreter, and probes `/health`. It starts Uvicorn only when the probe is explicitly connection-refused; an unknown network failure, occupied endpoint, or service-identity mismatch fails startup without touching the process that answered. A healthy service found before spawn is `attached`, while a child started through `ctx.subprocess` is `owned`.
+
+`external` accepts HTTP or HTTPS, verifies the configured health identity, and returns an `external` lease. It never starts, signals, or stops the service. Releasing the last lease stops only an in-memory `owned` handle; attached and external services survive. Runtime disposal rejects new work, waits for in-flight acquisitions, and then joins every owned process tree. State files are diagnostic records and never authorize PID or port takeover.
+
+Concurrent acquisitions for one backend id share one startup. Identical registrations are reference-counted; conflicting command, URL, mode, identity, or path definitions fail. Business tools are registered only after acquisition succeeds and are removed before their lease is released.
+
+## Project discovery and initialization
+
+Source launches discover `backend/dsh-trading-core` and `backend/market-watch` by walking upward from this installed package. A deployment without that repository layout must set the business plugin's absolute `backendProjectDir`; relative paths and missing directories fail. The interpreter is `<projectDir>/env/bin/python` on POSIX and `<projectDir>\env\Scripts\python.exe` on Windows. When it is absent, startup prints the project directory and the platform-specific command to run there: `./init.sh` or `init.bat`; the runtime does not install dependencies.
+
+The trading backend forwards an explicitly set `ADAPTER_RUNNER` to its owned child. Backend scheduler and push settings remain Python-owned; the shipped profile leaves stock-analysis in-chat push disabled (`enableInChatPush: false`) and does not reinterpret those settings as profile composition.
+
+## Logs and state
+
+Each backend writes `$DSH_HOME/investment-research/<id>/backend.log`, rotating an oversized file to `backend.previous.log`. Owned process metadata is atomically written to `runtime.json` with private permissions and removed only when it still matches the exact in-memory owned process. Startup diagnostics redact explicitly forwarded environment values.
+
+## Model Experience
+
+None, as this Host lifecycle service registers no prompt, tool schema, session event, or result.
+
+#### KV Cache effect
+
+None; business plugins own every model-visible contribution after their backend lease succeeds.
+
+## Known Limitations and Deferred Work
+
+- **Repository discovery is source-layout-specific** — installed deployments that do not retain the monorepo layout must configure each business plugin's absolute `backendProjectDir`.
+- **State is diagnostic, not recovery authority** — a restarted dsh instance reports stale state but never adopts or kills a PID from disk; use `external` for independently supervised services.
+- **One active and one previous log** — rotation is size-based at open time; long-running children do not rotate mid-process.

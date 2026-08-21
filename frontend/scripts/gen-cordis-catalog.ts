@@ -72,6 +72,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   goals: 'goal.md',
   webServer: 'web-server.md',
   invariants: 'invariants.md',
+  investmentPythonRuntime: 'investment-research.md',
   llm: 'llm-streaming.md',
   lsp: 'lsp.md',
   messageFeedback: 'feedback.md',
@@ -225,6 +226,9 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   GenerateOptions: 'llm-streaming.md',
   InboxItem: 'core.md',
   InboxPlacement: 'core.md',
+  InvestmentBackendId: 'investment-research.md',
+  PythonBackendDefinition: 'investment-research.md',
+  PythonBackendLease: 'investment-research.md',
   MessageId: 'llm-streaming.md',
   ResumeAgentOptions: 'core.md',
   SettleReason: 'core.md',
@@ -501,6 +505,7 @@ export const FOUNDATION_TYPE_NAMES: ReadonlySet<string> = new Set([
   'Promise',
   'Record',
   'Readonly',
+  'ReturnType',
   'Uint8Array',
 ])
 
@@ -566,6 +571,7 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   WebUpgradeRoute:
     'upgrade route registration contract is owned by packages/host/webserver/src/index.ts',
   InvariantRegistration: 'service-local lifecycle handle is owned by packages/runtime-diagnostics/invariants/README.md',
+  InvestmentBackendManager: 'service-local lifecycle snapshot implementation is owned by packages/investment-research/python-runtime/src/runtime.ts',
   JsonValue: 'JSON value union is owned by packages/core/session/src/json.ts',
   KnobState: 'projection unit state fields are owned by packages/interaction/permission-presets/README.md',
   PermissionSelect: 'permissions projection payload is owned by packages/interaction/permission-presets/src/types.ts',
