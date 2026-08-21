@@ -72,12 +72,18 @@ def _build_user(code: str, name: str, texts: list[str]) -> str:
     return _USER_TEMPLATE.format(code=code, name=name, body=body)
 
 
-def _chat_json(prompt: str) -> dict:
+def chat_json(system: str, prompt: str, raw: bool = False) -> dict:
+    """通用 DeepSeek 结构化 JSON 调用（研报抽取 / 补边脚本复用）。
+
+    system 为系统提示词，prompt 为用户提示词，response_format 强制 JSON 对象。
+    raw=False 用 _normalize 规整成研报 schema（保持旧行为）；raw=True 原样返回
+    LLM 输出的 JSON dict，供自定义 schema 的调用方自行处理。
+    """
     url = settings.deepseek_base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": settings.llm_model,
         "messages": [
-            {"role": "system", "content": _SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0,
@@ -90,10 +96,15 @@ def _chat_json(prompt: str) -> dict:
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]
             parsed = json.loads(content)
-            return _normalize(parsed)
+            return _normalize(parsed) if not raw else parsed
         except Exception as exc:  # noqa: BLE001
             last = exc
     raise RuntimeError(f"DeepSeek 抽取失败: {last}")
+
+
+def _chat_json(prompt: str) -> dict:
+    """研报抽取专用：固定研报 schema 的 system + 输出规整。"""
+    return chat_json(_SYSTEM, prompt)
 
 
 def _normalize(parsed) -> dict:

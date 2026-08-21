@@ -13,7 +13,10 @@
 """
 
 import json
+import math
+import re
 import threading
+import zlib
 from functools import lru_cache
 
 from .config import settings
@@ -46,6 +49,10 @@ def invalidate() -> None:
         _external_index.cache_clear()
         _view_merged.cache_clear()
         _overlay.cache_clear()
+        _universe_name_index.cache_clear()
+        a_share_links.cache_clear()
+        _universe_layout.cache_clear()
+        _llm_links.cache_clear()
 
 
 # ---- 数据访问 ------------------------------------------------------------
@@ -505,6 +512,209 @@ def graph_chain(
     return {"center": center, "up_levels": up_levels, "down_levels": down_levels}
 
 
+# ---- 全 A 股：A→A 供应链边解析 + 行业簇布局 --------------------------------
+#
+# universe（5901 家 A 股）与 iducsite 图谱是两套数据。全 A 股视图（include_universe=1）
+# 输出全部 A 股节点，边只来自 view-data-all + 研报 overlay 里能解析出的「A股→A股」
+# 供应链关系（供应商/客户），非上市实体只作解析桥接、不画成节点。
+
+
+@lru_cache(maxsize=1)
+def _universe_name_index() -> dict:
+    """universe name → [code]（重名时列表 len=2，用于判定 name 匹配是否唯一）。"""
+    idx: dict[str, list[str]] = {}
+    for code, rec in universe.universe_index().items():
+        n = rec.get("name")
+        if n:
+            idx.setdefault(n, []).append(code)
+    return idx
+
+
+_SUFFIX_RE = re.compile(r"\.(?:SZ|SH|BJ|XSHE|XSHG)$", re.I)
+
+
+def _norm_a_code(v) -> str:
+    """归一化 6/8 位 A 股代码（去掉 .SZ/.SH/.BJ 等交易所后缀）。"""
+    if isinstance(v, str):
+        return _SUFFIX_RE.sub("", v).strip()
+    return v
+
+
+def _resolve_a_share(ent: dict) -> str | None:
+    """供应商/客户实体 → A 股 code。
+
+    优先级：① id 归一化后精确命中 universe code → ② name 本身是 code
+    → ③ name 唯一命中 universe（重名歧义返回 None）。全 A 股只认 A 股。
+    """
+    u = universe.universe_index()
+    if ent.get("id"):
+        c = _norm_a_code(str(ent["id"]))
+        if c in u:
+            return c
+    nm = ent.get("name")
+    if not nm:
+        return None
+    if nm in u:  # name 本身就是 6/8 位 code
+        return nm
+    cand = _universe_name_index().get(nm) or []
+    if len(cand) == 1:
+        return cand[0]
+    return None
+
+
+def _merge_edge(agg: dict, src: str, tgt: str, kind: str, share, type_: str, item: str, confidence=None) -> None:
+    """(src,tgt) 有向 pair 去重聚合；share / confidence 取 max（前端线宽/置信度），item 聚合。"""
+    e = agg.get((src, tgt))
+    if e is None:
+        agg[(src, tgt)] = {"kind": kind, "share": share, "type": type_, "item": item or "",
+                           "count": 1, "confidence": confidence}
+        return
+    if share is not None and (e["share"] is None or share > e["share"]):
+        e["share"] = share
+    if confidence is not None and (e["confidence"] is None or confidence > e["confidence"]):
+        e["confidence"] = confidence
+    if item and item not in e["item"]:
+        e["item"] = (e["item"] + "、" + item) if e["item"] else item
+    e["count"] += 1
+
+
+LLM_LINKS_PATH = settings.root / "data" / "a_share_llm_links.json"
+
+
+@lru_cache(maxsize=1)
+def _llm_links() -> list[dict]:
+    """LLM 挖掘的 A→A 推断边（data/a_share_llm_links.json，可重建，缺失返回空）。
+
+    每条 {source,target,kind,item,confidence,note}，source/target 均为 universe code。
+    """
+    if not LLM_LINKS_PATH.is_file():
+        return []
+    with open(LLM_LINKS_PATH, encoding="utf-8") as f:
+        return (json.load(f) or {}).get("links") or []
+
+
+@lru_cache(maxsize=1)
+def a_share_links() -> dict:
+    """全 A 股「A→A」供应链有向边（view-data-all + 研报 overlay + LLM 挖掘边，pair 去重）。
+
+    返回 {"links":[{source,target,kind,type,share,item,count,confidence}],
+          "degrees":{code:{"up":n,"down":n}}}   # up=供应商数(入), down=客户数(出)
+    """
+    u = universe.universe_index()
+    records: list[dict] = []
+    seen: set[str] = set()
+    for c in view_companies().values():
+        cc = c.get("code") or c.get("id")
+        if not cc or cc in seen:
+            continue
+        seen.add(cc)
+        records.append(c)
+    # overlay 里不在图谱记录的公司（如 688363 华熙生物）单独合成记录解析
+    for code, extra in _overlay().items():
+        if code not in seen and code in u:
+            records.append({"code": code, "name": u[code]["name"],
+                            "materials": extra.get("materials") or [],
+                            "products": extra.get("products") or []})
+    agg: dict[tuple, dict] = {}
+    for c in records:
+        c0 = c.get("code") or c.get("id")
+        if c0 not in u:
+            continue
+        for m in c.get("materials") or []:  # 供应商边：supplier → company
+            for s in m.get("suppliers") or []:
+                cc = _resolve_a_share(s)
+                if cc and cc != c0:
+                    _merge_edge(agg, cc, c0, "supplier", s.get("share"),
+                                s.get("type") or "direct", m.get("name"))
+        for p in c.get("products") or []:  # 客户边：company → customer
+            for cu in p.get("customers") or []:
+                cc = _resolve_a_share(cu)
+                if cc and cc != c0:
+                    _merge_edge(agg, c0, cc, "customer", cu.get("share"),
+                                cu.get("type") or "direct", p.get("name"))
+    # LLM 挖掘的推断边（孤立股补边）并入同一 agg：进 degrees（孤立股补度数）、
+    # 进 links（画虚线）；share 保持 None 不受 min_share 过滤，confidence 分级显示
+    for l in _llm_links():
+        src, tgt = l.get("source"), l.get("target")
+        if not src or not tgt or src == tgt or src not in u or tgt not in u:
+            continue
+        _merge_edge(agg, src, tgt, l.get("kind") or "supplier", None,
+                    "inferred", l.get("item") or "", l.get("confidence"))
+    links: list[dict] = []
+    degrees: dict[str, dict] = {}
+    for (src, tgt), e in agg.items():
+        links.append({"source": src, "target": tgt, "kind": e["kind"],
+                      "type": e["type"], "share": e["share"],
+                      "item": e["item"], "count": e["count"],
+                      "confidence": e.get("confidence")})
+        degrees.setdefault(src, {"up": 0, "down": 0})
+        degrees.setdefault(tgt, {"up": 0, "down": 0})
+        degrees[src]["down"] += 1
+        degrees[tgt]["up"] += 1
+    return {"links": links, "degrees": degrees}
+
+
+def _industry_color(ind: str) -> str:
+    """行业 → 稳定色相（zlib.crc32 而非内置 hash()，后者受 PYTHONHASHSEED 影响）。"""
+    if not ind:
+        return "#8b97ad"
+    return f"hsl({zlib.crc32(ind.encode('utf-8')) % 360} 55% 45%)"
+
+
+@lru_cache(maxsize=1)
+def _universe_layout() -> dict:
+    """无 network 坐标的 A 股按行业簇布局：组内网格 + 组间 shelf 装箱 → [50,2350]×[50,1550]。
+
+    与 network 节点映射后的 init_x/init_y 同空间（前端全 A 股模式直接用，不再二次归一化）。
+    """
+    u = universe.universe_index()
+    groups: dict[str, list[str]] = {}
+    for code, rec in u.items():
+        groups.setdefault(rec.get("industry") or "其他", []).append(code)
+    items = sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+    S, node_r, GAP, MAXW = 14, 5, 30, 2300
+    rows: list[list[tuple]] = []
+    cur: list[tuple] = []
+    cur_w = cur_h = y = 0
+    for ind, codes in items:
+        n = len(codes)
+        cols = math.ceil(math.sqrt(n))
+        rws = math.ceil(n / cols)
+        w = (cols - 1) * S + 2 * node_r
+        h = (rws - 1) * S + 2 * node_r
+        if cur and cur_w + w + GAP > MAXW:  # 行满换行
+            rows.append(cur)
+            y += cur_h + GAP
+            cur, cur_w, cur_h = [], 0, 0
+        cur.append((ind, codes, cols, w, h))
+        cur_w += w + GAP
+        cur_h = max(cur_h, h)
+    if cur:
+        rows.append(cur)
+
+    out: dict[str, dict] = {}
+    yy = 0.0
+    for row in rows:
+        row_h = max(r[4] for r in row)
+        xx = 0.0
+        for _ind, codes, cols, w, _h in row:
+            for i, code in enumerate(codes):
+                out[code] = {"x": xx + (i % cols) * S + node_r,
+                             "y": yy + (i // cols) * S + node_r}
+            xx += w + GAP
+        yy += row_h + GAP
+
+    xs = [p["x"] for p in out.values()]
+    ys = [p["y"] for p in out.values()]
+    bw, bh = (max(xs) - min(xs)) or 1, (max(ys) - min(ys)) or 1
+    scale = min(2300 / bw, 1500 / bh)
+    offx = 50 + (2300 - bw * scale) / 2 - min(xs) * scale
+    offy = 50 + (1500 - bh * scale) / 2 - min(ys) * scale
+    return {c: {"x": round(p["x"] * scale + offx, 1),
+                "y": round(p["y"] * scale + offy, 1)} for c, p in out.items()}
+
+
 # ---- 全局网络切片（服务端过滤，浏览器不拉 14.8MB） -----------------------
 
 
@@ -514,8 +724,93 @@ def _slim_node(n: dict) -> dict:
         "radius", "color", "glowColor", "market_cap_cny", "badge", "degree",
         "upCount", "downCount", "macroId", "macroName", "init_x", "init_y",
         "subId", "subName", "scaleText",
+        "board", "market_cap", "has_view",
     )
     return {k: n.get(k) for k in keep}
+
+
+def _graph_network_universe(min_share: float) -> dict:
+    """全 A 股模式：全部 5901 家 A 股节点 + A→A 供应链真实边。
+
+    忽略 min_degree / min_market_cap / subject_only（合成 A 股大多 degree=0，
+    按 3 过滤会清空；外部实体不画节点故 subject_only 无意义）。min_share 仅对
+    数值型 share 生效（null share 恒保留，86% 真实边无 share 数据）。
+    """
+    u = universe.universe_index()
+    net = network()
+    al = a_share_links()
+    uidx = _universe_name_index()
+
+    # 可复用 network 坐标/社区的 A 股：code 精确命中 或 name 唯一命中（含外部实体里的上市公司）
+    net_by_code: dict[str, dict] = {}
+    for n in net["nodes"]:
+        c = n.get("code")
+        if c and c in u:
+            net_by_code[c] = n
+            continue
+        for key in (n.get("id"), n.get("name")):
+            if not key:
+                continue
+            cand = uidx.get(key)
+            if cand and len(cand) == 1:
+                net_by_code[cand[0]] = n
+                break
+
+    # network 坐标域 → [50,2350]×[50,1550]（与 _universe_layout 同空间）
+    pts = [(c, n["init_x"], n["init_y"]) for c, n in net_by_code.items()
+           if isinstance(n.get("init_x"), (int, float)) and isinstance(n.get("init_y"), (int, float))]
+    if pts:
+        nx = [p[1] for p in pts]
+        ny = [p[2] for p in pts]
+        minx, maxx = min(nx), max(nx)
+        miny, maxy = min(ny), max(ny)
+        rngx, rngy = (maxx - minx) or 1, (maxy - miny) or 1
+    else:
+        minx = miny = 0.0
+        rngx = rngy = 1.0
+
+    layout = _universe_layout()
+    vc = view_companies()
+    nodes = []
+    for code, rec in u.items():
+        base = {"id": code, "code": code, "name": rec.get("name"),
+                "industry": rec.get("industry") or "",
+                "board": rec.get("board"), "market_cap": rec.get("market_cap"),
+                "market_cap_cny": rec.get("market_cap"),
+                "has_view": code in vc}
+        nn = net_by_code.get(code)
+        if nn:  # 复用：保留原坐标(映射)/半径/社区/度数，is_subject 继承
+            for k in ("radius", "color", "glowColor", "macroId", "macroName", "subId",
+                      "subName", "scaleText", "role", "tier", "degree", "upCount", "downCount"):
+                if nn.get(k) is not None:
+                    base[k] = nn[k]
+            base["init_x"] = round(50 + (nn["init_x"] - minx) / rngx * 2300, 1)
+            base["init_y"] = round(50 + (nn["init_y"] - miny) / rngy * 1500, 1)
+            base["is_subject"] = bool(nn.get("is_subject"))
+        else:  # 合成：行业色、A→A 边度数、行业簇坐标
+            d = al["degrees"].get(code, {"up": 0, "down": 0})
+            p = layout.get(code, {"x": 50, "y": 50})
+            base.update({"is_subject": False, "radius": 4,
+                         "color": _industry_color(rec.get("industry") or ""),
+                         "degree": d["up"] + d["down"], "upCount": d["up"],
+                         "downCount": d["down"], "macroId": None,
+                         "init_x": p["x"], "init_y": p["y"]})
+        nodes.append(_slim_node(base))
+
+    links = [l for l in al["links"]
+             if not (min_share > 0 and l.get("share") is not None and l["share"] < min_share)]
+    return {
+        "nodes": nodes,
+        "links": links,
+        "macro_communities": net.get("macro_communities") or [],
+        "stats": {
+            "total_nodes": len(nodes),
+            "total_links": len(links),
+            "universe_mode": True,
+            "subject_count": sum(1 for n in nodes if n.get("is_subject")),
+            "macro_communities_count": len(net.get("macro_communities") or []),
+        },
+    }
 
 
 def graph_network(
@@ -523,7 +818,10 @@ def graph_network(
     min_market_cap: float = 0,
     min_share: float = 10,
     subject_only: bool = False,
+    include_universe: bool = False,
 ) -> dict:
+    if include_universe:
+        return _graph_network_universe(min_share)
     net = network()
     raw_nodes = net["nodes"]
     raw_links = net["links"]
@@ -558,15 +856,30 @@ def graph_network(
             }
         )
 
-    communities = [
-        {
-            "macroId": cm.get("macroId"),
-            "name": cm.get("name"),
-            "palette": cm.get("palette"),
-            "size": cm.get("size"),
-        }
-        for cm in (net.get("macro_communities") or [])
-    ]
+    # 宏观社区 → 成员 A 股东财主导行业（用于前端按申万一级分组展示侧栏）。
+    # 社区本身无成员列表，从 raw_nodes 按 macroId 归集，code → universe 拿干净行业名。
+    u = universe.universe_index()
+    macro_inds: dict[int, list[str]] = {}
+    for n in raw_nodes:
+        mid = n.get("macroId")
+        if mid is None:
+            continue
+        ind = u.get(n.get("code") or "", {}).get("industry")
+        if ind:
+            macro_inds.setdefault(mid, []).append(ind)
+    communities = []
+    for cm in (net.get("macro_communities") or []):
+        inds = macro_inds.get(cm.get("macroId")) or []
+        industry = max(set(inds), key=inds.count) if inds else None
+        communities.append(
+            {
+                "macroId": cm.get("macroId"),
+                "name": cm.get("name"),
+                "palette": cm.get("palette"),
+                "size": cm.get("size"),
+                "industry": industry,
+            }
+        )
 
     return {
         "nodes": filtered_nodes,

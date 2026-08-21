@@ -16,3 +16,6 @@ data/seed/
 # 研报管线产物（可重建，不进 git）
 data/reports/
 data/a_share_universe.json
+
+# LLM 补边产物（可重建，不进 git）：scripts/build_llm_links.py 生成
+data/a_share_llm_links.json
