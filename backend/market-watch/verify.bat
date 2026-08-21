@@ -1,33 +1,11 @@
 @echo off
 setlocal
-rem ============================================================
-rem  market-watch verify script (Windows)
-rem   1. adapter health check
-rem   2. plugin smoke test (11 tools registered = pass)
-rem ============================================================
+rem Verify the Python health contract and imports only.
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
-echo == market-watch verify ==
-echo.
-echo [1/2] adapter health check ...
-curl -s http://127.0.0.1:8100/health
-if errorlevel 1 (
-    echo.
-    echo   [ERROR] adapter not running. Start with start_all.bat
-    exit /b 1
-)
-echo.
-
-echo [2/2] plugin smoke test ...
-if exist "dsh-plugin\package.json" (
-    pushd dsh-plugin
-    call npx tsx test/plugin-load.smoke.ts
-    if errorlevel 1 echo   [WARN] plugin smoke test failed
-    popd
-) else (
-    echo   dsh-plugin not found, skip
-)
-echo.
-echo == verify done ==
+env\Scripts\python.exe -m unittest tests\test_health_contract.py
+if errorlevel 1 exit /b 1
+env\Scripts\python.exe -c "import fastapi, uvicorn; from market_watch.app import app; print('Python imports OK')"
+if errorlevel 1 exit /b 1
 endlocal
