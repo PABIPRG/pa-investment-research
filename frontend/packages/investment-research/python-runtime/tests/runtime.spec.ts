@@ -264,6 +264,34 @@ describe('InvestmentBackendManager', () => {
     await second.release()
   })
 
+  it('aborts and awaits an active-entry health probe during disposal', async () => {
+    const gate = Promise.withResolvers<BackendHealthResult>()
+    const current = await harness()
+    let probes = 0
+    let probeSignal: AbortSignal | undefined
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async (_definition, options) => {
+        if (probes++ === 0) return healthy
+        probeSignal = options?.signal
+        return gate.promise
+      },
+    })
+    manager.register({ ...definition, mode: 'external' })
+    await manager.acquire('trading-core')
+    const acquiring = manager.acquire('trading-core')
+    await vi.waitFor(() => { expect(probeSignal).toBeDefined() })
+    let disposed = false
+    const disposing = manager.dispose().then(() => { disposed = true })
+    await expect(acquiring).rejects.toThrow(/disposed/)
+    expect(probeSignal?.aborted).toBe(true)
+    expect(disposed).toBe(false)
+    gate.resolve(healthy)
+    await disposing
+    expect(disposed).toBe(true)
+  })
+
   it('disposal blocks new acquires and awaits owned process-tree exit', async () => {
     const { manager, handle } = await harness([refused, healthy])
     manager.register(definition)
@@ -396,7 +424,7 @@ describe('InvestmentBackendManager', () => {
     controller.abort(new Error('cancel startup'))
     ready.resolve(refused)
     await expect(acquiring).rejects.toThrow('cancel startup')
-    await vi.waitFor(() => { expect(cancelled.handle.waitForExitCalls).toBe(1) })
+    expect(cancelled.handle.waitForExitCalls).toBe(1)
 
     const logFailure = await harness([refused, healthy])
     await mkdir(join(logFailure.home, 'investment-research', 'trading-core', 'backend.log'), { recursive: true })
@@ -433,6 +461,9 @@ describe('InvestmentBackendManager', () => {
     void current.handle.done.catch(() => {})
     current.handle.fail(new Error('tree wait failed'))
     await expect(lease.release()).rejects.toThrow('tree wait failed')
+    expect(current.manager.invariantSnapshot().active).toHaveLength(1)
+    await expect(current.manager.dispose()).rejects.toThrow('runtime disposal failed')
+    expect(current.manager.invariantSnapshot().active).toHaveLength(1)
   })
 
   it('delegates the public Service API and awaits its Cordis teardown effect', async () => {
