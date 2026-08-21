@@ -16,7 +16,12 @@ const definition: PythonBackendDefinition = {
 
 function jsonFetch(body: unknown, status = 200): typeof fetch {
   return async (input) => {
-    if (String(input) !== 'http://127.0.0.1:8000/health') {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url
+    if (url !== 'http://127.0.0.1:8000/health') {
       return new Response(JSON.stringify({ service: 'wrong-route' }), {
         status: 200,
         headers: { 'content-type': 'application/json' },

@@ -93,9 +93,9 @@ describe('InvestmentPythonRuntime public API', () => {
     vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => (
       init?.signal === signal
         ? new Response(JSON.stringify({ service: 'trading-core', status: 'ok' }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
         : new Response('signal missing', { status: 503 })
     ))
     await expect(runtime.acquire('trading-core', signal)).resolves.toMatchObject({ ownership: 'attached' })
