@@ -58,13 +58,18 @@ const STOCK_CONTRACTS = [
 
 afterEach(() => vi.unstubAllGlobals())
 
-function install(config: Plugin.Config = {
-  adapterBaseUrl: 'http://adapter.test', streamTimeoutMs: 1_000,
+async function install(config: Plugin.Config = {
+  backendMode: 'external', backendBaseUrl: 'http://adapter.test', streamTimeoutMs: 1_000,
   enableInChatPush: false, pushPollMs: 30_000, pushSessions: [],
-}): RegisteredTool[] {
+}): Promise<RegisteredTool[]> {
   const tools: RegisteredTool[] = []
-  Plugin.apply({
-    effect(callback: () => () => void) { callback() },
+  let baseUrl = config.backendBaseUrl ?? 'http://127.0.0.1:8000'
+  await Plugin.apply({
+    async effect(callback: () => Promise<() => void>) { return callback() },
+    investmentPythonRuntime: {
+      register(definition: { baseUrl: string }) { baseUrl = definition.baseUrl; return () => {} },
+      async acquire() { return { id: 'trading-core', baseUrl, ownership: 'external', async release() {} } },
+    },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
     agents: { roots: () => [] },
   } as never, config)
@@ -75,7 +80,7 @@ describe('stock-analysis function plugin', () => {
   it('has only the preserved named function-plugin API', () => {
     const config: Plugin.Config = {}
     expect(Plugin.name).toBe('investment-stock-analysis')
-    expect(Plugin.inject).toEqual(['tools', 'agents'])
+    expect(Plugin.inject).toEqual(['tools', 'agents', 'investmentPythonRuntime'])
     expect(Plugin.apply).toBeTypeOf('function')
     expect(config).toEqual({})
   })
@@ -92,7 +97,7 @@ describe('stock-analysis function plugin', () => {
       }
       return new Response('{"saved":1,"tickers":[],"risk_profile":"balanced","label":"稳健","id":"b1"}')
     }))
-    const tools = install()
+    const tools = await install()
     const byName = new Map(tools.map(tool => [tool.name, tool]))
     expect(
       tools.map(({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema })),
@@ -189,7 +194,7 @@ describe('stock-analysis function plugin', () => {
     await byName.get('get_risk_profile')!.execute({}, exec)
     await byName.get('get_latest_brief')!.execute({}, exec)
 
-    const defaults = new Map(install({}).map(tool => [tool.name, tool]))
+    const defaults = new Map((await install({})).map(tool => [tool.name, tool]))
     await defaults.get('analyze_stock')!.execute({ ticker: '600519' }, exec)
     await defaults.get('analyze_holdings')!.execute({}, exec)
     await defaults.get('market_brief')!.execute({}, exec)
@@ -218,8 +223,8 @@ describe('stock-analysis function plugin', () => {
     ])
   })
 
-  it('renders successful and empty adapter values without exposing transport errors as schemas', () => {
-    const byName = new Map(install().map(tool => [tool.name, tool]))
+  it('renders successful and empty adapter values without exposing transport errors as schemas', async () => {
+    const byName = new Map((await install()).map(tool => [tool.name, tool]))
     expect(byName.get('set_watchlist')!.output.render?.({}, { saved: 2 })).toEqual([{ type: 'text', text: '已保存 2 只自选股。' }])
     expect(byName.get('get_watchlist')!.output.render?.({}, { tickers: [] })[0]!.text).toContain('（空）')
     expect(byName.get('get_latest_brief')!.output.render?.({}, {})[0]!.text).toBe('暂无简报')
@@ -238,8 +243,12 @@ describe('stock-analysis function plugin', () => {
       requests.push([url, init?.method ?? 'GET', init?.body as string | undefined])
       return new Response('{"saved":0}')
     }))
-    rawPlugin.apply({
-      effect(callback: () => () => void) { callback() },
+    await rawPlugin.apply({
+      async effect(callback: () => Promise<() => void>) { return callback() },
+      investmentPythonRuntime: {
+        register() { return () => {} },
+        async acquire() { return { id: 'trading-core', baseUrl: 'http://127.0.0.1:8000', ownership: 'external', async release() {} } },
+      },
       tools: { register(tool: Record<string, unknown>) { rawTools.push(tool); return () => {} } },
       agents: { roots: () => [] },
     } as never, {})

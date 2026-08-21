@@ -43,11 +43,11 @@ function briefBody(label: string, tradeDate: string | undefined, summary: string
  * @param ctx - Plugin context supplying agents, logging, and effect disposal.
  * @param config - Resolved adapter, interval, enablement, and audience settings.
  */
-export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void {
-  if (!config.enableInChatPush) return
+export function createBriefPusher(ctx: Context, config: BriefPusherConfig): (() => void) | undefined {
+  if (!config.enableInChatPush) return undefined
   if (ctx.get('agents') === undefined) {
     ctx.logger.warn('[stock-analysis] 对话内播报已开启但 agents 服务不可用，忽略')
-    return
+    return undefined
   }
 
   const pollMs = Math.max(config.pushPollMs, 30_000)
@@ -99,14 +99,15 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
     }
   }
 
-  // 绑定到上下文生命周期：dispose 时自动清掉定时器
-  ctx.effect(() => {
-    const timer = setInterval(() => {
-      void deliver()
-    }, pollMs)
-    void deliver() // 启动立即试一次：dsh 打开时若有未播报的盘前简报则补播
-    return () => {
-      clearInterval(timer)
-    }
-  })
+  const timer = setInterval(() => {
+    void deliver()
+  }, pollMs)
+  void deliver()
+  return () => { clearInterval(timer) }
+}
+
+/** Start effect-owned polling for callers that do not compose a larger ordered lifecycle. */
+export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void {
+  const dispose = createBriefPusher(ctx, config)
+  if (dispose !== undefined) ctx.effect(() => dispose)
 }

@@ -15,6 +15,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type { PythonBackendDefinition, PythonBackendLease } from '@deepseek-ai/dsh-investment-python-runtime'
 import {
   consumeSse,
   getLatestBrief,
@@ -27,7 +28,7 @@ import {
   startTask,
   type HoldingInput,
 } from './client.ts'
-import { setupBriefPusher } from './brief-pusher.ts'
+import { createBriefPusher } from './brief-pusher.ts'
 import {
   renderBrief,
   renderBriefCard,
@@ -44,8 +45,12 @@ export const name = 'investment-stock-analysis'
 
 /** Stock-analysis adapter, streaming, and optional in-chat brief settings. */
 export interface Config {
-  /** Adapter origin used by all stock-analysis tools. Defaults to `http://127.0.0.1:8000`. */
-  adapterBaseUrl?: string
+  /** Runtime ownership mode. Defaults to managed. */
+  backendMode?: 'managed' | 'external'
+  /** Backend origin verified by the runtime. Defaults to `http://127.0.0.1:8000`. */
+  backendBaseUrl?: string
+  /** Explicit absolute trading-core checkout when repository discovery is unavailable. */
+  backendProjectDir?: string
   /** Maximum SSE task duration in milliseconds. Defaults to 600000. */
   streamTimeoutMs?: number
   /** Enable periodic brief delivery to root agent sessions. Defaults to false. */
@@ -73,14 +78,16 @@ function stringValue(value: unknown): string {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  adapterBaseUrl: Schema.string().default('http://127.0.0.1:8000'),
+  backendMode: Schema.union(['managed', 'external']).default('managed'),
+  backendBaseUrl: Schema.string().default('http://127.0.0.1:8000'),
+  backendProjectDir: Schema.string(),
   streamTimeoutMs: Schema.number().default(600_000),
   enableInChatPush: Schema.boolean().description('dsh 对话内定时播报简报（外部推送由适配器 scheduler 负责）').default(false),
   pushPollMs: Schema.number().description('对话内播报轮询周期 ms').default(120_000),
   pushSessions: Schema.array(Schema.string()).description('播报目标会话 id；空 = 所有活跃会话').default([]),
 })
 
-export const inject = ['tools', 'agents']
+export const inject = ['tools', 'agents', 'investmentPythonRuntime']
 
 /** 风险偏好参数（三个流式工具共用）。缺省用适配器已保存偏好。 */
 const RISK_PROFILE_PARAM = {
@@ -105,15 +112,9 @@ async function runStreamingTask(
   return result as { signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }
 }
 
-export function apply(ctx: Context, config: Config): void {
-  const resolvedConfig = {
-    adapterBaseUrl: config.adapterBaseUrl ?? 'http://127.0.0.1:8000',
-    streamTimeoutMs: config.streamTimeoutMs ?? 600_000,
-    enableInChatPush: config.enableInChatPush ?? false,
-    pushPollMs: config.pushPollMs ?? 120_000,
-    pushSessions: config.pushSessions ?? [],
-  }
-  setupBriefPusher(ctx, {
+function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): () => void {
+  const toolDisposers: Array<() => void> = []
+  const disposePusher = createBriefPusher(ctx, {
     adapterBaseUrl: resolvedConfig.adapterBaseUrl,
     enableInChatPush: resolvedConfig.enableInChatPush,
     pushPollMs: resolvedConfig.pushPollMs,
@@ -121,9 +122,15 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   const register = (tool: Parameters<Context['tools']['register']>[0]): void => {
-    ctx.effect(() => ctx.tools.register(tool))
+    toolDisposers.push(ctx.tools.register(tool))
   }
 
+  const disposeFeatures = (): void => {
+    for (const dispose of toolDisposers.reverse()) dispose()
+    disposePusher?.()
+  }
+
+  try {
   register(
     defineTool({
       name: 'analyze_stock',
@@ -569,4 +576,66 @@ export function apply(ctx: Context, config: Config): void {
       },
     }),
   )
+  return disposeFeatures
+  } catch (error) {
+    disposeFeatures()
+    throw error
+  }
+}
+
+function tradingBackend(config: Config): PythonBackendDefinition {
+  return {
+    id: 'trading-core',
+    service: 'trading-core',
+    mode: config.backendMode ?? 'managed',
+    baseUrl: config.backendBaseUrl ?? 'http://127.0.0.1:8000',
+    ...(config.backendProjectDir === undefined ? {} : { projectDir: config.backendProjectDir }),
+    repositoryPath: ['backend', 'dsh-trading-core'],
+    module: 'adapter.app:app',
+    healthPath: '/health',
+    healthOk: { status: 'ok' },
+    initCommand: { posix: './init.sh', windows: 'init.bat' },
+    managedEnv: process.env.ADAPTER_RUNNER === undefined
+      ? {}
+      : { ADAPTER_RUNNER: process.env.ADAPTER_RUNNER },
+  }
+}
+
+/** Register, acquire, expose tools, and tear down the stock backend in one ordered effect. */
+export async function apply(ctx: Context, config: Config = {}): Promise<void> {
+  await ctx.effect(async () => {
+    const unregister = ctx.investmentPythonRuntime.register(tradingBackend(config))
+    let lease: PythonBackendLease | undefined
+    let disposeFeatures: (() => void) | undefined
+    try {
+      lease = await ctx.investmentPythonRuntime.acquire('trading-core')
+      const resolvedConfig: ResolvedConfig = {
+        adapterBaseUrl: lease.baseUrl,
+        streamTimeoutMs: config.streamTimeoutMs ?? 600_000,
+        enableInChatPush: config.enableInChatPush ?? false,
+        pushPollMs: config.pushPollMs ?? 120_000,
+        pushSessions: config.pushSessions ?? [],
+      }
+      disposeFeatures = setupFeatures(ctx, resolvedConfig)
+      return async () => {
+        try {
+          disposeFeatures?.()
+        } finally {
+          try {
+            await lease?.release()
+          } finally {
+            unregister()
+          }
+        }
+      }
+    } catch (error) {
+      try {
+        disposeFeatures?.()
+        await lease?.release()
+      } finally {
+        unregister()
+      }
+      throw error
+    }
+  }, 'investment stock-analysis runtime lifecycle')
 }
