@@ -51,7 +51,7 @@ describe('stock-analysis brief pusher', () => {
     expect(calls.filter(([url]) => url.endsWith('/brief/latest'))).toHaveLength(initialPolls)
     await vi.advanceTimersByTimeAsync(1)
     expect(calls.filter(([url]) => url.endsWith('/brief/latest'))).toHaveLength(initialPolls + 1)
-    dispose()
+    await dispose()
     await vi.advanceTimersByTimeAsync(60_000)
     expect(calls.filter(([url]) => url.endsWith('/brief/latest'))).toHaveLength(initialPolls + 1)
   })
@@ -92,7 +92,7 @@ describe('stock-analysis brief pusher', () => {
     })
     const dispose = effects[0]!()
     await vi.advanceTimersByTimeAsync(0)
-    dispose()
+    await dispose()
     expect(marks).toBe(expectedMarks)
   })
 
@@ -116,7 +116,7 @@ describe('stock-analysis brief pusher', () => {
 
     const dispose = effects[0]!()
     await vi.advanceTimersByTimeAsync(0)
-    dispose()
+    await dispose()
 
     expect(delivered).toHaveLength(1)
     expect(marks).toBe(1)
@@ -142,7 +142,7 @@ describe('stock-analysis brief pusher', () => {
 
     const dispose = effects[0]!()
     await vi.advanceTimersByTimeAsync(0)
-    dispose()
+    await dispose()
 
     expect(delivered).toEqual([])
     expect(marks).toBe(0)
@@ -177,8 +177,61 @@ describe('stock-analysis brief pusher', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     finishFetch()
     await vi.advanceTimersByTimeAsync(0)
-    dispose()
+    await dispose()
 
     expect(agentLookups).toBeGreaterThan(1)
+  })
+
+  it('awaits an in-flight delivery and suppresses followup during disposal', async () => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => void | Promise<void>)> = []
+    const response = Promise.withResolvers<Response>()
+    vi.stubGlobal('fetch', vi.fn(() => response.promise))
+    let followups = 0
+    setupBriefPusher({
+      get: () => ({ roots: () => [{ id: 'active', followup() { followups++ } }] }),
+      effect(callback: () => () => void | Promise<void>) { effects.push(callback) },
+    } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+    const dispose = effects[0]!()
+    let disposed = false
+    const disposing = Promise.resolve(dispose()).then(() => { disposed = true })
+    await Promise.resolve()
+    expect(disposed).toBe(false)
+    response.resolve(new Response(JSON.stringify({ id: 'late', summary: 'late' })))
+    await disposing
+    await dispose()
+    expect(followups).toBe(0)
+  })
+
+  it('stops the current audience loop when delivery synchronously initiates disposal', async () => {
+    vi.useFakeTimers()
+    const effects: Array<() => (() => Promise<void>)> = []
+    let marks = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/brief/latest')) return new Response(JSON.stringify({ id: 'current', summary: 'body' }))
+      marks++
+      return new Response('{}')
+    }))
+    let dispose!: () => Promise<void>
+    let disposing: Promise<void> | undefined
+    let followups = 0
+    setupBriefPusher({
+      get: () => ({
+        roots: () => [
+          { id: 'first', followup() { followups++; disposing = dispose() } },
+          { id: 'second', followup() { followups++ } },
+        ],
+      }),
+      effect(callback: () => () => Promise<void>) { effects.push(callback) },
+    } as never, {
+      adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
+    })
+    dispose = effects[0]!()
+    await vi.advanceTimersByTimeAsync(0)
+    await disposing
+    expect(followups).toBe(1)
+    expect(marks).toBe(0)
   })
 })

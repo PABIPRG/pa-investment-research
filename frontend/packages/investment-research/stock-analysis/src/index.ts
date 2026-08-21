@@ -112,7 +112,7 @@ async function runStreamingTask(
   return result as { signal: JsonValue; reports: JsonValue; performance_metrics: JsonValue }
 }
 
-function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): () => void {
+async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Promise<() => Promise<void>> {
   const toolDisposers: Array<() => void> = []
   const disposePusher = createBriefPusher(ctx, {
     adapterBaseUrl: resolvedConfig.adapterBaseUrl,
@@ -125,9 +125,9 @@ function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): () => void
     toolDisposers.push(ctx.tools.register(tool))
   }
 
-  const disposeFeatures = (): void => {
+  const disposeFeatures = async (): Promise<void> => {
     for (const dispose of toolDisposers.reverse()) dispose()
-    disposePusher?.()
+    await disposePusher?.()
   }
 
   try {
@@ -578,7 +578,7 @@ function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): () => void
     )
     return disposeFeatures
   } catch (error) {
-    disposeFeatures()
+    await disposeFeatures()
     throw error
   }
 }
@@ -606,7 +606,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   await ctx.effect(async () => {
     const unregister = ctx.investmentPythonRuntime.register(tradingBackend(config))
     let lease: PythonBackendLease | undefined
-    let disposeFeatures: (() => void) | undefined
+    let disposeFeatures: (() => Promise<void>) | undefined
     try {
       lease = await ctx.investmentPythonRuntime.acquire('trading-core')
       const resolvedConfig: ResolvedConfig = {
@@ -616,10 +616,10 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         pushPollMs: config.pushPollMs ?? 120_000,
         pushSessions: config.pushSessions ?? [],
       }
-      disposeFeatures = setupFeatures(ctx, resolvedConfig)
+      disposeFeatures = await setupFeatures(ctx, resolvedConfig)
       return async () => {
         try {
-          disposeFeatures?.()
+          await disposeFeatures?.()
         } finally {
           try {
             await lease?.release()
@@ -630,7 +630,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       }
     } catch (error) {
       try {
-        disposeFeatures?.()
+        await disposeFeatures?.()
         await lease?.release()
       } finally {
         unregister()
