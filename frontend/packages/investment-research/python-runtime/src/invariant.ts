@@ -20,9 +20,11 @@ const installInvariant: InvariantInstaller = (ctx, fail) => {
   for (const entry of snapshot.active) {
     const id = entry.definition.id
     if (entry.refs < 0) fail(`investment Python backend "${id}" has a negative lease count`)
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- invariant snapshots may be forged or corrupted at runtime.
     if (entry.ownership === 'owned' && entry.handle === undefined) {
       fail(`investment Python backend "${id}" is owned without a live handle`)
     }
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- invariant snapshots may be forged or corrupted at runtime.
     if (entry.ownership !== 'owned' && entry.handle !== undefined) {
       fail(`investment Python backend "${id}" is attached with an owned handle`)
     }

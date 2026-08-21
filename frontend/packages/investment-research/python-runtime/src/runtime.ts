@@ -154,6 +154,7 @@ export class InvestmentBackendManager {
         void flight.finally(() => { this.flights.delete(id) }).catch(() => {})
       }
       entry = await flight
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- disposal can race the awaited startup flight.
       if (this.disposed) {
         await this.stop(entry)
         throw new Error('investment Python runtime is disposed')
@@ -225,7 +226,7 @@ export class InvestmentBackendManager {
     const offsets = { stdout: 0, stderr: 0 }
     let outcome: Awaited<SubprocessHandle['done']> | undefined
     let spawnFailure: unknown
-    void handle.done.then(value => { outcome = value }, error => { spawnFailure = error })
+    void handle.done.then((value) => { outcome = value }, (error: unknown) => { spawnFailure = error })
     const drain = async (): Promise<void> => {
       for (const source of ['stdout', 'stderr'] as const) {
         const read = handle.collected[source]?.readFrom(offsets[source])

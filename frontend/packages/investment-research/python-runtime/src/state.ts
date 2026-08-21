@@ -82,8 +82,7 @@ export async function readOwnedBackendState(path: string): Promise<OwnedBackendS
 }
 
 function stateMatches(left: OwnedBackendState, right: OwnedBackendState): boolean {
-  return left.version === right.version
-    && left.id === right.id
+  return left.id === right.id
     && left.service === right.service
     && left.pid === right.pid
     && left.baseUrl === right.baseUrl
