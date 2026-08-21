@@ -16,7 +16,7 @@
  * @module @deepseek-ai/dsh/args
  */
 
-import { Command, CommanderError } from 'commander'
+import { Command, CommanderError, InvalidArgumentError } from 'commander'
 
 /** Boot a named profile and hand it the invocation's inner arguments. */
 interface ProfileInvocation {
@@ -48,6 +48,7 @@ interface PluginInvocation {
 /** Launch the Electron desktop application process. */
 interface ElectronInvocation {
   mode: 'electron'
+  profile: string
 }
 
 /** The resolved `dsh` invocation. Help, version, and errors exit inside {@link parseDshArgs}. */
@@ -65,6 +66,13 @@ interface BootOptions {
  * variadic — a variadic `--patch` would swallow the inner arguments.
  */
 const collect = (value: string, previous: string[] = []): string[] => [...previous, value]
+
+/** Accept one non-empty Electron profile and reject ambiguous repeats. */
+const electronProfile = (value: string, previous?: string): string => {
+  if (value === '') throw new InvalidArgumentError('--profile needs a non-empty name')
+  if (previous !== undefined) throw new InvalidArgumentError('--profile may be specified only once')
+  return value
+}
 
 /** The launcher's own help text; each app prints its own. */
 const HELP_EXAMPLES = `
@@ -182,14 +190,15 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
   profileAlias('cli', 'headless', 'command-line app')
   profileAlias('web', 'web', 'web app')
 
-  program
+  const electron = program
     .command('electron')
     .description('launch the Electron desktop application')
     .helpOption('-h, --help', 'display help for command')
     .allowExcessArguments(false)
+    .option('--profile <name>', 'the profile to boot in the Electron application', electronProfile)
     .action(() => {
       rejectParentOptions('electron')
-      resolved = { mode: 'electron' }
+      resolved = { mode: 'electron', profile: electron.opts<{ profile?: string }>().profile ?? 'web' }
     })
 
   const plugin = program.command('plugin').description('manage a profile\'s plugins by forwarding the remaining arguments to pnpm in the profile directory')

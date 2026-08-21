@@ -11,6 +11,7 @@ import type {
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
 import { ElectronConnectionService } from './index.ts'
+import { resolveElectronProfile } from './args.ts'
 import { APP_INDEX_URL, APP_SCHEME, createAppProtocolHandler } from './protocol.ts'
 import {
   STREAM_CLOSE_CHANNEL,
@@ -22,6 +23,7 @@ const APP_MANIFEST = fileURLToPath(new URL('../package.json', import.meta.url))
 const ELECTRON_PATCH = fileURLToPath(new URL('../electron.patch.yml', import.meta.url))
 const RENDERER_DIR = fileURLToPath(new URL('../renderer/', import.meta.url))
 const PRELOAD = fileURLToPath(new URL('./preload.cjs', import.meta.url))
+const PROFILE = resolveElectronProfile()
 
 interface StreamOpenRequest {
   kind: ElectronStreamKind
@@ -52,7 +54,7 @@ async function runApplication(): Promise<void> {
   await app.whenReady()
   const { ctx, shutdown } = await runProfile({
     environment: loadLayeredEnv('dsh'),
-    profile: 'web',
+    profile: PROFILE,
     patchFiles: [ELECTRON_PATCH],
     args: [],
     installAnchor: APP_MANIFEST,

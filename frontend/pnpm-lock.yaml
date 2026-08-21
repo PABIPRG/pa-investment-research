@@ -193,6 +193,15 @@ importers:
       '@deepseek-ai/dsh-home-paths':
         specifier: workspace:^
         version: link:../../packages/util/home-paths
+      '@deepseek-ai/dsh-investment-market-watch-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-market-watch
+      '@deepseek-ai/dsh-investment-runtime-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-runtime
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-stock-analysis
       '@deepseek-ai/dsh-jobs-local':
         specifier: workspace:^
         version: link:../../packages/jobs/jobs-local
@@ -380,6 +389,15 @@ importers:
       '@deepseek-ai/dsh-host-directory-picker-native':
         specifier: workspace:^
         version: link:../../packages/host/directory-picker-native
+      '@deepseek-ai/dsh-investment-market-watch-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-market-watch
+      '@deepseek-ai/dsh-investment-runtime-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-runtime
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-stock-analysis
     devDependencies:
       '@electron-forge/cli':
         specifier: 7.8.3

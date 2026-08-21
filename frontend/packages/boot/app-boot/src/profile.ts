@@ -114,6 +114,13 @@ export function resolveProfileDir(name: string, home: string = resolveDshHome())
 export const PROFILE_TEMPLATES: Record<string, readonly string[]> = {
   web: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
   headless: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless'],
+  'investment-research': [
+    '@deepseek-ai/dsh-base',
+    '@deepseek-ai/dsh-web-app',
+    '@deepseek-ai/dsh-investment-runtime-bundle',
+    '@deepseek-ai/dsh-investment-stock-analysis-bundle',
+    '@deepseek-ai/dsh-investment-market-watch-bundle',
+  ],
 }
 
 /** Installation-owned bundle tuples normalized to the shipped template. */
