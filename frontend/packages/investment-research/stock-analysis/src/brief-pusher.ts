@@ -79,6 +79,7 @@ export function createBriefPusher(ctx: Context, config: BriefPusherConfig): (() 
           : roots
       let sent = 0
       for (const agent of targets) {
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- followup can synchronously initiate effect disposal.
         if (disposed) return
         try {
           agent.followup(msg)
@@ -87,6 +88,7 @@ export function createBriefPusher(ctx: Context, config: BriefPusherConfig): (() 
           /* 单个会话播报失败不影响其它会话 */
         }
       }
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- followup can synchronously initiate effect disposal.
       if (sent > 0 && !disposed) {
         await httpJson(
           config.adapterBaseUrl,

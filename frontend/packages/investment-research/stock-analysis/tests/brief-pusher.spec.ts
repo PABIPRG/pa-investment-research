@@ -18,7 +18,7 @@ describe('stock-analysis brief pusher', () => {
 
   it('polls at the minimum interval, follows the allowlist, and disposer stops later polls', async () => {
     vi.useFakeTimers()
-    const effects: Array<() => (() => void)> = []
+    const effects: Array<() => (() => Promise<void>)> = []
     const delivered: string[] = []
     const calls: Array<[string, string | undefined]> = []
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -35,7 +35,7 @@ describe('stock-analysis brief pusher', () => {
           { id: 'other', followup() { throw new Error('must not be selected') } },
         ],
       }),
-      effect(callback: () => () => void) { effects.push(callback) },
+      effect(callback: () => () => Promise<void>) { effects.push(callback) },
       logger: { info() {} },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 1, pushSessions: ['allowed'],
@@ -77,7 +77,7 @@ describe('stock-analysis brief pusher', () => {
     ['failed delivery', { id: 'b1', period: 'other', summary: '内容' }, 0],
   ])('does not mark %s without a completed delivery', async (_label, brief, expectedMarks) => {
     vi.useFakeTimers()
-    const effects: Array<() => (() => void)> = []
+    const effects: Array<() => (() => Promise<void>)> = []
     let marks = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (url.endsWith('/brief/latest')) return new Response(JSON.stringify(brief))
@@ -86,7 +86,7 @@ describe('stock-analysis brief pusher', () => {
     }))
     setupBriefPusher({
       get: () => ({ roots: () => [{ id: 'bad', followup() { throw new Error('offline') } }] }),
-      effect(callback: () => () => void) { effects.push(callback) },
+      effect(callback: () => () => Promise<void>) { effects.push(callback) },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
     })
@@ -98,7 +98,7 @@ describe('stock-analysis brief pusher', () => {
 
   it('preserves the legacy title-only delivery for a whitespace-only brief', async () => {
     vi.useFakeTimers()
-    const effects: Array<() => (() => void)> = []
+    const effects: Array<() => (() => Promise<void>)> = []
     const delivered: unknown[] = []
     let marks = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -108,7 +108,7 @@ describe('stock-analysis brief pusher', () => {
     }))
     setupBriefPusher({
       get: () => ({ roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] }),
-      effect(callback: () => () => void) { effects.push(callback) },
+      effect(callback: () => () => Promise<void>) { effects.push(callback) },
       logger: { info() {} },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
@@ -124,7 +124,7 @@ describe('stock-analysis brief pusher', () => {
 
   it('keeps the defensive empty-body guard for malformed string normalization', async () => {
     vi.useFakeTimers()
-    const effects: Array<() => (() => void)> = []
+    const effects: Array<() => (() => Promise<void>)> = []
     const delivered: unknown[] = []
     let marks = 0
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -135,7 +135,7 @@ describe('stock-analysis brief pusher', () => {
     vi.spyOn(String.prototype, 'trim').mockReturnValue('')
     setupBriefPusher({
       get: () => ({ roots: () => [{ id: 'active', followup(message: unknown) { delivered.push(message) } }] }),
-      effect(callback: () => () => void) { effects.push(callback) },
+      effect(callback: () => () => Promise<void>) { effects.push(callback) },
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
     })
@@ -150,7 +150,7 @@ describe('stock-analysis brief pusher', () => {
 
   it('skips a concurrent poll and safely handles an agents service that disappears during delivery', async () => {
     vi.useFakeTimers()
-    const effects: Array<() => (() => void)> = []
+    const effects: Array<() => (() => Promise<void>)> = []
     let beginFetch!: () => void
     const fetchStarted = new Promise<void>((resolve) => { beginFetch = resolve })
     let finishFetch!: () => void
@@ -166,7 +166,7 @@ describe('stock-analysis brief pusher', () => {
         agentLookups++
         return agentLookups === 1 ? { roots: () => [] } : undefined
       },
-      effect(callback: () => () => void) { effects.push(callback) },
+      effect(callback: () => () => Promise<void>) { effects.push(callback) },
     }
     setupBriefPusher(ctx as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
@@ -214,13 +214,13 @@ describe('stock-analysis brief pusher', () => {
       marks++
       return new Response('{}')
     }))
-    let dispose!: () => Promise<void>
+    const lifecycle: { dispose?: () => Promise<void> } = {}
     let disposing: Promise<void> | undefined
     let followups = 0
     setupBriefPusher({
       get: () => ({
         roots: () => [
-          { id: 'first', followup() { followups++; disposing = dispose() } },
+          { id: 'first', followup() { followups++; disposing = lifecycle.dispose!() } },
           { id: 'second', followup() { followups++ } },
         ],
       }),
@@ -228,7 +228,7 @@ describe('stock-analysis brief pusher', () => {
     } as never, {
       adapterBaseUrl: 'http://adapter.test', enableInChatPush: true, pushPollMs: 30_000, pushSessions: [],
     })
-    dispose = effects[0]!()
+    lifecycle.dispose = effects[0]!()
     await vi.advanceTimersByTimeAsync(0)
     await disposing
     expect(followups).toBe(1)
