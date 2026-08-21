@@ -1,0 +1,6 @@
+# industry-chain 产业链图谱依赖（Python 3.10+）
+fastapi
+uvicorn[standard]
+pydantic>=2
+python-dotenv
+requests            # fetch_seed_data.py 下载种子数据用
