@@ -540,12 +540,18 @@ function productToken(file: string, pattern: Pattern, subpath: string): boolean 
     || (token === 'cordis' && BARE_CORDIS_PRODUCT_FILES.has(file))
 }
 
+function moduleSpecifier(line: string, offset: number): boolean {
+  const prefix = line.slice(0, offset)
+  return /\b(?:from|import)\s*$/.test(prefix)
+    || /\b(?:import|require)(?:\.resolve)?\s*\(\s*$/.test(prefix)
+}
+
 function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
   let out = line
   for (const pattern of all) {
     if (skipped(file, pattern)) continue
-    out = out.replace(pattern.token, (match, quote: string, subpath: string) => {
-      if (productToken(file, pattern, subpath)) return match
+    out = out.replace(pattern.token, (match, quote: string, subpath: string, offset: number) => {
+      if (!moduleSpecifier(out, offset) && productToken(file, pattern, subpath)) return match
       return `${quote}${pattern.to}${subpath}${quote}`
     })
     out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)

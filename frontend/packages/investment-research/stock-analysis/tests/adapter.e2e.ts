@@ -10,9 +10,7 @@ import {
   consumeSse,
   getLatestBrief,
   getRiskProfile,
-  getWatchlist,
   setRiskProfile,
-  setWatchlist,
   startAnalysis,
   startTask,
 } from '../src/client.ts'
@@ -27,6 +25,7 @@ import {
   type BriefSignal,
   type HoldingsSignal,
 } from '../src/render.ts'
+import { roundTripWatchlist } from './e2e-watchlist.ts'
 
 const adapterUrl = process.env.ADAPTER_URL
 const ticker = process.env.TICKER ?? '600519'
@@ -83,12 +82,14 @@ describe.skipIf(!adapterUrl)('stock-analysis adapter e2e', () => {
 
     // ── 2) set_watchlist / get_watchlist ─────────────────────────────
     console.log('\n── 自选列表工具 ──')
-    const saved = (await setWatchlist(adapterUrl, ['600519', '000858', '300750'], sink.signal)) as {
-      saved?: number
-    }
+    const { original: originalWatchlist, saved, persisted: watchlist } = await roundTripWatchlist(
+      adapterUrl,
+      ['600519', '000858', '300750'],
+      sink.signal,
+    )
     console.log(`✅ POST /watchlist → saved=${saved.saved}`)
-    const watchlist = (await getWatchlist(adapterUrl, sink.signal)) as { tickers?: string[] }
     console.log(`✅ GET /watchlist → tickers=${JSON.stringify(watchlist.tickers)}`)
+    console.log(`✅ 已恢复 → tickers=${JSON.stringify(originalWatchlist.tickers ?? [])}`)
     expect(saved.saved).toBe(3)
     expect(watchlist.tickers).toContain('600519')
 

@@ -78,9 +78,9 @@
 {"service":"market-watch","ok":true,"port":8100,"ts":0}
 ```
 
-- [ ] 股票测试先设置 `ADAPTER_RUNNER=fake`、`BRIEF_SCHEDULE_ENABLED=false`，从 `create_app()` 的 `/health` route 直接调用 async endpoint，断言 service、status 和三个 runner 键。
-- [ ] market-watch 测试设置 `MW_SCHEDULE_ENABLED=false`，直接调用 `health()`，断言 service 与 ok；不固定动态 `ts`。
-- [ ] 运行失败测试：
+- [x] 股票测试先设置 `ADAPTER_RUNNER=fake`、`BRIEF_SCHEDULE_ENABLED=false`，从 `create_app()` 的 `/health` route 直接调用 async endpoint，断言 service、status 和三个 runner 键。
+- [x] market-watch 测试设置 `MW_SCHEDULE_ENABLED=false`，直接调用 `health()`，断言 service 与 ok；不固定动态 `ts`。
+- [x] 运行失败测试：
 
 ```sh
 cd backend/dsh-trading-core
@@ -96,9 +96,9 @@ env/bin/python -m unittest discover -s tests -p 'test_health_contract.py'
 
 预期：market-watch 通过。Windows 用 `env\Scripts\python.exe` 执行等价命令。
 
-- [ ] 只给股票 health 增加 `"service": "trading-core"`；不改路径、状态字段、runner 构造或业务 API。
-- [ ] 重跑两个测试，预期全部通过。
-- [ ] 提交：
+- [x] 只给股票 health 增加 `"service": "trading-core"`；不改路径、状态字段、runner 构造或业务 API。
+- [x] 重跑两个测试，预期全部通过。
+- [x] 提交：
 
 ```sh
 git add backend/dsh-trading-core/adapter/app.py backend/dsh-trading-core/tests backend/market-watch/tests
@@ -128,14 +128,14 @@ git commit -m "test: pin investment backend health identities"
 - 移动： `backend/market-watch/dsh-plugin/test/plugin-load.smoke.ts` → `frontend/packages/investment-research/market-watch/test/plugin-load.smoke.ts`
 - 移动： `backend/market-watch/dsh-plugin/tsconfig.json` → `frontend/packages/investment-research/market-watch/tsconfig.json`
 
-- [ ] 记录移动前清单与干净状态：
+- [x] 记录移动前清单与干净状态：
 
 ```sh
 git ls-files backend/dsh-trading-core/dsh-plugin backend/market-watch/dsh-plugin
 git status --short
 ```
 
-- [ ] 只执行 `git mv`，本步骤不改内容：
+- [x] 只执行 `git mv`，本步骤不改内容：
 
 ```sh
 mkdir -p frontend/packages/investment-research
@@ -143,7 +143,7 @@ git mv backend/dsh-trading-core/dsh-plugin frontend/packages/investment-research
 git mv backend/market-watch/dsh-plugin frontend/packages/investment-research/market-watch
 ```
 
-- [ ] 检查：
+- [x] 检查：
 
 ```sh
 git diff --find-renames=50% --summary
@@ -152,7 +152,7 @@ git diff --check
 
 预期：旧源码和测试显示 rename，无 whitespace error。
 
-- [ ] 提交：
+- [x] 提交：
 
 ```sh
 git add -A backend/dsh-trading-core/dsh-plugin backend/market-watch/dsh-plugin frontend/packages/investment-research
@@ -209,9 +209,9 @@ export interface Config { adapterBaseUrl?: string }
 export const apply: (ctx: Context, config: Config) => void
 ```
 
-- [ ] 先把 mock smoke 改成真实 Loader 测试：临时 Cordis 配置按包名挂载真实 `ToolRuntime` 和插件，断言股票 9 个、盯盘 11 个 schema；dispose 后注册清空。禁止只用手工 `ctx.plugin()` 作为验收。
-- [ ] 补 characterization tests：客户端固定 method/path/body 与现有 SSE/JSON 行为；render 固定成功/空字段/中文/错误；brief pusher 固定默认关闭、轮询、allowlist/disposer；plugin 固定 schema、参数映射、错误渲染和具名导出。
-- [ ] 先运行：
+- [x] 先把 mock smoke 改成真实 Loader 测试：临时 Cordis 配置按包名挂载真实 `ToolRuntime` 和插件，断言股票 9 个、盯盘 11 个 schema；dispose 后注册清空。禁止只用手工 `ctx.plugin()` 作为验收。
+- [x] 补 characterization tests：客户端固定 method/path/body 与现有 SSE/JSON 行为；render 固定成功/空字段/中文/错误；brief pusher 固定默认关闭、轮询、allowlist/disposer；plugin 固定 schema、参数映射、错误渲染和具名导出。
+- [x] 先运行：
 
 ```sh
 cd frontend
@@ -225,13 +225,13 @@ pnpm exec vitest run \
 
 预期：旧脚本不是 Vitest suite、Loader fixture 缺失或 package resolution 失败。
 
-- [ ] package names 改为 `@deepseek-ai/dsh-investment-stock-analysis`、`@deepseek-ai/dsh-investment-market-watch`，版本 `0.1.0-rc.7`，补 publishConfig/repository/main/types/exports/files/license/`./invariant`。
-- [ ] 股票 peer/dev 精确声明 Cordis、dsh-agent、dsh-invariants、dsh-llm、dsh-session、dsh-tools；market 声明 Cordis、invariants、session、tools；Schemastery 放 dependencies；全部 `workspace:^`。
-- [ ] tsconfig 使用 `../../../tsconfig.base.json`、`rootDir: src`、`outDir: lib/types`，references 覆盖 peer 源工程与 vendor Cordis/Schemastery；tests 不进入 emit。
-- [ ] 每包加 no-op invariant companion，说明阶段一所有注册已由当前 Cordis effect 所有，没有额外跨服务关系。
-- [ ] base paths 两组分别加入 `./packages/investment-research/*/src/invariant.ts` 与 `./packages/investment-research/*/src`；Host aggregate 加两个 reference；删除 workspace 旧排除；`pnpm install --lockfile-only` 更新唯一 lock。
-- [ ] 只做严格类型与测试可注入性的等价整理；不得提取 client、启动 Python、改工具名称/description/schema/render。
-- [ ] 重跑 focused coverage，要求每文件 100%，再运行：
+- [x] package names 改为 `@deepseek-ai/dsh-investment-stock-analysis`、`@deepseek-ai/dsh-investment-market-watch`，版本 `0.1.0-rc.7`，补 publishConfig/repository/main/types/exports/files/license/`./invariant`。
+- [x] 股票 peer/dev 精确声明 Cordis、dsh-agent、dsh-invariants、dsh-llm、dsh-session、dsh-tools；market 声明 Cordis、invariants、session、tools；Schemastery 放 dependencies；全部 `workspace:^`。
+- [x] tsconfig 使用 `../../../tsconfig.base.json`、`rootDir: src`、`outDir: lib/types`，references 覆盖 peer 源工程与 vendor Cordis/Schemastery；tests 不进入 emit。
+- [x] 每包加 no-op invariant companion，说明阶段一所有注册已由当前 Cordis effect 所有，没有额外跨服务关系。
+- [x] base paths 两组分别加入 `./packages/investment-research/*/src/invariant.ts` 与 `./packages/investment-research/*/src`；Host aggregate 加两个 reference；删除 workspace 旧排除；`pnpm install --lockfile-only` 更新唯一 lock。
+- [x] 只做严格类型与测试可注入性的等价整理；不得提取 client、启动 Python、改工具名称/description/schema/render。
+- [x] 重跑 focused coverage，要求每文件 100%，再运行：
 
 ```sh
 pnpm run typecheck
@@ -239,7 +239,7 @@ pnpm run constraints
 pnpm run verify-cordis-config
 ```
 
-- [ ] 提交：
+- [x] 提交：
 
 ```sh
 git add frontend/packages/investment-research frontend/tsconfig.base.json frontend/tsconfig.host.json frontend/pnpm-workspace.yaml frontend/pnpm-lock.yaml
@@ -272,17 +272,17 @@ git commit -m "build: register investment research packages"
 - 修改： `backend/dsh-trading-core/docs/风险偏好分析框架.md`
 - 修改： `backend/market-watch/README.md`
 
-- [ ] 先保存失败输出：
+- [x] 先保存失败输出：
 
 ```sh
 rg -n 'dsh-plugin|npx @deepseek-ai/dsh|--patch|:3080|:3081' backend
 ```
 
-- [ ] init 只建 venv、装 requirements、验证 Python import；verify 只跑 health unittest 与 Python import；删除 npm/npx/tsx。
-- [ ] start 只启动各自 Uvicorn。股票保留后端参数 `ADAPTER_RUNNER=fake|engine`；删除 dsh 端口、patch、浏览器打开与 Node cwd。
-- [ ] stop 只处理 Python 端口 8000/8100；它是手动 backend wrapper，不替代阶段二 Runtime 的 owned-handle 规则。
-- [ ] 文档把源码链接改为 frontend 新路径。统一产品命令 `dsh electron --profile investment-research` 标注“阶段二交付”；backend 当前运行步骤只写 Python。
-- [ ] 验证：
+- [x] init 只建 venv、装 requirements、验证 Python import；verify 只跑 health unittest 与 Python import；删除 npm/npx/tsx。
+- [x] start 只启动各自 Uvicorn。股票保留后端参数 `ADAPTER_RUNNER=fake|engine`；删除 dsh 端口、patch、浏览器打开与 Node cwd。
+- [x] stop 只处理 Python 端口 8000/8100；它是手动 backend wrapper，不替代阶段二 Runtime 的 owned-handle 规则。
+- [x] 文档把源码链接改为 frontend 新路径。统一产品命令 `dsh electron --profile investment-research` 标注“阶段二交付”；backend 当前运行步骤只写 Python。
+- [x] 验证：
 
 ```sh
 rg -n 'dsh-plugin|npx @deepseek-ai/dsh|--patch|:3080|:3081' backend
@@ -291,7 +291,7 @@ test -z "$(rg --files backend | rg '(^|/)(package(-lock)?\.json|pnpm-lock\.yaml|
 
 预期：第一条无匹配，第二条成功。另跑两个 backend unittest。
 
-- [ ] 提交：
+- [x] 提交：
 
 ```sh
 git add backend
@@ -327,9 +327,9 @@ git commit -m "refactor: keep investment backends Python-only"
 - 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.zh.md`
 - 新建： `frontend/.agents/notes/implemented/architecture/2026-08-20-investment-research-package-ownership.i18n.yaml`
 
-- [ ] 先跑 `pnpm run doc-sync`，预期因缺 README 配对、目录索引和 generated catalog 漂移失败。
-- [ ] 组 README 只描述阶段一已有的 stock/market；包 README 写工具、配置、effect、错误、model-visible behavior、限制和测试，不预先宣称 Runtime/Profile/client 已实现。
-- [ ] 更新 packages root，运行：
+- [x] 先跑 `pnpm run doc-sync`，预期因缺 README 配对、目录索引和 generated catalog 漂移失败。
+- [x] 组 README 只描述阶段一已有的 stock/market；包 README 写工具、配置、effect、错误、model-visible behavior、限制和测试，不预先宣称 Runtime/Profile/client 已实现。
+- [x] 更新 packages root，运行：
 
 ```sh
 pnpm run gen-tool-catalog
@@ -337,9 +337,9 @@ pnpm run gen-config-catalog
 pnpm run gen-module-graph
 ```
 
-- [ ] 同步中文；Agent Note 记录 frontend 归属、阶段一不改启动行为、机械 rename 与 package 接入边界。
-- [ ] 对上述每个英文源逐一运行 pairing `--write`，再运行 `pnpm run doc-sync` 和 `pnpm run lint`。
-- [ ] 提交：
+- [x] 同步中文；Agent Note 记录 frontend 归属、阶段一不改启动行为、机械 rename 与 package 接入边界。
+- [x] 对上述每个英文源逐一运行 pairing `--write`，再运行 `pnpm run doc-sync` 和 `pnpm run lint`。
+- [x] 提交：
 
 ```sh
 git add frontend/packages frontend/docs frontend/.agents/notes/implemented/architecture

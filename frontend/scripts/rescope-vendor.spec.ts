@@ -58,8 +58,27 @@ describe('rewriteVendorReferences', () => {
     })
 
     expect(rewriteVendorReferences(
-      "const NS = 'cordis'",
+      [
+        "import { Context } from 'cordis'",
+        "const NS = 'cordis'",
+      ].join('\n'),
       'packages/extensions/ui-cordis/src/client/locales.ts',
-    )).toEqual({ text: "const NS = 'cordis'", lines: 0 })
+    )).toEqual({
+      text: [
+        "import { Context } from '@deepseek-ai/cordis'",
+        "const NS = 'cordis'",
+      ].join('\n'),
+      lines: 1,
+    })
+  })
+
+  it('即使子路径形似产品事件，也重写模块说明符', () => {
+    expect(rewriteVendorReferences(
+      "import run from 'cordis/request-run'",
+      'packages/extensions/cordis-host-runner/src/index.ts',
+    )).toEqual({
+      text: "import run from '@deepseek-ai/cordis/request-run'",
+      lines: 1,
+    })
   })
 })
