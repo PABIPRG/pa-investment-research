@@ -17,6 +17,7 @@ export interface FakeHandle extends SubprocessHandle {
   readonly stdoutChunks: string[]
   readonly stderrChunks: string[]
   readonly terminateCalls: number
+  readonly waitForExitCalls: number
   autoExitOnTerminate: boolean
   exit(outcome?: SubprocessOutcome): void
   fail(error: unknown): void
@@ -27,6 +28,7 @@ export function fakeHandle(pid = 101): FakeHandle {
   const stderrChunks: string[] = []
   const settled = Promise.withResolvers<SubprocessOutcome>()
   let terminateCalls = 0
+  let waitForExitCalls = 0
   let exited = false
   return {
     pid,
@@ -36,6 +38,7 @@ export function fakeHandle(pid = 101): FakeHandle {
     collected: { stdout: reader(stdoutChunks), stderr: reader(stderrChunks) },
     done: settled.promise,
     get terminateCalls() { return terminateCalls },
+    get waitForExitCalls() { return waitForExitCalls },
     stdoutChunks,
     stderrChunks,
     autoExitOnTerminate: false,
@@ -44,6 +47,7 @@ export function fakeHandle(pid = 101): FakeHandle {
       if (this.autoExitOnTerminate) this.exit({ exitCode: null, signal: 'SIGTERM' })
     },
     async waitForExit() {
+      waitForExitCalls += 1
       await settled.promise
       return true
     },

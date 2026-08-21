@@ -46,6 +46,34 @@ type ActiveEntry =
 
 type HealthCheck = (definition: PythonBackendDefinition, options?: { signal?: AbortSignal }) => Promise<BackendHealthResult>
 
+interface StartupFlight {
+  controller: AbortController
+  promise: Promise<ActiveEntry>
+  waiters: number
+}
+
+function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) return promise
+  signal.throwIfAborted()
+  return new Promise<T>((resolve, reject) => {
+    const aborted = (): void => {
+      signal.removeEventListener('abort', aborted)
+      reject(signal.reason)
+    }
+    signal.addEventListener('abort', aborted, { once: true })
+    void promise.then(
+      (value) => {
+        signal.removeEventListener('abort', aborted)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', aborted)
+        reject(error)
+      },
+    )
+  })
+}
+
 /** Injectable runtime dependencies used by deterministic lifecycle tests. */
 export interface InvestmentBackendManagerOptions {
   readonly subprocess: SubprocessRuntime
@@ -74,7 +102,8 @@ async function executableExists(path: string): Promise<boolean> {
 export class InvestmentBackendManager {
   private readonly definitions = new Map<InvestmentBackendId, RegistryEntry>()
   private readonly active = new Map<InvestmentBackendId, ActiveEntry>()
-  private readonly flights = new Map<InvestmentBackendId, Promise<ActiveEntry>>()
+  private readonly flights = new Map<InvestmentBackendId, StartupFlight>()
+  private readonly stopping = new Map<InvestmentBackendId, Promise<void>>()
   private disposed = false
   private readonly subprocess: SubprocessRuntime
   private readonly config: RuntimeConfig
@@ -139,27 +168,59 @@ export class InvestmentBackendManager {
     const registered = this.definitions.get(id)
     if (registered === undefined) throw new Error(`investment Python backend "${id}" is not registered`)
 
+    const stopping = this.stopping.get(id)
+    if (stopping !== undefined) {
+      await waitWithSignal(stopping, signal)
+      if (this.disposed) throw new Error('investment Python runtime is disposed')
+    }
+
     let entry = this.active.get(id)
-    if (entry !== undefined && entry.ownership !== 'owned') {
+    if (entry !== undefined) {
       const health = await this.checkHealth(registered.definition, signal === undefined ? {} : { signal })
       if (health.status !== 'healthy') {
         throw new Error(`investment Python backend "${id}" health is ${health.status}`)
       }
+      if (this.active.get(id) !== entry || this.stopping.has(id)) return this.acquire(id, signal)
     }
     if (entry === undefined) {
       let flight = this.flights.get(id)
       if (flight === undefined) {
-        flight = this.start(registered.definition, signal)
+        const controller = new AbortController()
+        let created: StartupFlight
+        const promise = this.start(registered.definition, controller.signal)
+          .then(async (started) => {
+            /* v8 ignore next -- start observes the internal signal; this closes only its final publication race. */
+            if (this.disposed || created.waiters === 0) {
+              await this.stop(started)
+              /* v8 ignore next -- both messages describe the same defensive publication race. */
+              throw new Error(this.disposed ? 'investment Python runtime is disposed' : 'investment Python backend acquisition cancelled')
+            }
+            this.active.set(id, started)
+            return started
+          })
+          .finally(() => {
+            /* v8 ignore next -- no replacement flight can publish until this flight removes itself. */
+            if (this.flights.get(id) === created) this.flights.delete(id)
+          })
+        created = { controller, promise, waiters: 0 }
+        void promise.catch(() => {})
+        flight = created
         this.flights.set(id, flight)
-        void flight.finally(() => { this.flights.delete(id) }).catch(() => {})
       }
-      entry = await flight
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- disposal can race the awaited startup flight.
-      if (this.disposed) {
-        await this.stop(entry)
-        throw new Error('investment Python runtime is disposed')
+      flight.waiters += 1
+      let acquired = false
+      try {
+        entry = await waitWithSignal(flight.promise, signal)
+        acquired = true
+      } finally {
+        flight.waiters -= 1
+        if (!acquired && flight.waiters === 0) {
+          flight.controller.abort(signal?.reason ?? new Error('investment Python backend acquisition cancelled'))
+          const idle = this.active.get(id)
+          /* v8 ignore next -- covers cancellation between shared publication and this waiter's continuation. */
+          if (idle?.refs === 0) await this.stopIdle(idle)
+        }
       }
-      this.active.set(id, entry)
     }
     entry.refs += 1
     return this.lease(entry)
@@ -176,15 +237,38 @@ export class InvestmentBackendManager {
         released = true
         entry.refs -= 1
         if (entry.refs > 0) return
-        this.active.delete(entry.definition.id)
-        await this.stop(entry)
+        if (this.active.get(entry.definition.id) !== entry) return
+        if (entry.ownership !== 'owned') {
+          this.active.delete(entry.definition.id)
+          return
+        }
+        await this.stopIdle(entry)
       },
     }
   }
 
-  private async start(definition: PythonBackendDefinition, signal?: AbortSignal): Promise<ActiveEntry> {
+  private async stopIdle(entry: ActiveEntry): Promise<void> {
+    const id = entry.definition.id
+    /* v8 ignore next -- ordinary non-owned releases are handled directly in lease.release. */
+    if (entry.ownership !== 'owned') {
+      this.active.delete(id)
+      return
+    }
+    const current = this.stopping.get(id)
+    /* v8 ignore next -- only the defensive cancelled-waiter cleanup can join an existing stop. */
+    if (current !== undefined) return current
+    const stopping = this.stop(entry).finally(() => {
+      this.active.delete(id)
+      this.stopping.delete(id)
+    })
+    this.stopping.set(id, stopping)
+    await stopping
+  }
+
+  private async start(definition: PythonBackendDefinition, signal: AbortSignal): Promise<ActiveEntry> {
     resolveBackendAddress(definition)
-    const health = await this.checkHealth(definition, signal === undefined ? {} : { signal })
+    const health = await this.checkHealth(definition, { signal })
+    signal.throwIfAborted()
     if (health.status === 'healthy') {
       return { definition, ownership: definition.mode === 'external' ? 'external' : 'attached', refs: 0 }
     }
@@ -217,7 +301,7 @@ export class InvestmentBackendManager {
           stderr: { maxBytes: this.config.logTailBytes },
         },
         graceMs: this.config.shutdownGraceMs,
-        ...(signal === undefined ? {} : { signal }),
+        signal,
         ...(definition.managedEnv === undefined ? {} : { env: { ...definition.managedEnv } }),
       })
     } catch (error) {
@@ -236,60 +320,76 @@ export class InvestmentBackendManager {
         }
       }
     }
-    const deadlineAt = this.internals.now() + this.config.startupTimeoutMs
-    for (;;) {
-      signal?.throwIfAborted()
-      const next = await this.checkHealth(definition, signal === undefined ? {} : { signal })
-      await drain()
-      if (next.status === 'healthy') break
-      if (next.status !== 'refused') {
-        await this.failOwned(handle, drain)
-        throw new Error(`investment Python backend "${definition.id}" health is ${next.status}`)
+    let state: OwnedBackendState | undefined
+    try {
+      const deadlineAt = this.internals.now() + this.config.startupTimeoutMs
+      for (;;) {
+        signal.throwIfAborted()
+        const next = await this.checkHealth(definition, { signal })
+        await drain()
+        signal.throwIfAborted()
+        if (next.status === 'healthy') break
+        if (next.status !== 'refused') {
+          throw new Error(`investment Python backend "${definition.id}" health is ${next.status}`)
+        }
+        if (spawnFailure !== undefined || outcome !== undefined) {
+          const fact = spawnFailure === undefined
+            ? `exit ${String(outcome?.exitCode)}`
+            : safeErrorMessage(spawnFailure, definition.managedEnv)
+          throw new Error(`investment Python backend "${definition.id}" exited before healthy (${fact})\n${log.tail()}`)
+        }
+        if (this.internals.now() >= deadlineAt) {
+          throw new Error(`investment Python backend "${definition.id}" startup timed out after ${this.config.startupTimeoutMs}ms\n${log.tail()}`)
+        }
+        await this.internals.sleep(this.config.healthPollMs)
       }
-      if (spawnFailure !== undefined || outcome !== undefined) {
-        const fact = spawnFailure === undefined
-          ? `exit ${String(outcome?.exitCode)}`
-          : safeErrorMessage(spawnFailure, definition.managedEnv)
-        throw new Error(`investment Python backend "${definition.id}" exited before healthy (${fact})\n${log.tail()}`)
-      }
-      if (this.internals.now() >= deadlineAt) {
-        await this.failOwned(handle, drain)
-        throw new Error(`investment Python backend "${definition.id}" startup timed out after ${this.config.startupTimeoutMs}ms\n${log.tail()}`)
-      }
-      await this.internals.sleep(this.config.healthPollMs)
-    }
 
-    const state: OwnedBackendState = {
-      version: 1,
-      id: definition.id,
-      service: definition.service,
-      pid: handle.pid,
-      baseUrl: definition.baseUrl,
-      projectDir: paths.projectDir,
-      startedAt: new Date().toISOString(),
+      state = {
+        version: 1,
+        id: definition.id,
+        service: definition.service,
+        pid: handle.pid,
+        baseUrl: definition.baseUrl,
+        projectDir: paths.projectDir,
+        startedAt: new Date().toISOString(),
+      }
+      await writeOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state)
+      return { definition, ownership: 'owned', handle, log, state, refs: 0 }
+    } catch (error) {
+      await this.failOwned(handle, drain)
+      if (state !== undefined) {
+        await Promise.allSettled([
+          clearOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state),
+        ])
+      }
+      throw error
     }
-    await writeOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state)
-    return { definition, ownership: 'owned', handle, log, state, refs: 0 }
   }
 
   private async failOwned(handle: SubprocessHandle, drain: () => Promise<void>): Promise<void> {
     handle.terminate()
-    await handle.waitForExit()
-    await drain()
+    await Promise.allSettled([handle.waitForExit()])
+    await Promise.allSettled([drain()])
   }
 
   private async stop(entry: ActiveEntry): Promise<void> {
     if (entry.ownership !== 'owned') return
     entry.handle.terminate()
-    await entry.handle.waitForExit()
+    const exit = await Promise.allSettled([entry.handle.waitForExit()])
     await clearOwnedBackendState(ownedBackendStatePath(this.config.dshHome, entry.definition.id), entry.state)
+    const failure = exit[0]
+    if (failure?.status === 'rejected') throw failure.reason
   }
 
   /** Reject new work, terminate every in-memory owned handle, and await tree quiescence. */
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
-    await Promise.allSettled([...this.flights.values()])
+    for (const flight of this.flights.values()) flight.controller.abort(new Error('investment Python runtime is disposed'))
+    const flights = [...this.flights.values()].map(flight => flight.promise)
+    if (flights.length > 0) await Promise.allSettled(flights)
+    const stopping = [...this.stopping.values()]
+    if (stopping.length > 0) await Promise.allSettled(stopping)
     const entries = [...this.active.values()]
     this.active.clear()
     await Promise.all(entries.map(entry => this.stop(entry)))

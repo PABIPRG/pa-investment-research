@@ -83,6 +83,68 @@ describe('InvestmentBackendManager', () => {
     expect(handle.terminateCalls).toBe(1)
   })
 
+  it('isolates caller cancellation from a shared startup and the acquired child lifetime', async () => {
+    const ready = Promise.withResolvers<BackendHealthResult>()
+    const base = await harness()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess,
+      config: { dshHome: base.home },
+      checkHealth: async () => probes++ === 0 ? refused : ready.promise,
+      resolvePaths: () => ({ projectDir: base.projectDir, pythonExecutable: join(base.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    const controller = new AbortController()
+    const cancelled = manager.acquire('trading-core', controller.signal)
+    const surviving = manager.acquire('trading-core')
+    await vi.waitFor(() => { expect(base.specs).toHaveLength(1) })
+    controller.abort(new Error('caller cancelled'))
+    await expect(cancelled).rejects.toThrow('caller cancelled')
+    ready.resolve(healthy)
+    const lease = await surviving
+    expect(base.specs[0]?.signal).not.toBe(controller.signal)
+    expect(base.handle.terminateCalls).toBe(0)
+    base.handle.exit()
+    await lease.release()
+  })
+
+  it('makes a new acquire wait for the previous owned teardown', async () => {
+    const current = await harness([refused, healthy, healthy])
+    current.manager.register(definition)
+    const lease = await current.manager.acquire('trading-core')
+    const releasing = lease.release()
+    let reacquired = false
+    const next = current.manager.acquire('trading-core').then((value) => {
+      reacquired = true
+      return value
+    })
+    await Promise.resolve()
+    expect(reacquired).toBe(false)
+    current.handle.exit()
+    await releasing
+    const nextLease = await next
+    expect(nextLease.ownership).toBe('attached')
+    await nextLease.release()
+  })
+
+  it('makes disposal await an owned teardown already in progress', async () => {
+    const current = await harness([refused, healthy])
+    current.manager.register(definition)
+    const lease = await current.manager.acquire('trading-core')
+    const releasing = lease.release()
+    const acquiring = current.manager.acquire('trading-core')
+    let disposed = false
+    const disposing = current.manager.dispose().then(() => { disposed = true })
+    await Promise.resolve()
+    expect(disposed).toBe(false)
+    current.handle.exit()
+    await releasing
+    await expect(acquiring).rejects.toThrow(/disposed/)
+    await disposing
+    expect(disposed).toBe(true)
+  })
+
   it('never spawns external, attached, occupied, or unavailable endpoints', async () => {
     for (const [mode, result, ownership] of [
       ['external', healthy, 'external'],
@@ -160,6 +222,7 @@ describe('InvestmentBackendManager', () => {
     early.handle.stderrChunks.push('bounded failure detail')
     early.handle.exit({ exitCode: 2, signal: null })
     await expect(early.manager.acquire('trading-core')).rejects.toThrow(/bounded failure detail/)
+    expect(early.handle.waitForExitCalls).toBe(1)
 
     const timeout = await harness([refused])
     timeout.manager.register(definition)
@@ -172,10 +235,39 @@ describe('InvestmentBackendManager', () => {
     await expect(mismatch.manager.acquire('trading-core')).rejects.toThrow(/occupied/)
   })
 
+  it('rejects a new lease when an active owned backend is no longer healthy', async () => {
+    const current = await harness([refused, healthy, { status: 'occupied', healthUrl: 'x', httpStatus: 200 }])
+    current.manager.register(definition)
+    const lease = await current.manager.acquire('trading-core')
+    await expect(current.manager.acquire('trading-core')).rejects.toThrow(/occupied/)
+    current.handle.exit()
+    await lease.release()
+  })
+
+  it('restarts acquisition when the verified active entry was released during its health probe', async () => {
+    const gate = Promise.withResolvers<BackendHealthResult>()
+    const current = await harness()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => probes++ === 1 ? gate.promise : healthy,
+    })
+    manager.register(definition)
+    const first = await manager.acquire('trading-core')
+    const acquiring = manager.acquire('trading-core')
+    await Promise.resolve()
+    await first.release()
+    gate.resolve(healthy)
+    const second = await acquiring
+    expect(second.ownership).toBe('attached')
+    await second.release()
+  })
+
   it('disposal blocks new acquires and awaits owned process-tree exit', async () => {
     const { manager, handle } = await harness([refused, healthy])
     manager.register(definition)
-    await manager.acquire('trading-core')
+    const lease = await manager.acquire('trading-core')
     let disposed = false
     const disposing = manager.dispose().then(() => { disposed = true })
     await Promise.resolve()
@@ -185,6 +277,17 @@ describe('InvestmentBackendManager', () => {
     handle.exit()
     await disposing
     expect(disposed).toBe(true)
+    await lease.release()
+    expect(handle.terminateCalls).toBe(1)
+  })
+
+  it('disposes an unreleased external lease without trying to terminate it', async () => {
+    const current = await harness([healthy])
+    current.manager.register({ ...definition, mode: 'external' })
+    const lease = await current.manager.acquire('trading-core')
+    await current.manager.dispose()
+    await lease.release()
+    expect(current.handle.terminateCalls).toBe(0)
   })
 
   it('publishes explicit schema defaults', () => {
@@ -239,7 +342,8 @@ describe('InvestmentBackendManager', () => {
     signalled.manager.register(definitionWithoutEnv)
     const signal = new AbortController().signal
     const lease = await signalled.manager.acquire('trading-core', signal)
-    expect(signalled.specs[0]?.signal).toBe(signal)
+    expect(signalled.specs[0]?.signal).toBeInstanceOf(AbortSignal)
+    expect(signalled.specs[0]?.signal).not.toBe(signal)
     expect(signalled.specs[0]).not.toHaveProperty('env')
     signalled.handle.exit()
     await lease.release()
@@ -255,7 +359,7 @@ describe('InvestmentBackendManager', () => {
     Object.defineProperty(rejected.handle, 'collected', { value: {} })
     void rejected.handle.done.catch(() => {})
     rejected.handle.fail(new Error('runner-name transport failed'))
-    await expect(rejected.manager.acquire('trading-core')).rejects.toThrow(/REDACTED.*transport failed/)
+    await expect(rejected.manager.acquire('trading-core', new AbortController().signal)).rejects.toThrow(/REDACTED.*transport failed/)
 
     const old = await harness([refused, healthy])
     await writeOwnedBackendState(ownedBackendStatePath(old.home, 'trading-core'), {
@@ -271,6 +375,64 @@ describe('InvestmentBackendManager', () => {
     const oldLease = await old.manager.acquire('trading-core')
     old.handle.exit()
     await oldLease.release()
+  })
+
+  it('rolls back owned children after cancellation, log I/O failure, and state publication failure', async () => {
+    const cancelled = await harness()
+    const ready = Promise.withResolvers<BackendHealthResult>()
+    let probes = 0
+    const cancelledManager = new InvestmentBackendManager({
+      subprocess: cancelled.subprocess,
+      config: { dshHome: cancelled.home },
+      checkHealth: async () => probes++ === 0 ? refused : ready.promise,
+      resolvePaths: () => ({ projectDir: cancelled.projectDir, pythonExecutable: join(cancelled.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
+    })
+    cancelledManager.register(definition)
+    cancelled.handle.autoExitOnTerminate = true
+    const controller = new AbortController()
+    const acquiring = cancelledManager.acquire('trading-core', controller.signal)
+    await vi.waitFor(() => { expect(cancelled.specs).toHaveLength(1) })
+    controller.abort(new Error('cancel startup'))
+    ready.resolve(refused)
+    await expect(acquiring).rejects.toThrow('cancel startup')
+    await vi.waitFor(() => { expect(cancelled.handle.waitForExitCalls).toBe(1) })
+
+    const logFailure = await harness([refused, healthy])
+    await mkdir(join(logFailure.home, 'investment-research', 'trading-core', 'backend.log'), { recursive: true })
+    logFailure.handle.stderrChunks.push('cannot append this chunk')
+    logFailure.handle.autoExitOnTerminate = true
+    logFailure.manager.register(definition)
+    await expect(logFailure.manager.acquire('trading-core')).rejects.toThrow()
+    expect(logFailure.handle.waitForExitCalls).toBe(1)
+
+    const stateFailure = await harness()
+    const publish = Promise.withResolvers<BackendHealthResult>()
+    let stateProbes = 0
+    const stateManager = new InvestmentBackendManager({
+      subprocess: stateFailure.subprocess,
+      config: { dshHome: stateFailure.home },
+      checkHealth: async () => stateProbes++ === 0 ? refused : publish.promise,
+      resolvePaths: () => ({ projectDir: stateFailure.projectDir, pythonExecutable: join(stateFailure.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
+    })
+    stateFailure.handle.autoExitOnTerminate = true
+    stateManager.register(definition)
+    const publishing = stateManager.acquire('trading-core')
+    await vi.waitFor(() => { expect(stateFailure.specs).toHaveLength(1) })
+    await mkdir(ownedBackendStatePath(stateFailure.home, 'trading-core'), { recursive: true })
+    publish.resolve(healthy)
+    await expect(publishing).rejects.toThrow()
+    expect(stateFailure.handle.waitForExitCalls).toBe(1)
+  })
+
+  it('clears state and reports a process-tree wait failure from release', async () => {
+    const current = await harness([refused, healthy])
+    current.manager.register(definition)
+    const lease = await current.manager.acquire('trading-core')
+    void current.handle.done.catch(() => {})
+    current.handle.fail(new Error('tree wait failed'))
+    await expect(lease.release()).rejects.toThrow('tree wait failed')
   })
 
   it('delegates the public Service API and awaits its Cordis teardown effect', async () => {
