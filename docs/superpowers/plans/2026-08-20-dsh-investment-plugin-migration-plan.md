@@ -348,7 +348,7 @@ git commit -m "docs: document investment package ownership"
 
 ## 任务 6：PR 1 验收
 
-- [ ] 从根目录验证纯 Python 与 history follow；从 frontend 运行：
+- [x] 从根目录验证纯 Python 与 history follow；从 frontend 运行：
 
 ```sh
 pnpm run typecheck
@@ -361,7 +361,21 @@ pnpm run hygiene
 pnpm run doc-sync
 ```
 
-- [ ] 检查 PR diff 只有阶段一文件，无 Runtime/Bundle/Profile/adapter-client；PR 标题 `refactor: move investment plugins into frontend workspace`。合并且 CI 通过后开始 PR 2。
+- [x] 检查 PR diff 只有阶段一文件，无 Runtime/Bundle/Profile/adapter-client。
+- [ ] PR 标题使用 `refactor: move investment plugins into frontend workspace`；合并且 CI 通过后开始 PR 2。
+
+### 用户批准的任务 6 扩展范围修复
+
+- [x] 对 `rescope-vendor:check` 的 26 个既有误报执行 TDD：先证明检查器会把
+  `cordis/request-run` 等扩展事件、本地化命名空间与生成签名误判为 npm 包引用；再只修改
+  `frontend/scripts/rescope-vendor.ts` 及其测试，保留产品标识并继续重写真实包引用。提交边界：
+  `f1b49fa340 fix: preserve cordis product identifiers during rescope`。
+- [x] 对 `verify-archived-agent-notes` 的既有路径失败执行 TDD：保留真实聚合门禁 RED，令
+  `git ls-tree --full-name` 返回仓库根相对路径，并将该返回值传给 `git show`。提交边界：
+  `19a1e3f15a fix: resolve archived manifest from repository root`。
+- [x] 扩展修复后重新运行 `pnpm run hygiene` 与 `pnpm run doc-sync`；两条聚合命令均须自然结束且
+  退出码为 0。随后重新运行阶段一聚焦覆盖率、完整构建、两个 Python 后端验证、8 个 shell
+  wrapper 语法检查及无 `ADAPTER_URL` 的 e2e 自跳过。
 
 ---
 
