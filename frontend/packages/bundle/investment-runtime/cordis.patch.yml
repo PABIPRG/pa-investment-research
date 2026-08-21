@@ -1,0 +1,3 @@
+- insert:
+    - id: investment-python-runtime
+      name: '@deepseek-ai/dsh-investment-python-runtime'

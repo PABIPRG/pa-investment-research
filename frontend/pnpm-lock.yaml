@@ -1312,6 +1312,51 @@ importers:
         specifier: workspace:^
         version: link:../../core/session
 
+  packages/bundle/investment-market-watch:
+    dependencies:
+      '@deepseek-ai/dsh-investment-market-watch':
+        specifier: workspace:^
+        version: link:../../investment-research/market-watch
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/bundle/investment-runtime:
+    dependencies:
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/bundle/investment-stock-analysis:
+    dependencies:
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+      '@deepseek-ai/dsh-investment-stock-analysis':
+        specifier: workspace:^
+        version: link:../../investment-research/stock-analysis
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
   packages/bundle/web-app:
     dependencies:
       '@deepseek-ai/dsh-agent-presets':
