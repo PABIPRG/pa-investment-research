@@ -570,6 +570,18 @@ interface BriefRecord {
 
 > **跨模块消费**：trading-core 的 `POST /strategies/hypothesize` 直接 HTTP 调本模块 `GET /news/events` 作为事件源（TTL 缓存，失败降级返回 0 候选）。持仓命中（`/news/event-alerts` 的 `hold`）来自 trading-core `:8000/holdings`。
 
+### 10.1 dsh 插件工具（`backend/market-watch/dsh-plugin/`，`mw_` 前缀，全同步）
+
+| dsh 插件工具 | 底层端点 |
+|---|---|
+| `mw_flash` | GET `/news/flash`（limit） |
+| `mw_events` | GET `/news/events`（limit） |
+| `mw_event_alerts` | GET `/news/event-alerts`（limit） |
+| `mw_overview` | GET `/overview` |
+| `mw_scan` | POST `/scan`（kind: gainers/volume_ratio/limit/turnover/amount） |
+| `mw_tech_signal` | POST `/tech-signal`（code） |
+| `mw_latest_brief` | GET `/brief/latest` |
+
 ---
 
 ## 11. 状态与数据持久化

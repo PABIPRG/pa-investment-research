@@ -1,0 +1,21 @@
+{
+  "name": "@local/trading-core",
+  "version": "0.1.0",
+  "description": "组合与策略 Agent（trading-core）for DeepSeek Harness (dsh)：股票分析/持仓分析/简报/回测/策略运行/影子验证（任务轮询）+ 自选持仓/策略/风险预警/个性化卡片/自进化（同步）",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "smoke": "tsx test/plugin-load.smoke.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.0.1-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.12",
+    "typescript": "^5.5.0"
+  }
+}

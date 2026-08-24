@@ -1704,21 +1704,47 @@ interface EvolutionAction {         // POST /evolution/run → actions[]
 
 ## 7. 与插件工具的映射
 
+dsh 插件 `backend/dsh-trading-core/dsh-plugin/` 注册 20 个对话工具（`tc_` 前缀）：
+
+**任务型**（POST 启动 → 轮询 `GET /analyze/{task_id}` → done 后取 result；超时返回 running 信封，
+可用 `tc_task_status` 凭 `task_id` 续查）：
+
+| dsh 插件工具 | 启动端点 | 结果 |
+|---|---|---|
+| `tc_analyze_stock` | POST `/analyze` | `{signal, reports, performance_metrics}` |
+| `tc_analyze_holdings` | POST `/holdings/analyze` | `{signal, reports, performance_metrics}` |
+| `tc_market_brief` | POST `/brief` | `{signal, reports, performance_metrics}` |
+| `tc_backtest` | POST `/backtest/run` | `{summary, results, params, meta}` |
+| `tc_strategy_run` | POST `/strategies/run` | `{strategy_id, status, backtest, symbol_errors}` |
+| `tc_shadow_run` | POST `/shadow/run` | `{skipped, trade_date, strategies, overall_nav, strategy_errors}` |
+| `tc_task_status` | GET `/analyze/{task_id}` | 状态续查 |
+
+**同步只读**：
+
 | dsh 插件工具 | 底层端点 |
 |---|---|
-| `analyze_stock` | POST `/analyze` + SSE |
-| `analyze_holdings` | POST `/holdings/analyze` + SSE |
-| `market_brief` | POST `/brief` + SSE |
-| `set_watchlist` | POST `/watchlist` |
-| `get_watchlist` | GET `/watchlist` |
-| `set_holdings` | POST `/holdings/save` |
-| `get_latest_brief` | GET `/brief/latest` |
-| `set_risk_profile` | POST `/risk_profile` |
-| `get_risk_profile` | GET `/risk_profile` |
+| `tc_get_watchlist` | GET `/watchlist` |
+| `tc_get_holdings` | GET `/holdings` |
+| `tc_list_strategies` | GET `/strategies` |
+| `tc_shadow_status` | GET `/shadow/status` |
+| `tc_risk_alerts` | GET `/risk/alerts` |
+| `tc_news_cards` | GET `/personalized/cards` |
+| `tc_personalized_profile` | GET `/personalized/profile` |
+| `tc_evolution_status` | GET `/evolution/status` |
+| `tc_evolution_attribution` | GET `/evolution/attribution` |
+| `tc_latest_brief` | GET `/brief/latest` |
+| `tc_risk_profile` | GET `/risk_profile` |
 
-> **二期端点不暴露为 dsh 对话工具**：`/backtest/*`、`/strategies/*`、`/shadow/*`、`/kyc/*`、
-> `/personalized/*`、`/risk/*`、`GET /holdings` 由 **product 前端 `#/strategies` 等页面直连**
-> （`PA.api` + `PA.runTask`），走 task_id + SSE 协议，不进 dsh 对话流。
+**同步写**：
+
+| dsh 插件工具 | 底层端点 |
+|---|---|
+| `tc_set_watchlist` | POST `/watchlist`（整体替换） |
+| `tc_set_holdings` | POST `/holdings/save`（整体替换） |
+
+> 二期端点（回测/策略/影子/个性化/风险/进化）在 0.2 前由 product 前端直连
+> （`PA.api` + `PA.runTask`，走 task_id + SSE 协议）；自 dsh 插件落成起，同一批端点
+> 以 `tc_*` 工具形式开放给对话流。两者并存，不影响前端。
 
 ---
 
