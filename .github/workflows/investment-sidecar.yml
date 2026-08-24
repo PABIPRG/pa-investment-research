@@ -59,11 +59,12 @@ jobs:
         run: |
           descriptor=$(find apps/electron/out -path '*/Resources/investment-python/runtime.json' -print -quit)
           test -n "$descriptor"
+          app="${descriptor%%/Contents/Resources/*}"
+          test -d "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
           node scripts/smoke-investment-python-sidecar.ts --root "${descriptor%/runtime.json}"
-          app=$(find apps/electron/out -name '*.app' -type d -maxdepth 3 -print -quit)
-          test -n "$app"
-          codesign --deep --force --sign - "$app"
-          codesign --verify --deep --strict "$app"
+          test -d "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
 
       - name: Smoke packaged sidecar (Windows)
         if: runner.os == 'Windows'
