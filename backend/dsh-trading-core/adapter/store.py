@@ -6,9 +6,19 @@ collection 是 data/adapter/ 下的一个 JSON 文件，每文件一个 dict。
 """
 
 import json
+import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
+
+
+_FILE_LOCKS: dict[Path, threading.Lock] = {}
+_FILE_LOCKS_GUARD = threading.Lock()
+
+
+class JsonStoreCorruptionError(RuntimeError):
+    """持久化文件存在但不是可读取的 JSON 对象。"""
 
 
 class JsonStore:
@@ -22,8 +32,6 @@ class JsonStore:
         else:
             self.base_dir = settings.root / "data" / "adapter"
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._locks: dict[str, threading.Lock] = {}
-
     def _path(self, collection: str) -> Path:
         # 集合名只允许字母数字下划线，防路径穿越
         if not collection.replace("_", "").isalnum():
@@ -31,28 +39,60 @@ class JsonStore:
         return self.base_dir / f"{collection}.json"
 
     def _lock(self, collection: str) -> threading.Lock:
-        lock = self._locks.get(collection)
-        if lock is None:
-            lock = threading.Lock()
-            self._locks[collection] = lock
-        return lock
+        path = self._path(collection).resolve()
+        with _FILE_LOCKS_GUARD:
+            lock = _FILE_LOCKS.get(path)
+            if lock is None:
+                lock = threading.Lock()
+                _FILE_LOCKS[path] = lock
+            return lock
 
     def _read(self, collection: str) -> dict:
         path = self._path(collection)
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return {}
-        except (json.JSONDecodeError, OSError):
-            return {}
+        except UnicodeDecodeError as exc:
+            raise JsonStoreCorruptionError(
+                f"持久化文件不是有效 UTF-8: {path}"
+            ) from exc
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise JsonStoreCorruptionError(
+                f"持久化文件损坏，无法读取: {path}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise JsonStoreCorruptionError(
+                f"持久化文件顶层必须是 JSON 对象: {path}"
+            )
+        return data
 
     def _write(self, collection: str, data: dict) -> None:
         path = self._path(collection)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        content = json.dumps(data, ensure_ascii=False, indent=2)
+        fd, temporary = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
         )
-        tmp.replace(path)  # 原子写
+        temporary_path = Path(temporary)
+        stream = None
+        try:
+            stream = os.fdopen(fd, "w", encoding="utf-8")
+            with stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, path)
+        finally:
+            if stream is None:
+                os.close(fd)
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
     # ---- API -----------------------------------------------------
 

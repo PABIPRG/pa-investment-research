@@ -136,7 +136,7 @@ def create_app() -> FastAPI:
     async def holdings_save(req: HoldingsRequest):
         """保存持仓到本地 store（ManualProvider 数据源）。"""
         store = JsonStore()
-        if req.holdings:
+        if req.holdings is not None:
             store.set(
                 "holdings", "default",
                 [h.model_dump() for h in req.holdings],
