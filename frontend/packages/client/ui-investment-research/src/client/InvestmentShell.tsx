@@ -637,7 +637,7 @@ export function OpportunityPage({
   }, [kind, nonce, scan.run])
 
   useEffect(() => {
-    news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: true, personal: true } })
+    news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false } })
   }, [news.run, nonce])
 
   const rows = useMemo(() => {
@@ -660,9 +660,13 @@ export function OpportunityPage({
   const signalRecord = asRecord(signal.state.value)
   const indicators = asRecord(signalRecord.indicators)
   const support = asRecord(indicators.support_resistance)
+  const newsRecord = asRecord(news.state.value)
   const headlines = Array.isArray(news.state.value)
     ? news.state.value
-    : records(asRecord(news.state.value).items)
+    : records(newsRecord.items)
+  const newsSettled = newsRecord.stale === true
+    ? '缓存资讯'
+    : newsRecord.complete === false ? '部分来源' : undefined
   const resources = selected.trim() === ''
     ? [scan.state, news.state]
     : [scan.state, news.state, signal.state]
@@ -670,7 +674,7 @@ export function OpportunityPage({
 
   return (
     <div className={css.pageScroll}>
-      <PageHeader title="机会发现" description="基于实时扫描、技术信号和个性化事件发现研究线索">
+      <PageHeader title="机会发现" description="基于实时扫描、技术信号和基础实时资讯发现研究线索">
         <button
           type="button"
           className={css.secondaryButton}
@@ -785,15 +789,15 @@ export function OpportunityPage({
           </div>
           <div className={css.newsList} aria-busy={news.busy} aria-labelledby="market-news-title">
             <div className={css.sectionHeading}>
-              <h3 id="market-news-title">实时资讯</h3>
-              <ResourceLabel state={news.state} />
+              <h3 id="market-news-title">实时资讯（基础）</h3>
+              <ResourceLabel state={news.state} {...(newsSettled === undefined ? {} : { settled: newsSettled })} />
             </div>
             {news.state.error !== '' && (
               <ErrorCard
                 title={news.state.loaded ? '实时资讯更新失败' : '实时资讯暂不可用'}
                 message={news.state.error}
                 retry={() => {
-                  news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: true, personal: true } })
+                  news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false } })
                 }}
                 retained={news.state.loaded}
               />

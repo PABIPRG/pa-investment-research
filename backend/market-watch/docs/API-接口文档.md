@@ -53,7 +53,7 @@
 |---|---|---|
 | 实时快照 | 东财 push2（含量比/换手） | 新浪 hq（无量比/换手） |
 | 异动榜单 | 东财 clist 服务端排序 | 新浪 Market_Center 排序 |
-| 日 K | 新浪 | 东财 push2his → baostock（带锁） |
+| 日 K | 新浪 | 东财 push2his → baostock（带锁）；TTL/stale cache + single-flight |
 | 新闻速递 | 财联社 + 东财个股 | LLM 摘要失败 → 纯标题模板 |
 | 结构化事件 | LLM 抽取 | 规则抽取（价格异动/涨停跌停关键词） |
 | 触发解读 / 简报 | LLM | 确定性模板（正文末尾注明） |
@@ -282,6 +282,8 @@ POST /tech-signal
 ```
 
 > 各指标子对象字段不足数据时自动置 `null` / 默认文案（`trend: "数据不足"` 等），`signals` 数组为人类可读信号行（供直接渲染 / LLM 上下文）。
+>
+> K 线按 `code+lookback` 使用 60 秒 fresh cache、30 分钟 stale cache 和 single-flight。stale 命中会立即返回并后台刷新；无缓存冷请求最多前台等待 2.5 秒，超时返回 `504`，唯一后台刷新仍会继续，稍后重试可命中缓存。技术信号名称补全最多另等 0.3 秒，超时仅使 `name` 为空，不阻塞指标返回。
 
 ---
 
@@ -319,17 +321,19 @@ POST /news/express
 
 **Query**：`limit`（5–100，默认 30）、`enrich`（0/1，默认 0）、`personal`（0/1，默认 0）。
 
-- `enrich=1`：每项附加 `event`（结构化事件，如已抽取）与 `matched`（命中自选/持仓时为 `"hit"`，否则 `""`）
+- `enrich=0`：基础首屏档，只拉新浪财经与财联社；1.5 秒总体 deadline 到达时返回已完成来源，不进入 LLM
+- `enrich=1`：显式完整档，访问全部配置来源，每项附加 `event`（结构化事件，如已抽取）与 `matched`（命中自选/持仓时为 `"hit"`，否则 `""`），可能等待可选 LLM
 - `personal=1`：命中项置顶（个性化排序），须配合 `enrich=1` 才有意义
 
-跨源聚合（新浪财经 / 财联社 / 华尔街见闻 / IT之家 / 36氪 / 虎嗅），标题去重 + 时间倒序，8s 后端缓存。
+基础档使用 15 秒 fresh cache 与 5 分钟 stale cache；过期但仍可用的缓存会立即返回，同时只启动一个后台 refresh。完整档同样使用独立 cache 和 single-flight，其外部来源总体 deadline 为 10 秒。来源失败时响应保留已完成来源或 stale cache，不把部分数据伪装成完整结果。
 
 ```jsonc
 GET /news/flash?limit=30
 // 200
 {
   "as_of": "2026-08-24 14:02:11",
-  "sources": ["财联社", "新浪财经", "华尔街见闻"],
+  "sources": ["财联社", "新浪财经"],
+  "tier": "base", "complete": true, "stale": false,
   "items": [
     { "id": "sina-123", "time": "2026-08-24 14:01:50", "tag": "新浪财经",
       "title": "快讯标题", "content": "快讯全文……", "source": "新浪财经", "url": "https://..." }
