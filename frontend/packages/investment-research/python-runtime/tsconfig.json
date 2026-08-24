@@ -12,6 +12,7 @@
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../runtime-diagnostics/invariants" },
+    { "path": "../../typert/protocol" },
     { "path": "../../credentials/credentials" },
     { "path": "../../subprocess/subprocess" },
     { "path": "../../util/atomic-write" },

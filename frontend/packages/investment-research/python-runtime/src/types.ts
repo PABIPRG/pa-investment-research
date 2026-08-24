@@ -67,6 +67,11 @@ export interface InvestmentReadinessSnapshot {
   readonly backends: readonly InvestmentBackendReadiness[]
 }
 
+/** Client-safe result of a launcher-owned application restart request. */
+export type InvestmentRestartResult =
+  | Readonly<{ status: 'accepted' }>
+  | Readonly<{ status: 'unavailable'; reason: string }>
+
 /** One credential reference injected into an owned backend child environment. */
 export interface ManagedCredentialEnv {
   /** Provider-managed credential reference resolved only for an owned child. */

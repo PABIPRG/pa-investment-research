@@ -3,6 +3,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
+import { bindTypertRemote, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import { InvestmentBackendManager } from './runtime.ts'
 import type {
   Config,
@@ -10,6 +11,7 @@ import type {
   InvestmentCapabilityDefinition,
   InvestmentCapabilityUse,
   InvestmentReadinessSnapshot,
+  InvestmentRestartResult,
   PythonBackendDefinition,
   PythonBackendLease,
 } from './types.ts'
@@ -35,6 +37,7 @@ export type {
   InvestmentCapabilityUse,
   InvestmentCredentialReadiness,
   InvestmentReadinessSnapshot,
+  InvestmentRestartResult,
   ManagedCredentialEnv,
   PythonBackendDefinition,
   PythonBackendLease,
@@ -51,6 +54,9 @@ declare module '@deepseek-ai/cordis' {
 /** Runtime service that verifies registered investment Python backends and leases their URLs. */
 export class InvestmentPythonRuntime extends Service {
   static inject = ['credentials', 'subprocess']
+
+  /** Visible binding consumed by Typert Gateway source-mode discovery. */
+  readonly typertRemote = bindTypertRemote(this, 'investmentPythonRuntime')
 
   static Config: z<Config> = z.object({
     dshHome: z.string(),
@@ -121,8 +127,23 @@ export class InvestmentPythonRuntime extends Service {
    * Read the immutable, client-safe Runtime readiness projection.
    * @returns current backend, credential, and capability facts.
    */
+  @Remote('readiness')
   readiness(): InvestmentReadinessSnapshot {
     return this.manager.readiness()
+  }
+
+  /**
+   * Request the launcher to restart the complete application after the Remote acknowledgement is sent.
+   * @returns an accepted result, or an actionable unavailable result when this launcher cannot restart.
+   */
+  @Remote('request-restart')
+  requestRestart(): InvestmentRestartResult {
+    const appRestart = this.ctx.get('appRestart')
+    if (typeof appRestart !== 'function') {
+      return { status: 'unavailable', reason: 'Application restart is unavailable from this launcher.' }
+    }
+    queueMicrotask(appRestart)
+    return { status: 'accepted' }
   }
 
   /**
