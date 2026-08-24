@@ -381,7 +381,7 @@ describe('investment readiness and capability preflight', () => {
     let probe = 0
     const manager = new InvestmentBackendManager({
       subprocess: { spawn: vi.fn(() => handle) } as unknown as SubprocessRuntime,
-      config: { dshHome: home },
+      config: { dshHome: home, healthFreshnessMs: 0 },
       checkHealth: async () => results[Math.min(probe++, results.length - 1)]!,
       resolvePaths: () => ({ source: 'source', projectDir, pythonExecutable }),
       executableExists: async () => true,

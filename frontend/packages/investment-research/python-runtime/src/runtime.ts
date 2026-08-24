@@ -33,6 +33,8 @@ import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 const DEFAULT_CONFIG = {
   startupTimeoutMs: 30_000,
   healthPollMs: 250,
+  healthFreshnessMs: 5_000,
+  healthTimeoutMs: 2_000,
   shutdownGraceMs: 5_000,
   logTailBytes: 65_536,
   logMaxBytes: 4_194_304,
@@ -49,6 +51,8 @@ interface ActiveEntryBase {
   readonly definition: PythonBackendDefinition
   refs: number
   health: 'healthy' | 'failed'
+  healthVerifiedAt: number | undefined
+  healthGeneration: number
 }
 
 type ActiveEntry =
@@ -75,6 +79,12 @@ interface StartupFlight {
   controller: AbortController
   promise: Promise<ActiveEntry>
   waiters: number
+}
+
+interface ActiveHealthFlight {
+  readonly entry: ActiveEntry
+  readonly generation: number
+  promise: Promise<BackendHealthResult>
 }
 
 interface CredentialGenerationCapture {
@@ -245,6 +255,7 @@ export class InvestmentBackendManager {
   private readonly definitions = new Map<InvestmentBackendId, RegistryEntry>()
   private readonly active = new Map<InvestmentBackendId, ActiveEntry>()
   private readonly flights = new Map<InvestmentBackendId, StartupFlight>()
+  private readonly healthFlights = new Map<InvestmentBackendId, ActiveHealthFlight>()
   private readonly stopping = new Map<InvestmentBackendId, Promise<void>>()
   private readonly operations = new Set<Promise<unknown>>()
   private readonly lifetime = new AbortController()
@@ -356,6 +367,7 @@ export class InvestmentBackendManager {
       if (entry.ownership !== 'owned') continue
       if (entry.definition.credentialEnv?.some(credential => credential.ref === ref) === true) {
         entry.restartRequired = true
+        this.invalidateHealthFreshness(entry)
       }
     }
   }
@@ -381,16 +393,7 @@ export class InvestmentBackendManager {
 
     let entry = this.active.get(id)
     if (entry !== undefined) {
-      const probeSignal = signal === undefined
-        ? this.lifetime.signal
-        : AbortSignal.any([signal, this.lifetime.signal])
-      const probe = this.track(this.checkHealth(registered.definition, { signal: probeSignal }))
-      const health = await waitWithSignal(probe, probeSignal)
-      if (health.status !== 'healthy') {
-        entry.health = 'failed'
-        throw new Error(`investment Python backend "${id}" health is ${health.status}`)
-      }
-      entry.health = 'healthy'
+      await this.verifyActiveHealth(id, entry, signal)
       if (this.active.get(id) !== entry || this.stopping.has(id)) return this.acquire(id, signal)
     }
     if (entry === undefined) {
@@ -408,6 +411,7 @@ export class InvestmentBackendManager {
             }
             this.applyCredentialUpdatesDuringStartup(started)
             this.active.set(id, started)
+            this.observeOwnedExit(started)
             return started
           })
           .finally(() => {
@@ -433,6 +437,82 @@ export class InvestmentBackendManager {
     }
     entry.refs += 1
     return this.lease(entry)
+  }
+
+  private async verifyActiveHealth(id: InvestmentBackendId, entry: ActiveEntry, signal?: AbortSignal): Promise<void> {
+    if (this.hasFreshHealth(entry)) return
+    let flight = this.healthFlights.get(id)
+    if (flight === undefined || flight.entry !== entry) {
+      const created = { entry, generation: entry.healthGeneration } as ActiveHealthFlight
+      created.promise = this.track(
+        this.probeHealth(entry.definition, this.lifetime.signal)
+          .then((health) => {
+            if (this.active.get(id) === entry && entry.healthGeneration === created.generation) {
+              entry.health = health.status === 'healthy' ? 'healthy' : 'failed'
+              entry.healthVerifiedAt = health.status === 'healthy' ? this.internals.now() : undefined
+            }
+            return health
+          }, (error: unknown) => {
+            if (this.active.get(id) === entry && entry.healthGeneration === created.generation) {
+              entry.health = 'failed'
+              entry.healthVerifiedAt = undefined
+            }
+            throw error
+          })
+          .finally(() => {
+            if (this.healthFlights.get(id) === created) this.healthFlights.delete(id)
+          }),
+      )
+      flight = created
+      this.healthFlights.set(id, flight)
+    }
+    const health = await waitWithSignal(flight.promise, signal)
+    if (entry.healthGeneration !== flight.generation) {
+      return this.verifyActiveHealth(id, entry, signal)
+    }
+    if (health.status !== 'healthy') {
+      throw new Error(`investment Python backend "${id}" health is ${health.status}`)
+    }
+  }
+
+  private hasFreshHealth(entry: ActiveEntry): boolean {
+    if (entry.health !== 'healthy' || entry.healthVerifiedAt === undefined) return false
+    const age = this.internals.now() - entry.healthVerifiedAt
+    return age >= 0 && age < this.config.healthFreshnessMs
+  }
+
+  private invalidateHealthFreshness(entry: ActiveEntry): void {
+    entry.healthVerifiedAt = undefined
+    entry.healthGeneration += 1
+  }
+
+  private async probeHealth(definition: PythonBackendDefinition, signal: AbortSignal): Promise<BackendHealthResult> {
+    signal.throwIfAborted()
+    const timeout = new AbortController()
+    const timeoutError = new Error(
+      `investment Python backend "${definition.id}" health probe timed out after ${this.config.healthTimeoutMs}ms`,
+    )
+    const timer = setTimeout(() => { timeout.abort(timeoutError) }, this.config.healthTimeoutMs)
+    const probeSignal = AbortSignal.any([signal, timeout.signal])
+    try {
+      const probe = this.track(this.checkHealth(definition, { signal: probeSignal }))
+      return await waitWithSignal(probe, probeSignal)
+    } catch (error) {
+      if (timeout.signal.aborted && !signal.aborted) throw timeoutError
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  private observeOwnedExit(entry: ActiveEntry): void {
+    if (entry.ownership !== 'owned') return
+    const invalidate = (): void => {
+      if (this.active.get(entry.definition.id) !== entry) return
+      entry.health = 'failed'
+      this.invalidateHealthFreshness(entry)
+    }
+    void entry.handle.done.then(invalidate, invalidate)
   }
 
   private track<T>(operation: Promise<T>): Promise<T> {
@@ -466,6 +546,7 @@ export class InvestmentBackendManager {
 
   private async stopIdle(entry: ActiveEntry): Promise<void> {
     const id = entry.definition.id
+    this.invalidateHealthFreshness(entry)
     /* v8 ignore next -- ordinary non-owned releases are handled directly in lease.release. */
     if (entry.ownership !== 'owned') {
       this.active.delete(id)
@@ -561,10 +642,17 @@ export class InvestmentBackendManager {
 
   private async start(definition: PythonBackendDefinition, signal: AbortSignal): Promise<ActiveEntry> {
     resolveBackendAddress(definition)
-    const health = await this.checkHealth(definition, { signal })
+    const health = await this.probeHealth(definition, signal)
     signal.throwIfAborted()
     if (health.status === 'healthy') {
-      return { definition, ownership: definition.mode === 'external' ? 'external' : 'attached', health: 'healthy', refs: 0 }
+      return {
+        definition,
+        ownership: definition.mode === 'external' ? 'external' : 'attached',
+        health: 'healthy',
+        healthVerifiedAt: this.internals.now(),
+        healthGeneration: 0,
+        refs: 0,
+      }
     }
     if (definition.mode === 'external' || health.status !== 'refused') {
       throw new Error(`investment Python backend "${definition.id}" health is ${health.status}`)
@@ -648,7 +736,7 @@ export class InvestmentBackendManager {
       const deadlineAt = this.internals.now() + this.config.startupTimeoutMs
       for (;;) {
         signal.throwIfAborted()
-        const next = await this.checkHealth(definition, { signal })
+        const next = await this.probeHealth(definition, signal)
         await drain()
         signal.throwIfAborted()
         if (next.status === 'healthy') break
@@ -677,6 +765,8 @@ export class InvestmentBackendManager {
         credentials: resolvedCredentials.facts,
         restartRequired: false,
         health: 'healthy',
+        healthVerifiedAt: this.internals.now(),
+        healthGeneration: 0,
         refs: 0,
       }
       this.startupCredentialGenerations.set(entry, resolvedCredentials.generations)
@@ -694,6 +784,8 @@ export class InvestmentBackendManager {
           credentials: resolvedCredentials.facts,
           restartRequired: false,
           health: 'failed',
+          healthVerifiedAt: undefined,
+          healthGeneration: 0,
           refs: 0,
         }
         this.startupCredentialGenerations.set(retained, resolvedCredentials.generations)
@@ -756,6 +848,7 @@ export class InvestmentBackendManager {
       this.disposed = true
       this.lifetime.abort(new Error('investment Python runtime is disposed'))
     }
+    for (const entry of this.active.values()) this.invalidateHealthFreshness(entry)
     for (const flight of this.flights.values()) flight.controller.abort(new Error('investment Python runtime is disposed'))
     const flights = [...this.flights.values()].map(flight => flight.promise)
     if (flights.length > 0) await Promise.allSettled(flights)

@@ -41,6 +41,7 @@ function withoutLogPrefixes(text: string): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -58,7 +59,15 @@ async function harness(health: BackendHealthResult[] = [healthy]) {
   let probe = 0
   const manager = new InvestmentBackendManager({
     subprocess,
-    config: { dshHome: home, startupTimeoutMs: 50, healthPollMs: 1, shutdownGraceMs: 5, logTailBytes: 128, logMaxBytes: 1024 },
+    config: {
+      dshHome: home,
+      startupTimeoutMs: 50,
+      healthPollMs: 1,
+      healthFreshnessMs: 0,
+      shutdownGraceMs: 5,
+      logTailBytes: 128,
+      logMaxBytes: 1024,
+    },
     checkHealth: async () => health[Math.min(probe++, health.length - 1)]!,
     resolvePaths: () => ({ source: 'source', projectDir, pythonExecutable }),
     executableExists: async () => true,
@@ -695,13 +704,133 @@ describe('InvestmentBackendManager', () => {
     await lease.release()
   })
 
+  it('single-flights an expired active health probe and reuses it inside the freshness window', async () => {
+    const current = await harness()
+    const gate = Promise.withResolvers<BackendHealthResult>()
+    let clock = 0
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthFreshnessMs: 100, healthTimeoutMs: 1_000 },
+      checkHealth: async () => probes++ === 0 ? healthy : gate.promise,
+      now: () => clock,
+    })
+    manager.register({ ...definition, mode: 'external' })
+    const initial = await manager.acquire('trading-core')
+    expect(probes).toBe(1)
+
+    clock = 100
+    const pending = [
+      manager.acquire('trading-core'),
+      manager.acquire('trading-core'),
+      manager.acquire('trading-core'),
+    ]
+    await vi.waitFor(() => { expect(probes).toBe(2) })
+    gate.resolve(healthy)
+    const leases = await Promise.all(pending)
+
+    clock = 199
+    const fresh = await manager.acquire('trading-core')
+    expect(probes).toBe(2)
+    await initial.release()
+    for (const lease of leases) await lease.release()
+    await fresh.release()
+  })
+
+  it('times out a health fetch, aborts its signal, and reports the configured deadline', async () => {
+    const current = await harness()
+    let probeSignal: AbortSignal | undefined
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthTimeoutMs: 5 },
+      checkHealth: async (_definition, options) => {
+        probeSignal = options?.signal
+        return new Promise<BackendHealthResult>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => { reject(options.signal?.reason) }, { once: true })
+        })
+      },
+    })
+    manager.register({ ...definition, mode: 'external' })
+
+    await expect(manager.acquire('trading-core')).rejects.toThrow(
+      'investment Python backend "trading-core" health probe timed out after 5ms',
+    )
+    expect(probeSignal?.aborted).toBe(true)
+    await manager.dispose()
+  })
+
+  it('invalidates a fresh owned health result when the backend exits', async () => {
+    const current = await harness()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthFreshnessMs: 60_000 },
+      checkHealth: async () => {
+        probes += 1
+        if (probes === 1) return refused
+        if (probes === 2) return healthy
+        return { status: 'occupied', healthUrl: 'x', httpStatus: 200 }
+      },
+      resolvePaths: () => ({
+        source: 'source',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'env', 'bin', 'python'),
+      }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    const lease = await manager.acquire('trading-core')
+    expect(probes).toBe(2)
+
+    current.handle.exit()
+    await Promise.resolve()
+    await expect(manager.acquire('trading-core')).rejects.toThrow(/occupied/)
+    expect(probes).toBe(3)
+    await lease.release()
+  })
+
+  it('invalidates a fresh owned health result when credentials require a restart', async () => {
+    const current = await harness()
+    let probes = 0
+    const ref = credentialRef('trading-api-key')
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthFreshnessMs: 60_000 },
+      checkHealth: async () => {
+        probes += 1
+        if (probes === 1) return refused
+        if (probes === 2) return healthy
+        return { status: 'occupied', healthUrl: 'x', httpStatus: 200 }
+      },
+      resolveCredential: async () => 'credential-value',
+      resolvePaths: () => ({
+        source: 'source',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'env', 'bin', 'python'),
+      }),
+      executableExists: async () => true,
+    })
+    manager.register({
+      ...definition,
+      credentialEnv: [{ ref, env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const lease = await manager.acquire('trading-core')
+    expect(probes).toBe(2)
+
+    manager.credentialUpdated(ref)
+    await expect(manager.acquire('trading-core')).rejects.toThrow(/occupied/)
+    expect(probes).toBe(3)
+    current.handle.exit()
+    await lease.release()
+  })
+
   it('restarts acquisition when the verified active entry was released during its health probe', async () => {
     const gate = Promise.withResolvers<BackendHealthResult>()
     const current = await harness()
     let probes = 0
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
-      config: { dshHome: current.home },
+      config: { dshHome: current.home, healthFreshnessMs: 0 },
       checkHealth: async () => probes++ === 1 ? gate.promise : healthy,
     })
     manager.register(definition)
@@ -722,7 +851,7 @@ describe('InvestmentBackendManager', () => {
     let probeSignal: AbortSignal | undefined
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
-      config: { dshHome: current.home },
+      config: { dshHome: current.home, healthFreshnessMs: 0 },
       checkHealth: async (_definition, options) => {
         if (probes++ === 0) return healthy
         probeSignal = options?.signal
@@ -749,7 +878,7 @@ describe('InvestmentBackendManager', () => {
     let probes = 0
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
-      config: { dshHome: current.home },
+      config: { dshHome: current.home, healthFreshnessMs: 0 },
       checkHealth: async () => probes++ === 0 ? healthy : gate.promise,
     })
     manager.register({ ...definition, mode: 'external' })
@@ -793,6 +922,8 @@ describe('InvestmentBackendManager', () => {
     expect(InvestmentPythonRuntime.Config({})).toEqual({
       startupTimeoutMs: 30_000,
       healthPollMs: 250,
+      healthFreshnessMs: 5_000,
+      healthTimeoutMs: 2_000,
       shutdownGraceMs: 5_000,
       logTailBytes: 65_536,
       logMaxBytes: 4_194_304,

@@ -76,6 +76,8 @@ export class InvestmentPythonRuntime extends Service {
     dshHome: z.string(),
     startupTimeoutMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(30_000),
     healthPollMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(250),
+    healthFreshnessMs: z.number().step(1).min(0).max(MAX_TIMER_DELAY_MS).default(5_000),
+    healthTimeoutMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(2_000),
     shutdownGraceMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(5_000),
     logTailBytes: z.number().step(1).min(1).default(65_536),
     logMaxBytes: z.number().step(1).min(1).default(4_194_304),

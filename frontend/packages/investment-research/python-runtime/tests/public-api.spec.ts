@@ -41,7 +41,9 @@ describe('InvestmentPythonRuntime public API', () => {
   it('exposes every deployment tunable through its Config schema', () => {
     expect(Object.keys(InvestmentPythonRuntime.Config.dict ?? {}).sort()).toEqual([
       'dshHome',
+      'healthFreshnessMs',
       'healthPollMs',
+      'healthTimeoutMs',
       'logMaxBytes',
       'logTailBytes',
       'shutdownGraceMs',
@@ -51,18 +53,28 @@ describe('InvestmentPythonRuntime public API', () => {
       dshHome: '/tmp/dsh-home',
       startupTimeoutMs: 1,
       healthPollMs: 2,
-      shutdownGraceMs: 3,
-      logTailBytes: 4,
-      logMaxBytes: 5,
+      healthFreshnessMs: 3,
+      healthTimeoutMs: 4,
+      shutdownGraceMs: 5,
+      logTailBytes: 6,
+      logMaxBytes: 7,
     })).toEqual({
       dshHome: '/tmp/dsh-home',
       startupTimeoutMs: 1,
       healthPollMs: 2,
-      shutdownGraceMs: 3,
-      logTailBytes: 4,
-      logMaxBytes: 5,
+      healthFreshnessMs: 3,
+      healthTimeoutMs: 4,
+      shutdownGraceMs: 5,
+      logTailBytes: 6,
+      logMaxBytes: 7,
     })
-    for (const field of ['startupTimeoutMs', 'healthPollMs', 'shutdownGraceMs'] as const) {
+    for (const field of [
+      'startupTimeoutMs',
+      'healthPollMs',
+      'healthFreshnessMs',
+      'healthTimeoutMs',
+      'shutdownGraceMs',
+    ] as const) {
       expect(() => InvestmentPythonRuntime.Config({ [field]: 2_147_483_648 })).toThrow()
     }
   })
@@ -97,7 +109,7 @@ describe('InvestmentPythonRuntime public API', () => {
   it('attaches to a matching managed service and rejects an occupied endpoint', async () => {
     const ctx = new Context()
     new StubCredentials(ctx)
-    const runtime = new InvestmentPythonRuntime(ctx)
+    const runtime = new InvestmentPythonRuntime(ctx, { healthFreshnessMs: 0 })
     runtime.register({ ...externalBackend, mode: 'managed', baseUrl: 'http://127.0.0.1:8000' })
     const signal = new AbortController().signal
     const healthSignals: AbortSignal[] = []

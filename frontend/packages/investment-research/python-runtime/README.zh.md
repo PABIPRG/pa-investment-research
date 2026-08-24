@@ -11,6 +11,8 @@
 | `dshHome` | `$DSH_HOME`，否则 `~/.dsh` | 仅所有者可读写的日志与 runtime state（运行时状态）根目录。 |
 | `startupTimeoutMs` | `30000` | managed 启动的最长等待时间。 |
 | `healthPollMs` | `250` | 启动期间两次健康探测之间的间隔。 |
+| `healthFreshnessMs` | `5000` | 活动 backend 成功健康探测的复用窗口；设为 `0` 可禁用复用。 |
+| `healthTimeoutMs` | `2000` | 单次 backend 健康请求的最长等待时间。 |
 | `shutdownGraceMs` | `5000` | 传给子进程树终止阶梯的宽限期。 |
 | `logTailBytes` | `65536` | 启动错误可附带的诊断日志尾部上限。 |
 | `logMaxBytes` | `4194304` | 下次启动时触发单文件轮转的活动 backend 日志大小。 |
@@ -21,7 +23,7 @@
 
 `external` 接受 HTTP 或 HTTPS，验证配置的健康身份并返回 `external` lease。它绝不启动、发送信号或停止服务。最后一个 lease 释放时只会停止内存中持有 handle 的 `owned` 进程；attached 与 external 服务继续存活。runtime dispose（释放）会拒绝新工作、等待进行中的获取，再等待所有 owned 进程树完全退出。状态文件只用于诊断，绝不授权按 PID 或端口接管进程。
 
-同一 backend id 的并发获取共享一次启动。相同定义按引用计数注册；命令、URL、模式、身份或路径定义冲突时明确失败。业务工具只在获取成功后注册，并在释放 lease 前移除。
+同一 backend id 的并发获取共享一次启动。活动获取会复用近期成功的健康结果；结果过期后同时到达的请求共享一次健康探测。每次探测都有明确的截止时间；owned 进程退出、凭据更新要求重启、teardown 和非健康就绪结果都会使可复用结果失效。相同定义按引用计数注册；命令、URL、模式、身份或路径定义冲突时明确失败。业务工具只在获取成功后注册，并在释放 lease 前移除。
 
 ## 凭据与就绪状态
 
