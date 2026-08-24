@@ -88,10 +88,22 @@ describe('investment Python sidecar builder', () => {
   it('builds a stable descriptor from offline cache and excludes generated or sensitive backend files', async () => {
     const setup = await fixture()
     const options = { target: TARGET, output: setup.output, cache: setup.cache, offline: true }
+    let activeHashes = 0
+    let peakHashes = 0
+    const descriptorFileSha256 = vi.fn(async (path: string) => {
+      activeHashes += 1
+      peakHashes = Math.max(peakHashes, activeHashes)
+      try {
+        return hash(await readFile(path))
+      } finally {
+        activeHashes -= 1
+      }
+    })
+    const dependencies = { ...setup.dependencies, descriptorFileSha256 }
 
-    const first = await buildInvestmentPythonSidecar(options, setup.dependencies)
+    const first = await buildInvestmentPythonSidecar(options, dependencies)
     const firstJson = await readFile(join(setup.output, 'runtime.json'), 'utf8')
-    const second = await buildInvestmentPythonSidecar(options, setup.dependencies)
+    const second = await buildInvestmentPythonSidecar(options, dependencies)
     const secondJson = await readFile(join(setup.output, 'runtime.json'), 'utf8')
 
     expect(secondJson).toBe(firstJson)
@@ -115,6 +127,8 @@ describe('investment Python sidecar builder', () => {
     )
     expect(setup.runCommand.mock.calls[0]?.[1]).not.toContain('--require-hashes')
     expect(setup.runCommand.mock.calls[0]?.[1]).not.toContain('--only-binary=:all:')
+    expect(descriptorFileSha256).toHaveBeenCalled()
+    expect(peakHashes).toBe(1)
   })
 
   it('fails closed for missing targets, cache/hash failures, requirements drift, and traversal', async () => {

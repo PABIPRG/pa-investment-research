@@ -40,7 +40,7 @@ pnpm run package:electron
 pnpm run make:electron
 ```
 
-`package:electron` 构建自包含的生产部署及当前平台原生 Python sidecar，并在 `apps/electron/out/` 下生成未压缩应用。sidecar 会复制到 `Resources/investment-python`，构建缓存与 staging 目录不会进入产物。`make:electron` 还会运行 Electron Forge 中配置的 maker，在 `apps/electron/out/make/` 下为当前平台与架构生成 ZIP。可对最终资源目录运行 `pnpm run investment:sidecar:smoke --root <Resources/investment-python>`。该 ZIP 未签名；正式签名／公证仍是发布门禁，`Investment packaged sidecar` workflow 则执行 arm64／x64／Windows 原生产物 smoke 与 macOS ad-hoc 签名验证。
+`package:electron` 构建自包含的生产部署及当前平台原生 Python sidecar，并在 `apps/electron/out/` 下生成未压缩应用。sidecar 会复制到 `Resources/investment-python`，构建缓存与 staging 目录不会进入产物。`make:electron` 还会运行 Electron Forge 中配置的 maker，在 `apps/electron/out/make/` 下为当前平台与架构生成 ZIP。可对最终资源目录运行 `node scripts/smoke-investment-python-sidecar.ts --root <Resources/investment-python>`。该 ZIP 未签名；正式签名／公证仍是发布门禁，`Investment packaged sidecar` workflow 则执行 arm64／x64／Windows 原生产物 smoke 与 macOS ad-hoc 签名验证。
 
 ## 运行时结构
 

@@ -49,6 +49,7 @@ export interface BuildInvestmentSidecarDependencies {
   readonly listArchive?: (archive: string) => Promise<readonly string[]>
   readonly extractArchive?: (archive: string, destination: string) => Promise<void>
   readonly runCommand?: (command: string, args: readonly string[], cwd: string) => Promise<number>
+  readonly descriptorFileSha256?: (path: string) => Promise<string>
 }
 
 interface RuntimeDescriptor {
@@ -196,7 +197,10 @@ async function copyBackend(source: string, destination: string): Promise<void> {
   }
 }
 
-async function collectFiles(root: string): Promise<RuntimeDescriptor['files']> {
+async function collectFiles(
+  root: string,
+  hashFile: (path: string) => Promise<string>,
+): Promise<RuntimeDescriptor['files']> {
   const files: string[] = []
   const visit = async (directory: string): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true })
@@ -210,7 +214,11 @@ async function collectFiles(root: string): Promise<RuntimeDescriptor['files']> {
   }
   await visit(root)
   files.sort()
-  return await Promise.all(files.map(async path => ({ path, sha256: await fileSha256(join(root, ...path.split('/'))) })))
+  const descriptors: { path: string; sha256: string }[] = []
+  for (const path of files) {
+    descriptors.push({ path, sha256: await hashFile(join(root, ...path.split('/'))) })
+  }
+  return descriptors
 }
 
 async function prepareArchive(
@@ -313,7 +321,7 @@ export async function buildInvestmentPythonSidecar(
         'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
         'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
       },
-      files: await collectFiles(staging),
+      files: await collectFiles(staging, dependencies.descriptorFileSha256 ?? fileSha256),
     }
     await writeFile(join(staging, 'runtime.json'), `${JSON.stringify(descriptor, undefined, 2)}\n`, 'utf8')
     await rm(output, { recursive: true, force: true })

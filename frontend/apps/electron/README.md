@@ -40,7 +40,7 @@ pnpm run package:electron
 pnpm run make:electron
 ```
 
-`package:electron` builds a self-contained production deployment plus the current native Python sidecar and creates an unpacked application under `apps/electron/out/`. The sidecar is copied to `Resources/investment-python`; build caches and staging directories are never copied. `make:electron` also runs Electron Forge's configured maker to create a ZIP for the current platform and architecture under `apps/electron/out/make/`. Run `pnpm run investment:sidecar:smoke --root <Resources/investment-python>` against the final resource directory. The ZIP is unsigned; release signing/notarization remains a distribution gate, while the `Investment packaged sidecar` workflow performs native arm64/x64/Windows artifact smoke and ad-hoc macOS signature verification.
+`package:electron` builds a self-contained production deployment plus the current native Python sidecar and creates an unpacked application under `apps/electron/out/`. The sidecar is copied to `Resources/investment-python`; build caches and staging directories are never copied. `make:electron` also runs Electron Forge's configured maker to create a ZIP for the current platform and architecture under `apps/electron/out/make/`. Run `node scripts/smoke-investment-python-sidecar.ts --root <Resources/investment-python>` against the final resource directory. The ZIP is unsigned; release signing/notarization remains a distribution gate, while the `Investment packaged sidecar` workflow performs native arm64/x64/Windows artifact smoke and ad-hoc macOS signature verification.
 
 ## Runtime structure
 

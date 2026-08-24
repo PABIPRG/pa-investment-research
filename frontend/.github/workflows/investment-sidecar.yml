@@ -52,7 +52,7 @@ jobs:
         run: |
           descriptor=$(find apps/electron/out -path '*/Resources/investment-python/runtime.json' -print -quit)
           test -n "$descriptor"
-          pnpm run investment:sidecar:smoke --root "${descriptor%/runtime.json}"
+          node scripts/smoke-investment-python-sidecar.ts --root "${descriptor%/runtime.json}"
           app=$(find apps/electron/out -name '*.app' -type d -maxdepth 3 -print -quit)
           test -n "$app"
           codesign --deep --force --sign - "$app"
@@ -66,4 +66,4 @@ jobs:
             Where-Object { $_.FullName -match 'resources[\\/]investment-python[\\/]runtime.json$' } |
             Select-Object -First 1
           if ($null -eq $descriptor) { throw 'packaged investment sidecar not found' }
-          pnpm run investment:sidecar:smoke --root $descriptor.Directory.FullName
+          node scripts/smoke-investment-python-sidecar.ts --root $descriptor.Directory.FullName
