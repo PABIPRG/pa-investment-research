@@ -33,11 +33,16 @@ describe('investment runtime bundle', () => {
             id: 'client-investment-research-runtime',
             name: '@deepseek-ai/dsh-client-investment-research-runtime',
           },
+          {
+            id: 'client-ui-settings-investment-research',
+            name: '@deepseek-ai/dsh-client-ui-settings-investment-research',
+          },
         ],
       },
     ])
     expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-investment-python-runtime')
     expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-client-investment-research-runtime')
+    expect(manifest.dependencies).toHaveProperty('@deepseek-ai/dsh-client-ui-settings-investment-research')
   })
 
   it('keeps the investment-only Client facade out of the ordinary web bundle', () => {
@@ -47,5 +52,6 @@ describe('investment runtime bundle', () => {
     )
 
     expect(JSON.stringify(webPatch)).not.toContain('@deepseek-ai/dsh-client-investment-research-runtime')
+    expect(JSON.stringify(webPatch)).not.toContain('@deepseek-ai/dsh-client-ui-settings-investment-research')
   })
 })

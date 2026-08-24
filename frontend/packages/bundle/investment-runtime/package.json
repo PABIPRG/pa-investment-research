@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-client-investment-research-runtime": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-settings-investment-research": "workspace:^",
     "@deepseek-ai/dsh-investment-python-runtime": "workspace:^"
   },
   "peerDependencies": {
