@@ -26,8 +26,8 @@
 | `init` | 初始化项目：前端安装依赖并构建（后端待加入） |
 | `sync-upstream` | 同步上游 deepseek-harness 到 `frontend/`（git subtree + squash） |
 | `dev-web` | 启动前端 Web 开发服务 |
-| `start-electron` | 构建并启动 Electron 桌面端（上游更新后或改动涉及构建产物时用） |
-| `start-electron-dev` | 直接启动 Electron 桌面端，跳过构建（需先 `init`） |
+| `start-electron` | 构建并启动 Electron 桌面端；macOS 启动前会清理 native 模块的 quarantine 标记 |
+| `start-electron-dev` | 直接启动 Electron 桌面端，跳过构建；macOS 同样会先清理 quarantine 标记（需先 `init`） |
 
 ### 同步上游
 
