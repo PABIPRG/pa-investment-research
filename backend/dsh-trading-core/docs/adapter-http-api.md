@@ -121,11 +121,15 @@ curl http://127.0.0.1:8000/health
 
 `research_depth` → 引擎配置映射：
 
-| depth | max_debate_rounds | max_risk_discuss_rounds | online_news |
-|---|---|---|---|
-| quick / basic / standard | 1 | 1 | false |
-| deep | 2 | 2 | false |
-| full | 3 | 3 | true |
+| depth | 分析师 | max_debate_rounds | max_risk_discuss_rounds | online_news | agent 节点预算 |
+|---|---|---|---|---|---|
+| quick | 市场 | 1 | 1 | false | 9 |
+| basic | 市场、基本面 | 1 | 1 | false | 10 |
+| standard | 市场、社媒、新闻、基本面 | 1 | 1 | false | 12 |
+| deep | 市场、社媒、新闻、基本面 | 2 | 2 | false | 17 |
+| full | 市场、社媒、新闻、基本面 | 3 | 3 | true | 22 |
+
+adapter 分析的跨次记忆由 dsh 会话层持有，因此构图时固定 `memory_enabled=false`，不初始化 Chroma memory，也不发起 memory embedding 请求。
 
 **测试入参**
 

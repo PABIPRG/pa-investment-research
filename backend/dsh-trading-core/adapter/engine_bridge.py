@@ -21,11 +21,43 @@ logger = logging.getLogger("adapter.engine")
 
 # research_depth → 引擎配置（会话级覆盖优先于这些默认）
 RESEARCH_DEPTH_MAP = {
-    "quick":    {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1, "online_news": False},
-    "basic":    {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1, "online_news": False},
-    "standard": {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1, "online_news": False},
-    "deep":     {"max_debate_rounds": 2, "max_risk_discuss_rounds": 2, "online_news": False},
-    "full":     {"max_debate_rounds": 3, "max_risk_discuss_rounds": 3, "online_news": True},
+    "quick": {
+        "selected_analysts": ("market",),
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "online_news": False,
+    },
+    "basic": {
+        "selected_analysts": ("market", "fundamentals"),
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "online_news": False,
+    },
+    "standard": {
+        "selected_analysts": ("market", "social", "news", "fundamentals"),
+        "max_debate_rounds": 1,
+        "max_risk_discuss_rounds": 1,
+        "online_news": False,
+    },
+    "deep": {
+        "selected_analysts": ("market", "social", "news", "fundamentals"),
+        "max_debate_rounds": 2,
+        "max_risk_discuss_rounds": 2,
+        "online_news": False,
+    },
+    "full": {
+        "selected_analysts": ("market", "social", "news", "fundamentals"),
+        "max_debate_rounds": 3,
+        "max_risk_discuss_rounds": 3,
+        "online_news": True,
+    },
+}
+
+ANALYST_NODE_IDS = {
+    "market": "Market Analyst",
+    "social": "Social Analyst",
+    "news": "News Analyst",
+    "fundamentals": "Fundamentals Analyst",
 }
 
 
@@ -50,7 +82,6 @@ class EngineRunner:
         config["online_tools"] = True    # A 股走 akshare 数据源
         config["online_news"] = False    # A 股中文在线新闻源少，避免拖慢
         config["realtime_data"] = False
-        config["use_memory"] = False     # 记忆归 dsh 会话，引擎不做跨次反思
 
         # research_depth 映射
         depth = params.get("research_depth", "standard")
@@ -62,6 +93,11 @@ class EngineRunner:
         # 会话级覆盖优先（config_overrides 直接透传给引擎 config）
         for k, v in (params.get("config_overrides") or {}).items():
             config[k] = v
+
+        # 记忆由 dsh 会话层持有；adapter 任务不得初始化 Chroma 或发起 embedding。
+        # TradingAgentsGraph 读取 memory_enabled，旧的 use_memory 键不生效。
+        config.pop("use_memory", None)
+        config["memory_enabled"] = False
         return config
 
     def run(self, params: dict, progress_cb) -> dict:
@@ -74,7 +110,11 @@ class EngineRunner:
         logger.info("🚀 构建 TradingAgentsGraph（provider=deepseek, depth=%s, risk_profile=%s）…",
                     params.get("research_depth", "standard"), profile_key)
         # 每个任务独立建图：避免共享 self.ticker/self.curr_state 的并发污染（S5 再优化缓存）
-        graph = TradingAgentsGraph(config=config, debug=False)
+        graph = TradingAgentsGraph(
+            selected_analysts=config["selected_analysts"],
+            config=config,
+            debug=False,
+        )
 
         state, decision = graph.propagate(
             ticker,
@@ -96,16 +136,11 @@ class EngineRunner:
         max_debate = config.get("max_debate_rounds", 1)
         max_risk = config.get("max_risk_discuss_rounds", 1)
 
-        # 分析师节点（默认全选，顺序与 graph 默认 selected_analysts 一致）
-        _key_to_id = {
-            "market": "Market Analyst",
-            "social": "Social Analyst",
-            "news": "News Analyst",
-            "fundamentals": "Fundamentals Analyst",
-        }
+        # 分析师节点必须与真实 graph 使用同一份深度配置。
+        selected_analysts = config["selected_analysts"]
         analyst_nodes = [
             {"id": nid, "label": NODE_META[nid]["label"], "type": "analyst"}
-            for nid in (_key_to_id[k] for k in ["market", "social", "news", "fundamentals"])
+            for nid in (ANALYST_NODE_IDS[key] for key in selected_analysts)
         ]
 
         n_analysts = len(analyst_nodes)
