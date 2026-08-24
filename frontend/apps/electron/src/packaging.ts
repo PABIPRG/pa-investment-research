@@ -41,6 +41,10 @@ interface PackagerOptionsInput {
   stagingDir: string
 }
 
+type PackagerOsxSignOptions = Exclude<PackagerOptions['osxSign'], true | undefined> & {
+  continueOnError: boolean
+}
+
 /**
  * Report whether Node must invoke a command through the Windows command shell.
  * @param command - Executable or command-script path.
@@ -104,6 +108,12 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
  * @returns Options for the existing Electron packager and signing pipeline.
  */
 export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
+  const osxSign = {
+    continueOnError: false,
+    identity: '-',
+    identityValidation: false,
+  } satisfies PackagerOsxSignOptions
+
   return {
     appBundleId: 'com.deepseek.harness',
     arch: input.arch,
@@ -117,10 +127,7 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     out: input.outDir,
     overwrite: true,
     ...(input.platform === 'darwin' ? {
-      osxSign: {
-        identity: '-',
-        identityValidation: false,
-      },
+      osxSign,
     } : {}),
     platform: input.platform,
     prune: false,

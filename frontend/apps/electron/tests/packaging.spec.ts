@@ -64,6 +64,7 @@ describe('Electron investment sidecar packaging', () => {
       dir: plan.stagingDir,
       extraResource: [plan.sidecarDir],
       osxSign: {
+        continueOnError: false,
         identity: '-',
         identityValidation: false,
       },
