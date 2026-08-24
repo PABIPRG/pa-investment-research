@@ -128,6 +128,15 @@ function normalizeCredentialEnv(
     targets.add(env)
     return Object.freeze({ ref: credential.ref, env, role: credential.role })
   })
+  normalized.sort((left, right) => {
+    if (left.env < right.env) return -1
+    if (left.env > right.env) return 1
+    if (left.ref < right.ref) return -1
+    if (left.ref > right.ref) return 1
+    if (left.role < right.role) return -1
+    if (left.role > right.role) return 1
+    return 0
+  })
   return Object.freeze(normalized)
 }
 
@@ -409,7 +418,7 @@ export class InvestmentBackendManager {
         const read = handle.collected[source]?.readFrom(offsets[source])
         if (read !== undefined) {
           offsets[source] = read.nextOffset
-          await log.append(source, read.text)
+          await log.append(source, safeErrorMessage(read.text, credentialEnv))
         }
       }
     }

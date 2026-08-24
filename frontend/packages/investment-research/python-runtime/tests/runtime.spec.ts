@@ -260,15 +260,24 @@ describe('InvestmentBackendManager', () => {
     })
     const first = manager.register({
       ...definition,
-      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'trading_api_key', role: 'required' }],
+      credentialEnv: [
+        { ref: credentialRef('trading-api-key'), env: 'trading_api_key', role: 'required' },
+        { ref: credentialRef('trading-api-secret'), env: 'trading_api_secret', role: 'enhancement' },
+      ],
     })
     const second = manager.register({
       ...definition,
-      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+      credentialEnv: [
+        { ref: credentialRef('trading-api-secret'), env: 'TRADING_API_SECRET', role: 'enhancement' },
+        { ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' },
+      ],
     })
     expect(() => manager.register({
       ...definition,
-      credentialEnv: [{ ref: credentialRef('trading-api-secret'), env: 'TRADING_API_KEY', role: 'required' }],
+      credentialEnv: [
+        { ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' },
+        { ref: credentialRef('trading-api-extra'), env: 'TRADING_API_SECRET', role: 'enhancement' },
+      ],
     })).toThrow(/conflict/)
     first()
     await expect(manager.acquire('trading-core')).resolves.toMatchObject({ ownership: 'attached' })
@@ -338,6 +347,72 @@ describe('InvestmentBackendManager', () => {
     await expect(readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')).resolves.not.toContain(secret)
     current.handle.exit()
     await lease.release()
+  })
+
+  it('does not resolve or spawn an external backend after a refused health probe', async () => {
+    const current = await harness([refused])
+    const resolveCredential = vi.fn(async () => 'credential-value-must-not-be-read')
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => refused,
+      resolveCredential,
+    })
+    manager.register({
+      ...definition,
+      mode: 'external',
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    await expect(manager.acquire('trading-core')).rejects.toThrow(/health is refused/)
+    expect(resolveCredential).not.toHaveBeenCalled()
+    expect(current.specs).toHaveLength(0)
+  })
+
+  it('redacts credential values from owned child output before logs and lifecycle errors', async () => {
+    const secret = 'credential-value-echoed-by-child'
+    const early = await harness([refused, refused])
+    early.handle.stdoutChunks.push(`stdout diagnostic ${secret}\n`)
+    early.handle.stderrChunks.push(`stderr diagnostic ${secret}\n`)
+    early.handle.exit({ exitCode: 2, signal: null })
+    const earlyManager = new InvestmentBackendManager({
+      subprocess: early.subprocess,
+      config: { dshHome: early.home },
+      checkHealth: async () => early.specs.length === 0 ? refused : refused,
+      resolveCredential: async () => secret,
+    })
+    earlyManager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const earlyError = await earlyManager.acquire('trading-core').catch(error => error)
+    expect(earlyError).toBeInstanceOf(Error)
+    expect((earlyError as Error).message).toMatch(/stdout diagnostic.*stderr diagnostic/s)
+    expect((earlyError as Error).message).not.toContain(secret)
+    const earlyLog = await readFile(join(early.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
+    expect(earlyLog).toContain('stdout diagnostic')
+    expect(earlyLog).toContain('stderr diagnostic')
+    expect(earlyLog).not.toContain(secret)
+
+    const cleanup = await harness([refused, { status: 'occupied', healthUrl: 'x', httpStatus: 200 }])
+    cleanup.handle.stderrChunks.push(`cleanup diagnostic ${secret}\n`)
+    void cleanup.handle.done.catch(() => {})
+    cleanup.handle.fail(new Error(`cleanup failure ${secret}`))
+    const cleanupManager = new InvestmentBackendManager({
+      subprocess: cleanup.subprocess,
+      config: { dshHome: cleanup.home },
+      checkHealth: async () => cleanup.specs.length === 0 ? refused : { status: 'occupied', healthUrl: 'x', httpStatus: 200 },
+      resolveCredential: async () => secret,
+    })
+    cleanupManager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const cleanupError = await cleanupManager.acquire('trading-core').catch(error => error)
+    expect(cleanupError).toBeInstanceOf(AggregateError)
+    expect((cleanupError as Error).message).not.toContain(secret)
+    const cleanupLog = await readFile(join(cleanup.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
+    expect(cleanupLog).toContain('cleanup diagnostic')
+    expect(cleanupLog).not.toContain(secret)
   })
 
   it('omits unresolved credentials from the owned child environment and redacts resolver values from spawn errors', async () => {
