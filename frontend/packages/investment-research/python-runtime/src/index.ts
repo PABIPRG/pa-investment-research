@@ -142,7 +142,7 @@ export class InvestmentPythonRuntime extends Service {
     if (typeof appRestart !== 'function') {
       return { status: 'unavailable', reason: 'Application restart is unavailable from this launcher.' }
     }
-    queueMicrotask(appRestart)
+    setImmediate(appRestart)
     return { status: 'accepted' }
   }
 

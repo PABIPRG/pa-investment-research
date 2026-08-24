@@ -82,10 +82,13 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(serialized).not.toContain(SECRET)
   })
 
-  it('acknowledges before scheduling the launcher restart exactly once', () => {
+  it('defers the launcher restart to the next event-loop phase exactly once', () => {
     const scheduled: (() => void)[] = []
     const appRestart = vi.fn()
-    vi.stubGlobal('queueMicrotask', (callback: () => void) => { scheduled.push(callback) })
+    vi.stubGlobal('setImmediate', (callback: () => void): NodeJS.Immediate => {
+      scheduled.push(callback)
+      return {} as NodeJS.Immediate
+    })
     const runtime = runtimeWith(appRestart)
 
     const result = runtime.requestRestart()
@@ -95,5 +98,22 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(scheduled).toHaveLength(1)
     scheduled[0]!()
     expect(appRestart).toHaveBeenCalledOnce()
+  })
+
+  it('waits for the Gateway acknowledgement continuation before restarting', async () => {
+    const order: string[] = []
+    const runtime = runtimeWith(() => { order.push('restart') })
+
+    const invokeThroughGatewayBoundary = async () => {
+      const result = await Reflect.apply(runtime.requestRestart, runtime, [])
+      order.push('gateway decode')
+      expect(result).toEqual({ status: 'accepted' })
+      order.push('gateway response assembly')
+    }
+
+    await invokeThroughGatewayBoundary()
+    expect(order).toEqual(['gateway decode', 'gateway response assembly'])
+    await new Promise<void>(resolve => setImmediate(resolve))
+    expect(order).toEqual(['gateway decode', 'gateway response assembly', 'restart'])
   })
 })
