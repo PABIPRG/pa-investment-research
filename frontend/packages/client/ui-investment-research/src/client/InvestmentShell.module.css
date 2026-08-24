@@ -79,6 +79,7 @@
 .secondaryButton { height: 30px; padding: 0 10px; border: 1px solid var(--investment-line); color: #4e5561; background: var(--dsw-alias-bg-base, #fff); }
 .secondaryButton:hover { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--investment-blue-50); }
 .primaryButton:disabled { border-color: #8aa8dc; background: #8aa8dc; cursor: wait; }
+.secondaryButton:disabled { color: #8a9099; border-color: #d9dce1; background: #f3f4f6; cursor: wait; }
 .primaryButton:focus-visible, .secondaryButton:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--investment-blue-100); }
 .actionIcon { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .sessionProgress { position: absolute; top: 55px; right: 0; left: var(--dsh-sidebar-width, 260px); z-index: 25; height: 2px; overflow: hidden; pointer-events: none; }
@@ -105,6 +106,13 @@
 .investmentNav { display: flex; flex-direction: column; gap: 3px; }
 .investmentNav button { display: flex; align-items: center; width: 100%; min-height: 38px; padding: 0 10px; border: 0; border-radius: 8px; color: var(--dsw-alias-label-secondary, #5b616b); background: transparent; cursor: pointer; text-align: left; }
 .investmentNav button:hover { background: var(--dsw-alias-bg-layer-1, #edf2fa); }
+.investmentNav button:focus-visible, .segmented button:focus-visible,
+.stockCard:focus-visible, .stockCardActive:focus-visible, .codeButton:focus-visible,
+.drawerHead button:focus-visible, .historyMain:focus-visible, .moreButton:focus-visible,
+.historyMenu button:focus-visible, .renameForm button:focus-visible, .errorCard button:focus-visible {
+  outline: 2px solid var(--investment-primary);
+  outline-offset: 2px;
+}
 .investmentNav button:disabled { color: #9aa0aa; cursor: not-allowed; opacity: .72; }
 .investmentNav button:disabled:hover { background: transparent; }
 .investmentNav .navActive { color: var(--investment-primary); background: var(--investment-blue-100); font-weight: 700; }
@@ -119,9 +127,12 @@
 .pageHeader h1 { margin: 0; font-size: 22px; }
 .pageHeader p { margin: 5px 0 0; color: var(--dsw-alias-label-secondary, #737984); font-size: 12px; }
 .pageHeader > div:last-child { display: flex; gap: 8px; }
-.segmented { display: inline-flex; margin-bottom: 16px; padding: 3px; border: 1px solid var(--dsw-alias-border-l1, #dfe3e8); border-radius: 10px; background: var(--dsw-alias-bg-base, #fff); }
+.segmented { display: flex; width: max-content; max-width: 100%; box-sizing: border-box; overflow-x: auto; margin-bottom: 12px; padding: 3px; border: 1px solid var(--dsw-alias-border-l1, #dfe3e8); border-radius: 10px; background: var(--dsw-alias-bg-base, #fff); scrollbar-width: thin; }
 .segmented button { min-height: 30px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-secondary, #6a707b); cursor: pointer; }
 .segmented .segmentActive { color: var(--dsw-alias-state-business-primary, #1769e0); background: var(--dsw-alias-state-business-tertiary, #e9f2ff); font-weight: 700; }
+
+.progressStatus { margin-bottom: 12px; padding: 9px 12px; border: 1px solid var(--investment-blue-100); border-radius: 9px; color: #43546f; background: var(--investment-blue-50); font-size: 11px; line-height: 1.45; }
+.resourceLabel { color: var(--dsw-alias-label-tertiary, #858b95); font-size: 11px; font-weight: 400; }
 
 .opportunityGrid { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(430px, 1.25fr); gap: 14px; align-items: start; }
 .cardList, .detailCard, .tableCard, .panelCard, .metric, .loadingCard, .errorCard {
@@ -150,13 +161,15 @@
 .metric { padding: 13px; }
 .metric span { display: block; color: var(--dsw-alias-label-tertiary, #858b95); font-size: 10px; }
 .metric strong { display: block; margin-top: 6px; font-size: 15px; overflow-wrap: anywhere; }
-.signalList, .newsList { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--dsw-alias-border-l1, #e5e8ec); }
+.dataRegion, .signalList, .newsList { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--dsw-alias-border-l1, #e5e8ec); }
 .signalList h3, .newsList h3 { margin: 0 0 9px; font-size: 13px; }
+.newsList .sectionHeading h3 { margin: 0; }
 .signalList p { margin: 5px 0; padding: 8px 10px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2, #f6f8fb); color: var(--dsw-alias-label-secondary, #555d68); font-size: 11px; }
 .newsList article { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--dsw-alias-border-l1, #eef0f3); }
 .newsList article strong { font-size: 11px; font-weight: 550; }
 .newsList article span { flex: none; color: var(--dsw-alias-label-caption, #969ba4); font-size: 9px; }
 
+.riskSummary { margin-top: 14px; }
 .portfolioGrid { display: grid; grid-template-columns: minmax(480px, 1.25fr) minmax(340px, 0.85fr); gap: 14px; margin-top: 14px; align-items: start; }
 .tableCard, .panelCard { padding: 14px; }
 .tableWrap { overflow: auto; margin: 8px -14px -14px; }
@@ -178,9 +191,20 @@
 .alertRow small { display: block; margin-top: 5px; color: var(--dsw-alias-label-caption, #9aa0a9); font-size: 9px; }
 .goodState { margin-top: 8px; padding: 13px; border-radius: 8px; color: var(--dsw-alias-state-success-primary, #147748); background: var(--dsw-alias-state-success-tertiary, #edf9f3); font-size: 11px; }
 
-.loadingCard { padding: 28px; color: var(--dsw-alias-label-secondary, #727985); text-align: center; }
-.errorCard { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px; border-color: #f0c6c6; background: #fff8f8; }
+.riskSummary, .loadingSkeleton, .errorCard {
+  border: 1px solid var(--dsw-alias-border-l1, #dfe3e8);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-base, #fff);
+}
+.riskSummary { padding: 14px; }
+.loadingSkeleton { display: flex; flex-direction: column; gap: 9px; min-height: 92px; box-sizing: border-box; padding: 14px; border-color: transparent; background: var(--dsw-alias-bg-layer-2, #f7f8fa); }
+.loadingSkeleton span { display: block; height: 13px; border-radius: 7px; background: linear-gradient(90deg, #edf0f4 25%, #f8f9fb 50%, #edf0f4 75%); background-size: 220% 100%; animation: investment-skeleton 1.5s ease-in-out infinite; }
+.loadingSkeleton span:nth-child(2n) { width: 74%; }
+.loadingSkeleton span:nth-child(3n) { width: 88%; }
+.errorCard { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 8px 0; padding: 12px; border-color: #f0c6c6; background: #fff8f8; }
+.errorCard[data-retained='true'] { border-color: #ead9a9; background: #fffbef; }
 .errorCard strong { color: #bd3535; }
+.errorCard[data-retained='true'] strong { color: #8a6418; }
 .errorCard p { margin: 5px 0 0; color: #7d5b5b; font-size: 11px; overflow-wrap: anywhere; }
 .errorCard button { flex: none; color: #bd3535; border-color: #e6b3b3; background: #fff; }
 .emptyState { padding: 28px 12px; color: #9297a0; text-align: center; font-size: 11px; }
@@ -249,11 +273,12 @@
 @keyframes investment-backdrop-exit { to { background: rgba(15, 23, 42, 0); } }
 @keyframes investment-drawer-exit { to { opacity: .4; transform: translateX(18px); } }
 @keyframes investment-spin { to { transform: rotate(360deg); } }
+@keyframes investment-skeleton { to { background-position: -120% 0; } }
 
 @media (prefers-reduced-motion: reduce) {
   .sessionProgress::before, .workbench, .investmentWelcome, .drawerBackdrop, .historyDrawer,
   .drawerBackdrop[data-closing='true'], .drawerBackdrop[data-closing='true'] .historyDrawer,
-  .historyTitleRow i { animation: none; }
+  .historyTitleRow i, .loadingSkeleton span { animation: none; }
 }
 
 @media (max-width: 1050px) {
@@ -271,8 +296,17 @@
 }
 
 @media (max-width: 680px) {
-  .primaryButton, .secondaryButton { width: 36px; height: 36px; padding: 0; }
+  .topActions .primaryButton, .topActions .secondaryButton { width: 36px; height: 36px; padding: 0; }
   .actionLabel { display: none; }
+  .pageScroll { padding: 16px 14px 28px; }
+  .pageHeader { flex-direction: column; gap: 12px; }
+  .pageHeader > div:last-child { width: 100%; flex-wrap: wrap; }
+  .pageHeader > div:last-child .primaryButton, .pageHeader > div:last-child .secondaryButton { min-height: 44px; height: auto; padding: 10px 13px; }
+  .segmented button { flex: none; min-height: 42px; }
+  .detailTitle { align-items: flex-start; flex-direction: column; }
+  .detailTitle .primaryButton { min-height: 44px; height: auto; padding-block: 10px; }
+  .errorCard { align-items: stretch; flex-direction: column; }
+  .errorCard button { min-height: 44px; }
   .promptGrid { grid-template-columns: 1fr; }
   .investmentWelcome { padding-inline: 14px; }
   .investmentWelcome > p { display: none; }
