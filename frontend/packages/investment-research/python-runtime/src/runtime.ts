@@ -22,6 +22,7 @@ import type {
   InvestmentCapabilityDefinition,
   InvestmentCapabilityUse,
   InvestmentReadinessSnapshot,
+  InvestmentRuntimeAssetReadiness,
   ManagedCredentialEnv,
   PythonBackendDefinition,
   PythonBackendLease,
@@ -68,6 +69,7 @@ type EnvironmentKeyNormalizer = (key: string) => string
 type LogPathResolver = (dshHome: string, id: InvestmentBackendId) => BackendLogPaths
 
 const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const BUNDLED_ENVIRONMENT_KEYS = ['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR'] as const
 
 interface StartupFlight {
   controller: AbortController
@@ -143,14 +145,22 @@ function normalizeCredentialEnv(
   definition: PythonBackendDefinition,
   normalizeEnvironmentKey: EnvironmentKeyNormalizer,
 ): readonly ManagedCredentialEnv[] | undefined {
-  if (definition.credentialEnv === undefined) return undefined
   const managed = new Set(Object.keys(definition.managedEnv ?? {}).map(normalizeEnvironmentKey))
+  const reserved = new Set(BUNDLED_ENVIRONMENT_KEYS.map(normalizeEnvironmentKey))
+  const reservedManaged = [...managed].find(key => reserved.has(key))
+  if (reservedManaged !== undefined) {
+    throw new Error(`investment Python backend "${definition.id}" managed environment "${reservedManaged}" is reserved by the bundled Runtime`)
+  }
+  if (definition.credentialEnv === undefined) return undefined
   const targets = new Set<string>()
   const normalized = definition.credentialEnv.map((credential) => {
     if (!ENVIRONMENT_NAME.test(credential.env)) {
       throw new Error(`investment Python backend "${definition.id}" has invalid credential environment "${credential.env}"`)
     }
     const env = normalizeEnvironmentKey(credential.env)
+    if (reserved.has(env)) {
+      throw new Error(`investment Python backend "${definition.id}" credential environment "${env}" is reserved by the bundled Runtime`)
+    }
     if (targets.has(env)) {
       throw new Error(`investment Python backend "${definition.id}" has duplicate credential environment "${env}"`)
     }
@@ -261,7 +271,7 @@ export class InvestmentBackendManager {
     this.subprocess = options.subprocess
     this.config = { ...DEFAULT_CONFIG, ...options.config, dshHome: resolveDshHome(options.config?.dshHome) }
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
-    this.resolvePaths = options.resolvePaths ?? defaultResolvePaths
+    this.resolvePaths = options.resolvePaths ?? (definition => defaultResolvePaths(definition, { dshHome: this.config.dshHome }))
     this.resolveCredential = options.resolveCredential ?? (async () => undefined)
     this.describeCredential = options.describeCredential
     this.resolveLogPaths = options.resolveLogPaths ?? backendLogPaths
@@ -328,7 +338,11 @@ export class InvestmentBackendManager {
    * @returns immutable JSON-safe readiness snapshot.
    */
   readiness(): InvestmentReadinessSnapshot {
-    return this.readinessTracker.readiness(this.readinessStates(), id => this.runtimeLogPath(id))
+    return this.readinessTracker.readiness(
+      this.readinessStates(),
+      id => this.runtimeLogPath(id),
+      this.runtimeAssetReadiness(),
+    )
   }
 
   /**
@@ -573,9 +587,15 @@ export class InvestmentBackendManager {
     const resolvedCredentials = await this.resolveCredentialEnv(definition, signal)
     signal.throwIfAborted()
     const credentialEnv = resolvedCredentials.environment
-    const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined
+    const bundledEnv = paths.source === 'bundled'
+      ? {
+          PYTHONPATH: paths.sitePackages!,
+          DSH_INVESTMENT_STATE_DIR: paths.stateDir!,
+        }
+      : undefined
+    const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined && bundledEnv === undefined
       ? undefined
-      : { ...definition.managedEnv, ...credentialEnv }
+      : { ...definition.managedEnv, ...credentialEnv, ...bundledEnv }
     const redactors = {
       stdout: new CredentialOutputRedactor(credentialEnv),
       stderr: new CredentialOutputRedactor(credentialEnv),
@@ -752,6 +772,22 @@ export class InvestmentBackendManager {
 
   private runtimeLogPath(id: InvestmentBackendId): string {
     return this.resolveLogPaths(this.config.dshHome, id).active
+  }
+
+  private runtimeAssetReadiness(): InvestmentRuntimeAssetReadiness {
+    const sources = new Set<ResolvedBackendPaths['source']>()
+    for (const entry of this.definitions.values()) {
+      try {
+        sources.add(this.resolvePaths(entry.definition).source)
+      } catch (error) {
+        const detail = safeErrorMessage(error)
+        return Object.freeze({
+          status: /packaged runtime is invalid|bundled Runtime requires/iu.test(detail) ? 'invalid' : 'missing',
+          detail,
+        })
+      }
+    }
+    return Object.freeze({ status: sources.has('bundled') ? 'bundled-ready' : 'source-env-ready' })
   }
 
   private applyCredentialUpdatesDuringStartup(entry: ActiveEntry): void {

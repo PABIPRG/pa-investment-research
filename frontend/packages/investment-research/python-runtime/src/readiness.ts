@@ -7,6 +7,7 @@ import type {
   InvestmentCapabilityUse,
   InvestmentCredentialReadiness,
   InvestmentReadinessSnapshot,
+  InvestmentRuntimeAssetReadiness,
   PythonBackendDefinition,
   PythonBackendLease,
 } from './types.ts'
@@ -156,6 +157,7 @@ export class InvestmentReadinessTracker {
   readiness(
     states: readonly BackendReadinessState[],
     runtimeLogPath: (id: InvestmentBackendId) => string,
+    runtimeAsset: InvestmentRuntimeAssetReadiness,
   ): InvestmentReadinessSnapshot {
     const byId = new Map(states.map(state => [state.definition.id, state]))
     const ids = new Set<InvestmentBackendId>([...byId.keys(), ...this.capabilities.keys()])
@@ -178,7 +180,7 @@ export class InvestmentReadinessTracker {
         runtimeLogPath: runtimeLogPath(id),
       })
     })
-    return Object.freeze({ backends: Object.freeze(backends) })
+    return Object.freeze({ runtimeAsset, backends: Object.freeze(backends) })
   }
 
   /**

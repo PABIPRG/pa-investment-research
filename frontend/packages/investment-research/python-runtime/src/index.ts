@@ -19,6 +19,13 @@ import type {
 export { checkBackendHealth } from './health.ts'
 export type { BackendHealthOptions } from './health.ts'
 export { resolveBackendAddress, resolveBackendPaths } from './path.ts'
+export { verifyInvestmentRuntimeDescriptor } from './descriptor.ts'
+export type {
+  InvestmentRuntimeDescriptor,
+  InvestmentRuntimeDescriptorOptions,
+  InvestmentRuntimeFileDescriptor,
+  VerifiedInvestmentRuntime,
+} from './descriptor.ts'
 export { InvestmentBackendManager } from './runtime.ts'
 export type { InvestmentBackendManagerOptions } from './runtime.ts'
 export { backendLogPaths, BackendLog, safeErrorMessage } from './log.ts'
@@ -37,6 +44,7 @@ export type {
   InvestmentCapabilityUse,
   InvestmentCredentialReadiness,
   InvestmentReadinessSnapshot,
+  InvestmentRuntimeAssetReadiness,
   InvestmentRestartResult,
   ManagedCredentialEnv,
   PythonBackendDefinition,

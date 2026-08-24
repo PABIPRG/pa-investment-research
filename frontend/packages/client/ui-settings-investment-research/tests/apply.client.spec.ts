@@ -7,7 +7,7 @@ import { apply, inject } from '../src/client/index.ts'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
 import type { InvestmentReadinessSnapshot } from '../src/client/store.ts'
 
-const EMPTY: InvestmentReadinessSnapshot = { backends: [] }
+const EMPTY: InvestmentReadinessSnapshot = { runtimeAsset: { status: 'missing' }, backends: [] }
 
 async function bench() {
   const ctx = new Context()

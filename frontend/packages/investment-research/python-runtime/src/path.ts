@@ -2,6 +2,8 @@ import { statSync } from 'node:fs'
 import path, { dirname } from 'node:path'
 import type { PlatformPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyInvestmentRuntimeDescriptor } from './descriptor.ts'
+import type { VerifiedInvestmentRuntime } from './descriptor.ts'
 import type {
   PythonBackendDefinition,
   ResolvedBackendAddress,
@@ -16,10 +18,18 @@ export interface BackendPathResolutionOptions {
   readonly packageDir?: string
   /** Target process platform. */
   readonly platform?: NodeJS.Platform
+  /** Target process architecture. */
+  readonly arch?: string
   /** Node path implementation matching the target platform. */
   readonly pathApi?: PlatformPath
+  /** Harness home used for bundled backend writable state. */
+  readonly dshHome?: string
   /** Return whether a candidate is an existing directory. */
   readonly isDirectory?: (candidate: string) => boolean
+  /** Return whether a candidate is an existing regular file. */
+  readonly isFile?: (candidate: string) => boolean
+  /** Parse and verify one discovered sidecar descriptor. */
+  readonly verifyDescriptor?: (descriptorPath: string) => VerifiedInvestmentRuntime
 }
 
 function directoryExists(candidate: string): boolean {
@@ -30,10 +40,24 @@ function directoryExists(candidate: string): boolean {
   }
 }
 
+function fileExists(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile()
+  } catch {
+    return false
+  }
+}
+
 function resolutionError(definition: PythonBackendDefinition): Error {
   return new Error(
-    `investment Python backend "${definition.id}": cannot resolve projectDir; configure an explicit absolute projectDir for ${definition.repositoryPath.join('/')}`,
+    `investment Python backend "${definition.id}": local Runtime is missing; configure a valid absolute projectDir or initialize ${definition.repositoryPath.join('/')}`,
   )
+}
+
+function sourceInterpreter(projectDir: string, platform: NodeJS.Platform, pathApi: PlatformPath): string {
+  return platform === 'win32'
+    ? pathApi.join(projectDir, 'env', 'Scripts', 'python.exe')
+    : pathApi.join(projectDir, 'env', 'bin', 'python')
 }
 
 /**
@@ -47,34 +71,65 @@ export function resolveBackendPaths(
   options: BackendPathResolutionOptions = {},
 ): ResolvedBackendPaths {
   const platform = options.platform ?? process.platform
+  const arch = options.arch ?? process.arch
   const pathApi = options.pathApi ?? path
   const isDirectory = options.isDirectory ?? directoryExists
+  const isFile = options.isFile ?? fileExists
+  const verifyDescriptor = options.verifyDescriptor ?? (descriptorPath => verifyInvestmentRuntimeDescriptor(descriptorPath, {
+    platform,
+    arch,
+    pathApi,
+  }))
 
-  let projectDir: string | undefined
   if (definition.projectDir !== undefined) {
     if (!pathApi.isAbsolute(definition.projectDir) || !isDirectory(definition.projectDir)) {
       throw resolutionError(definition)
     }
-    projectDir = pathApi.normalize(definition.projectDir)
-  } else {
-    let cursor = options.packageDir ?? PACKAGE_DIR
-    while (true) {
-      const candidate = pathApi.join(cursor, ...definition.repositoryPath)
-      if (isDirectory(candidate)) {
-        projectDir = candidate
-        break
-      }
-      const parent = pathApi.dirname(cursor)
-      if (parent === cursor) break
-      cursor = parent
-    }
+    const projectDir = pathApi.normalize(definition.projectDir)
+    const pythonExecutable = sourceInterpreter(projectDir, platform, pathApi)
+    if (!isFile(pythonExecutable)) throw resolutionError(definition)
+    return { source: 'source', projectDir, pythonExecutable }
   }
 
-  if (projectDir === undefined) throw resolutionError(definition)
-  const pythonExecutable = platform === 'win32'
-    ? pathApi.join(projectDir, 'env', 'Scripts', 'python.exe')
-    : pathApi.join(projectDir, 'env', 'bin', 'python')
-  return { projectDir, pythonExecutable }
+  const packageDir = options.packageDir ?? PACKAGE_DIR
+  let cursor = packageDir
+  while (true) {
+    const projectDir = pathApi.join(cursor, ...definition.repositoryPath)
+    const pythonExecutable = sourceInterpreter(projectDir, platform, pathApi)
+    if (isDirectory(projectDir) && isFile(pythonExecutable)) {
+      return { source: 'source', projectDir, pythonExecutable }
+    }
+    const parent = pathApi.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+
+  cursor = packageDir
+  while (true) {
+    const descriptorPath = pathApi.join(cursor, 'investment-python', 'runtime.json')
+    if (isFile(descriptorPath)) {
+      if (options.dshHome === undefined || !pathApi.isAbsolute(options.dshHome)) {
+        throw new Error(`investment Python backend "${definition.id}": bundled Runtime requires an absolute dshHome`)
+      }
+      const bundled = verifyDescriptor(descriptorPath)
+      const descriptorBackend = bundled.descriptor.backends[definition.id]
+      if (descriptorBackend.module !== definition.module) {
+        throw new Error(`investment Python packaged runtime is invalid (${definition.id} module); reinstall the application`)
+      }
+      return {
+        source: 'bundled',
+        projectDir: bundled.projectDirs[definition.id],
+        pythonExecutable: bundled.pythonExecutable,
+        sitePackages: bundled.sitePackages,
+        stateDir: pathApi.join(options.dshHome, 'investment-research', definition.id),
+      }
+    }
+    const parent = pathApi.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+
+  throw resolutionError(definition)
 }
 
 function isLoopbackHost(host: string): boolean {

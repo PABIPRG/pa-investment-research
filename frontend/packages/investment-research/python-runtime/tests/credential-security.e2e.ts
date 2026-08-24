@@ -44,7 +44,7 @@ describe('investment credential negative scan', () => {
       checkHealth: async () => probes++ === 0
         ? { status: 'refused', healthUrl: 'http://127.0.0.1:18000/health', error: new Error('refused') }
         : { status: 'healthy', healthUrl: 'http://127.0.0.1:18000/health', httpStatus: 200 },
-      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      resolvePaths: () => ({ source: 'source', projectDir, pythonExecutable }),
       executableExists: async () => true,
       sleep: async () => {},
       resolveCredential: async () => ({ value: CANARY, source: 'test' }),

@@ -63,8 +63,18 @@ export interface InvestmentBackendReadiness {
 
 /** Synchronous, immutable, JSON-safe investment Runtime readiness projection. */
 export interface InvestmentReadinessSnapshot {
+  /** Local Python asset selected for owned managed backends. */
+  readonly runtimeAsset: InvestmentRuntimeAssetReadiness
   /** Stable backend-id-sorted readiness entries. */
   readonly backends: readonly InvestmentBackendReadiness[]
+}
+
+/** Client-safe local Python asset state. */
+export interface InvestmentRuntimeAssetReadiness {
+  /** Source environment, verified bundled sidecar, or actionable installation failure. */
+  readonly status: 'source-env-ready' | 'bundled-ready' | 'missing' | 'invalid'
+  /** Safe recovery detail without environment or credential values. */
+  readonly detail?: string
 }
 
 /** Client-safe result of a launcher-owned application restart request. */
@@ -140,10 +150,16 @@ export interface Config {
 
 /** Resolved backend directory and platform interpreter. */
 export interface ResolvedBackendPaths {
+  /** Deployment source selected by the fixed resolver priority. */
+  readonly source: 'source' | 'bundled'
   /** Absolute Python backend directory. */
   readonly projectDir: string
   /** Absolute virtual-environment interpreter path. */
   readonly pythonExecutable: string
+  /** Absolute import root for a bundled Runtime. */
+  readonly sitePackages?: string
+  /** Absolute writable backend root for a bundled Runtime. */
+  readonly stateDir?: string
 }
 
 /** Validated network address used for health and Uvicorn arguments. */

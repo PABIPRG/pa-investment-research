@@ -130,6 +130,13 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
   const refreshMessage = interaction.refresh === 'error'
     ? props.t('refreshFailed')
     : snapshot.backends.length === 0 ? props.t('loading') : undefined
+  const runtimeAssetKey = snapshot.runtimeAsset.status === 'source-env-ready'
+    ? 'sourceRuntime'
+    : snapshot.runtimeAsset.status === 'bundled-ready'
+      ? 'bundledRuntime'
+      : snapshot.runtimeAsset.status === 'invalid'
+        ? 'invalidRuntime'
+        : 'missingRuntime'
 
   const requestRestart = (): void => {
     if (restart.status === 'pending') return
@@ -158,7 +165,7 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
         </div>
         <dl className={css.runtimeAsset}>
           <dt>{props.t('runtimeAsset')}</dt>
-          <dd>{props.t('sourceRuntime')}</dd>
+          <dd>{props.t(runtimeAssetKey)}</dd>
         </dl>
       </header>
 

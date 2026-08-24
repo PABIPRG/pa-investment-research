@@ -14,6 +14,7 @@ type CredentialRef = InvestmentReadinessSnapshot['backends'][number]['credential
 const DEEPSEEK_REF = 'DEEPSEEK_API_KEY' as CredentialRef
 
 const FIRST: InvestmentReadinessSnapshot = {
+  runtimeAsset: { status: 'source-env-ready' },
   backends: [{
     backendId: 'trading-core',
     ownership: 'owned',
@@ -32,6 +33,7 @@ const FIRST: InvestmentReadinessSnapshot = {
 }
 
 const CHANGED: InvestmentReadinessSnapshot = {
+  runtimeAsset: FIRST.runtimeAsset,
   backends: [{
     ...FIRST.backends[0]!,
     credentials: [{

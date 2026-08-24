@@ -14,7 +14,10 @@ import type {
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
 const DEEPSEEK_CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
-const EMPTY_SNAPSHOT: InvestmentReadinessSnapshot = Object.freeze({ backends: Object.freeze([]) })
+const EMPTY_SNAPSHOT: InvestmentReadinessSnapshot = Object.freeze({
+  runtimeAsset: Object.freeze({ status: 'missing' }),
+  backends: Object.freeze([]),
+})
 
 /** Observable, secret-free Client projection consumed by investment UI plugins. */
 export interface InvestmentResearchRuntimeClient {

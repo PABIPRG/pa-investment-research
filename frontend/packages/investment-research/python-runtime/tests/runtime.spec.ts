@@ -60,7 +60,7 @@ async function harness(health: BackendHealthResult[] = [healthy]) {
     subprocess,
     config: { dshHome: home, startupTimeoutMs: 50, healthPollMs: 1, shutdownGraceMs: 5, logTailBytes: 128, logMaxBytes: 1024 },
     checkHealth: async () => health[Math.min(probe++, health.length - 1)]!,
-    resolvePaths: () => ({ projectDir, pythonExecutable }),
+    resolvePaths: () => ({ source: 'source', projectDir, pythonExecutable }),
     executableExists: async () => true,
     sleep: async () => {},
     now: (() => { let value = 0; return () => ++value })(),
@@ -124,7 +124,7 @@ describe('InvestmentBackendManager', () => {
       subprocess: base.subprocess,
       config: { dshHome: base.home },
       checkHealth: async () => probes++ === 0 ? refused : ready.promise,
-      resolvePaths: () => ({ projectDir: base.projectDir, pythonExecutable: join(base.projectDir, 'env', 'bin', 'python') }),
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: join(base.projectDir, 'env', 'bin', 'python') }),
       executableExists: async () => true,
     })
     manager.register(definition)
@@ -622,6 +622,45 @@ describe('InvestmentBackendManager', () => {
     await lease.release()
   })
 
+  it('adds only verified bundled import and writable state roots to an owned child', async () => {
+    const current = await harness()
+    let probes = 0
+    const sitePackages = join(current.home, 'read only resources', 'site-packages')
+    const stateDir = join(current.home, 'investment-research', 'trading-core')
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => probes++ === 0 ? refused : healthy,
+      resolvePaths: () => ({
+        source: 'bundled',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'runtime', 'python'),
+        sitePackages,
+        stateDir,
+      }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    const lease = await manager.acquire('trading-core')
+    expect(current.specs[0]?.env).toEqual({
+      ADAPTER_RUNNER: 'runner-name',
+      PYTHONPATH: sitePackages,
+      DSH_INVESTMENT_STATE_DIR: stateDir,
+    })
+    expect(manager.readiness().runtimeAsset.status).toBe('bundled-ready')
+    current.handle.exit()
+    await lease.release()
+  })
+
+  it.each(['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR'])('reserves the bundled Runtime environment key %s', async (key) => {
+    const { manager } = await harness()
+    expect(() => manager.register({ ...definition, managedEnv: { [key]: 'override' } })).toThrow(/reserved/)
+    expect(() => manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: key, role: 'required' }],
+    })).toThrow(/reserved/)
+  })
+
   it('reports missing venv initialization, child early exit tail, startup timeout, and health mismatch', async () => {
     const missing = await harness([refused])
     missing.manager.register(definition)
@@ -844,7 +883,7 @@ describe('InvestmentBackendManager', () => {
       subprocess: cancelled.subprocess,
       config: { dshHome: cancelled.home },
       checkHealth: async () => probes++ === 0 ? refused : ready.promise,
-      resolvePaths: () => ({ projectDir: cancelled.projectDir, pythonExecutable: join(cancelled.projectDir, 'env', 'bin', 'python') }),
+      resolvePaths: () => ({ source: 'source', projectDir: cancelled.projectDir, pythonExecutable: join(cancelled.projectDir, 'env', 'bin', 'python') }),
       executableExists: async () => true,
     })
     cancelledManager.register(definition)
@@ -872,7 +911,7 @@ describe('InvestmentBackendManager', () => {
       subprocess: stateFailure.subprocess,
       config: { dshHome: stateFailure.home },
       checkHealth: async () => stateProbes++ === 0 ? refused : publish.promise,
-      resolvePaths: () => ({ projectDir: stateFailure.projectDir, pythonExecutable: join(stateFailure.projectDir, 'env', 'bin', 'python') }),
+      resolvePaths: () => ({ source: 'source', projectDir: stateFailure.projectDir, pythonExecutable: join(stateFailure.projectDir, 'env', 'bin', 'python') }),
       executableExists: async () => true,
     })
     stateFailure.handle.autoExitOnTerminate = true

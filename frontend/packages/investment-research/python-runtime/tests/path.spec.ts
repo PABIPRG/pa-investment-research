@@ -2,6 +2,7 @@ import path, { posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { resolveBackendAddress, resolveBackendPaths } from '../src/path.ts'
+import type { VerifiedInvestmentRuntime } from '../src/descriptor.ts'
 import type { PythonBackendDefinition } from '../src/types.ts'
 
 function backend(overrides: Partial<PythonBackendDefinition> = {}): PythonBackendDefinition {
@@ -61,9 +62,10 @@ describe('investment backend path resolution', () => {
       pathApi,
       platform,
       isDirectory: candidate => candidate === projectDir,
+      isFile: candidate => candidate === pythonExecutable,
     })
 
-    expect(resolved).toEqual({ projectDir, pythonExecutable })
+    expect(resolved).toEqual({ source: 'source', projectDir, pythonExecutable })
   })
 
   it.each([
@@ -91,9 +93,12 @@ describe('investment backend path resolution', () => {
     try {
       const resolved = resolveBackendPaths(backend(), {
         packageDir,
-        pathApi,
-        platform,
-        isDirectory: candidate => candidate === projectDir,
+      pathApi,
+      platform,
+      isDirectory: candidate => candidate === projectDir,
+      isFile: candidate => candidate === (platform === 'win32'
+        ? pathApi.join(projectDir, 'env', 'Scripts', 'python.exe')
+        : pathApi.join(projectDir, 'env', 'bin', 'python')),
       })
 
       expect(resolved.projectDir).toBe(projectDir)
@@ -111,6 +116,7 @@ describe('investment backend path resolution', () => {
       pathApi: posix,
       platform: 'linux',
       isDirectory: candidate => candidate === explicit || candidate === discovered,
+      isFile: candidate => candidate === `${explicit}/env/bin/python`,
     })
 
     expect(resolved.projectDir).toBe(explicit)
@@ -123,6 +129,95 @@ describe('investment backend path resolution', () => {
       platform: 'linux',
       isDirectory: () => false,
     })).toThrow(/trading-core.*projectDir/)
+  })
+
+  it.each([
+    {
+      platform: 'darwin' as const,
+      arch: 'arm64',
+      pathApi: posix,
+      packageDir: '/Applications/DSH.app/Contents/Resources/app/node_modules/runtime/lib',
+      descriptorPath: '/Applications/DSH.app/Contents/Resources/investment-python/runtime.json',
+      root: '/Applications/DSH.app/Contents/Resources/investment-python',
+      home: '/Users/example/Library/Application Support/dsh',
+      executable: '/Applications/DSH.app/Contents/Resources/investment-python/runtime/bin/python3',
+    },
+    {
+      platform: 'win32' as const,
+      arch: 'x64',
+      pathApi: win32,
+      packageDir: 'C:\\Program Files\\DSH\\resources\\app\\node_modules\\runtime\\lib',
+      descriptorPath: 'C:\\Program Files\\DSH\\resources\\investment-python\\runtime.json',
+      root: 'C:\\Program Files\\DSH\\resources\\investment-python',
+      home: 'C:\\Users\\example\\AppData\\Roaming\\dsh',
+      executable: 'C:\\Program Files\\DSH\\resources\\investment-python\\runtime\\python.exe',
+    },
+  ])('falls back to a verified $platform bundled Runtime and derives writable state', ({
+    platform,
+    arch,
+    pathApi,
+    packageDir,
+    descriptorPath,
+    root,
+    home,
+    executable,
+  }) => {
+    const sitePackages = pathApi.join(root, 'site-packages')
+    const projectDirs = {
+      'trading-core': pathApi.join(root, 'backends', 'dsh-trading-core'),
+      'market-watch': pathApi.join(root, 'backends', 'market-watch'),
+    }
+    const verified: VerifiedInvestmentRuntime = {
+      root,
+      pythonExecutable: executable,
+      sitePackages,
+      projectDirs,
+      descriptor: {
+        schemaVersion: 1,
+        python: { version: '3.10.18', platform, arch, executable: platform === 'win32' ? 'runtime/python.exe' : 'runtime/bin/python3' },
+        sitePackages: 'site-packages',
+        backends: {
+          'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
+          'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+        },
+        files: [{ path: platform === 'win32' ? 'runtime/python.exe' : 'runtime/bin/python3', sha256: '0'.repeat(64) }],
+      },
+    }
+    const resolved = resolveBackendPaths(backend(), {
+      platform,
+      arch,
+      pathApi,
+      packageDir,
+      dshHome: home,
+      isDirectory: candidate => candidate.endsWith(pathApi.join('backend', 'dsh-trading-core')),
+      isFile: candidate => candidate === descriptorPath,
+      verifyDescriptor: candidate => {
+        expect(candidate).toBe(descriptorPath)
+        return verified
+      },
+    })
+
+    expect(resolved).toEqual({
+      source: 'bundled',
+      projectDir: projectDirs['trading-core'],
+      pythonExecutable: executable,
+      sitePackages,
+      stateDir: pathApi.join(home, 'investment-research', 'trading-core'),
+    })
+  })
+
+  it('does not inspect a bundled descriptor after an explicit projectDir is invalid', () => {
+    const verifyDescriptor = vi.fn()
+    expect(() => resolveBackendPaths(backend({ projectDir: '/missing/explicit' }), {
+      packageDir: '/app/resources/app/runtime/lib',
+      pathApi: posix,
+      platform: 'linux',
+      dshHome: '/home/dsh',
+      isDirectory: () => false,
+      isFile: candidate => candidate === '/app/resources/investment-python/runtime.json',
+      verifyDescriptor,
+    })).toThrow(/local Runtime is missing/)
+    expect(verifyDescriptor).not.toHaveBeenCalled()
   })
 
   it.each(['relative/backend', '/missing/backend'])('rejects an unusable explicit projectDir without resolving it from cwd: %s', (projectDir) => {

@@ -17,6 +17,7 @@ type CredentialRef = InvestmentReadinessSnapshot['backends'][number]['credential
 const DEEPSEEK_REF = 'DEEPSEEK_API_KEY' as CredentialRef
 
 const MISSING: InvestmentReadinessSnapshot = {
+  runtimeAsset: { status: 'source-env-ready' },
   backends: [
     {
       backendId: 'trading-core',
@@ -40,6 +41,7 @@ const MISSING: InvestmentReadinessSnapshot = {
 }
 
 const CONFIGURED: InvestmentReadinessSnapshot = {
+  runtimeAsset: MISSING.runtimeAsset,
   backends: MISSING.backends.map(backend => ({
     ...backend,
     credentials: [{
@@ -53,6 +55,7 @@ const CONFIGURED: InvestmentReadinessSnapshot = {
 }
 
 const RESTART_REQUIRED: InvestmentReadinessSnapshot = {
+  runtimeAsset: CONFIGURED.runtimeAsset,
   backends: CONFIGURED.backends.map(backend => ({
     ...backend,
     credentials: [{
@@ -121,6 +124,7 @@ describe('InvestmentReadinessSection', () => {
 
   it('projects configured, read-only, attached, and external facts without inferring from the platform', () => {
     const readOnlyAndExternal: InvestmentReadinessSnapshot = {
+      runtimeAsset: { status: 'bundled-ready' },
       backends: [
         {
           ...CONFIGURED.backends[0]!,
@@ -146,6 +150,7 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.getByText('凭据由外部服务管理')).toBeTruthy()
     expect(screen.getByText('完整股票分析可用')).toBeTruthy()
     expect(screen.getByText('完整盯盘解读可用')).toBeTruthy()
+    expect(screen.getByText('应用随附 Python 环境')).toBeTruthy()
     expect(screen.getByText(WINDOWS_LOG)).toBeTruthy()
     expect(screen.queryByRole('button', { name: '打开模型设置' })).toBeNull()
   })
@@ -197,12 +202,14 @@ describe('InvestmentReadinessSection', () => {
 
   it('shows failed-backend repair actions and preserves Host-provided log hints verbatim', async () => {
     const failed: InvestmentReadinessSnapshot = {
+      runtimeAsset: { status: 'invalid', detail: 'hash mismatch' },
       backends: [{ ...MISSING.backends[0]!, backendStatus: 'failed', ownership: null }],
     }
     const refresh = vi.fn(() => Promise.resolve())
     mount(failed, { refresh })
 
     expect(screen.getByText('后端启动失败')).toBeTruthy()
+    expect(screen.getByText('Python 运行资源损坏，请重新安装应用')).toBeTruthy()
     expect(screen.getByText(SOURCE_LOG)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
     await waitFor(() => { expect(refresh).toHaveBeenCalledOnce() })
@@ -210,6 +217,7 @@ describe('InvestmentReadinessSection', () => {
 
   it('keeps empty credentials and stopped backends actionable', async () => {
     const stopped: InvestmentReadinessSnapshot = {
+      runtimeAsset: { status: 'missing' },
       backends: [{
         ...MISSING.backends[0]!,
         ownership: null,
@@ -228,6 +236,7 @@ describe('InvestmentReadinessSection', () => {
 
   it('reports refresh failures instead of swallowing a repair error', async () => {
     const failed: InvestmentReadinessSnapshot = {
+      runtimeAsset: MISSING.runtimeAsset,
       backends: [{ ...MISSING.backends[0]!, backendStatus: 'failed', ownership: null }],
     }
     mount(failed, { refresh: () => Promise.reject(new Error('readiness unavailable')) })
@@ -240,7 +249,7 @@ describe('InvestmentReadinessSection', () => {
 
   it('keeps the empty facade snapshot retryable and reports a failed retry', async () => {
     const { refresh } = mount(
-      { backends: [] },
+      { runtimeAsset: { status: 'missing' }, backends: [] },
       { refresh: () => Promise.reject(new Error('initial readiness unavailable')) },
     )
     expect(screen.getByRole('status').textContent).toBe('正在读取投研运行状态…')
@@ -258,6 +267,7 @@ describe('InvestmentReadinessSection', () => {
     let rejectRefresh!: (error: Error) => void
     const refreshPending = new Promise<void>((_resolve, reject) => { rejectRefresh = reject })
     const failedAndRestarting: InvestmentReadinessSnapshot = {
+      runtimeAsset: RESTART_REQUIRED.runtimeAsset,
       backends: [{ ...RESTART_REQUIRED.backends[0]!, backendStatus: 'failed' }],
     }
     const { requestRestart, refresh } = mount(failedAndRestarting, {
