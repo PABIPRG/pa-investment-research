@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>投研智能体 · 对话交互稿</title>
+  <style>
+    :root {
+      --surface: #f8f9fb;
+      --surface-low: #f2f4f6;
+      --surface-high: #eceef0;
+      --white: #ffffff;
+      --text: #191c1e;
+      --text-2: #434653;
+      --muted: #737785;
+      --muted-2: #5d5e63;
+      --line: #c3c6d5;
+      --line-soft: #e6e8ea;
+      --primary: #1155c4;
+      --primary-hover: #174daf;
+      --primary-soft: #edf3fe;
+      --primary-line: #c8d9fb;
+      --green: #16835d;
+      --red: #ba1a1a;
+      --red-soft: #fff0ee;
+      --orange: #a84b00;
+      --shadow: 0 4px 12px rgba(20, 30, 45, .04);
+      --shadow-float: 0 16px 44px rgba(28, 37, 55, .14);
+      --sans: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body { overflow: hidden; color: var(--text); background: var(--surface); font: 14px/1.5 var(--sans); }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    svg { display: block; }
+
+    .app { height: 100vh; display: flex; flex-direction: column; background: var(--white); }
+    .topbar {
+      height: 60px;
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 16px 0 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(255, 255, 255, .96);
+      position: relative;
+      z-index: 30;
+    }
+    .brand-side, .top-actions, .brand, .session-title, .status-line { display: flex; align-items: center; }
+    .brand-side { min-width: 0; gap: 18px; }
+    .brand { flex: none; gap: 9px; }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      color: var(--white);
+      background: var(--primary);
+    }
+    .brand-copy strong { display: block; color: var(--primary); font-size: 14px; line-height: 18px; }
+    .brand-copy span { display: block; color: var(--muted); font-size: 10px; line-height: 15px; }
+    .top-divider { width: 1px; height: 24px; background: var(--line-soft); }
+    .session-title { min-width: 0; gap: 9px; }
+    .session-title-icon { color: var(--primary); }
+    .session-title-text { min-width: 0; }
+    .session-title-text strong {
+      display: block;
+      max-width: 430px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+      line-height: 19px;
+    }
+    .session-title-text span { color: var(--muted); font-size: 10px; }
+    .top-actions { flex: none; gap: 8px; }
+    .primary-button, .ghost-button, .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      transition: background .14s, border-color .14s, color .14s;
+    }
+    .primary-button {
+      height: 38px;
+      gap: 7px;
+      padding: 0 16px;
+      border: 1px solid var(--primary);
+      color: var(--white);
+      background: var(--primary);
+      font-size: 13px;
+      font-weight: 650;
+      box-shadow: 0 3px 8px rgba(17, 85, 196, .18);
+    }
+    .primary-button:hover { border-color: var(--primary-hover); background: var(--primary-hover); }
+    .ghost-button { height: 32px; gap: 6px; padding: 0 10px; border: 1px solid var(--line-soft); background: var(--white); font-size: 12px; }
+    .ghost-button:hover, .icon-button:hover { border-color: var(--primary-line); color: var(--primary); background: var(--primary-soft); }
+    .icon-button { width: 32px; height: 32px; padding: 0; border: 1px solid transparent; background: transparent; color: var(--muted-2); }
+    .mobile-history-button { display: none; }
+
+    .workspace { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+    .chat-panel { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; background: var(--white); }
+    .context-bar {
+      height: 44px;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(248, 249, 251, .92);
+    }
+    .status-line { min-width: 0; gap: 8px; color: var(--text-2); font-size: 12px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px rgba(22, 131, 93, .1); }
+    .context-copy { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .context-copy b { color: var(--text); }
+    .context-meta { color: var(--muted); font-size: 11px; }
+
+    .messages-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 22px 28px 188px; }
+    .conversation { width: min(748px, 100%); margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+    .session-pill { align-self: center; padding: 4px 11px; border: 1px solid var(--line-soft); border-radius: 999px; color: var(--muted); background: var(--surface); font-size: 11px; }
+    .message-user { align-self: flex-end; max-width: 82%; padding: 11px 14px 9px; border: 1px solid var(--primary-line); border-radius: 20px 20px 5px 20px; background: var(--primary-soft); font-size: 14px; line-height: 1.65; }
+    .message-time { margin-top: 4px; color: var(--muted); font: 10px/16px var(--mono); }
+    .message-user .message-time { text-align: right; }
+    .assistant-message { width: 100%; }
+    .assistant-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .assistant-avatar { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; color: var(--white); background: var(--primary); }
+    .assistant-head strong { font-size: 13px; }
+    .assistant-body { padding-left: 34px; font-size: 14px; line-height: 1.68; }
+    .assistant-body > p { margin: 0; white-space: pre-wrap; }
+    .assistant-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+    .tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-low); color: var(--text-2); font-size: 11px; font-weight: 600; }
+    .tag-danger { border-color: #f2c3bd; color: var(--red); background: var(--red-soft); }
+    .analysis-card { margin-top: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--white); box-shadow: var(--shadow); }
+    .analysis-card-head { display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
+    .analysis-card-head strong { font-size: 13px; }
+    .table-scroll { overflow-x: auto; }
+    .analysis-table { width: 100%; min-width: 650px; border-collapse: collapse; font-size: 12px; }
+    .analysis-table th { padding: 9px 11px; border-bottom: 1px solid var(--line); color: var(--muted); background: #fafbfc; text-align: left; font-size: 10px; white-space: nowrap; }
+    .analysis-table td { padding: 10px 11px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+    .analysis-table tr:last-child td { border-bottom: 0; }
+    .analysis-table .num { font-family: var(--mono); text-align: right; }
+    .analysis-table .positive { color: var(--green); }
+    .analysis-table .negative { color: var(--red); }
+    .ticker { margin-left: 5px; padding: 2px 5px; border-radius: 4px; color: var(--muted); background: var(--surface-high); font: 10px var(--mono); }
+    .trend { width: 78px; height: 22px; }
+    .card-footnote { padding: 6px 11px; border-top: 1px solid var(--line-soft); color: var(--muted); background: var(--surface); text-align: right; font-size: 9px; }
+    .logic-callout { margin-top: 11px; padding: 10px 12px; border: 1px solid var(--primary-line); border-radius: 9px; background: #f6f9ff; font-size: 13px; }
+    .logic-callout b { color: var(--primary); }
+    .followups { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+    .followup { padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--white); color: var(--text-2); font-size: 11px; }
+    .followup:hover { border-color: var(--primary-line); color: var(--primary); background: var(--primary-soft); }
+    .typing { display: flex; align-items: center; gap: 4px; padding-left: 34px; color: var(--muted); font-size: 12px; }
+    .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: pulse 1s infinite alternate; }
+    .typing i:nth-child(2) { animation-delay: .18s; }
+    .typing i:nth-child(3) { animation-delay: .36s; }
+    @keyframes pulse { to { opacity: .25; transform: translateY(-2px); } }
+
+    .empty-state { min-height: calc(100vh - 330px); display: grid; place-items: center; text-align: center; }
+    .empty-inner { width: min(620px, 100%); }
+    .empty-mark { width: 48px; height: 48px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 14px; color: var(--primary); background: var(--primary-soft); }
+    .empty-state h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+    .empty-state p { margin: 8px auto 18px; max-width: 500px; color: var(--muted-2); font-size: 13px; }
+    .quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .quick-card { padding: 11px 12px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--white); text-align: left; }
+    .quick-card:hover { border-color: var(--primary-line); background: #fbfdff; }
+    .quick-card strong { display: block; font-size: 12px; }
+    .quick-card span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+
+    .composer-wrap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 12; padding: 28px 20px 12px; background: linear-gradient(to top, var(--white) 74%, rgba(255,255,255,0)); pointer-events: none; }
+    .composer { width: min(780px, 100%); margin: 0 auto; pointer-events: auto; }
+    .composer-card { padding: 8px 9px 7px; border: 1px solid var(--line); border-radius: 22px; background: var(--white); box-shadow: 0 8px 26px rgba(30, 43, 65, .09); }
+    .composer-card:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(17,85,196,.12), 0 8px 26px rgba(30,43,65,.08); }
+    .composer textarea { width: 100%; min-height: 42px; max-height: 120px; resize: none; overflow-y: auto; padding: 6px 9px; border: 0; outline: 0; background: transparent; font-size: 14px; line-height: 22px; }
+    .composer textarea::placeholder { color: #858a94; }
+    .composer-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 1px 3px 0; }
+    .tool-group { display: flex; align-items: center; gap: 5px; }
+    .tool-button { height: 29px; display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border: 0; border-radius: 999px; color: var(--muted-2); background: transparent; font-size: 11px; }
+    .tool-button:hover { color: var(--primary); background: var(--primary-soft); }
+    .tool-button.active { color: var(--primary); background: var(--primary-soft); font-weight: 650; }
+    .send-button { width: 34px; height: 34px; display: grid; place-items: center; border: 0; border-radius: 50%; color: var(--white); background: var(--primary); }
+    .send-button:disabled { opacity: .35; cursor: default; }
+    .disclaimer { margin-top: 6px; color: var(--muted); text-align: center; font-size: 10px; }
+    .storage-warning { margin-bottom: 6px; padding: 5px 9px; border: 1px solid #f1d09a; border-radius: 8px; color: var(--orange); background: #fff9ed; font-size: 10px; }
+
+    .history-panel { width: 288px; flex: 0 0 288px; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line-soft); background: var(--surface); transition: width .22s ease, flex-basis .22s ease; position: relative; z-index: 22; }
+    .history-panel[data-collapsed="true"] { width: 48px; flex-basis: 48px; }
+    .history-expanded { min-width: 287px; height: 100%; display: flex; flex-direction: column; opacity: 1; transition: opacity .12s; }
+    .history-panel[data-collapsed="true"] .history-expanded { opacity: 0; pointer-events: none; }
+    .history-rail { display: none; height: 100%; flex-direction: column; align-items: center; padding: 10px 7px; }
+    .history-panel[data-collapsed="true"] .history-rail { display: flex; }
+    .rail-spacer { flex: 1; }
+    .history-head { min-height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); background: var(--white); }
+    .history-head strong { font-size: 13px; }
+    .history-count { margin-left: 6px; padding: 2px 6px; border-radius: 999px; color: var(--muted); background: var(--surface-high); font: 10px var(--mono); }
+    .history-search { padding: 12px 12px 8px; }
+    .search-box { position: relative; }
+    .search-box svg { position: absolute; left: 10px; top: 9px; color: var(--muted); }
+    .search-box input { width: 100%; height: 34px; padding: 0 10px 0 32px; border: 1px solid var(--line-soft); border-radius: 8px; outline: 0; background: var(--white); font-size: 11px; }
+    .search-box input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(17,85,196,.1); }
+    .history-list { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 14px; }
+    .history-group + .history-group { margin-top: 15px; }
+    .group-label { padding: 0 8px 5px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .02em; }
+    .conversation-item { position: relative; display: flex; align-items: center; gap: 7px; min-height: 52px; margin-bottom: 4px; padding: 7px 7px 7px 9px; border: 1px solid transparent; border-radius: 9px; background: transparent; }
+    .conversation-item:hover { background: var(--surface-high); }
+    .conversation-item[aria-current="true"] { border-color: var(--primary-line); background: var(--primary-soft); }
+    .conversation-main { min-width: 0; flex: 1; border: 0; padding: 0; background: transparent; text-align: left; }
+    .conversation-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .conversation-preview { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }
+    .conversation-actions { display: flex; gap: 1px; opacity: 0; }
+    .conversation-item:hover .conversation-actions, .conversation-item[aria-current="true"] .conversation-actions { opacity: 1; }
+    .mini-action { width: 25px; height: 25px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; }
+    .mini-action:hover { color: var(--primary); background: var(--white); }
+    .mini-action.danger:hover { color: var(--red); background: var(--red-soft); }
+    .conversation-rename { width: 100%; height: 28px; padding: 0 7px; border: 1px solid var(--primary); border-radius: 6px; outline: 0; background: var(--white); font-size: 11px; }
+    .history-empty { padding: 36px 18px; color: var(--muted); text-align: center; font-size: 11px; }
+    .history-foot { padding: 10px 14px; border-top: 1px solid var(--line-soft); color: var(--muted); background: var(--white); font-size: 9px; }
+    .history-foot b { color: var(--green); }
+
+    .mobile-backdrop { display: none; position: fixed; inset: 60px 0 0; z-index: 20; background: rgba(25, 28, 30, .34); }
+    .dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(25,28,30,.35); backdrop-filter: blur(2px); }
+    .confirm-dialog { width: min(390px, 100%); padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); box-shadow: var(--shadow-float); }
+    .confirm-dialog h2 { margin: 0; font-size: 16px; }
+    .confirm-dialog p { margin: 7px 0 18px; color: var(--muted-2); font-size: 12px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+    .danger-button { height: 34px; padding: 0 12px; border: 1px solid var(--red); border-radius: 8px; color: var(--white); background: var(--red); font-size: 12px; }
+    .toast { position: fixed; right: 24px; bottom: 22px; z-index: 100; padding: 9px 12px; border-radius: 8px; color: var(--white); background: #252a2e; box-shadow: var(--shadow-float); font-size: 11px; animation: toast-in .18s ease; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(5px); } }
+
+    @media (max-width: 900px) {
+      .history-panel { position: fixed; top: 60px; right: 0; bottom: 0; width: min(340px, 88vw); transform: translateX(100%); box-shadow: var(--shadow-float); transition: transform .22s ease; }
+      .history-panel[data-collapsed="true"] { width: min(340px, 88vw); }
+      .history-panel[data-mobile-open="true"] { transform: translateX(0); }
+      .history-panel[data-collapsed="true"] .history-expanded { opacity: 1; pointer-events: auto; }
+      .history-rail { display: none !important; }
+      .mobile-history-button { display: inline-flex; }
+      .mobile-backdrop[data-open="true"] { display: block; }
+      .topbar { padding-left: 14px; }
+      .context-bar { padding: 0 16px; }
+      .messages-scroll { padding-left: 18px; padding-right: 18px; }
+    }
+
+    @media (max-width: 640px) {
+      .topbar { gap: 8px; padding: 0 10px 0 12px; }
+      .brand-copy span, .top-divider, .session-title-icon, .session-title-text span, .context-meta { display: none; }
+      .brand-side { gap: 8px; }
+      .brand-copy strong { font-size: 13px; }
+      .session-title-text strong { max-width: 110px; font-size: 11px; }
+      .primary-button { width: 38px; padding: 0; }
+      .primary-button span { display: none; }
+      .messages-scroll { padding: 16px 14px 180px; }
+      .message-user { max-width: 92%; }
+      .assistant-body { padding-left: 0; }
+      .quick-grid { grid-template-columns: 1fr; }
+      .composer-wrap { padding-left: 12px; padding-right: 12px; }
+      .tool-button span { display: none; }
+      .disclaimer { font-size: 9px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    (() => {
+      const STORAGE_KEY = 'pa-investment-research.chat-prototype.v1';
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+      const paths = {
+        spark: 'm12 2 1.4 5.6L19 9l-5.6 1.4L12 16l-1.4-5.6L5 9l5.6-1.4L12 2Zm6 12 .8 3.2L22 18l-3.2.8L18 22l-.8-3.2L14 18l3.2-.8L18 14Z',
+        plus: 'M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4Z',
+        history: 'M4 4h16v2H4V4Zm0 7h16v2H4v-2Zm0 7h11v2H4v-2Z',
+        collapse: 'm15 18-6-6 6-6 1.4 1.4-4.6 4.6 4.6 4.6L15 18Z',
+        expand: 'm9 18 6-6-6-6-1.4 1.4 4.6 4.6-4.6 4.6L9 18Z',
+        search: 'M10 3a7 7 0 1 0 4.9 12l4.6 4.5 1.4-1.4-4.5-4.6A7 7 0 0 0 10 3Zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z',
+        edit: 'm4 16.6 10.7-10.7 3.4 3.4L7.4 20H4v-3.4ZM16.1 4.5l1.4-1.4a1.4 1.4 0 0 1 2 0l1.4 1.4a1.4 1.4 0 0 1 0 2l-1.4 1.4-3.4-3.4Z',
+        trash: 'M8 3h8l1 2h4v2H3V5h4l1-2Zm-2 6h12l-1 12H7L6 9Zm3 2 .5 8h2L11 11H9Zm4 0-.5 8h2l.5-8h-2Z',
+        bot: 'M12 2a2 2 0 0 1 2 2v1h2a4 4 0 0 1 4 4v7a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4h2V4a2 2 0 0 1 2-2ZM9 10a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm6 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-7 5v2h8v-2H8Z',
+        paperclip: 'M7.5 12.5 14 6a3 3 0 0 1 4.2 4.2l-8 8a5 5 0 1 1-7.1-7.1l8.4-8.4 1.4 1.4-8.4 8.4a3 3 0 1 0 4.3 4.3l8-8a1 1 0 0 0-1.4-1.4L9 13.8a1 1 0 0 1-1.4-1.4Z',
+        globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm6.9 9h-3c-.2-2.4-.9-4.5-1.8-5.8A8 8 0 0 1 18.9 11ZM12 4c.8.7 1.7 3.1 1.9 7h-3.8C10.3 7.1 11.2 4.7 12 4ZM5.1 13h3c.2 2.4.9 4.5 1.8 5.8A8 8 0 0 1 5.1 13Zm6.9 7c-.8-.7-1.7-3.1-1.9-7h3.8c-.2 3.9-1.1 6.3-1.9 7Z',
+        send: 'm3 20 18-8L3 4v6l12 2-12 2v6Z',
+        alert: 'M12 3 2 21h20L12 3Zm0 4 6.6 12H5.4L12 7Zm-1 4v4h2v-4h-2Zm0 5v2h2v-2h-2Z',
+        close: 'M6.7 5.3 12 10.6l5.3-5.3 1.4 1.4-5.3 5.3 5.3 5.3-1.4 1.4-5.3-5.3-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3 1.4-1.4Z'
+      };
+      const icon = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${paths[name] || paths.spark}"></path></svg>`;
+      const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+      const uid = () => `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const isoBefore = days => new Date(Date.now() - days * 86400000).toISOString();
+      const timeLabel = iso => new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+      function seedState() {
+        const now = new Date().toISOString();
+        return {
+          activeConversationId: 'semiconductor-risk',
+          historyCollapsed: false,
+          conversations: [
+            {
+              id: 'semiconductor-risk', title: '半导体持仓风险与操作建议', titleSource: 'automatic', createdAt: now, updatedAt: now, draft: '',
+              messages: [
+                { id: 'm1', role: 'user', content: '帮我分析当前半导体板块走势，结合北方华创和中芯国际的持仓评估风险。', createdAt: now },
+                { id: 'm2', role: 'assistant', kind: 'portfolio-comparison', content: '基于您的持仓，半导体板块近期处于震荡筑底阶段。先进制程、半导体设备与 AI 算力相关产业链仍有结构性机会，但短期需要关注行业集中度和高 Beta 资产的同步回撤风险。', createdAt: now }
+              ]
+            },
+            {
+              id: 'liquor-valuation', title: '贵州茅台与五粮液估值对比', titleSource: 'manual', createdAt: isoBefore(3), updatedAt: isoBefore(2), draft: '进一步比较渠道库存变化',
+              messages: [
+                { id: 'm3', role: 'user', content: '对比贵州茅台与五粮液的长期投资价值。', createdAt: isoBefore(2) },
+                { id: 'm4', role: 'assistant', content: '高端白酒比较应重点观察品牌定价权、渠道库存、自由现金流和估值历史分位。贵州茅台更偏向稳定现金流，五粮液的弹性更多取决于渠道改善。', createdAt: isoBefore(2) }
+              ]
+            },
+            {
+              id: 'weekly-diagnosis', title: '核心科技组合周度诊断', titleSource: 'automatic', createdAt: isoBefore(16), updatedAt: isoBefore(12), draft: '',
+              messages: [
+                { id: 'm5', role: 'user', content: '生成本周投资组合诊断摘要。', createdAt: isoBefore(12) },
+                { id: 'm6', role: 'assistant', content: '本周组合超额收益主要来自半导体设备和云计算，新能源车仓位对波动贡献最高。建议下周优先复核行业集中度和关键标的止损条件。', createdAt: isoBefore(12) }
+              ]
+            }
+          ]
+        };
+      }
+
+      function loadState() {
+        try {
+          const value = JSON.parse(localStorage.getItem(STORAGE_KEY));
+          if (!value || !Array.isArray(value.conversations) || typeof value.historyCollapsed !== 'boolean') throw new Error('invalid state');
+          if (!value.conversations.some(item => item.id === value.activeConversationId)) value.activeConversationId = value.conversations[0]?.id;
+          return value.conversations.length ? value : seedState();
+        } catch { return seedState(); }
+      }
+
+      let state = loadState();
+      let searchQuery = '';
+      let editingId = null;
+      let pendingDeleteId = null;
+      let mobileHistoryOpen = false;
+      let liveMode = true;
+      let storageWarning = false;
+      let typingConversationId = null;
+      let toastTimer = null;
+
+      const activeConversation = () => state.conversations.find(item => item.id === state.activeConversationId);
+      function persistState() {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          storageWarning = false;
+        } catch { storageWarning = true; }
+      }
+      function commit() { persistState(); render(); }
+      function showToast(message) {
+        $('.toast')?.remove();
+        const node = document.createElement('div');
+        node.className = 'toast';
+        node.textContent = message;
+        document.body.appendChild(node);
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => node.remove(), 1900);
+      }
+
+      function createConversation() {
+        const now = new Date().toISOString();
+        const conversation = { id: uid(), title: '新对话', titleSource: 'automatic', createdAt: now, updatedAt: now, draft: '', messages: [] };
+        state.conversations.unshift(conversation);
+        state.activeConversationId = conversation.id;
+        searchQuery = '';
+        mobileHistoryOpen = false;
+        commit();
+        setTimeout(() => $('#composer-input')?.focus(), 0);
+      }
+      function selectConversation(id) { state.activeConversationId = id; editingId = null; mobileHistoryOpen = false; commit(); }
+      function renameConversation(id, title) {
+        const conversation = state.conversations.find(item => item.id === id);
+        if (!conversation || !title.trim()) { editingId = null; render(); return; }
+        conversation.title = title.trim();
+        conversation.titleSource = 'manual';
+        conversation.updatedAt = new Date().toISOString();
+        editingId = null;
+        commit();
+      }
+      function confirmDeleteConversation(id) {
+        state.conversations = state.conversations.filter(item => item.id !== id);
+        pendingDeleteId = null;
+        if (state.conversations.length === 0) { createConversation(); return; }
+        if (state.activeConversationId === id) state.activeConversationId = [...state.conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0].id;
+        commit();
+      }
+      function updateDraft(value) { const conversation = activeConversation(); if (!conversation) return; conversation.draft = value; persistState(); }
+      function toggleHistory() { state.historyCollapsed = !state.historyCollapsed; commit(); }
+
+      function replyFor(content) {
+        if (content.includes('风险') || content.includes('持仓')) return '结合当前组合，主要风险来自科技与半导体行业集中度、部分高 Beta 标的波动放大，以及流动性收紧时的相关性上升。建议先设定单一行业仓位上限，再为高波动标的明确减仓条件。';
+        if (content.includes('半导体')) return '半导体设备的核心变量仍是先进制程扩产、国产替代率和先进封装资本开支。可继续跟踪北方华创、中微公司和澜起科技的订单兑现、估值分位与资金流变化。';
+        if (content.includes('茅台') || content.includes('五粮液')) return '长期价值比较应重点看品牌定价权、渠道库存、自由现金流和估值历史分位。当前贵州茅台更符合稳定现金流框架，五粮液的收益弹性更依赖渠道改善。';
+        return `已基于${liveMode ? '实时行情增强和' : ''}多因子框架完成初步分析。建议先明确投资周期、核心假设与失效条件，再验证估值、安全边际和资金面是否同时支持执行。`;
+      }
+      function sendMessage(text) {
+        const conversation = activeConversation();
+        const content = String(text ?? '').trim();
+        if (!conversation || !content || typingConversationId) return;
+        const now = new Date().toISOString();
+        conversation.messages.push({ id: uid(), role: 'user', content, createdAt: now });
+        conversation.draft = '';
+        conversation.updatedAt = now;
+        if (conversation.titleSource === 'automatic' && (conversation.title === '新对话' || conversation.messages.filter(item => item.role === 'user').length === 1)) conversation.title = content.slice(0, 24);
+        typingConversationId = conversation.id;
+        commit();
+        setTimeout(() => {
+          const target = state.conversations.find(item => item.id === conversation.id);
+          if (!target) return;
+          target.messages.push({ id: uid(), role: 'assistant', content: replyFor(content), createdAt: new Date().toISOString() });
+          target.updatedAt = new Date().toISOString();
+          typingConversationId = null;
+          commit();
+        }, 320);
+      }
+
+      function groupFor(date) {
+        const now = new Date();
+        const value = new Date(date);
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const day = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+        const diff = Math.floor((start - day) / 86400000);
+        if (diff <= 0) return '今天';
+        if (diff <= 7) return '最近 7 天';
+        return '更早';
+      }
+      function previewOf(conversation) { return conversation.messages.at(-1)?.content || '空白会话 · 等待输入'; }
+      function filteredGroups() {
+        const query = searchQuery.trim().toLowerCase();
+        const matches = state.conversations
+          .filter(item => !query || `${item.title} ${item.messages.map(message => message.content).join(' ')}`.toLowerCase().includes(query))
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        const groups = { '今天': [], '最近 7 天': [], '更早': [] };
+        matches.forEach(item => groups[groupFor(item.updatedAt)].push(item));
+        return groups;
+      }
+
+      function sparkline(positive) {
+        const stroke = positive ? '#16835d' : '#ba1a1a';
+        const points = positive ? '2,17 14,15 26,16 38,10 50,12 62,7 76,4' : '2,5 14,8 26,4 38,12 50,15 62,10 76,19';
+        return `<svg class="trend" viewBox="0 0 78 22" fill="none"><polyline points="${points}" stroke="${stroke}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      }
+      function comparisonCard() {
+        return `<div class="analysis-card"><div class="analysis-card-head"><strong>持仓个股核心指标对比</strong><span class="tag">行情快照</span></div><div class="table-scroll"><table class="analysis-table"><thead><tr><th>股票名称（代码）</th><th class="num">现价</th><th class="num">今日涨跌</th><th class="num">PE (TTM)</th><th>近期走势（5日）</th><th>操作建议</th></tr></thead><tbody><tr><td><b>北方华创</b><span class="ticker">002371.SZ</span></td><td class="num">¥285.40</td><td class="num negative"><b>-1.24%</b></td><td class="num">45.2</td><td>${sparkline(false)}</td><td><span class="tag">逢低观察</span></td></tr><tr><td><b>中芯国际</b><span class="ticker">688981.SH</span></td><td class="num">¥42.15</td><td class="num positive"><b>+0.85%</b></td><td class="num">38.7</td><td>${sparkline(true)}</td><td><span class="tag">持有观望</span></td></tr></tbody></table></div><div class="card-footnote">演示数据 · 延迟 15 分钟 · 不构成投资建议</div></div><div class="logic-callout"><b>核心逻辑：</b>AI 算力驱动的先进封装和设备订单仍有韧性，但建议控制行业集中度，并将关键价位与失效条件写入交易计划。</div>`;
+      }
+      function messageTemplate(message) {
+        if (message.role === 'user') return `<div class="message-user"><div>${escapeHtml(message.content).replace(/\n/g, '<br>')}</div><div class="message-time">${timeLabel(message.createdAt)}</div></div>`;
+        const structured = message.kind === 'portfolio-comparison' ? comparisonCard() : '';
+        return `<article class="assistant-message" data-role="assistant-message"><div class="assistant-head"><span class="assistant-avatar">${icon('bot', 13)}</span><strong>投研智能体</strong><span class="message-time">${timeLabel(message.createdAt)}</span></div><div class="assistant-body"><p>${escapeHtml(message.content)}</p><div class="assistant-meta"><span class="tag">✓ AI 信心指数：87%</span>${message.kind ? `<span class="tag tag-danger">${icon('alert', 11)} 短期波动预警</span>` : ''}</div>${structured}<div class="followups"><button class="followup" data-prompt="继续分析财务指标">继续分析财务指标 ›</button><button class="followup" data-prompt="测算未来 12 个月目标价">测算未来 12 个月目标价 ›</button><button class="followup" data-prompt="与同行业龙头对比估值">与同行业龙头对比估值 ›</button></div></div></article>`;
+      }
+      function messagesTemplate(conversation) {
+        if (!conversation.messages.length) return `<div class="empty-state"><div class="empty-inner"><div class="empty-mark">${icon('spark', 24)}</div><h1>今天想研究什么？</h1><p>我可以结合投研框架、行情信号和持仓上下文，协助你拆解个股、行业机会与组合风险。</p><div class="quick-grid"><button class="quick-card" data-prompt="分析当前持仓风险"><strong>分析当前持仓风险</strong><span>集中度、波动率与回撤情景</span></button><button class="quick-card" data-prompt="寻找半导体设备机会"><strong>寻找半导体设备机会</strong><span>基本面、资金流与估值分位</span></button><button class="quick-card" data-prompt="对比贵州茅台与五粮液"><strong>对比茅台与五粮液</strong><span>品牌、现金流与渠道变化</span></button><button class="quick-card" data-prompt="生成组合周度诊断"><strong>生成组合周度诊断</strong><span>收益归因、风险与下周计划</span></button></div></div></div>`;
+        return `<div class="session-pill">${groupFor(conversation.createdAt)} · 投研对话</div>${conversation.messages.map(messageTemplate).join('')}${typingConversationId === conversation.id ? `<article class="assistant-message"><div class="assistant-head"><span class="assistant-avatar">${icon('bot', 13)}</span><strong>投研智能体</strong></div><div class="typing"><span>正在组织分析</span><i></i><i></i><i></i></div></article>` : ''}`;
+      }
+
+      function historyItemTemplate(conversation) {
+        const active = conversation.id === state.activeConversationId;
+        if (editingId === conversation.id) return `<div class="conversation-item" aria-current="${active}"><input class="conversation-rename" value="${escapeHtml(conversation.title)}" data-id="${conversation.id}" aria-label="输入新的会话名称"></div>`;
+        return `<div class="conversation-item" aria-current="${active}"><button class="conversation-main" data-select="${conversation.id}"><span class="conversation-title">${escapeHtml(conversation.title)}</span><span class="conversation-preview">${escapeHtml(previewOf(conversation))}</span></button><div class="conversation-actions"><button class="mini-action" data-action="rename" data-id="${conversation.id}" aria-label="重命名会话">${icon('edit', 13)}</button><button class="mini-action danger" data-action="delete" data-id="${conversation.id}" aria-label="删除会话">${icon('trash', 13)}</button></div></div>`;
+      }
+      function historyTemplate() {
+        const groups = filteredGroups();
+        const sections = Object.entries(groups).filter(([, items]) => items.length).map(([label, items]) => `<section class="history-group"><div class="group-label">${label}</div>${items.map(historyItemTemplate).join('')}</section>`).join('');
+        return `<aside class="history-panel" data-testid="history-panel" data-collapsed="${state.historyCollapsed}" data-mobile-open="${mobileHistoryOpen}"><div class="history-expanded"><div class="history-head"><div><strong>历史对话</strong><span class="history-count">${state.conversations.length}</span></div><button class="icon-button" data-action="toggle-history" aria-label="收起历史记录">${icon('expand', 15)}</button></div><div class="history-search"><div class="search-box">${icon('search', 14)}<input id="history-search" value="${escapeHtml(searchQuery)}" placeholder="搜索对话内容" aria-label="搜索历史对话"></div></div><div class="history-list">${sections || '<div class="history-empty">没有找到匹配的对话</div>'}</div><div class="history-foot"><b>● 本地保存</b> · 对话数据仅保存在此浏览器</div></div><div class="history-rail"><button class="icon-button" data-action="toggle-history" aria-label="展开历史记录">${icon('collapse', 16)}</button><div class="rail-spacer"></div><button class="icon-button" data-action="open-mobile-history" aria-label="历史记录">${icon('history', 16)}</button></div></aside>`;
+      }
+      function confirmTemplate() {
+        if (!pendingDeleteId) return '';
+        const conversation = state.conversations.find(item => item.id === pendingDeleteId);
+        return `<div class="dialog-backdrop"><div class="confirm-dialog" role="dialog" aria-modal="true"><h2>删除这段对话？</h2><p>“${escapeHtml(conversation?.title || '当前对话')}”将从本地历史记录中移除，此操作无法撤销。</p><div class="dialog-actions"><button class="ghost-button" data-action="cancel-delete">取消</button><button class="danger-button" data-action="confirm-delete">删除对话</button></div></div></div>`;
+      }
+      function render() {
+        const conversation = activeConversation() || state.conversations[0];
+        if (!conversation) { createConversation(); return; }
+        state.activeConversationId = conversation.id;
+        $('#app').innerHTML = `<div class="app"><header class="topbar"><div class="brand-side"><div class="brand"><div class="brand-mark">${icon('spark', 19)}</div><div class="brand-copy"><strong>投研智能体</strong><span>Technical Precision · 对话工作台</span></div></div><div class="top-divider"></div><div class="session-title"><span class="session-title-icon">${icon('bot', 15)}</span><div class="session-title-text"><strong data-testid="current-title">${escapeHtml(conversation.title)}</strong><span>${conversation.messages.length} 条消息 · ${groupFor(conversation.updatedAt)}更新</span></div></div></div><div class="top-actions"><button class="icon-button mobile-history-button" data-action="open-mobile-history" aria-label="打开历史记录">${icon('history', 17)}</button><button class="primary-button" data-action="new-conversation">${icon('plus', 16)}<span>新对话</span></button></div></header><div class="workspace"><main class="chat-panel"><div class="context-bar"><div class="status-line"><span class="status-dot"></span><span class="context-copy"><b>智能投研对话助理</b> · A / 港 / 美股行情与多因子分析</span></div><span class="context-meta">前端交互原型</span></div><div class="messages-scroll" id="messages-scroll"><div class="conversation">${messagesTemplate(conversation)}</div></div><div class="composer-wrap"><div class="composer">${storageWarning ? '<div class="storage-warning">本次更改仅在当前页面有效</div>' : ''}<div class="composer-card"><textarea id="composer-input" rows="1" placeholder="输入股票代码、问题或指令…">${escapeHtml(conversation.draft)}</textarea><div class="composer-tools"><div class="tool-group"><button class="tool-button" data-action="attach" aria-label="关联附件">${icon('paperclip', 15)}</button><button class="tool-button ${liveMode ? 'active' : ''}" data-action="toggle-live">${icon('globe', 15)}<span>${liveMode ? '实时联网中' : '离线模型'}</span></button></div><button class="send-button" data-action="send" aria-label="发送" ${conversation.draft.trim() || '' ? '' : 'disabled'}>${icon('send', 15)}</button></div></div><div class="disclaimer">AI 分析仅供投研参考，不构成实质性投资建议或买卖依据。</div></div></div></main>${historyTemplate()}</div><div class="mobile-backdrop" data-open="${mobileHistoryOpen}" data-action="close-mobile-history"></div></div>${confirmTemplate()}`;
+        bindEvents();
+        const scrollToLatest = () => { const scroller = $('#messages-scroll'); if (scroller) scroller.scrollTop = scroller.scrollHeight; };
+        if (window.requestAnimationFrame) window.requestAnimationFrame(scrollToLatest);
+        else window.setTimeout(scrollToLatest, 0);
+      }
+
+      function resizeComposer(input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; }
+      function bindEvents() {
+        $('[data-action="new-conversation"]')?.addEventListener('click', createConversation);
+        $$('[data-action="toggle-history"]').forEach(button => button.addEventListener('click', toggleHistory));
+        $$('[data-action="open-mobile-history"]').forEach(button => button.addEventListener('click', () => { mobileHistoryOpen = true; render(); }));
+        $('[data-action="close-mobile-history"]')?.addEventListener('click', () => { mobileHistoryOpen = false; render(); });
+        $$('[data-select]').forEach(button => button.addEventListener('click', () => selectConversation(button.dataset.select)));
+        $$('[data-action="rename"]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); editingId = button.dataset.id; render(); setTimeout(() => { const input = $('.conversation-rename'); input?.focus(); input?.select(); }, 0); }));
+        $$('[data-action="delete"]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); pendingDeleteId = button.dataset.id; render(); }));
+        $('.conversation-rename')?.addEventListener('keydown', event => {
+          if (event.key === 'Enter') renameConversation(event.currentTarget.dataset.id, event.currentTarget.value);
+          if (event.key === 'Escape') { editingId = null; render(); }
+        });
+        $('[data-action="cancel-delete"]')?.addEventListener('click', () => { pendingDeleteId = null; render(); });
+        $('[data-action="confirm-delete"]')?.addEventListener('click', () => confirmDeleteConversation(pendingDeleteId));
+        const search = $('#history-search');
+        search?.addEventListener('input', event => { searchQuery = event.target.value; const position = event.target.selectionStart; render(); setTimeout(() => { const next = $('#history-search'); next?.focus(); next?.setSelectionRange(position, position); }, 0); });
+        const input = $('#composer-input');
+        if (input) {
+          resizeComposer(input);
+          input.addEventListener('input', event => { updateDraft(event.target.value); resizeComposer(event.target); $('[data-action="send"]').disabled = !event.target.value.trim(); });
+          input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage(event.currentTarget.value); } });
+        }
+        $('[data-action="send"]')?.addEventListener('click', () => sendMessage($('#composer-input')?.value));
+        $('[data-action="attach"]')?.addEventListener('click', () => showToast('交互稿：已关联持仓与研报上下文'));
+        $('[data-action="toggle-live"]')?.addEventListener('click', () => { liveMode = !liveMode; render(); showToast(liveMode ? '实时行情增强已开启' : '已切换为离线模型'); });
+        $$('[data-prompt]').forEach(button => button.addEventListener('click', () => sendMessage(button.dataset.prompt)));
+      }
+
+      persistState();
+      render();
+    })();
+  </script>
+</body>
+</html>
