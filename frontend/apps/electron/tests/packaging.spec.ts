@@ -1,12 +1,15 @@
 /** Electron packaging keeps the Python sidecar outside the application staging tree. */
 
-import { isAbsolute, relative } from 'node:path'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import {
   commandRequiresShell,
   createPackagerOptions,
   createPackagingPlan,
+  materializePackagingLinkTargets,
 } from '../src/packaging.ts'
 
 describe('Electron investment sidecar packaging', () => {
@@ -44,6 +47,29 @@ describe('Electron investment sidecar packaging', () => {
     expect(isAbsolute(plan.sidecarDir)).toBe(true)
     expect(relative(plan.stagingDir, plan.sidecarDir)).toMatch(/^\.\./)
     expect(relative(plan.stagingDir, plan.sidecarCacheDir)).toMatch(/^\.\./)
+    expect(plan.linkTargets).toEqual([])
+
+    const darwinPlan = createPackagingPlan('/tmp/dsh-electron-darwin-test', 'darwin', 'arm64')
+    expect(darwinPlan.linkTargets).toEqual([{
+      sourceDir: resolve(darwinPlan.deploy.cwd, 'vendor/cosmokit'),
+      targetDir: join(darwinPlan.stagingDir, 'vendor/cosmokit'),
+    }])
+  })
+
+  it('materializes the vendored target of a deployed workspace link', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-link-test-'))
+    const sourceDir = join(rootDir, 'source', 'cosmokit')
+    const targetDir = join(rootDir, 'app', 'vendor', 'cosmokit')
+    try {
+      await mkdir(sourceDir, { recursive: true })
+      await writeFile(join(sourceDir, 'package.json'), '{"name":"@deepseek-ai/cosmokit"}')
+
+      await materializePackagingLinkTargets([{ sourceDir, targetDir }])
+
+      expect(await readFile(join(targetDir, 'package.json'), 'utf8')).toBe('{"name":"@deepseek-ai/cosmokit"}')
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
   })
 
   it('copies the built directory as Resources/investment-python', () => {
