@@ -18,9 +18,6 @@ bash "$ROOT/scripts/ensure-electron.sh"
 
 # TODO: 后端初始化（依赖安装/环境准备），后续在此追加
 
-# macOS: 移除 native 模块的 quarantine 标记（Sourcetree 等工具同步 node_modules 会触发 Gatekeeper 拦截）
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  find frontend/node_modules -name '*.node' -exec xattr -d com.apple.quarantine {} \; 2>/dev/null || true
-fi
+bash "$ROOT/scripts/prepare-macos-native-modules.sh"
 
 echo "[done] 初始化完成。"

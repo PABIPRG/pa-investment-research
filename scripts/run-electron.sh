@@ -11,7 +11,10 @@ bash "$ROOT/scripts/ensure-electron.sh"
 
 cd frontend
 if [[ "${1:-dev}" == "build" ]]; then
-  pnpm run start:electron
-else
-  pnpm --filter @deepseek-ai/dsh-electron run start
+  pnpm run build
 fi
+
+# Keep this immediately before launch: a build or dependency refresh may restore
+# quarantine attributes propagated by GUI checkout tools such as Sourcetree.
+bash "$ROOT/scripts/prepare-macos-native-modules.sh"
+pnpm --filter @deepseek-ai/dsh-electron run start
