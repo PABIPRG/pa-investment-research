@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """非聊天持仓页的风险读取延迟、缓存与并发复用回归。"""
 
+import os
 import tempfile
 import threading
 import time
@@ -49,6 +50,17 @@ class _Response:
         return {"items": self.items}
 
 
+class _FakeClock:
+    def __init__(self, now=100.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
 class PortfolioRouteLatencyTests(unittest.TestCase):
     def setUp(self):
         risk_engine._reset_risk_cache_for_tests()
@@ -95,6 +107,38 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
         self.assertEqual(portfolio_result["summary"]["n_positions"], 2)
         self.assertTrue(any(item["source"] == "portfolio" for item in alerts_result["items"]))
 
+    def test_concurrent_portfolio_waiters_share_the_same_failure(self):
+        store = _store()
+        _seed_holdings(store)
+        failure = RuntimeError("deterministic portfolio failure")
+        calls = 0
+        calls_lock = threading.Lock()
+        barrier = threading.Barrier(6)
+
+        def fail_once(_store, _profile_key):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            time.sleep(0.08)
+            raise failure
+
+        def run():
+            barrier.wait()
+            try:
+                risk_engine.portfolio_risk(store)
+            except Exception as exc:  # noqa: BLE001 — 断言同一 flight 异常对象
+                return exc
+            self.fail("portfolio_risk should fail")
+
+        with (
+            patch.object(risk_engine, "_compute_portfolio_risk", side_effect=fail_once),
+            ThreadPoolExecutor(max_workers=6) as executor,
+        ):
+            errors = list(executor.map(lambda _index: run(), range(6)))
+
+        self.assertEqual(calls, 1)
+        self.assertTrue(all(error is failure for error in errors))
+
     def test_holdings_revision_invalidates_portfolio_cache_without_changing_semantics(self):
         store = _store()
         _seed_holdings(store, ("600519",))
@@ -116,6 +160,33 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
         self.assertEqual(first, repeated)
         self.assertEqual(first["summary"]["n_positions"], 1)
         self.assertEqual(revised["summary"]["n_positions"], 3)
+
+    def test_same_size_atomic_replacement_changes_revision_immediately(self):
+        store = _store()
+        _seed_holdings(store, ("600519",))
+        original = risk_engine._compute_portfolio_risk
+        calls = 0
+
+        def count_compute(current_store, profile_key):
+            nonlocal calls
+            calls += 1
+            return original(current_store, profile_key)
+
+        with patch.object(risk_engine, "_compute_portfolio_risk", side_effect=count_compute):
+            risk_engine.portfolio_risk(store)
+            path = store._path("holdings")
+            before_stat = path.stat()
+            before_revision = risk_engine._collection_revision(store, "holdings")
+            _seed_holdings(store, ("000001",))
+            os.utime(path, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+            after_stat = path.stat()
+            after_revision = risk_engine._collection_revision(store, "holdings")
+            risk_engine.portfolio_risk(store)
+
+        self.assertEqual(before_stat.st_size, after_stat.st_size)
+        self.assertEqual(before_stat.st_mtime_ns, after_stat.st_mtime_ns)
+        self.assertNotEqual(before_revision, after_revision)
+        self.assertEqual(calls, 2)
 
     def test_slow_market_watch_fails_open_within_route_budget(self):
         store = _store()
@@ -169,6 +240,77 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
         self.assertTrue(status["stale"])
         self.assertEqual(status["source"], "stale-cache")
 
+    def test_hypothesis_fetch_does_not_silently_reuse_stale_events(self):
+        stale_event = {"id": "old", "direction": "利空"}
+        strategies._EVENTS_CACHE["events"] = (time.time() - 2, [stale_event])
+
+        with (
+            patch.object(settings, "event_cache_ttl", 0.0),
+            patch.object(settings, "event_stale_ttl", 60.0),
+            patch.object(strategies.requests, "get", side_effect=requests.Timeout("slow")),
+        ):
+            events = strategies.fetch_events(limit=20, timeout=0.05)
+
+        self.assertEqual(events, [])
+
+    def test_no_stale_failure_uses_short_negative_backoff(self):
+        clock = _FakeClock()
+        calls = 0
+
+        def fail(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise requests.Timeout("down")
+
+        with (
+            patch.object(strategies, "_EVENTS_CLOCK", clock),
+            patch.object(settings, "event_cache_ttl", 0.0),
+            patch.object(settings, "event_failure_backoff", 2.0),
+            patch.object(strategies.requests, "get", side_effect=fail),
+        ):
+            first_events, first_status = strategies.fetch_events_with_status(
+                30, 0.05, allow_stale=True, failure_backoff=True,
+            )
+            second_events, second_status = strategies.fetch_events_with_status(
+                30, 0.05, allow_stale=True, failure_backoff=True,
+            )
+            clock.advance(2.01)
+            third_events, third_status = strategies.fetch_events_with_status(
+                30, 0.05, allow_stale=True, failure_backoff=True,
+            )
+
+        self.assertEqual(first_events, [])
+        self.assertEqual(second_events, [])
+        self.assertEqual(third_events, [])
+        self.assertEqual(first_status["source"], "fail-open")
+        self.assertEqual(second_status["source"], "failure-backoff")
+        self.assertEqual(third_status["source"], "fail-open")
+        self.assertEqual(calls, 2)
+
+    def test_risk_failure_backoff_does_not_change_hypothesis_fetch_semantics(self):
+        clock = _FakeClock()
+        upstream = [requests.Timeout("risk route down"), _Response([{"id": "fresh"}])]
+
+        with (
+            patch.object(strategies, "_EVENTS_CLOCK", clock),
+            patch.object(settings, "event_cache_ttl", 0.0),
+            patch.object(settings, "event_failure_backoff", 2.0),
+            patch.object(strategies.requests, "get", side_effect=upstream) as get,
+            patch.object(
+                strategies,
+                "_expand_events",
+                side_effect=lambda events, cached_impact: events,
+            ),
+        ):
+            _events, status = strategies.fetch_events_with_status(
+                30, 0.05, allow_stale=True, failure_backoff=True,
+            )
+            events = strategies.fetch_events(limit=20, timeout=0.05)
+
+        self.assertEqual(status["source"], "fail-open")
+        self.assertEqual(events, [{"id": "fresh"}])
+        self.assertEqual(get.call_count, 2)
+
     def test_event_refresh_is_single_flight_and_concurrent_reader_does_not_wait(self):
         entered = threading.Event()
         release = threading.Event()
@@ -186,10 +328,17 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
             patch.object(strategies.requests, "get", side_effect=slow_get),
             ThreadPoolExecutor(max_workers=2) as executor,
         ):
-            owner = executor.submit(strategies.fetch_events_with_status, 30, 0.5)
+            owner = executor.submit(
+                strategies.fetch_events_with_status,
+                30,
+                0.5,
+                allow_stale=True,
+            )
             self.assertTrue(entered.wait(timeout=1))
             started = time.monotonic()
-            events, status = strategies.fetch_events_with_status(30, 0.5)
+            events, status = strategies.fetch_events_with_status(
+                30, 0.5, allow_stale=True,
+            )
             elapsed = time.monotonic() - started
             release.set()
             owner.result(timeout=1)

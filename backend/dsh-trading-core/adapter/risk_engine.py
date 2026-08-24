@@ -14,6 +14,7 @@ _risk_budget_check 保持一致：{indicator, label, value, limit, excess}，额
 import copy
 import threading
 import time
+from dataclasses import dataclass, field
 
 from .personalize import (
     _active_strategies,
@@ -34,7 +35,18 @@ _BREACH_LABELS = {
 # V→Q：用户反馈校准只作用于事件源（软信号），组合/影子/画像永不抑制
 _DOWNGRADE = {"高": "中", "中": "低", "低": "低"}
 _PORTFOLIO_CACHE: dict[tuple, tuple[float, dict]] = {}
-_PORTFOLIO_FLIGHTS: dict[tuple, threading.Event] = {}
+
+
+@dataclass
+class _PortfolioFlight:
+    """一次组合计算的共享终态，等待者读取同一结果或同一异常。"""
+
+    event: threading.Event = field(default_factory=threading.Event)
+    result: dict | None = None
+    error: Exception | None = None
+
+
+_PORTFOLIO_FLIGHTS: dict[tuple, _PortfolioFlight] = {}
 _PORTFOLIO_CACHE_LOCK = threading.Lock()
 
 
@@ -85,13 +97,19 @@ def _excess_ratio(value, limit) -> float | None:
         return None
 
 
-def _collection_revision(store, collection: str) -> tuple[int, int]:
-    """原子替换文件的 mtime/size 作为短 TTL 缓存 revision。"""
+def _collection_revision(store, collection: str) -> tuple[int, int, int, int, int]:
+    """用文件身份、ctime、mtime 与尺寸识别原子替换及原地改写。"""
     try:
         stat = store._path(collection).stat()
     except FileNotFoundError:
-        return (0, 0)
-    return (stat.st_mtime_ns, stat.st_size)
+        return (0, 0, 0, 0, 0)
+    return (
+        int(getattr(stat, "st_dev", 0)),
+        int(getattr(stat, "st_ino", 0)),
+        int(getattr(stat, "st_ctime_ns", 0)),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
 
 
 def _portfolio_revision(store, profile_key: str) -> tuple:
@@ -114,36 +132,42 @@ def portfolio_risk(store=None) -> dict:
     revision = _portfolio_revision(store, profile_key)
     ttl = max(0.0, float(settings.risk_portfolio_cache_ttl))
 
-    while True:
-        now = time.monotonic()
-        with _PORTFOLIO_CACHE_LOCK:
-            cached = _PORTFOLIO_CACHE.get(revision)
-            if cached is not None and (now - cached[0]) <= ttl:
-                return copy.deepcopy(cached[1])
-            flight = _PORTFOLIO_FLIGHTS.get(revision)
-            if flight is None:
-                flight = threading.Event()
-                _PORTFOLIO_FLIGHTS[revision] = flight
-                owner = True
-            else:
-                owner = False
-        if owner:
-            break
-        flight.wait()
+    now = time.monotonic()
+    with _PORTFOLIO_CACHE_LOCK:
+        cached = _PORTFOLIO_CACHE.get(revision)
+        if cached is not None and (now - cached[0]) <= ttl:
+            return copy.deepcopy(cached[1])
+        flight = _PORTFOLIO_FLIGHTS.get(revision)
+        if flight is None:
+            flight = _PortfolioFlight()
+            _PORTFOLIO_FLIGHTS[revision] = flight
+            owner = True
+        else:
+            owner = False
+
+    if not owner:
+        flight.event.wait()
+        if flight.error is not None:
+            raise flight.error
+        if flight.result is None:
+            raise RuntimeError("组合风险 single-flight 未发布终态")
+        return copy.deepcopy(flight.result)
 
     try:
         result = _compute_portfolio_risk(store, profile_key)
-    except Exception:
+    except Exception as exc:
         with _PORTFOLIO_CACHE_LOCK:
             _PORTFOLIO_FLIGHTS.pop(revision, None)
-            flight.set()
+            flight.error = exc
+            flight.event.set()
         raise
     with _PORTFOLIO_CACHE_LOCK:
         if len(_PORTFOLIO_CACHE) >= 32:
             _PORTFOLIO_CACHE.clear()
         _PORTFOLIO_CACHE[revision] = (time.monotonic(), result)
         _PORTFOLIO_FLIGHTS.pop(revision, None)
-        flight.set()
+        flight.result = result
+        flight.event.set()
     return copy.deepcopy(result)
 
 
@@ -362,6 +386,8 @@ def risk_alerts(store=None) -> dict:
     events, event_status = fetch_events_with_status(
         limit=30,
         timeout=settings.risk_event_deadline,
+        allow_stale=True,
+        failure_backoff=True,
         cached_impact=True,
     )
     for ev in events or []:
@@ -430,7 +456,8 @@ def _reset_risk_cache_for_tests() -> None:
     with _PORTFOLIO_CACHE_LOCK:
         _PORTFOLIO_CACHE.clear()
         for flight in _PORTFOLIO_FLIGHTS.values():
-            flight.set()
+            flight.error = RuntimeError("测试重置终止了组合风险 single-flight")
+            flight.event.set()
         _PORTFOLIO_FLIGHTS.clear()
 
 

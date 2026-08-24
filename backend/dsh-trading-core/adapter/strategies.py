@@ -43,6 +43,8 @@ _DEFAULT_PARAMS = {
 _EVENTS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _EVENTS_CACHE_LOCK = threading.Lock()
 _EVENTS_REFRESH_LOCK = threading.Lock()
+_EVENTS_FAILURE: tuple[float, str] | None = None
+_EVENTS_CLOCK = time.time
 
 
 def _now() -> str:
@@ -82,13 +84,18 @@ def fetch_events_with_status(
     limit: int = 20,
     timeout: float | None = None,
     *,
+    allow_stale: bool,
+    failure_backoff: bool = False,
     cached_impact: bool = False,
 ) -> tuple[list[dict], dict]:
-    """按 deadline 拉 market-watch；超时使用 stale，且并发刷新 single-flight。"""
+    """风险读取按 deadline 拉取；stale 与失败退避都必须由调用方显式选择。"""
+    global _EVENTS_FAILURE
+
     deadline = max(0.05, float(timeout if timeout is not None else 4.0))
-    now = time.time()
+    now = _EVENTS_CLOCK()
     with _EVENTS_CACHE_LOCK:
         hit = _EVENTS_CACHE.get("events")
+        failure = _EVENTS_FAILURE
     age = (now - hit[0]) if hit else None
     if hit and age is not None and age < max(0.0, settings.event_cache_ttl):
         return _expand_events(hit[1], cached_impact), _event_status(
@@ -100,12 +107,24 @@ def fetch_events_with_status(
     stale = None
     if hit and age is not None and age < max(0.0, settings.event_stale_ttl):
         stale = hit[1]
-    if not _EVENTS_REFRESH_LOCK.acquire(blocking=False):
-        events = stale or []
+    usable_stale = stale if allow_stale else None
+    if failure_backoff and failure is not None and now < failure[0]:
+        events = usable_stale or []
         return _expand_events(events, cached_impact), _event_status(
             degraded=True,
-            stale=stale is not None,
-            source="stale-cache" if stale is not None else "fail-open",
+            stale=usable_stale is not None,
+            source="stale-cache" if usable_stale is not None else "failure-backoff",
+            reason=failure[1],
+            age_seconds=round(age, 3) if age is not None else None,
+            deadline_seconds=deadline,
+            retry_after_seconds=round(failure[0] - now, 3),
+        )
+    if not _EVENTS_REFRESH_LOCK.acquire(blocking=False):
+        events = usable_stale or []
+        return _expand_events(events, cached_impact), _event_status(
+            degraded=True,
+            stale=usable_stale is not None,
+            source="stale-cache" if usable_stale is not None else "fail-open",
             reason="market-watch refresh already in flight",
             age_seconds=round(age, 3) if age is not None else None,
             deadline_seconds=deadline,
@@ -125,19 +144,27 @@ def fetch_events_with_status(
                 raise ValueError("market-watch items 必须是列表")
         except Exception as exc:  # noqa: BLE001 — stale/fail-open 保住读取路径
             logger.warning("拉取 market-watch 事件失败（使用 stale/fail-open）: %s", exc)
-            events = stale or []
+            events = usable_stale or []
             reason = f"{type(exc).__name__}: {str(exc)[:160]}"
+            if failure_backoff:
+                failed_at = _EVENTS_CLOCK()
+                with _EVENTS_CACHE_LOCK:
+                    _EVENTS_FAILURE = (
+                        failed_at + max(0.0, settings.event_failure_backoff),
+                        reason,
+                    )
             return _expand_events(events, cached_impact), _event_status(
                 degraded=True,
-                stale=stale is not None,
-                source="stale-cache" if stale is not None else "fail-open",
+                stale=usable_stale is not None,
+                source="stale-cache" if usable_stale is not None else "fail-open",
                 reason=reason,
                 age_seconds=round(age, 3) if age is not None else None,
                 deadline_seconds=deadline,
             )
-        refreshed_at = time.time()
+        refreshed_at = _EVENTS_CLOCK()
         with _EVENTS_CACHE_LOCK:
             _EVENTS_CACHE["events"] = (refreshed_at, events)
+            _EVENTS_FAILURE = None
         return _expand_events(events, cached_impact), _event_status(
             source="upstream",
             age_seconds=0.0,
@@ -148,15 +175,42 @@ def fetch_events_with_status(
 
 
 def fetch_events(limit: int = 20, timeout: float = 4.0) -> list[dict]:
-    """兼容调用：返回事件列表；失败时优先返回 stale，再 fail-open 为空列表。"""
-    events, _status = fetch_events_with_status(limit=limit, timeout=timeout)
-    return events
+    """兼容假设/个性化调用：只接受 fresh/upstream，失败仍返回空列表。"""
+    global _EVENTS_FAILURE
+
+    deadline = max(0.05, float(timeout))
+    now = _EVENTS_CLOCK()
+    with _EVENTS_CACHE_LOCK:
+        hit = _EVENTS_CACHE.get("events")
+    if hit and (now - hit[0]) < max(0.0, settings.event_cache_ttl):
+        return _expand_events(hit[1], cached_impact=False)
+    try:
+        response = requests.get(
+            settings.mw_url.rstrip("/") + f"/news/events?limit={limit}",
+            timeout=deadline,
+            proxies={},
+        )
+        response.raise_for_status()
+        payload = response.json() or {}
+        events = payload.get("items") or []
+        if not isinstance(events, list):
+            raise ValueError("market-watch items 必须是列表")
+    except Exception as exc:  # noqa: BLE001 — 保持原有 fail-open 语义
+        logger.warning("拉取 market-watch 事件失败（假设/个性化 fail-open）: %s", exc)
+        return []
+    with _EVENTS_CACHE_LOCK:
+        _EVENTS_CACHE["events"] = (_EVENTS_CLOCK(), events)
+        _EVENTS_FAILURE = None
+    return _expand_events(events, cached_impact=False)
 
 
 def _reset_event_cache_for_tests() -> None:
     """测试隔离：生产调用不使用。"""
+    global _EVENTS_FAILURE
+
     with _EVENTS_CACHE_LOCK:
         _EVENTS_CACHE.clear()
+        _EVENTS_FAILURE = None
 
 
 # ---- 轻量指标（纯 pandas，不 import tradingagents）----

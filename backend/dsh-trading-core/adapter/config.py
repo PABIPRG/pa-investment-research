@@ -64,6 +64,7 @@ class Settings:
         self.mw_url = os.getenv("MW_URL", "http://127.0.0.1:8100")
         self.event_cache_ttl = float(os.getenv("EVENT_CACHE_TTL", "60"))
         self.event_stale_ttl = float(os.getenv("EVENT_STALE_TTL", "900"))
+        self.event_failure_backoff = float(os.getenv("EVENT_FAILURE_BACKOFF", "2"))
         self.risk_event_deadline = float(os.getenv("RISK_EVENT_DEADLINE", "0.35"))
         self.risk_portfolio_cache_ttl = float(os.getenv("RISK_PORTFOLIO_CACHE_TTL", "2"))
         self.shadow_schedule_enabled = os.getenv("SHADOW_SCHEDULE_ENABLED", "false").lower() == "true"

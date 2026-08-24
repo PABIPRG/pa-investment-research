@@ -947,7 +947,8 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
 `risk_profiles.profile()["risk_budget"]`（balanced：单股 0.25 / HHI 0.30 / 波动 0.18）。
 影子回撤/波动来自 `shadow_equity` 净值序列，**≥2 日才评估**，否则 `null` + `data_note="数据不足"`。
 服务端按持仓、影子净值和画像版本保存 `RISK_PORTFOLIO_CACHE_TTL` 秒的进程内短缓存；
-文件版本变化立即失效，同版本的并发请求通过 single-flight 共享一次计算。
+文件 revision 同时包含设备、inode、ctime、mtime 与尺寸，因此同尺寸原子替换也会立即失效；
+同版本的并发请求通过 single-flight 共享同一次成功结果或失败。
 
 ```jsonc
 // 200
@@ -1013,11 +1014,14 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
     运行错误（`shadow_equity.strategy_errors`）三项；
   - `event`：`fetch_events` → 命中持仓/自选 且 **利空** 事件（持仓→高、自选→中，再用
     `_risk_level` 按画像校准）；market-watch 在 `RISK_EVENT_DEADLINE` 内不可用时优先读取
-    `EVENT_STALE_TTL` 内旧值，无旧值则该源自动缺失（不 500）；
+    `EVENT_STALE_TTL` 内旧值，无旧值则该源自动缺失（不 500），并用 `EVENT_FAILURE_BACKOFF`
+    做短失败退避，避免页面轮询反复等待 deadline；
   - `profile`：一条画像预算 advisory（低）。
 - 顶层 `degraded` 表示事件上游是否降级；`upstreams.market_watch_events` 给出
-  `source=upstream|fresh-cache|stale-cache|fail-open`、`stale`、`reason`、缓存年龄和 deadline，
+  `source=upstream|fresh-cache|stale-cache|fail-open|failure-backoff`、`stale`、`reason`、缓存年龄和 deadline，
   方便前端区分旧数据与完全缺失。
+- stale 与失败退避只由 `/risk/alerts` 显式启用；策略假设和个性化卡片仍保持原契约：
+  只消费 fresh cache 或本次成功的上游响应，上游失败返回空列表，不静默复用旧事件。
 - 事件源复用 `personalize._classify/_risk_level`。为保证持仓分析 deadline，风险路由只使用
   已缓存的 C 影响图谱补充间接波及标的，不会在请求内冷调用 industry-chain；事件直接关联标的语义不变。
 - **V→Q 效果归因**：每项带 `feedback{useful,useless}`（该预警被标记的次数）；`effect` 是
