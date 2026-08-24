@@ -57,7 +57,10 @@ export function createProcessShutdown(
         if (forceAfterDispose) forceExitOnce(code)
         else completeOnce(code)
       },
-      () => { forceExitOnce(code) },
+      (error: unknown) => {
+        forceExitOnce(code === 0 ? 1 : code)
+        throw error
+      },
     )
     return pending
   }

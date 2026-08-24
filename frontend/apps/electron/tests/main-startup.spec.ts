@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('electron', () => ({
   app: {
+    on: vi.fn(),
     requestSingleInstanceLock: mocks.requestSingleInstanceLock,
     quit: vi.fn(),
     whenReady: () => mocks.ready.promise,

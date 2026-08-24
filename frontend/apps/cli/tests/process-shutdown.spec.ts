@@ -20,7 +20,7 @@ afterEach(() => {
 })
 
 describe('process shutdown', () => {
-  it('completes naturally after disposal resolves and forces exit when it rejects', async () => {
+  it('completes naturally after disposal resolves', async () => {
     const resolvedExit = vi.fn()
     const resolvedComplete = vi.fn()
     const resolved = createProcessShutdown(() => Promise.resolve(), resolvedExit, resolvedComplete)
@@ -29,17 +29,18 @@ describe('process shutdown', () => {
     expect(resolvedComplete).toHaveBeenCalledWith(0)
     expect(resolvedExit).not.toHaveBeenCalled()
 
-    const rejectedExit = vi.fn()
-    const rejectedComplete = vi.fn()
-    const rejected = createProcessShutdown(
-      () => Promise.reject(new Error('dispose failed')),
-      rejectedExit,
-      rejectedComplete,
-    )
-    await rejected.shutdown(1)
-    expect(rejectedExit).toHaveBeenCalledOnce()
-    expect(rejectedExit).toHaveBeenCalledWith(1)
-    expect(rejectedComplete).not.toHaveBeenCalled()
+  })
+
+  it('forces a non-zero exit and rethrows the disposal failure from shutdown(0)', async () => {
+    const exit = vi.fn()
+    const complete = vi.fn()
+    const error = new Error('dispose failed')
+    const shutdown = createProcessShutdown(() => Promise.reject(error), exit, complete)
+
+    await expect(shutdown.shutdown(0)).rejects.toBe(error)
+    expect(exit).toHaveBeenCalledOnce()
+    expect(exit).toHaveBeenCalledWith(1)
+    expect(complete).not.toHaveBeenCalled()
   })
 
   it('uses process.exitCode for default normal completion', async () => {

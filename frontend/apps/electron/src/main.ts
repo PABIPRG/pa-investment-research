@@ -59,6 +59,15 @@ async function runApplication(): Promise<void> {
   let restartPromise: Promise<void> | undefined
   let normalQuitPromise: Promise<void> | undefined
   let quitCommitted = false
+  let failureReported = false
+  const failLoud = (): void => {
+    if (failureReported) return
+    failureReported = true
+    app.exit(1)
+  }
+  const consume = (pending: Promise<void>): void => {
+    void pending.catch(failLoud)
+  }
   const disposeOnce = (): Promise<void> => {
     if (disposePromise !== undefined) return disposePromise
     disposePromise = (async () => {
@@ -91,6 +100,13 @@ async function runApplication(): Promise<void> {
     })()
     return restartPromise
   }
+  const requestRestart = (): void => { consume(restartOnce()) }
+  app.on('before-quit', (event) => {
+    if (quitCommitted) return
+    event.preventDefault()
+    consume(quitOnce())
+  })
+  app.on('window-all-closed', () => { consume(quitOnce()) })
   try {
     await app.whenReady()
     const { ctx, shutdown } = await runProfile({
@@ -99,7 +115,7 @@ async function runApplication(): Promise<void> {
       patchFiles: [ELECTRON_PATCH],
       args: [],
       installAnchor: APP_MANIFEST,
-      restart: restartOnce,
+      restart: requestRestart,
       watchPatches: false,
     })
     profileShutdown = shutdown
@@ -138,12 +154,6 @@ async function runApplication(): Promise<void> {
       window.show()
       window.focus()
     })
-    app.on('before-quit', (event) => {
-      if (quitCommitted) return
-      event.preventDefault()
-      return quitOnce()
-    })
-    app.on('window-all-closed', () => quitOnce())
     lifecycleReady.resolve()
   } catch (error) {
     lifecycleReady.reject(error)
