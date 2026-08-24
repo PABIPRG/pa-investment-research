@@ -39,6 +39,49 @@ class BlockingKlineSource:
         return self.result
 
 
+class _FakePipeEnd:
+    def close(self):
+        return None
+
+
+class _NeverReadyReceive(_FakePipeEnd):
+    def poll(self, _timeout):
+        return False
+
+
+class _FakeProcess:
+    def __init__(self):
+        self.started = False
+        self.terminated = False
+        self.killed = False
+
+    def start(self):
+        self.started = True
+
+    def join(self, timeout=None):
+        return None
+
+    def is_alive(self):
+        return not self.terminated and not self.killed
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+
+class _FakeProcessContext:
+    def __init__(self):
+        self.process = _FakeProcess()
+
+    def Pipe(self, duplex=False):
+        return _NeverReadyReceive(), _FakePipeEnd()
+
+    def Process(self, **_kwargs):
+        return self.process
+
+
 class KlineLatencyTests(unittest.TestCase):
     def setUp(self):
         with quotes._KLINE_LOCK:
@@ -111,6 +154,39 @@ class KlineLatencyTests(unittest.TestCase):
         self.assertEqual(float(first.iloc[-1]["close"]), 10)
         self.assertEqual(float(second.iloc[-1]["close"]), 10)
         self.assertEqual(source.calls, 1)
+
+    def test_unique_stalled_keys_are_rejected_at_bounded_admission(self):
+        gate = threading.Event()
+        source = BlockingKlineSource(gate, _frame(12))
+        codes = tuple(f"{index:06d}" for index in range(quotes._KLINE_WORKERS + 1))
+        try:
+            with (
+                patch.object(quotes, "_fetch_kline_uncached", source),
+                patch.object(quotes.settings, "kline_cold_deadline", 0.01),
+            ):
+                for code in codes[:quotes._KLINE_WORKERS]:
+                    with self.assertRaises(quotes.KlineDeadlineExceeded):
+                        quotes.get_kline(code, 120)
+                started = time.monotonic()
+                with self.assertRaises(quotes.KlineRefreshBusy):
+                    quotes.get_kline(codes[quotes._KLINE_WORKERS], 120)
+                self.assertLess(time.monotonic() - started, 0.05)
+                self.assertEqual(len(quotes._KLINE_FLIGHTS), quotes._KLINE_WORKERS)
+        finally:
+            gate.set()
+
+    def test_baostock_timeout_terminates_its_isolated_process(self):
+        context = _FakeProcessContext()
+        with (
+            patch.object(quotes.multiprocessing, "get_context", return_value=context),
+            patch.object(quotes.settings, "kline_baostock_timeout", 0.01),
+        ):
+            with self.assertRaisesRegex(TimeoutError, "baostock K线 600519 超时"):
+                quotes._bs_hist_ohlcv_bounded("600519", "2026-01-01", "2026-08-24")
+
+        self.assertTrue(context.process.started)
+        self.assertTrue(context.process.terminated)
+        self.assertFalse(context.process.killed)
 
 
 if __name__ == "__main__":

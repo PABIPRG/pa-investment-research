@@ -12,9 +12,9 @@ Status: implemented
 
 `OpportunityPage` 使用 `enrich=false` 和 `personal=false` 请求基础快讯。页面把该数据明确标为基础资讯，并显式报告部分来源或 stale cache 响应。切换扫描类型不会改变新闻请求键；只有页面刷新或新闻区域重试才会重新请求资讯。完整来源聚合、事件富化和个性化排序继续作为显式 `news-flash` 能力存在，不进入首屏工作。
 
-market-watch 后端为基础新闻设置 1.5 秒总体 deadline、15 秒 fresh TTL、5 分钟 stale 窗口和单个刷新 flight。冷请求在 deadline 到达时返回已经完成的快速来源；stale 请求立即返回，同时让唯一 refresh 继续。显式完整档使用独立 cache，并在可选事件与 LLM 工作前使用 10 秒来源 deadline。
+market-watch 后端为基础新闻设置 1.5 秒总体 deadline、15 秒 fresh TTL、5 分钟 stale 窗口和单个刷新 flight。冷请求在 deadline 到达时返回已经完成的快速来源；flight 会保持所有权，直到每个带 timeout 的来源结束，而且只有完整刷新才能替换已有 stale 值。财联社改为直接调用带签名的 HTTP 接口，不再进入 akshare 的无界重试 helper。显式完整档使用独立 cache，并在可选事件与 LLM 工作前使用 10 秒来源 deadline。
 
-K 线读取按代码与 lookback 共享 single-flight，使用 60 秒 fresh TTL、30 分钟 stale 窗口和 2.5 秒冷请求前台 deadline。stale 命中会直接返回并继续刷新。冷请求超时会返回 HTTP 504 和明确的后台刷新说明，不会宣称该股票没有数据。可选名称行情查询使用独立的 0.3 秒预算。
+K 线读取按代码与 lookback 共享 single-flight，使用 60 秒 fresh TTL、30 分钟 stale 窗口和 2.5 秒冷请求前台 deadline。4 个准入许可同时限制运行和排队的 refresh key；超过容量的冷 key 快速返回 HTTP 503，stale 值仍可继续使用。baostock 的全局 socket 在短生命周期子进程中运行，超过独立 deadline 后由父进程终止。冷请求超时会返回 HTTP 504 和明确的后台刷新说明，不会宣称该股票没有数据。可选名称行情查询使用独立的 0.3 秒预算和有界准入。
 
 ## Alternatives considered
 
@@ -22,11 +22,12 @@ K 线读取按代码与 lookback 共享 single-flight，使用 60 秒 fresh TTL�
 
 **LLM 较慢时在富化响应字段中静默返回规则结果。** 这会悄悄改变调用方请求的能力。基础档与完整档保持显式区分，完整富化继续使用其已经文档化的降级行为。
 
-**在 deadline 到达时取消 provider 线程。** Python 无法安全停止已经进入阻塞调用的线程。有限的前台等待、provider 超时、TTL/stale cache 和 single-flight 会约束用户延迟与来源压力，线程则自然结束。
+**在 deadline 到达时遗弃 provider 线程。** Python 无法安全停止已经运行的线程，而且这样会在真实来源调用仍占资源时过早释放逻辑 flight。固定 worker 容量和 HTTP timeout 让 news 调用自然结束；唯一没有可靠 timeout 的 socket API baostock 改在可终止子进程中运行。
 
 ## Consequences
 
 - “机会发现”路由最晚在配置的 1.5 秒来源预算后展示基础新闻，不再等待完整来源或 LLM 富化。
 - 部分结果与 stale 响应保持可用且可见；来源失败不会清除已有缓存。
 - 冷技术信号请求会在 2.5 秒内得到 K 线，或在共享刷新继续时收到明确且可重试的超时。
-- fake clock、HTTP session、source 和并发测试会在无外部网络、无 LLM 的条件下锁定 deadline、stale 行为与 single-flight 来源调用次数。
+- 应用关闭时停止准入，并在 provider deadline 后 join 有界的 news、K 线和名称行情 worker。
+- fake clock、HTTP session、source、进程隔离、准入和并发测试会在无外部网络、无 LLM 的条件下锁定 deadline、stale 行为与来源调用次数。

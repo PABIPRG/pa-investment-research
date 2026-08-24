@@ -85,10 +85,13 @@ class Settings:
         )
         self.flash_full_deadline = float(os.getenv("MW_FLASH_FULL_DEADLINE", "10"))
         self.flash_source_timeout = float(os.getenv("MW_FLASH_SOURCE_TIMEOUT", "2"))
+        self.flash_source_workers = int(os.getenv("MW_FLASH_SOURCE_WORKERS", "8"))
         self.kline_cache_ttl = float(os.getenv("MW_KLINE_CACHE_TTL", "60"))
         self.kline_stale_ttl = float(os.getenv("MW_KLINE_STALE_TTL", "1800"))
         self.kline_cold_deadline = float(os.getenv("MW_KLINE_COLD_DEADLINE", "2.5"))
         self.kline_source_timeout = float(os.getenv("MW_KLINE_SOURCE_TIMEOUT", "2"))
+        self.kline_baostock_timeout = float(os.getenv("MW_KLINE_BAOSTOCK_TIMEOUT", "2"))
+        self.kline_refresh_workers = int(os.getenv("MW_KLINE_REFRESH_WORKERS", "4"))
         self.quote_name_deadline = float(os.getenv("MW_QUOTE_NAME_DEADLINE", "0.3"))
         # 事件驱动（快讯 → 结构化事件 → 命中自选/持仓预警 → 个性化）
         self.event_enabled = _true("MW_EVENT_ENABLED", default=True)

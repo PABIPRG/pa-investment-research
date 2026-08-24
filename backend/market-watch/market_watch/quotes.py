@@ -14,6 +14,7 @@ akshare 权威列名（1.18.92，读安装源码确认）：
 
 import logging
 import math
+import multiprocessing
 import re
 import requests
 import threading
@@ -551,17 +552,24 @@ def get_fund_flow(code: str) -> float | None:
 _KLINE_CACHE: dict[tuple[str, int], tuple[float, pd.DataFrame]] = {}
 _KLINE_FLIGHTS: dict[tuple[str, int], Future] = {}
 _KLINE_LOCK = threading.RLock()
-_KLINE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kline-refresh")
+_KLINE_WORKERS = max(1, settings.kline_refresh_workers)
+_KLINE_EXECUTOR = ThreadPoolExecutor(max_workers=_KLINE_WORKERS, thread_name_prefix="kline-refresh")
+_KLINE_ADMISSION = threading.BoundedSemaphore(_KLINE_WORKERS)
 _KLINE_CLOCK = time.monotonic
 
 _POINT_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
 _POINT_QUOTE_FLIGHTS: dict[str, Future] = {}
 _POINT_QUOTE_LOCK = threading.RLock()
 _POINT_QUOTE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="quote-name")
+_POINT_QUOTE_ADMISSION = threading.BoundedSemaphore(4)
 
 
 class KlineDeadlineExceeded(TimeoutError):
     """冷 K 线请求超过前台等待预算，后台 single-flight 仍继续刷新。"""
+
+
+class KlineRefreshBusy(RuntimeError):
+    """K 线 refresh 容量已满，当前 key 未进入无界等待队列。"""
 
 
 def _bs_hist_ohlcv(code: str, start: str, end: str) -> list[dict]:
@@ -593,6 +601,46 @@ def _bs_hist_ohlcv(code: str, start: str, end: str) -> list[dict]:
             return rows
         finally:
             bs.logout()
+
+
+def _bs_hist_process(send, code: str, start: str, end: str) -> None:
+    """子进程入口：隔离 baostock 全局 socket，父进程可在 deadline 后终止。"""
+    try:
+        send.send((True, _bs_hist_ohlcv(code, start, end)))
+    except BaseException as exc:
+        send.send((False, f"{type(exc).__name__}: {exc}"))
+    finally:
+        send.close()
+
+
+def _bs_hist_ohlcv_bounded(code: str, start: str, end: str) -> list[dict]:
+    """在独立 spawn 进程执行 baostock，并在 deadline 后 terminate/kill 收敛。"""
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(duplex=False)
+    process = context.Process(target=_bs_hist_process, args=(send, code, start, end), daemon=True)
+    try:
+        process.start()
+    except BaseException:
+        receive.close()
+        send.close()
+        raise
+    send.close()
+    try:
+        if not receive.poll(max(0.05, settings.kline_baostock_timeout)):
+            raise TimeoutError(f"baostock K线 {code} 超时")
+        ok, payload = receive.recv()
+        if not ok:
+            raise RuntimeError(str(payload))
+        return payload
+    finally:
+        receive.close()
+        process.join(timeout=0.1)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=0.5)
+        if process.is_alive():
+            process.kill()
+            process.join()
 
 
 def _fetch_kline_uncached(code: str, lookback: int = 120) -> pd.DataFrame | None:
@@ -637,7 +685,7 @@ def _fetch_kline_uncached(code: str, lookback: int = 120) -> pd.DataFrame | None
         logger.warning("东财K线直连 %s 失败，降级 baostock: %s", code, exc)
 
     try:
-        rows = _bs_hist_ohlcv(code, start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
+        rows = _bs_hist_ohlcv_bounded(code, start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
     except Exception as exc:
         logger.warning("baostock K线 %s 失败: %s", code, exc)
         return None
@@ -655,17 +703,26 @@ def _finish_kline_refresh(key: tuple[str, int], future: Future) -> None:
     except Exception as exc:
         logger.warning("K线后台刷新 %s 失败: %s", key[0], exc)
         result = None
-    with _KLINE_LOCK:
-        if result is not None and not result.empty:
-            _KLINE_CACHE[key] = (_KLINE_CLOCK(), result.copy(deep=True))
-        if _KLINE_FLIGHTS.get(key) is future:
-            _KLINE_FLIGHTS.pop(key, None)
+    try:
+        with _KLINE_LOCK:
+            if result is not None and not result.empty:
+                _KLINE_CACHE[key] = (_KLINE_CLOCK(), result.copy(deep=True))
+            if _KLINE_FLIGHTS.get(key) is future:
+                _KLINE_FLIGHTS.pop(key, None)
+    finally:
+        _KLINE_ADMISSION.release()
 
 
 def _start_kline_refresh(key: tuple[str, int]) -> Future:
     future = _KLINE_FLIGHTS.get(key)
     if future is None:
-        future = _KLINE_EXECUTOR.submit(_fetch_kline_uncached, key[0], key[1])
+        if not _KLINE_ADMISSION.acquire(blocking=False):
+            raise KlineRefreshBusy("K线后台刷新容量已满")
+        try:
+            future = _KLINE_EXECUTOR.submit(_fetch_kline_uncached, key[0], key[1])
+        except BaseException:
+            _KLINE_ADMISSION.release()
+            raise
         _KLINE_FLIGHTS[key] = future
         future.add_done_callback(lambda done: _finish_kline_refresh(key, done))
     return future
@@ -684,7 +741,12 @@ def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
         age = (now - cached[0]) if cached else None
         if cached and age is not None and age <= settings.kline_cache_ttl:
             return cached[1].copy(deep=True)
-        future = _start_kline_refresh(key)
+        try:
+            future = _start_kline_refresh(key)
+        except KlineRefreshBusy:
+            if cached and age is not None and age <= settings.kline_stale_ttl:
+                return cached[1].copy(deep=True)
+            raise
         if cached and age is not None and age <= settings.kline_stale_ttl:
             return cached[1].copy(deep=True)
     try:
@@ -710,11 +772,14 @@ def _finish_point_quote(code: str, future: Future) -> None:
     except Exception as exc:
         logger.warning("名称行情后台刷新 %s 失败: %s", code, exc)
         result = None
-    with _POINT_QUOTE_LOCK:
-        if result:
-            _POINT_QUOTE_CACHE[code] = (_KLINE_CLOCK(), dict(result))
-        if _POINT_QUOTE_FLIGHTS.get(code) is future:
-            _POINT_QUOTE_FLIGHTS.pop(code, None)
+    try:
+        with _POINT_QUOTE_LOCK:
+            if result:
+                _POINT_QUOTE_CACHE[code] = (_KLINE_CLOCK(), dict(result))
+            if _POINT_QUOTE_FLIGHTS.get(code) is future:
+                _POINT_QUOTE_FLIGHTS.pop(code, None)
+    finally:
+        _POINT_QUOTE_ADMISSION.release()
 
 
 def get_quote_bounded(code: str) -> dict | None:
@@ -726,7 +791,13 @@ def get_quote_bounded(code: str) -> dict | None:
             return dict(cached[1])
         future = _POINT_QUOTE_FLIGHTS.get(code)
         if future is None:
-            future = _POINT_QUOTE_EXECUTOR.submit(_fetch_point_quote, code)
+            if not _POINT_QUOTE_ADMISSION.acquire(blocking=False):
+                return None
+            try:
+                future = _POINT_QUOTE_EXECUTOR.submit(_fetch_point_quote, code)
+            except BaseException:
+                _POINT_QUOTE_ADMISSION.release()
+                raise
             _POINT_QUOTE_FLIGHTS[code] = future
             future.add_done_callback(lambda done: _finish_point_quote(code, done))
     try:
@@ -734,6 +805,12 @@ def get_quote_bounded(code: str) -> dict | None:
     except Exception:
         return None
     return dict(result) if result else None
+
+
+def shutdown_background_workers() -> None:
+    """应用退出时停止接收任务，并等待有界 provider 收敛。"""
+    _KLINE_EXECUTOR.shutdown(wait=True, cancel_futures=True)
+    _POINT_QUOTE_EXECUTOR.shutdown(wait=True, cancel_futures=True)
 
 
 # ---- 交易日历 ------------------------------------------------------------
