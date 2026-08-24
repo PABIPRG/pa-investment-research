@@ -34,6 +34,9 @@ from .schemas import (
     KycAdjustRequest,
     KycParseRequest,
     KycQuestionnaireRequest,
+    PersonalizedFeedbackRequest,
+    PersonalizedInteractionRequest,
+    EvolutionRunRequest,
     RiskProfileRequest,
     ShadowRunRequest,
     StrategyRunRequest,
@@ -424,6 +427,137 @@ def create_app() -> FastAPI:
                 recs.append({"date": k, "overall_nav": snap.get("overall_nav"),
                              "strategy_count": len(snap.get("strategies") or {})})
         return {"count": len(recs), "items": recs}
+
+    # ---- 个性化右链（O 策略匹配 + D/P 资讯卡片 + R 行为捕获） ----------------
+
+    @app.get("/personalized/matches", response_model=dict)
+    def personalized_matches():
+        """O：active 策略 × 用户画像 → 确定性推荐排序（可解释）。"""
+        from . import personalize
+
+        return personalize.match_strategies()
+
+    @app.get("/personalized/cards", response_model=dict)
+    def personalized_cards(
+        limit: int = 30,
+        bucket: str = "all",
+        match: int = 0,
+        comment: int = 0,
+        strategy_id: Optional[str] = None,
+    ):
+        """D+P：个性化资讯卡片 feed（桶优先级 + relevance 排序）。
+
+        bucket=all|holdings|watchlist|strategy|fresh；match=1 仅命中关注；
+        comment=1 附加 LLM 一句话点评（可降级为 null）。
+        """
+        from . import personalize
+
+        return personalize.build_cards(
+            limit=limit, bucket=bucket, match_only=bool(match),
+            strategy_id=strategy_id, comment=bool(comment),
+        )
+
+    @app.post("/personalized/interactions", response_model=dict)
+    def personalized_interactions_post(req: PersonalizedInteractionRequest):
+        """R：view/click 阅读行为埋点（环形缓冲落 behavior.json）。"""
+        from . import personalize
+
+        return personalize.record_interaction(
+            JsonStore(), req.card_id, req.action, req.ts, req.meta,
+        )
+
+    @app.post("/personalized/feedback", response_model=dict)
+    def personalized_feedback_post(req: PersonalizedFeedbackRequest):
+        """R 显式反馈（P→R 决策信号）：卡片/预警 有用/没用。
+
+        落行为库 action=feedback，供 R→U→K 画像修正与 R→V 效果归因
+        （卡片排序 boost / 事件预警灵敏度校准）。
+        """
+        from . import personalize
+
+        return personalize.record_feedback(
+            JsonStore(), req.card_id, req.sentiment, req.ts, req.meta,
+        )
+
+    @app.get("/personalized/profile", response_model=dict)
+    def personalized_profile():
+        """K 画像增强 L→K：基础画像 + 行为推断（effective_aggression + 关注/方向/策略亲和）。"""
+        from . import behavior_profile
+
+        return behavior_profile.profile_view()
+
+    @app.get("/personalized/impact", response_model=dict)
+    def personalized_impact(limit: int = 5):
+        """C 调试：事件影响图谱扩展结果（带 impact_codes / impact_by）。
+
+        :8200 不可达时事件保持原样（impact 为空），用于验证优雅降级。
+        """
+        from .strategies import fetch_events
+
+        # fetch_events 命中 TTL 缓存时忽略 limit（返回缓存整表），这里按本端点 limit 截断
+        want = max(1, min(int(limit), 50))
+        events = (fetch_events(limit=want, timeout=15.0) or [])[:want]
+        return {
+            "as_of": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": len(events),
+            "events": [{
+                "id": e.get("id"), "tickers": e.get("tickers"),
+                "industries": e.get("industries"), "direction": e.get("direction"),
+                "summary": (e.get("summary") or "")[:60],
+                "impact_codes": e.get("impact_codes") or [],
+                "impact_industries": e.get("impact_industries") or [],
+                "impact_by": e.get("impact_by") or [],
+            } for e in events],
+        }
+
+    @app.get("/personalized/interactions", response_model=dict)
+    def personalized_interactions_get(limit: int = 50):
+        """R：最近行为记录（时间倒序）。"""
+        from . import personalize
+
+        return personalize.list_interactions(JsonStore(), limit=limit)
+
+    # ---- 风险预警中心（架构图 N 组合风险 + Q 四源预警）------------------------
+
+    @app.get("/risk/portfolio", response_model=dict)
+    def risk_portfolio():
+        """N：组合风险模型（等权确定性估算，无实时行情，同步 def 不阻塞）。"""
+        from . import risk_engine
+
+        return risk_engine.portfolio_risk()
+
+    @app.get("/risk/alerts", response_model=dict)
+    def risk_alerts():
+        """Q：风险预警中心（组合+影子+事件+画像四源聚合，按严重度高>中>低排序）。"""
+        from . import risk_engine
+
+        return risk_engine.risk_alerts()
+
+    # ---- 自进化闭环（S_shadow→T→W→H + R→S→U→K outcome 版）-----------------
+
+    @app.get("/evolution/status", response_model=dict)
+    def evolution_status():
+        """自进化闭环状态：影子数据是否就绪 + 策略生命周期统计。"""
+        from . import evolution
+
+        return evolution.status()
+
+    @app.get("/evolution/attribution", response_model=dict)
+    def evolution_attribution():
+        """T 归因（S_shadow→T）：影子组合整体 + 每策略 收益/回撤/平仓胜率（只读）。"""
+        from . import evolution
+
+        return evolution.attribution()
+
+    @app.post("/evolution/run", response_model=dict)
+    def evolution_run(req: EvolutionRunRequest):
+        """T→W→H 进化：升降级/淘汰 + 参数变异回流（apply=false 仅预览，true 写库）。
+
+        数据不足（< EVOLVE_MIN_DAYS）时返回 waiting_data + 空 actions，不动作。
+        """
+        from . import evolution
+
+        return evolution.evolve(apply=req.apply)
 
     @app.get("/analyze/{task_id}/stream")
     async def stream(task_id: str):

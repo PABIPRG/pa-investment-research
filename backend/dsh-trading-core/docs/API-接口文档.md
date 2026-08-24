@@ -109,6 +109,18 @@
 | 30 | GET | `/analyze/{task_id}/stream` | **SSE 进度流**（六类任务共用） | 流式 |
 | 31 | GET | `/analyze/{task_id}/result` | 最终结果（未完成 409） | 查询 |
 | 32 | GET | `/analyze/{task_id}` | 任务状态查询 | 查询 |
+| 33 | GET | `/personalized/matches` | **O 策略—用户匹配**：active 策略 × 画像推荐（含行为激进度 + N→O 分散化修正） | 轻量 |
+| 34 | GET | `/personalized/cards` | **D+P 个性化资讯卡片 feed**（分桶 + relevance 排序 + C 影响 + V→D 反馈归因） | 轻量 |
+| 35 | POST | `/personalized/interactions` | **R 行为捕获**：view/click 阅读埋点 | 轻量 |
+| 36 | GET | `/personalized/interactions` | 最近行为记录（时间倒序） | 轻量 |
+| 37 | GET | `/personalized/impact` | **C 调试**：事件影响图谱扩展结果（impact_codes/impact_by） | 轻量 |
+| 38 | GET | `/personalized/profile` | **K 画像增强**：基础画像 + 行为推断（含行业/关注/交易/反馈维度） | 轻量 |
+| 39 | GET | `/risk/portfolio` | **N 组合风险模型**：等权集中度/单股权重 + 影子回撤波动 vs 预算 | 轻量 |
+| 40 | GET | `/risk/alerts` | **Q 风险预警中心**：四源聚合 + R→V 效果归因（反馈计数/灵敏度校准） | 轻量 |
+| 41 | POST | `/personalized/feedback` | **P→R 显式反馈**：卡片/预警 有用/没用（供画像修正与效果归因） | 轻量 |
+| 42 | GET | `/evolution/status` | **自进化闭环状态**：影子数据是否就绪 + 策略生命周期统计 | 轻量 |
+| 43 | GET | `/evolution/attribution` | **S→T 归因**：影子组合整体 + 每策略 收益/回撤/平仓胜率（只读） | 轻量 |
+| 44 | POST | `/evolution/run` | **T→W→H 进化**：升降级/淘汰 + 参数变异回流（apply=false 预览 / true 写库） | 轻量 |
 
 ---
 
@@ -817,6 +829,355 @@ POST /strategies/strat-abc123def0/activate
 { "code": "600519", "n_items": 42, "summary": { … } }
 ```
 
+### 4.24 GET /personalized/matches —— O 策略—用户匹配推荐
+
+`active` 策略 × 用户画像（KYC 有效画像 + 持仓/自选 + 影子净值 + 样本外 + 组合集中度）确定性打分
+（0–100，四维度权重 35/35/20/10 + **N→O 分散化修正**），输出"为你推荐"。同步、<100ms、可解释。
+
+```jsonc
+// 200
+{
+  "as_of": "2026-08-24 15:57:00",
+  "profile": "balanced", "profile_label": "稳健型",
+  "count": 1,
+  "portfolio_concentration": { "concentrated": true, "n": 1, "hhi": 1.0, "limit": 0.3, "label": "稳健型" },
+  "items": [{
+    "strategy_id": "strat-b022a7436e", "name": "利空·rsi_reversal·688981+2",
+    "kind": "rsi_reversal", "direction": "利空", "symbols": ["688981","603986","688347"],
+    "status": "active", "nav": 1.0, "closed_count": 0,
+    "match_score": 44.2, "fits_profile": true, "caution": null,
+    "breakdown": {
+      "affinity":    { "score": 0,  "notes": ["未命中你的持仓/自选"] },
+      "profile_fit": { "score": 21.0, "notes": ["稳健型画像(激进度0.5) vs 利空rsi_reversal(需求0.9)，契合度60%"] },
+      "shadow":      { "score": 10.0, "notes": ["影子净值 1.0000"] },
+      "quality":     { "score": 10.0, "notes": ["样本外胜率 100%", "样本外均收益 1.61%"] },
+      "diversification": { "score": 3.2, "notes": ["组合集中度高（HHI=1.00），该策略与持仓无重叠，可分散组合 → 加分"] }
+    },
+    "match_reasons": [
+      { "dim": "affinity", "code": "none", "text": "未命中你的持仓/自选", "score": 0 },
+      { "dim": "profile_fit", "code": "aligned", "text": "稳健型画像…契合度60%", "score": 21.0 }
+    ]
+  }]
+}
+```
+
+- `fits_profile=false` + `caution` 文案出现于硬约束：conservative×利空 / aggressive×ma_cross。
+- **N→O 分散化修正**：组合集中度超标（HHI > 画像 `hhi_max`，等权 HHI=1/N）时，
+  `diversification` 维度生效——与持仓重叠策略 `-W_DIV`（1 只 -4 / ≥2 只 -8）、无重叠 `+3.2`；
+  未超标则该维度 score=0（"组合集中度正常"）。`portfolio_concentration` 暴露集中度信号给前端。
+- 排序：`fits_profile` 在前，再按 `match_score` 降序；无 active 策略时 `items` 为空。
+- `match_reasons[].code` 取值：affinity=`hit|none`；profile_fit=`aligned|demand_gap|caution`；
+  shadow=`nav|profit|no_nav`；quality=`strong|weak`；diversification=`overlap|diversify|neutral`。
+
+### 4.25 GET /personalized/cards —— D+P 个性化资讯卡片 feed
+
+market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶），按「桶优先级 > relevance」排序。
+事件拉取复用 `strategies.fetch_events`（TTL 缓存；market-watch 冷缓存时首次可能空，下一轮恢复）。
+
+| Query | 默认 | 说明 |
+|---|---|---|
+| `limit` | `30` | 卡片数（1–100） |
+| `bucket` | `all` | `all` / `holdings` / `watchlist` / `strategy` / `fresh` |
+| `match` | `0` | `1` = 仅命中关注（排除 `fresh` 桶） |
+| `comment` | `0` | `1` = 附加 LLM 一句话点评（仅前几张命中卡；无 key/失败 → `null`） |
+| `strategy_id` | — | 只返回命中该策略的事件卡 |
+
+```jsonc
+// 200
+{
+  "as_of": "2026-08-24 15:57:29",
+  "profile": "balanced", "profile_label": "稳健型",
+  "count": 8, "cards": [{
+    "card_id": "card-f87bec719", "event_id": "ev-…", "item_id": "sina-…",
+    "bucket": "strategy", "relevance_score": 85,
+    "type": "价格异动", "direction": "利空",
+    "title": "港股芯片股集体下挫…", "summary": "…", "time": "2026-08-24 14:59:48",
+    "source": "财联社", "url": "…",
+    "tickers": [{ "name": "中芯国际", "code": "688981" }], "industries": ["半导体"],
+    "matched": {
+      "holdings": [], "watchlist": [],
+      "strategies": [{ "id": "strat-b022a7436e", "name": "…", "kind": "rsi_reversal",
+                       "direction": "利空", "symbols": ["688981","603986","688347"],
+                       "status": "active", "nav": 1.0, "closed_count": 0 }]
+    },
+    "risk": { "level": "高", "note": "利空事件，稳健型画像需关注持仓风险（买入风险分上限 0.65）" },
+    "reasons": ["利空事件", "新鲜：<1小时", "你近期看过相关个股"],
+    "llm_comment": "港股芯片板块承压，相关个股短期波动需关注。",
+    "event": { /* 原事件全部字段，前端可复用 drawer */ }
+  }]
+}
+```
+
+- `card_id = "card-" + md5(event.id)[:10]`，跨刷新稳定，供 R 埋点回传。
+- 桶优先级：`holdings > watchlist > strategy > fresh`；`relevance` 组成：
+  `BUCKET_BASE(70/60/50/20) + 新鲜度(15/10/5) + 方向(10/3) + 类型(5/3/0) + 关联策略盈利(5) + 近期点击(5)`。
+- **V→D 反馈归因**（R→V→D 闭环）：你反馈「有用」的个股 +6、有用行业（`impact_industries`/`industries`）
+  +4；「没用」的个股 -4。对应 reason：「你反馈有用的个股 / 你关注的行业 / 你反馈无用的个股」。
+- `risk.level` 按画像护栏文案生成（利空×conservative/balanced→高、aggressive→中；利好→低；中性→中）。
+
+### 4.26 POST /personalized/interactions —— R 行为捕获（view/click 埋点）
+
+```jsonc
+// body
+{ "card_id": "card-f87bec719", "action": "click",
+  "ts": "2026-08-24 15:57:30", "meta": { "bucket": "strategy", "ticker": "688981",
+  "strategy_id": "strat-b022a7436e" } }
+// 200
+{ "ok": true, "stored": true, "action": "click", "card_id": "card-f87bec719" }
+```
+
+- `action` ∈ `view`（曝光，每卡每会话一次）/ `click`（点击打开，每次记）。
+- 落 `data/adapter/behavior.json`（环形缓冲，默认 cap 500）；`click` 会在 24h 内
+  给同 ticker 事件卡 +5 relevance（反馈进 P 排序）。
+- `meta` 建议带 `{ bucket, ticker, strategy_id, direction, industries }`：`direction` 参与
+  K 画像方向偏差统计（旧记录无 direction 按不参与）；`industries` 参与行业亲和归因。
+- `ts` 缺省服务端记；`card_id` 必须回传（渲染时的 `card_id`）。
+
+### 4.27 GET /personalized/interactions —— 最近行为记录
+
+```jsonc
+// 200
+{ "count": 1, "items": [{ "card_id": "card-…", "action": "click",
+  "ts": "…", "meta": { … }, "server_ts": "…" }] }
+```
+
+### 4.28 GET /risk/portfolio —— N 组合风险模型（同步、确定性、无实时行情）
+
+等权估算：持仓 `N` → 单股权重 `1/N`、集中度 `HHI=1/N`，对比
+`risk_profiles.profile()["risk_budget"]`（balanced：单股 0.25 / HHI 0.30 / 波动 0.18）。
+影子回撤/波动来自 `shadow_equity` 净值序列，**≥2 日才评估**，否则 `null` + `data_note="数据不足"`。
+
+```jsonc
+// 200
+{
+  "as_of": "2026-08-24 16:36:58",
+  "profile": "balanced", "profile_label": "稳健型",
+  "summary": {
+    "n_positions": 1, "equal_weight": 1.0, "hhi": 1.0,
+    "shadow_max_drawdown": null, "shadow_annualized_vol": null,
+    "data_note": "影子净值不足2日，回撤/波动未评估"
+  },
+  "breaches": [
+    { "indicator": "single_stock_weight", "label": "单股权重",
+      "value": 1.0, "limit": 0.25, "excess": 4.0, "severity": "高" },
+    { "indicator": "hhi", "label": "集中度 HHI",
+      "value": 1.0, "limit": 0.3, "excess": 3.33, "severity": "高" }
+  ]
+}
+```
+
+- breach 形状与 `holdings_runner._risk_budget_check` 一致（`{indicator,label,value,limit,excess}`），
+  额外带 `severity`：`excess>1.5→高 / >1→中 / 其余低`；`indicator` ∈ `single_stock_weight|hhi|portfolio_vol`。
+- 数据不足时**不产出 0 值 breach**（避免误报）。
+
+### 4.29 GET /risk/alerts —— Q 风险预警中心（四源聚合）
+
+聚合 组合(N) + 影子(I) + 事件(F) + 画像(K) 四源，按 `severity 高>中>低` 排序。
+
+```jsonc
+// 200
+{
+  "as_of": "2026-08-24 16:37:09", "profile": "balanced", "profile_label": "稳健型",
+  "count": 3,
+  "items": [
+    { "id": "risk-…", "source": "portfolio", "severity": "高",
+      "title": "单股权重超预算",
+      "detail": "当前单股等权占比 100%，稳健型预算上限 25%（超 4.0 倍）",
+      "codes": ["600519"], "strategy_id": null, "ts": "…",
+      "feedback": { "useful": 0, "useless": 0 } },
+    { "id": "risk-…", "source": "portfolio", "severity": "高",
+      "title": "集中度 HHI超预算", "detail": "…", "codes": ["600519"], "strategy_id": null, "ts": "…",
+      "feedback": { "useful": 0, "useless": 0 } },
+    { "id": "risk-…", "source": "profile", "severity": "低",
+      "title": "画像预算提示",
+      "detail": "当前画像 稳健型，组合预算 波动≤18% / HHI≤0.30",
+      "codes": [], "strategy_id": null, "ts": "…",
+      "feedback": { "useful": 0, "useless": 0 } }
+  ],
+  "effect": { "window_hours": 168, "views": 5, "clicks": 0, "useful": 1, "useless": 0, "ctr": 0.0 }
+}
+```
+
+- `source` ∈ `portfolio | shadow | event | profile`：
+  - `portfolio`：N 模型 breach 展开；
+  - `shadow`：影子策略 `nav<1`（净值回撤，<0.95→高 / 其余中）、已平仓净负（`shadows/trades:{sid}`）、
+    运行错误（`shadow_equity.strategy_errors`）三项；
+  - `event`：`fetch_events` → 命中持仓/自选 且 **利空** 事件（持仓→高、自选→中，再用
+    `_risk_level` 按画像校准）；market-watch 不可用 → 该源自动缺失（不 500）；
+  - `profile`：一条画像预算 advisory（低）。
+- 事件源复用 `personalize._classify/_risk_level`，C 影响图谱注入后间接波及标的也会命中持仓/自选。
+- **V→Q 效果归因**：每项带 `feedback{useful,useless}`（该预警被标记的次数）；`effect` 是
+  R→V 整体漏斗（曝光→点击→有用/没用→CTR）。**事件源**预警若被标记没用 ≥2 次且 ≥ 有用次数，
+  `severity` 自动降一档（高→中/中→低）并在 `detail` 注明「灵敏度已下调」——**组合/影子/画像源永不抑制**。
+
+### 4.30 GET /personalized/impact —— C 事件影响图谱（调试/验证）
+
+事件 → 直连标的产业链上下游 + 同行业公司 的间接波及标的（`impact_codes`）。
+
+| Query | 默认 | 说明 |
+|---|---|---|
+| `limit` | `5` | 返回事件数（1–50） |
+
+```jsonc
+// 200
+{
+  "as_of": "…", "count": 5,
+  "events": [{
+    "id": "ev-…", "tickers": [{ "name": "中芯国际", "code": "688981" }],
+    "industries": ["半导体"], "direction": "利空", "summary": "…",
+    "impact_codes": ["603986","688347", …],      // 间接波及标的（已过 _normalize_symbol 白名单，剔北交所/B股）
+    "impact_industries": ["半导体"],
+    "impact_by": ["688981 产业链: …", "行业「半导体」: 兆易创新(603986)/…"]   // 可读原因
+  }]
+}
+```
+
+- 数据源 = industry-chain `:8200`：`GET /graph/chain/{code}?depth_up=1&depth_down=1`（邻居）+ 
+  `GET /companies?keyword={industry}&limit=50`（同行业）。每事件 ≤2 次子请求、`timeout=1.5`。
+- TTL 300s 内存缓存；`:8200` 不可达 → 30s backoff 后跳过 → **优雅降级**：事件保持原样
+  （`impact_codes` 为空、不 500、不拖慢）。该扩展已注入 `fetch_events`，
+  **`/personalized/cards` 与 `/strategies/hypothesize` 自动吃到**，无需额外传参。
+
+### 4.31 GET /personalized/profile —— K 画像增强（行为推断）
+
+基础画像 + 近 `PERSONALIZED_BEHAVIOR_HOURS`(默认 168) 小时行为（R 埋点）推断的
+`effective_aggression` 与关注/方向/策略亲和。
+
+```jsonc
+// 200
+{
+  "as_of": "…", "base_profile": "balanced", "profile_label": "稳健型",
+  "base_aggression": 0.5, "effective_aggression": 0.5,
+  "behavior": {
+    "window_hours": 168, "views": 5, "clicks": 0,
+    "focus_tickers": [{ "ticker": "600519", "count": 2 }],
+    "direction_skew": null,                       // 无方向数据为 null；有则为 {利好, 利空, good_pct, bad_pct, delta}
+    "aggression_delta": 0.0,                      // = clamp(点击方向 delta + 反馈 delta, ±0.15)
+    "feedback": { "useful": 1, "useless": 0, "total": 1, "delta": 0.15 },
+    "feedback_delta": 0.15,                       // 显式反馈方向修正（利空有用/利好没用=风险耐受，权重 0.15）
+    "interest_tickers": [{ "ticker": "001382", "count": 1 }],
+    "interest_industries": [{ "industry": "电力设备", "count": 1 }],
+    "ignored_tickers": [],
+    "industry_affinity": [{ "industry": "电力设备", "count": 1 }],  // 点击+反馈的行业偏好 top8
+    "watchlist_tickers": ["600519", "000858", "300750"],            // 关注（自选）
+    "trading_affinity": ["688981", "603986", "688347"],             // 交易代理：影子验证中策略标的
+    "strategy_affinity": [{ "strategy_id": "…", "kind": "rsi_reversal", "name": "…", "count": 1 }],
+    "notes": ["近168小时 5 次点击、1 次反馈；有用1/没用0，行为画像激进度+0.15"]
+  },
+  "notes": []
+}
+```
+
+- `effective_aggression = clamp(画像基础激进度 + aggression_delta, 0, 1)`，O 打分用；
+  `aggression_delta` 合并点击方向（`0.3×(利空占比-利好占比)`）与反馈方向（`0.15×反馈符号`），
+  总上限 ±0.15。行为记录**无 `direction` 的历史数据按不参与**。
+- L→K 四类输入：阅读(view/click 方向+行业)、显式反馈(useful/useless→interest/ignored)、
+  关注(watchlist_tickers)、交易代理(trading_affinity)；供 O/P/Q 微调与 R→V 归因。
+
+### 4.32 POST /personalized/feedback —— R 显式反馈（P→R 决策信号）
+
+卡片或预警的「有用/没用」反馈，落行为库（`action=feedback`），服务端据此做
+R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归因（卡片排序 boost、
+事件预警灵敏度校准）。
+
+```jsonc
+// body
+{ "card_id": "card-f87bec719", "sentiment": "useful",
+  "meta": { "bucket": "strategy", "ticker": "688981",
+            "strategy_id": "strat-b022a7436e", "direction": "利空",
+            "industries": ["半导体"] } }
+// 预警反馈：card_id 用 /risk/alerts 的 item.id，meta 带 {source, codes, title}
+{ "card_id": "risk-abc123", "sentiment": "useless",
+  "meta": { "source": "event", "codes": ["600519"], "title": "持仓利空事件" } }
+// 200
+{ "ok": true, "stored": true, "sentiment": "useful", "card_id": "card-f87bec719" }
+```
+
+- `sentiment` ∈ `useful`（有用/值得看）/ `useless`（没用/噪音）。
+- 卡片反馈建议带 `meta{ticker, direction, industries}`（供画像归因）；
+  预警反馈建议带 `meta{source, codes, title}`（`source` 决定是否触发 V→Q 灵敏度校准）。
+- fire-and-forget：前端不 await、失败静默，绝不阻塞渲染。
+
+### 4.33 GET /evolution/status —— 自进化闭环状态
+
+闭环就绪度 + 策略生命周期统计（`GET`，无参）。
+
+```json
+// 200
+{ "as_of": "2026-08-24 17:27:11", "days_of_data": 1, "min_days": 5,
+  "ready": false,
+  "counts": { "candidate": 1, "active": 1, "watch": 0, "retired": 0,
+              "rejected": 0, "mutated": 0 },
+  "note": "影子净值仅 1 日，自进化待累积至 5 日" }
+```
+
+- `days_of_data`：shadow_equity 有效净值日数；`min_days`：进化阈值（默认 5，`EVOLVE_MIN_DAYS`）。
+- `ready = days_of_data >= min_days`。不足时只出归因报告，`/evolution/run` 返回 `waiting_data` 不动作。
+- `counts.watch` = 自进化降级观察中的策略；`counts.mutated` = 变异回流产生的 candidate 后代。
+
+### 4.34 GET /evolution/attribution —— S→T 策略归因（只读）
+
+影子组合整体归因 + 每策略贡献分解（`GET`，无参，永不写库）。
+
+```json
+// 200
+{ "as_of": "…", "days_of_data": 5, "min_days": 5, "data_note": null,
+  "overall": { "start_nav": 1.0, "end_nav": 1.035, "return_pct": 3.5,
+               "max_drawdown_pct": 0.0, "strategy_count": 2 },
+  "strategies": [ { "strategy_id": "strat-b022a7436e", "name": "…",
+                    "kind": "rsi_reversal", "status": "active",
+                    "symbols": ["688981","603986","688347"],
+                    "nav": 1.04, "return_pct": 4.0,
+                    "max_drawdown_pct": 0.0, "closed_trades": 2,
+                    "closed_win_rate_pct": 100.0, "closed_cum_return_pct": 5.0 } ] }
+```
+
+- 每策略 `return_pct` / `max_drawdown_pct` 基于该策略影子净值序列；`closed_*` 来自
+  `shadows/trades:{sid}` 平仓记录。样本不足（<2 日）对应字段为 `null`，**不要渲染成 0**。
+- `strategies` 已按影子收益降序；数据不足时 `data_note` 给提示、`overall`/`strategies` 仍返回当前可得值。
+
+### 4.35 POST /evolution/run —— T→W→H 进化（升降级/淘汰 + 变异回流）
+
+```json
+// 请求
+{ "apply": false }          // false=仅预览（默认）；true=写库执行
+```
+
+```json
+// 200（apply=false 预览；数据不足时 status=waiting_data + count=0）
+{ "as_of": "…", "days_of_data": 5, "min_days": 5, "applied": false,
+  "status": "ready", "count": 4, "actions": [
+    { "type": "promote", "sid": "strat-good", "from": "tier1", "to": "tier2",
+      "reason": "影子净值 1.0400 ≥ 升级线 1.03" },
+    { "type": "mutate", "parent": "strat-good", "sid": "strat-768b184ea0",
+      "kind": "rsi_reversal", "params": {"n":10,"oversold":25,"overbought":65},
+      "symbols": ["688981","603986","688347"],
+      "name": "变体·strat-good·b1", "reason": "由升级策略 … 变异 → candidate 回流" },
+    { "type": "retire", "sid": "strat-bad", "from": "active", "to": "retired",
+      "reason": "平仓胜率 33% < 35%（已平 3 笔），影子表现不可靠" } ] }
+```
+
+**动作语义**（对应架构图 T→W→H）：
+
+| type | 触发 | 效果 |
+|---|---|---|
+| `promote` | 影子 `nav ≥ EVOLVE_PROMOTE_NAV`（默认 1.03） | `evolve.tier=2` 高置信标记 |
+| `demote` | 影子 `nav ≤ EVOLVE_DEMOTE_NAV`（默认 0.95） | `evolve.state=watch`：停止推荐、影子继续记账（可恢复） |
+| `retire` | 影子 `nav ≤ EVOLVE_RETIRE_NAV`（默认 0.90）或平仓胜率 `< EVOLVE_RETIRE_CLOSED_WIN` 且 ≥3 笔 | `status→retired`：不再推荐、不再进影子 |
+| `mutate` | 升级策略 + 样本外达标 + 变异冷却期外（`EVOLVE_MUTATE_COOLDOWN_DAYS`，默认 7） | 参数轻变异 + 标的子集 → 新 `candidate` 写回策略池（`source=evolution`、`mutated_from` 指向父），走既有 E→G→H→I 再验证 |
+
+**护栏**：
+- 数据不足（`days_of_data < min_days`）→ `status=waiting_data` + `count=0`，**永不写库**。
+- 变异只从「样本外 `win_rate_pct ≥ 50` + 影子升级」的 active 策略出发，小步参数扰动；
+  同一父策略冷却期内不重复变异（幂等）。
+- 阈值全部走 `.env`（`EVOLVE_*`，见 §6.12）；`apply=true` 后再次 dry-run 可见已生效状态。
+- **R→S→U→K outcome 版**：`GET /personalized/profile` 的 `behavior.outcome` 即用户参与/激活策略的
+  影子 outcome → `outcome_delta`（决策受验证→微调行为激进度），与 `/evolution/run` 相互独立。
+
+---
+
+## 5. 任务查询与结果
+
 ---
 
 ## 5. 任务查询与结果
@@ -1191,6 +1552,154 @@ interface KycParseResult {          // POST /kyc/parse
 }
 ```
 
+### 6.10 个性化右链（O/C/D/P/R/K，`/personalized/*`）
+
+```ts
+interface BehaviorProfile {         // K 画像增强（L→K）：GET /personalized/profile → behavior
+  window_hours: number; views: number; clicks: number
+  focus_tickers: { ticker: string; count: number }[]
+  direction_skew: { 利好: number; 利空: number; good_pct: number
+                    bad_pct: number; delta: number } | null
+  aggression_delta: number          // clamp(点击方向 delta + 反馈 delta + outcome delta, ±0.15)
+  feedback: { useful: number; useless: number; total: number; delta: number }
+  feedback_delta: number            // 显式反馈方向修正（利空有用/利好没用=风险耐受）
+  outcome: {                        // 自进化 outcome 版（R→S→U→K）：参与/激活策略的影子 outcome
+    delta: number; engaged: number; samples: number
+    avg_return_pct: number | null; note: string
+  } | null                          // 数据不足（<2 日）或无样本时 delta=0 + note
+  outcome_delta: number             // clamp(0.08 × 参与策略影子均收益, ±0.05)
+  interest_tickers: { ticker: string; count: number }[]        // 你反馈有用的个股
+  interest_industries: { industry: string; count: number }[]   // 你反馈有用的行业
+  ignored_tickers: { ticker: string; count: number }[]         // 你反馈无用的个股
+  industry_affinity: { industry: string; count: number }[]     // 点击+反馈行业偏好 top8
+  watchlist_tickers: string[]                                  // 关注（自选）
+  trading_affinity: string[]                                   // 交易代理：影子验证中策略标的
+  strategy_affinity: { strategy_id: string; kind: string; name: string; count: number }[]
+  notes: string[]
+}
+
+interface StrategyMatch {           // GET /personalized/matches → items[]
+  strategy_id: string; name: string; kind: string; direction: string
+  symbols: string[]; status: string
+  nav: number | null; closed_count: number
+  match_score: number; fits_profile: boolean; caution: string | null
+  breakdown: Record<string, { score: number; notes: string[] }>   // 含 diversification（N→O）
+  match_reasons: { dim: string; code: string; text: string; score: number }[]
+}
+// GET /personalized/matches 顶层额外：
+//   effective_aggression: number, behavior: BehaviorProfile,
+//   portfolio_concentration: { concentrated: boolean; n: number; hhi: number; limit: number | null; label: string | null }
+
+interface PersonalizedCard {        // GET /personalized/cards → cards[]
+  card_id: string; event_id: string; item_id: string
+  bucket: 'holdings' | 'watchlist' | 'strategy' | 'fresh'
+  relevance_score: number
+  type: string; direction: string; title: string; summary: string
+  time: string; source: string; url: string
+  tickers: { name: string; code: string }[]; industries: string[]
+  impact: {                          // C 事件影响图谱（:8200 挂掉时为空对象）
+    codes: string[]; industries: string[]; by: string[]
+  }
+  matched: {
+    holdings: string[]; watchlist: string[]
+    strategies: { id: string; name: string; kind: string; direction: string
+                  symbols: string[]; status: string; nav: number | null;
+                  closed_count: number }[]
+  }
+  risk: { level: '高' | '中' | '低'; note: string }
+  reasons: string[]
+  llm_comment: string | null
+  event: Record<string, unknown>    // 原事件字段（含 impact_codes/impact_by），前端可复用 drawer
+}
+// GET /personalized/cards 顶层额外：effective_aggression: number, behavior: BehaviorProfile
+
+interface InteractionRecord {       // POST/GET /personalized/interactions
+  card_id: string; action: 'view' | 'click'
+  ts: string; meta?: Record<string, unknown>; server_ts?: string
+}
+// meta.direction: '利好' | '利空' | '' —— 前端补埋，供 K 方向偏差统计
+// meta.industries: string[] —— 前端补埋，供行业亲和归因
+
+interface FeedbackRecord {          // POST /personalized/feedback → 行为库 action=feedback
+  card_id: string; sentiment: 'useful' | 'useless'
+  ts: string; meta?: Record<string, unknown>; server_ts?: string
+}
+// 卡片反馈 meta 建议 { bucket, ticker, strategy_id, direction, industries }
+// 预警反馈 meta 建议 { source, codes, title } —— source='event' 才触发 V→Q 灵敏度校准
+```
+
+### 6.11 风险预警中心（N+Q，`/risk/*`）
+
+```ts
+interface RiskBreach {              // GET /risk/portfolio → breaches[]
+  indicator: 'single_stock_weight' | 'hhi' | 'portfolio_vol'
+  label: string; value: number; limit: number; excess: number
+  severity: '高' | '中' | '低'       // excess>1.5→高 / >1→中 / 其余低
+}
+
+interface RiskAlert {               // GET /risk/alerts → items[]
+  id: string; source: 'portfolio' | 'shadow' | 'event' | 'profile'
+  severity: '高' | '中' | '低'
+  title: string; detail: string
+  codes: string[]; strategy_id: string | null; ts: string
+  feedback: { useful: number; useless: number }   // V→Q 归因：该预警被标记次数
+}
+// GET /risk/alerts 顶层额外：
+//   effect: { window_hours: number; views: number; clicks: number;
+//             useful: number; useless: number; ctr: number | null }  // R→V 整体漏斗
+// 事件源预警 feedback.useless>=2 且 >=useful → severity 降一档（detail 注明「灵敏度已下调」）
+```
+
+### 6.12 自进化闭环（S_shadow→T→W→H + R→S→U→K outcome，`/evolution/*`）
+
+```ts
+interface EvolutionStatus {         // GET /evolution/status
+  as_of: string; days_of_data: number; min_days: number; ready: boolean
+  counts: { candidate: number; active: number; watch: number
+            retired: number; rejected: number; mutated: number }
+  note: string | null
+}
+
+interface StrategyAttribution {     // GET /evolution/attribution → strategies[]
+  strategy_id: string; name: string; kind: string; status: string
+  symbols: string[]; nav: number
+  return_pct: number | null; max_drawdown_pct: number | null
+  closed_trades: number; closed_win_rate_pct: number | null
+  closed_cum_return_pct: number | null
+}
+// GET /evolution/attribution 顶层：as_of, days_of_data, min_days, data_note,
+//   overall: { start_nav, end_nav, return_pct, max_drawdown_pct, strategy_count }
+
+interface EvolutionAction {         // POST /evolution/run → actions[]
+  type: 'promote' | 'demote' | 'retire' | 'mutate'
+  sid: string
+  from?: string; to?: string                     // 升降级流转（promote/demote/retire）
+  parent?: string; kind?: string; params?: object // 变异（mutate）
+  symbols?: string[]; name?: string; reason: string
+}
+// POST /evolution/run 顶层：as_of, days_of_data, min_days, applied, status
+//   ('ready' | 'waiting_data'), count, actions[], data_note?
+```
+
+**策略 `evolve` 字段**（写进 strategies 集合，前端 `GET /strategies` 可读）：
+`{ state: 'active'|'watch'|'retired', tier: 1|2, updated_at, note?, mutated_at? }`。
+- `state=watch`（降级观察）：`status` 仍 active → 影子继续记账（shadow runner 自读 status），
+  但 **O 推荐侧（`/personalized/matches`、卡片 strategy 桶、事件→策略命中）过滤掉**（`_active_strategies`）；
+- `state=retired` / `status=retired`：不再推荐、不再进影子；
+- `source='evolution'` + `mutated_from=<父 id>` + `generation`：变异回流候选，走既有 E→G→H→I 再验证。
+
+**进化阈值（`.env`）**：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `EVOLVE_MIN_DAYS` | `5` | 影子净值≥N 日才执行升降级/变异（不足只出归因） |
+| `EVOLVE_PROMOTE_NAV` | `1.03` | `nav ≥` 升级线 → tier2 + 可变异 |
+| `EVOLVE_DEMOTE_NAV` | `0.95` | `nav ≤` 观察线 → watch 降级 |
+| `EVOLVE_RETIRE_NAV` | `0.90` | `nav ≤` 淘汰线 → retired |
+| `EVOLVE_RETIRE_CLOSED_WIN` | `0.35` | 平仓胜率 < 此且 ≥3 笔 → retired |
+| `EVOLVE_MUTATE_BRANCHES` | `2` | 每升级策略变异分支数 |
+| `EVOLVE_MUTATE_COOLDOWN_DAYS` | `7` | 父策略变异冷却（幂等护栏） |
+
 ---
 
 ## 7. 与插件工具的映射
@@ -1208,8 +1717,8 @@ interface KycParseResult {          // POST /kyc/parse
 | `get_risk_profile` | GET `/risk_profile` |
 
 > **二期端点不暴露为 dsh 对话工具**：`/backtest/*`、`/strategies/*`、`/shadow/*`、`/kyc/*`、
-> `GET /holdings` 由 **product 前端 `#/strategies` 等页面直连**（`PA.api` + `PA.runTask`），
-> 走 task_id + SSE 协议，不进 dsh 对话流。
+> `/personalized/*`、`/risk/*`、`GET /holdings` 由 **product 前端 `#/strategies` 等页面直连**
+> （`PA.api` + `PA.runTask`），走 task_id + SSE 协议，不进 dsh 对话流。
 
 ---
 
@@ -1228,4 +1737,8 @@ interface KycParseResult {          // POST /kyc/parse
   - `decisions`（评估结果写回 `eval_meta`，供 `/backtest/performance` 重算）
 - **调度器**：`BRIEF_SCHEDULE_ENABLED`（简报 job）与 `SHADOW_SCHEDULE_ENABLED`
   （shadow_daily job，默认 false；手动 POST 永远可用）。
+- **事件影响图谱（C）**：`:8200` 扩展结果在**进程内内存缓存**（TTL 300s，key=event id），
+  重启即失 → 下一次 `fetch_events` 自动重建；`:8200` 不可达时 30s backoff 后优雅降级为空。
+- **行为画像（L→K）**：`behavior.json`（环形缓冲）为唯一持久源，`/personalized/profile`
+  每次实时重算（不落中间态）。
 - 数据目录可随仓库整体迁移；`USE_MONGODB_STORAGE` 恒为 `false`（本项目固定 JSON 存储）。

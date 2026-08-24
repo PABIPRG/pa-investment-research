@@ -189,6 +189,49 @@ class KycParseRequest(BaseModel):
     text: str = Field(min_length=1, description="自然语言描述（语音转写或手打）")
 
 
+class PersonalizedInteractionRequest(BaseModel):
+    """POST /personalized/interactions 请求体：个性化卡片阅读行为埋点。"""
+
+    card_id: str = Field(min_length=1, description="资讯卡片 id（渲染后回传，跨刷新稳定）")
+    action: Literal["view", "click"] = Field(
+        description="view=曝光（每卡每会话一次），click=点击打开（每次记）"
+    )
+    ts: Optional[str] = Field(
+        default=None, description="客户端时间戳 %Y-%m-%d %H:%M:%S；缺省服务端记"
+    )
+    meta: Optional[dict] = Field(
+        default=None, description="上下文：strategy_id/ticker/bucket 等"
+    )
+
+
+class PersonalizedFeedbackRequest(BaseModel):
+    """POST /personalized/feedback 请求体：卡片/预警显式反馈（P→R 决策信号）。
+
+    落行为库（action=feedback），服务端据此做 R→U→K 画像修正与 R→V 效果归因
+    （卡片排序 boost / 事件预警灵敏度校准）。
+    """
+
+    card_id: str = Field(min_length=1, description="卡片或预警 id（预警用 /risk/alerts 的 id）")
+    sentiment: Literal["useful", "useless"] = Field(
+        description="useful=有用/值得看，useless=没用/噪音"
+    )
+    ts: Optional[str] = Field(
+        default=None, description="客户端时间戳 %Y-%m-%d %H:%M:%S；缺省服务端记"
+    )
+    meta: Optional[dict] = Field(
+        default=None, description="上下文：source/codes/ticker/strategy_id/direction/industries"
+    )
+
+
+class EvolutionRunRequest(BaseModel):
+    """POST /evolution/run 请求体：自进化闭环执行开关。"""
+
+    apply: bool = Field(
+        default=False,
+        description="false=仅预览（dry-run，返回 actions 清单不写库）；true=写库执行升降级/变异/回流",
+    )
+
+
 class TaskStarted(BaseModel):
     """POST /analyze 响应"""
 

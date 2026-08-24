@@ -53,8 +53,11 @@ def _str2md5(s: str) -> str:
 # ---- 事件源 -------------------------------------------------------------
 
 
-def fetch_events(limit: int = 20) -> list[dict]:
-    """从 market-watch 拉结构化事件（TTL 缓存，失败返回空→假设生成降级）。"""
+def fetch_events(limit: int = 20, timeout: float = 4.0) -> list[dict]:
+    """从 market-watch 拉结构化事件（TTL 缓存，失败返回空→假设生成降级）。
+
+    timeout 默认 4s（hypothesize 用）；个性化卡片 feed 传更大值等 market-watch
+    懒抽取完成（实测冷缓存抽取 ~4.2s，4s 恰好在边界上会偶发超时）。"""
     now = time.time()
     hit = _EVENTS_CACHE.get("events")
     if hit and (now - hit[0]) < settings.event_cache_ttl:
@@ -63,12 +66,17 @@ def fetch_events(limit: int = 20) -> list[dict]:
     try:
         r = requests.get(
             settings.mw_url.rstrip("/") + f"/news/events?limit={limit}",
-            timeout=4, proxies={},
+            timeout=timeout, proxies={},
         )
         r.raise_for_status()
         events = (r.json() or {}).get("items") or []
     except Exception as exc:  # noqa: BLE001 — 事件源不可用不拖垮假设生成
         logger.warning("拉取 market-watch 事件失败（假设生成降级）: %s", exc)
+    try:  # C 事件影响图谱：注入扩展（D/E 自动吃到，:8200 挂掉优雅降级）
+        from . import impact
+        events = impact.expand_events(events)
+    except Exception:  # noqa: BLE001 — 扩展失败保持原样
+        pass
     _EVENTS_CACHE["events"] = (now, events)
     return events
 
@@ -370,7 +378,8 @@ def generate_hypotheses(events: list[dict]) -> list[dict]:
     usable = [
         e for e in events
         if e.get("direction") in ("利好", "利空")
-        and any(t.get("code") for t in (e.get("tickers") or []))
+        and (any(t.get("code") for t in (e.get("tickers") or []))
+             or (e.get("impact_codes") or []))
     ]
     if not usable:
         return []
@@ -404,6 +413,9 @@ def generate_hypotheses(events: list[dict]) -> list[dict]:
     hyps = []
     for i, e in enumerate(usable):
         codes = [t.get("code") for t in (e.get("tickers") or []) if t.get("code")]
+        for c in (e.get("impact_codes") or []):  # C 间接波及标的也进候选
+            if c not in codes:
+                codes.append(c)
         dirn = e.get("direction")
         if dirn == "利好":
             hyps.append({"event_idx": i, "symbols": codes, "direction": dirn,
