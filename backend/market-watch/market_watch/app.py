@@ -8,12 +8,13 @@
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from . import briefs, news, quotes, rules, scanner, scheduler
+from . import briefs, events, news, quotes, rules, scanner, scheduler
 from .config import settings
 from .indicators import compute_indicators, summarize
 from .schemas import (
@@ -136,6 +137,13 @@ def overview():
     items = _list("watchlist")
     rows = quotes.cache().get_quotes([w["code"] for w in items])
     alerts = [a for a in _list("alerts") if a.get("enabled", True)]
+    # 主力净流入并发拉取（东财限流时 get_fund_flow 快速失败 + 60s 失败缓存，不拖住整页）
+    flows: dict[str, float | None] = {}
+    if settings.fund_flow_enabled and rows:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(quotes.get_fund_flow, q["code"]): q["code"] for q in rows}
+            for f in futs:
+                flows[futs[f]] = f.result()
     out = []
     for q in rows:
         hit, near = rules.matching_alerts(alerts, q)
@@ -143,7 +151,7 @@ def overview():
             "code": q["code"], "name": q["name"], "price": q.get("price"),
             "pct_change": q.get("pct_change"), "volume_ratio": q.get("volume_ratio"),
             "turnover": q.get("turnover"), "amount_yi": q.get("amount_yi"),
-            "fund_flow_yi": quotes.get_fund_flow(q["code"]) if settings.fund_flow_enabled else None,
+            "fund_flow_yi": flows.get(q["code"]),
             "hit": hit, "near": near,
         }
         out.append(row)
@@ -195,6 +203,31 @@ def news_latest():
     if record is None:
         raise HTTPException(404, "暂无新闻速递，先调 POST /news/express")
     return record
+
+
+@app.get("/news/flash")
+def news_flash(limit: int = 30, enrich: int = 0, personal: int = 0):
+    """实时快讯（源目录聚合）：前端滚动刷新 + 点开看全文。limit 5-100。
+    enrich=1 时每项附加 event（结构化事件）与 matched（命中自选/持仓）；
+    personal=1 时命中项置顶（个性化排序）。"""
+    limit = max(5, min(limit, 100))
+    if enrich:
+        return events.enriched_flash(limit=limit, personal=bool(personal))
+    return news.fetch_flash(limit=limit)
+
+
+@app.get("/news/events")
+def news_events(limit: int = 30):
+    """结构化投资事件：LLM 抽取（类型/涉及个股/行业/方向/摘要），自动降级规则抽取。"""
+    limit = max(5, min(limit, 100))
+    items = events.extract_events(limit=limit)
+    return {"as_of": time.strftime("%Y-%m-%d %H:%M:%S"), "count": len(items), "items": items}
+
+
+@app.get("/news/event-alerts")
+def news_event_alerts():
+    """事件预警中心：命中自选/持仓股的事件列表 + 命中范围。"""
+    return events.event_alerts()
 
 
 @app.post("/brief/generate")

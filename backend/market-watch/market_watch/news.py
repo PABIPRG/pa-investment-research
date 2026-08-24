@@ -7,9 +7,17 @@
 LLM 不可用时降级为纯标题列表，保证速递始终可用。
 """
 
+import hashlib
+import html
 import json
 import logging
+import os
+import time
+import xml.etree.ElementTree as ET
+
+import requests
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
 from . import llm, quotes
@@ -149,3 +157,265 @@ def latest() -> dict | None:
     if not key:
         return None
     return store.get("news", key)
+
+
+# ---- 实时快讯（源目录 + 并发聚合，借鉴 open-news-mcp 的 feeds.py 源目录思路）-------
+
+_FLASH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    ),
+    "Referer": "https://finance.sina.com.cn/7x24/",
+}
+_FLASH_CACHE: dict[str, tuple[float, dict]] = {}
+_FLASH_TTL = 8.0  # 前端 30s 轮询 + 后端 8s 缓存，防高频打爆源
+
+# Google News 源需访问境外，走本机代理（clash）；其余国内源显式 proxies={} 直连
+_FLASH_PROXY = os.getenv("MW_FLASH_PROXY", "http://127.0.0.1:7892")
+# 追加国内财经域到 NO_PROXY：akshare（财联社）内部走系统代理时对这些域直连
+os.environ["NO_PROXY"] = (
+    os.environ.get("NO_PROXY", "")
+    + ",cls.cn,sina.com.cn,ithome.com,wallstreetcn.com,36kr.com,huxiu.com"
+).strip(",")
+
+
+def _strip_html(src: str) -> str:
+    """快讯 HTML → 纯文本（保留段落换行）。"""
+    import re
+
+    s = html.unescape(src or "")
+    s = re.sub(r"<br\s*/?>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"</p>", "\n", s, flags=re.IGNORECASE)
+    s = re.sub(r"<[^>]+>", "", s)
+    return re.sub(r"[ \t]+", " ", s).strip()
+
+
+def _flash_title(content: str) -> str:
+    """正文首段以【标题】开头时提取标题，否则截前 36 字作列表预览。"""
+    if content.startswith("【"):
+        return content.split("】", 1)[0].lstrip("【").strip()
+    return content[:36]
+
+
+def _t8(dt: datetime) -> str:
+    """任意 datetime → 东八区 'YYYY-MM-DD HH:MM:SS'（跨源统一时间轴）。"""
+    tz = ZoneInfo(settings.timezone)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz)
+    return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _rss_time(pub: str) -> str:
+    """RSS pubDate（如 'Mon, 24 Aug 2026 02:47:42 GMT'）→ 东八区字符串。失败返回空。"""
+    try:
+        return _t8(parsedate_to_datetime(pub))
+    except Exception:
+        return ""
+
+
+def _sina_flash(limit: int) -> list[dict]:
+    """新浪财经 7x24（秒级实时，全文 + 原文链接）。"""
+    r = requests.get("https://zhibo.sina.com.cn/api/zhibo/feed", params={
+        "page": "1", "page_size": str(max(limit, 20)),
+        "zhibo_id": "152", "tag_id": "0", "dire": "f", "dpc": "1",
+    }, timeout=8, proxies={}, headers=_FLASH_HEADERS)
+    r.raise_for_status()
+    lst = (r.json() or {}).get("result", {}).get("data", {}).get("feed", {}).get("list") or []
+    out = []
+    for d in lst:
+        content = _strip_html(str(d.get("rich_text") or ""))
+        if not content:
+            continue
+        out.append({
+            "id": "sina-" + str(d.get("id") or ""),
+            "time": str(d.get("create_time") or ""),
+            "tag": "新浪财经",
+            "title": _flash_title(content),
+            "content": content,
+            "source": "新浪财经",
+            "url": str(d.get("docurl") or ""),
+        })
+    return out
+
+
+def _cls_flash(limit: int) -> list[dict]:
+    """财联社要闻（akshare，含全文、无链接）。"""
+    import akshare as ak
+
+    df = ak.stock_info_global_cls(symbol="全部")
+    out = []
+    for r in df.to_dict("records"):
+        content = _strip_html(str(r.get("内容") or "")).strip()
+        title = str(r.get("标题") or "").strip()
+        if not content and not title:
+            continue
+        if not title:
+            title = _flash_title(content)
+        out.append({
+            "id": "cls-" + hashlib.md5(content.encode()).hexdigest()[:10],
+            "time": f"{r.get('发布日期')} {r.get('发布时间')}".strip(),
+            "tag": "财联社",
+            "title": title,
+            "content": content,
+            "source": "财联社",
+            "url": "",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _wallstreetcn_flash(limit: int) -> list[dict]:
+    """华尔街见闻 7×24 实时快讯（全文 content_text + 原文链接 uri）。"""
+    r = requests.get("https://api-one.wallstcn.com/apiv1/content/lives", params={
+        "channel": "global-channel", "limit": str(limit),
+    }, timeout=10, proxies={}, headers=_FLASH_HEADERS)
+    r.raise_for_status()
+    items = (r.json() or {}).get("data", {}).get("items") or []
+    out = []
+    for d in items:
+        content = str(d.get("content_text") or _strip_html(str(d.get("content") or ""))).strip()
+        if not content:
+            continue
+        ts = d.get("display_time")
+        try:
+            time_s = _t8(datetime.fromtimestamp(int(ts), tz=ZoneInfo(settings.timezone))) if ts else ""
+        except Exception:
+            time_s = ""
+        out.append({
+            "id": "ws-" + str(d.get("id") or ""),
+            "time": time_s,
+            "tag": "华尔街见闻",
+            "title": str(d.get("title") or "").strip() or _flash_title(content),
+            "content": content,
+            "source": "华尔街见闻",
+            "url": str(d.get("uri") or ""),
+        })
+    return out
+
+
+def _rss_flash(url: str, name: str, limit: int) -> list[dict]:
+    """通用 RSS 源（IT之家）：标题 + 摘要 + 原文链接。"""
+    r = requests.get(url, timeout=8, proxies={}, headers=_FLASH_HEADERS)
+    r.raise_for_status()
+    root = ET.fromstring(r.content)
+    out = []
+
+    def g(it, tag):
+        e = it.find(tag)
+        return (e.text or "").strip() if e is not None and e.text else ""
+
+    for it in (root.findall(".//item") or []):
+        title, link, pub, desc = g(it, "title"), g(it, "link"), g(it, "pubDate"), g(it, "description")
+        if not title:
+            continue
+        content = _strip_html(desc)
+        out.append({
+            "id": name + "-" + hashlib.md5((link or title).encode()).hexdigest()[:10],
+            "time": _rss_time(pub),
+            "tag": name,
+            "title": title,
+            "content": content or title,
+            "source": name,
+            "url": link,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _google_news_flash(site: str, name: str, limit: int) -> list[dict]:
+    """Google News RSS 按站聚合（36氪 / 虎嗅 无官方 RSS 的替代）：
+    仅标题 + 原文链接（Google 中转页，需能访问 Google）。走本机代理。"""
+    r = requests.get("https://news.google.com/rss/search", params={
+        "q": f"site:{site}+when:1d", "hl": "zh-CN", "gl": "CN", "ceid": "CN:zh",
+    }, timeout=10, proxies={"http": _FLASH_PROXY, "https": _FLASH_PROXY}, headers=_FLASH_HEADERS)
+    r.raise_for_status()
+    root = ET.fromstring(r.content)
+    out = []
+
+    def g(it, tag):
+        e = it.find(tag)
+        return (e.text or "").strip() if e is not None and e.text else ""
+
+    for it in (root.findall(".//item") or []):
+        raw, link, pub = g(it, "title"), g(it, "link"), g(it, "pubDate")
+        if not raw:
+            continue
+        # Google News 标题常带「 - 平台名」后缀，去掉
+        title = raw.rsplit(" - ", 1)[0].strip() if " - " in raw else raw
+        out.append({
+            "id": name + "-" + hashlib.md5(link.encode()).hexdigest()[:10],
+            "time": _rss_time(pub),
+            "tag": name,
+            "title": title,
+            "content": title,
+            "source": name,
+            "url": link,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+# 快讯源目录：并发拉取，失败源自动降级；新平台在此加一项即可
+_FLASH_SOURCES = [
+    {"name": "新浪财经", "fetch": lambda n: _sina_flash(n)},
+    {"name": "财联社", "fetch": lambda n: _cls_flash(n)},
+    {"name": "华尔街见闻", "fetch": lambda n: _wallstreetcn_flash(n)},
+    {"name": "IT之家", "fetch": lambda n: _rss_flash("https://www.ithome.com/rss/", "IT之家", n)},
+    {"name": "36氪", "fetch": lambda n: _google_news_flash("36kr.com", "36氪", n)},
+    {"name": "虎嗅", "fetch": lambda n: _google_news_flash("huxiu.com", "虎嗅", n)},
+]
+
+
+def _norm_key(s: str) -> str:
+    """标题归一化 key：去【】/标点/空白，取前 24 字，用于跨源去重同一事件。"""
+    import re
+
+    return re.sub(r"[\s【】\.,，。!！?？:：;；\"'“”‘’()（）]", "", s or "")[:24]
+
+
+def fetch_flash(limit: int = 30) -> dict:
+    """实时快讯：源目录并发聚合（跨源标题去重 + 时间倒序）。全部失败返回空 items。
+
+    返回 {as_of, sources, items:[{id,time,tag,title,content,source,url}]}。
+    前端 30s 轮询，本函数 8s 缓存。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    now = time.time()
+    hit = _FLASH_CACHE.get("data")
+    if hit and (now - hit[0]) < _FLASH_TTL:
+        items, used = hit[1]["items"], hit[1]["sources"]
+    else:
+        # 每源保底配额：避免新浪秒级高频把其他平台的独家新闻挤出前 limit
+        per_source = max(4, limit // max(1, len(_FLASH_SOURCES)))
+        merged: list[dict] = []
+        seen: set[str] = set()
+        used: list[str] = []
+        with ThreadPoolExecutor(max_workers=len(_FLASH_SOURCES)) as ex:
+            futs = {ex.submit(src["fetch"], per_source): src["name"] for src in _FLASH_SOURCES}
+            for f, name in futs.items():
+                try:
+                    rows = f.result()
+                except Exception as exc:
+                    logger.warning("快讯源 %s 拉取失败: %s", name, exc)
+                    continue
+                if rows:
+                    used.append(name)
+                for it in rows:
+                    key = _norm_key(it["title"]) or it["id"]
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    merged.append(it)
+        merged.sort(key=lambda it: it["time"], reverse=True)
+        items = merged[:limit]
+        _FLASH_CACHE["data"] = (now, {"items": items, "sources": sorted(set(used))})
+    return {
+        "as_of": datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S"),
+        "sources": used,
+        "items": items[:limit],
+    }

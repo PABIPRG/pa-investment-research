@@ -13,8 +13,12 @@ akshare 权威列名（1.18.92，读安装源码确认）：
 """
 
 import logging
+import math
+import re
+import requests
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -44,6 +48,45 @@ def _num(value):
     return f
 
 
+# 浏览器 UA：东财 push2 WAF 会断连 requests 默认 UA（python-requests/2.34.2）
+_UA = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    ),
+}
+
+
+# push2 子域轮换：东财对单 host 有间歇性断连/限流窗口，跨子域重试提高成功率
+_EM_HOSTS = ["82.push2.eastmoney.com", "push2.eastmoney.com", "push2his.eastmoney.com"]
+
+
+def _http_get(url: str, params: dict | None = None, timeout: int = 10, retries: int = 2) -> requests.Response:
+    """东财直连 GET：浏览器 UA + proxies={} 禁用系统代理 + push2 子域轮换重试。
+
+    两个坑：requests 默认 UA（python-requests/x）被 push2 WAF 拒连；trust_env 会把
+    Windows 系统代理 127.0.0.1:7892 套到 push2 上（clash 对该域断连）。显式 proxies={} +
+    浏览器 UA 直连。东财 push2 单 host 有间歇断连/限流窗口，同一 host 失败时轮换子域重试。
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    base = parsed.netloc
+    hosts = _EM_HOSTS if "eastmoney.com" in base else [base]
+    last = None
+    for i in range(len(hosts) * (retries + 1)):
+        h = hosts[i % len(hosts)]
+        u = url if h == base else url.replace(base, h)
+        try:
+            r = requests.get(u, params=params, timeout=timeout, proxies={}, headers=_UA)
+            r.raise_for_status()
+            return r
+        except Exception as exc:
+            last = exc
+            time.sleep(0.2)
+    raise last
+
+
 def normalize_code(code: str) -> str:
     """标准化股票代码：去空白、校验 6 位数字。非法抛 ValueError。"""
     c = str(code).strip()
@@ -66,29 +109,262 @@ def _bs_code(code: str) -> str:
 
 
 def _fetch_spot_em() -> dict[str, dict]:
-    """东财实时快照（主源，含量比/换手率）。失败抛异常由调用方走新浪 fallback。"""
-    import akshare as ak
+    """东财实时快照（主源，含量比/换手率）。失败抛异常由调用方走新浪 fallback。
 
-    df = ak.stock_zh_a_spot_em()
+    直连 push2 clist（浏览器 UA + 禁用系统代理），pz=100 分页并发拉全市场。
+    akshare 原实现是 59 页串行 + 每页随机 sleep 0.5-1.5s（防反爬），首拉 30s+ 卡死盯盘按钮；
+    且走系统代理对 push2 断连重试。这里并发 8 + 无 sleep，首拉 ~5s，60s TTL 缓存后基本无感。
+    """
+    url = "https://82.push2.eastmoney.com/api/qt/clist/get"
+    base = {
+        "pn": "1", "pz": "100", "po": "1", "np": "1",
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": "2", "invt": "2", "fid": "f12",
+        "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+        "fields": "f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,"
+        "f20,f21,f23,f24,f25,f22,f11,f62,f128,f136,f115,f152",
+    }
+
+    def _page(pn: int) -> tuple[list, int]:
+        p = dict(base)
+        p["pn"] = str(pn)
+        j = _http_get(url, p).json()
+        data = (j or {}).get("data") or {}
+        return (data.get("diff") or []), int(data.get("total") or 0)
+
+    first, total = _page(1)
+    per = len(first) or 100
+    pages = max(1, math.ceil(total / per))
+    diff = first
+    if pages > 1:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = [ex.submit(_page, pn) for pn in range(2, pages + 1)]
+            for f in futs:
+                try:
+                    d, _ = f.result()
+                    diff.extend(d)
+                except Exception:
+                    continue  # 单页失败跳过（下轮 TTL 重拉）
+
     out: dict[str, dict] = {}
-    for r in df.itertuples(index=False):
-        d = r._asdict()
-        code = str(d.get("代码", "")).strip()
+    for d in diff:
+        code = str(d.get("f12", "")).strip()
         if not (len(code) == 6 and code.isdigit()):
             continue
-        amount = _num(d.get("成交额"))
-        row = {
+        amount = _num(d.get("f6"))
+        out[code] = {
             "code": code,
-            "name": str(d.get("名称") or ""),
-            "price": _num(d.get("最新价")),
-            "pct_change": _num(d.get("涨跌幅")),
-            "volume_ratio": _num(d.get("量比")),
-            "turnover": _num(d.get("换手率")),
+            "name": str(d.get("f14") or ""),
+            "price": _num(d.get("f2")),
+            "pct_change": _num(d.get("f3")),
+            "volume_ratio": _num(d.get("f10")),
+            "turnover": _num(d.get("f8")),
             "amount_yi": (amount / 1e8) if amount is not None else None,
-            "volume": _num(d.get("成交量")),  # 手
+            "volume": _num(d.get("f5")),  # 手
         }
-        out[code] = row
     return out
+
+
+def _secid(code: str) -> str:
+    """A 股代码 → 东财 secid（600519→1.600519，000858→0.000858）。"""
+    return ("1." if code.startswith("6") else "0.") + code
+
+
+def _row_from_diff(d: dict) -> dict | None:
+    """东财 clist/ulist diff 行 → normalized quote row。非法代码返回 None。"""
+    code = str(d.get("f12", "")).strip()
+    if not (len(code) == 6 and code.isdigit()):
+        return None
+    amount = _num(d.get("f6"))
+    return {
+        "code": code,
+        "name": str(d.get("f14") or ""),
+        "price": _num(d.get("f2")),
+        "pct_change": _num(d.get("f3")),
+        "volume_ratio": _num(d.get("f10")),
+        "turnover": _num(d.get("f8")),
+        "amount_yi": (amount / 1e8) if amount is not None else None,
+        "volume": _num(d.get("f5")),
+    }
+
+
+# ulist 批量行情短缓存（防 scheduler 30s 轮询高频打 push2）
+_UL_TTL = 10.0
+_ul_cache: dict[str, tuple[float, dict[str, dict]]] = {}
+
+
+def _ulist(codes: list[str]) -> dict[str, dict]:
+    """按代码批量查实时行情（东财 ulist 单请求，浏览器 UA + 直连）。
+    自选几十只 = 1 个请求，替代全市场快照分页；失败返回空表（调用方降级）。"""
+    if not codes:
+        return {}
+    key = ",".join(sorted(set(codes)))
+    now = time.time()
+    hit = _ul_cache.get(key)
+    if hit and (now - hit[0]) < _UL_TTL:
+        return hit[1]
+    try:
+        # 快速失败（retries=0）：东财限流时几秒内降级新浪 hq，不拖住 /overview
+        j = _http_get("https://push2.eastmoney.com/api/qt/ulist.np/get", {
+            "secids": ",".join(_secid(c) for c in codes),
+            "fltt": "2", "invt": "2", "fields": "f2,f3,f5,f6,f8,f10,f12,f14",
+        }, timeout=5, retries=0).json()
+        diff = ((j or {}).get("data") or {}).get("diff") or []
+        out = {}
+        for d in diff:
+            row = _row_from_diff(d)
+            if row:
+                out[row["code"]] = row
+        _ul_cache[key] = (now, out)
+        return out
+    except Exception as exc:
+        logger.warning("ulist 行情 %d 只失败: %s", len(codes), exc)
+        return {}
+
+
+_CLIST_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
+
+
+def _clist_top(fid: str, top_n: int, po: int = 1, page_size: int | None = None) -> list[dict]:
+    """东财 clist 服务端排序取前 N（涨幅/量比/换手/成交额榜），浏览器 UA + 直连。
+    fid: f3=涨跌幅 f10=量比 f8=换手率 f6=成交额；po: 1=降序 0=升序。"""
+    size = page_size or max(top_n * 3, 50)
+    # timeout=5 retries=1（3 子域 × 2 轮 = 6 次），东财限流时 ~2-3s 放弃，让 /scan 快速降级或 422 提示
+    j = _http_get("https://82.push2.eastmoney.com/api/qt/clist/get", {
+        "pn": "1", "pz": str(size), "po": str(po), "np": "1",
+        "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+        "fltt": "2", "invt": "2", "fid": fid, "fs": _CLIST_FS,
+        "fields": "f2,f3,f5,f6,f8,f10,f12,f14",
+    }, timeout=5, retries=1).json()
+    diff = ((j or {}).get("data") or {}).get("diff") or []
+    return [row for row in (_row_from_diff(d) for d in diff) if row]
+
+
+# ---- 新浪源（东财 push2 间歇限流时的稳定替代） -------------------------------
+# 新浪字段缺口：无 volume_ratio（量比），hq 实时无 turnover。price/pct/amount 齐全。
+
+
+def _sina_sym(code: str) -> str:
+    """A 股代码 → 新浪 symbol（600519→sh600519，000858→sz000858）。"""
+    if code.startswith("6"):
+        return "sh" + code
+    if code.startswith(("4", "8", "92")):
+        return "bj" + code
+    return "sz" + code
+
+
+def _sina_hq(codes: list[str]) -> dict[str, dict]:
+    """新浪实时行情（hq.sinajs.cn 批量，GBK）。无换手/量比，price/pct/amount 齐全。"""
+    if not codes:
+        return {}
+    syms = [_sina_sym(c) for c in codes]
+    try:
+        r = requests.get(
+            "https://hq.sinajs.cn/list=" + ",".join(syms),
+            timeout=8, proxies={}, headers={**_UA, "Referer": "https://finance.sina.com.cn"},
+        )
+        r.raise_for_status()
+        txt = r.content.decode("gbk", errors="replace")
+    except Exception as exc:
+        logger.warning("新浪 hq 失败: %s", exc)
+        return {}
+    out: dict[str, dict] = {}
+    for line in txt.splitlines():
+        if '="' not in line:
+            continue
+        sym, _, payload = line.partition('="')
+        code = sym.strip().split("hq_str_")[-1][2:]
+        if len(code) != 6 or not code.isdigit():
+            continue
+        f = payload.rstrip('";').split(",")
+        if len(f) < 10:
+            continue
+        price = _num(f[3])
+        prev = _num(f[2])
+        amount = _num(f[9])
+        out[code] = {
+            "code": code,
+            "name": f[0],
+            "price": price,
+            "pct_change": (round((price - prev) / prev * 100, 2) if price and prev else None),
+            "volume_ratio": None,
+            "turnover": None,
+            "amount_yi": (amount / 1e8) if amount is not None else None,
+            "volume": _num(f[8]),  # 股（新浪），clist 为手
+        }
+    return out
+
+
+_SINA_MARKET = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "Market_Center.getHQNodeData"
+)
+
+
+def _sina_market(sort: str, top_n: int, asc: int = 0) -> list[dict]:
+    """新浪全市场排序行情。有 changepercent/turnoverratio/amount，无量比。
+    sort: changepercent / turnoverratio / amount / volume；asc: 0=降序 1=升序。"""
+    r = _http_get(_SINA_MARKET, {
+        "page": "1", "num": str(max(top_n, 20)), "sort": sort, "asc": str(asc),
+        "node": "hs_a", "_s_r_a": "init",
+    })
+    out = []
+    for d in (r.json() or []):
+        code = str(d.get("code", "")).strip()
+        if not (len(code) == 6 and code.isdigit()):
+            continue
+        amount = _num(d.get("amount"))
+        out.append({
+            "code": code,
+            "name": str(d.get("name") or ""),
+            "price": _num(d.get("trade")),
+            "pct_change": _num(d.get("changepercent")),
+            "volume_ratio": None,
+            "turnover": _num(d.get("turnoverratio")),
+            "amount_yi": (amount / 1e8) if amount is not None else None,
+            "volume": _num(d.get("volume")),
+        })
+    return out
+
+
+def _sina_kline(sym: str, lookback: int) -> list[dict] | None:
+    """新浪日 K（升序）。无成交额列，amount 用 close*volume 估算。"""
+    r = _http_get(
+        "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData",
+        {"symbol": sym, "scale": "240", "ma": "no", "datalen": str(max(lookback, 60))},
+    )
+    out = []
+    for d in (r.json() or []):
+        close = _num(d.get("close"))
+        volume = _num(d.get("volume"))
+        out.append({
+            "date": str(d.get("day"))[:10],
+            "open": _num(d.get("open")), "close": close,
+            "high": _num(d.get("high")), "low": _num(d.get("low")),
+            "volume": volume,
+            "amount": (close * volume) if close is not None and volume is not None else None,
+        })
+    return out or None
+
+
+def _scan_rows(kind: str, top_n: int, min_amount_yi: float | None = None) -> list[dict]:
+    """异动扫描行情源：东财 clist 服务端排序为主（完整字段含量比/换手），
+    东财限流时降级新浪 Market_Center 排序（无 volume_ratio）。量比仅东财有。"""
+    if kind == "volume_ratio":
+        return _clist_top("f10", top_n)  # 东财限流时抛错，由 app 层 503 提示
+    fid = {"gainers": "f3", "turnover": "f8", "amount": "f6"}[kind]
+    try:
+        rows = _clist_top(fid, top_n * 3 if kind == "amount" else top_n)
+    except Exception:
+        sort = {"f3": "changepercent", "f8": "turnoverratio", "f6": "amount"}[fid]
+        rows = _sina_market(sort, max(top_n * 3, 30))
+    if kind == "turnover":
+        rows = [r for r in rows if r.get("turnover") is not None]
+    elif kind == "amount":
+        rows = [r for r in rows if r.get("amount_yi") is not None]
+        if min_amount_yi is not None:
+            rows = [r for r in rows if r["amount_yi"] >= min_amount_yi]
+    return rows
 
 
 def _fetch_spot_sina() -> dict[str, dict]:
@@ -158,16 +434,12 @@ class QuoteCache:
             return self._map
 
     def get_quote(self, code: str) -> dict | None:
-        return self._load().get(code)
+        m = _ulist([code]) or _sina_hq([code])
+        return m.get(code)
 
     def get_quotes(self, codes: list[str]) -> list[dict]:
-        m = self._load()
-        out = []
-        for c in codes:
-            row = m.get(c)
-            if row is not None:
-                out.append(row)
-        return out
+        m = _ulist(codes) or _sina_hq(codes)
+        return [m[c] for c in codes if c in m]
 
     def all_quotes(self) -> list[dict]:
         """全部沪深快照（排除停牌 NaN 行）。"""
@@ -186,35 +458,89 @@ def cache() -> QuoteCache:
     return _cache
 
 
+# ---- 名称→code 反查（事件抽取用）----
+_NAME_INDEX: dict[str, list[str]] | None = None
+_NAME_INDEX_TS = 0.0
+_NAME_INDEX_TTL = 3600.0  # 名称映射几乎不变，1 小时足够；用轻量名称表而非全市场快照
+
+
+def _name_to_code_index() -> dict[str, list[str]]:
+    """全市场 name→code 索引（TTL 缓存，失败返回空）。
+    用 akshare 名称表（一次请求返回全 A code+name），比全市场行情快照（55+ 请求）轻得多。"""
+    global _NAME_INDEX, _NAME_INDEX_TS
+    now = time.time()
+    if _NAME_INDEX is None or (now - _NAME_INDEX_TS) > _NAME_INDEX_TTL:
+        idx: dict[str, list[str]] = {}
+        try:
+            import akshare as ak
+            for r in ak.stock_info_a_code_name().to_dict("records"):
+                nm = str(r.get("name") or "").strip()
+                cd = str(r.get("code") or "").strip()
+                if nm and cd:
+                    idx.setdefault(nm, []).append(cd)
+        except Exception as exc:
+            logger.warning("名称→code 索引构建失败: %s", exc)
+        _NAME_INDEX, _NAME_INDEX_TS = idx, now
+    return _NAME_INDEX
+
+
+def resolve_company_codes(name: str, limit: int = 3) -> list[str]:
+    """公司中文名 → 可能的 6 位 A 股 code。精确匹配优先，再试去常见后缀模糊。
+    重名返回多个候选；找不到返回空。"""
+    if not name:
+        return []
+    idx = _name_to_code_index()
+    nm = str(name).strip()
+    cands = idx.get(nm) or []
+    if cands:
+        return cands[:limit]
+    base = re.sub(r"(股份有限公司|有限公司|股份公司|控股公司|集团公司|公司|集团|股份|控股|科技)$", "", nm)
+    if base and base != nm:
+        cands = idx.get(base) or []
+        if cands:
+            return cands[:limit]
+    return []
+
+
 # ---- 资金流 -------------------------------------------------------------
 
 _fund_cache: dict[str, tuple[float, float]] = {}  # code -> (ts, value_yi)
+_fund_fail_ts: dict[str, float] = {}  # code -> 失败时间戳（东财限流时 60s 内不再重试）
+_FUND_FAIL_TTL = 60.0
 
 
 def get_fund_flow(code: str) -> float | None:
-    """最近交易日主力净流入（亿元）。best-effort，失败返回 None。"""
+    """最近交易日主力净流入（亿元）。best-effort，失败返回 None（60s 内不重试）。"""
     if not settings.fund_flow_enabled:
         return None
     now = time.time()
     hit = _fund_cache.get(code)
     if hit and (now - hit[0]) < settings.fund_flow_ttl:
         return hit[1]
+    fail_ts = _fund_fail_ts.get(code)
+    if fail_ts and (now - fail_ts) < _FUND_FAIL_TTL:
+        return None
     try:
-        import akshare as ak
-
-        market = "sh" if code.startswith("6") else "sz"
-        df = ak.stock_individual_fund_flow(stock=code, market=market)
-        if df is None or df.empty:
+        secid = ("1." if code.startswith("6") else "0.") + code
+        # 快速失败（timeout=5 retries=0 = 3 子域各 1 次），东财限流时 ~1s 放弃，不拖住 /overview
+        j = _http_get("https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get", {
+            "lmt": "0", "klt": "101", "secid": secid,
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+        }, timeout=5, retries=0).json()
+        klines = ((j or {}).get("data") or {}).get("klines") or []
+        if not klines:
             return None
-        last = df.iloc[-1]
-        value = _num(last.get("主力净流入-净额"))
+        value = _num(klines[-1].split(",")[1])  # f52 主力净流入净额（元）
         if value is None:
             return None
         yi = round(value / 1e8, 3)
         _fund_cache[code] = (now, yi)
+        _fund_fail_ts.pop(code, None)
         return yi
     except Exception as exc:
         logger.warning("主力净流入 %s 拉取失败: %s", code, exc)
+        _fund_fail_ts[code] = now
         return None
 
 
@@ -254,35 +580,50 @@ def _bs_hist_ohlcv(code: str, start: str, end: str) -> list[dict]:
 
 def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
     """前复权日线，返回列 date/open/close/high/low/volume/amount（升序）。
-    主源 akshare stock_zh_a_hist，失败降级 baostock。无数据返回 None。"""
+    主源新浪（稳定）→ 东财 push2his → baostock，逐级降级。无数据返回 None。"""
     today = date.today()
     start = today - timedelta(days=int(lookback * 1.5))
     start_s, end_s = start.strftime("%Y%m%d"), today.strftime("%Y%m%d")
+
     rows = None
     try:
-        import akshare as ak
-
-        df = ak.stock_zh_a_hist(
-            symbol=code, period="daily", start_date=start_s, end_date=end_s, adjust="qfq"
-        )
-        if df is not None and not df.empty:
-            rows = [
-                {
-                    "date": str(r.get("日期"))[:10],
-                    "open": _num(r.get("开盘")), "close": _num(r.get("收盘")),
-                    "high": _num(r.get("最高")), "low": _num(r.get("最低")),
-                    "volume": _num(r.get("成交量")), "amount": _num(r.get("成交额")),
-                }
-                for r in df.to_dict("records")
-            ]
+        rows = _sina_kline(_sina_sym(code), lookback)
     except Exception as exc:
-        logger.warning("akshare K线 %s 失败，降级 baostock: %s", code, exc)
-    if not rows:
-        try:
-            rows = _bs_hist_ohlcv(code, start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
-        except Exception as exc:
-            logger.warning("baostock K线 %s 失败: %s", code, exc)
-            return None
+        logger.warning("新浪K线 %s 失败: %s", code, exc)
+    if rows:
+        df = pd.DataFrame(rows).tail(lookback)
+        df = df.dropna(subset=["open", "close", "high", "low"])
+        return df.reset_index(drop=True)
+
+    try:
+        j = _http_get("https://push2his.eastmoney.com/api/qt/stock/kline/get", {
+            "secid": _secid(code),
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "klt": "101", "fqt": "1", "beg": start_s, "end": end_s,
+        }).json()
+        klines = ((j or {}).get("data") or {}).get("klines") or []
+        if klines:
+            rows = []
+            for line in klines:
+                p = line.split(",")
+                if len(p) >= 7:
+                    rows.append({
+                        "date": p[0], "open": _num(p[1]), "close": _num(p[2]),
+                        "high": _num(p[3]), "low": _num(p[4]),
+                        "volume": _num(p[5]), "amount": _num(p[6]),
+                    })
+            df = pd.DataFrame(rows).tail(lookback)
+            df = df.dropna(subset=["open", "close", "high", "low"])
+            return df.reset_index(drop=True)
+    except Exception as exc:
+        logger.warning("东财K线直连 %s 失败，降级 baostock: %s", code, exc)
+
+    try:
+        rows = _bs_hist_ohlcv(code, start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
+    except Exception as exc:
+        logger.warning("baostock K线 %s 失败: %s", code, exc)
+        return None
     if not rows:
         return None
     df = pd.DataFrame(rows).tail(lookback)
@@ -301,12 +642,13 @@ def _calendar() -> list[str]:
     if _CALENDAR_TS and (now - _CALENDAR_TS) < _DAY_CAL_TTL:
         return _CALENDAR_CACHE or []
     try:
-        import akshare as ak
-
-        cal = ak.tool_trade_date_hist_sina()
-        dates = sorted({str(d)[:10] for d in cal["trade_date"]})  # 去重+升序
-        _CALENDAR_CACHE = dates
-        _CALENDAR_TS = now
+        # 新浪交易日历纯文本（每行 YYYYMMDD），直连替代 akshare（避免走系统代理卡死）
+        txt = _http_get("https://finance.sina.com.cn/realstock/company/klc_td_sh.txt").text
+        raw = sorted({ln.strip() for ln in txt.splitlines() if len(ln.strip()) == 8 and ln.strip().isdigit()})
+        dates = [f"{r[:4]}-{r[4:6]}-{r[6:]}" for r in raw]  # 转 YYYY-MM-DD（与 akshare 原格式一致）
+        if dates:
+            _CALENDAR_CACHE = dates
+            _CALENDAR_TS = now
     except Exception as exc:
         logger.warning("交易日历拉取失败: %s", exc)
     return _CALENDAR_CACHE or []

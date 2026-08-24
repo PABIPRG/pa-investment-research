@@ -50,6 +50,11 @@ class Settings:
         self.news_interval_min = int(os.getenv("MW_NEWS_INTERVAL_MIN", "60"))
         self.news_top = int(os.getenv("MW_NEWS_TOP", "8"))
         self.stock_news_top = int(os.getenv("MW_STOCK_NEWS_TOP", "3"))
+        # 事件驱动（快讯 → 结构化事件 → 命中自选/持仓预警 → 个性化）
+        self.event_enabled = _true("MW_EVENT_ENABLED", default=True)
+        self.event_batch = int(os.getenv("MW_EVENT_BATCH", "15"))
+        self.event_ttl = float(os.getenv("MW_EVENT_TTL", "60"))
+        self.trading_core_url = os.getenv("MW_TRADING_CORE", "http://127.0.0.1:8000")
         # 盘前/盘后简报
         self.pre_brief_enabled = _true("MW_PRE_BRIEF_ENABLED")
         self.pre_brief_time = os.getenv("MW_PRE_BRIEF_TIME", "08:50")
