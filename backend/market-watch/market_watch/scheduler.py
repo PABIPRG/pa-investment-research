@@ -28,15 +28,17 @@ _MAX_TRIGGERS_KEPT = 50
 _scheduler: BackgroundScheduler | None = None
 
 
+class _TriggerRejected(Exception):
+    def __init__(self, outcome: str):
+        super().__init__(outcome)
+        self.outcome = outcome
+
+
 # ---- 状态维护 -----------------------------------------------------------
 
 
 def _state() -> dict:
     return JsonStore().get("state", "data", {})
-
-
-def _save_state(st: dict) -> None:
-    JsonStore().set("state", "data", st)
 
 
 def _cooldown_ok(st: dict, rule_id: str, cooldown_min: int) -> bool:
@@ -55,17 +57,30 @@ def _daily_cap_ok(st: dict, rule_id: str, date: str, cap: int) -> bool:
     return st.get("daily_counts", {}).get(rule_id, {}).get(date, 0) < cap
 
 
-def _record_trigger(st: dict, t: dict) -> None:
-    st.setdefault("cooldowns", {})[t["rule_id"]] = t["ts"]
-    counts = st.setdefault("daily_counts", {}).setdefault(t["rule_id"], {})
-    counts[t["date"]] = counts.get(t["date"], 0) + 1
-    # 仅保留当日触发，历史滚进 triggers 日志（截断）
-    triggers = st.setdefault("triggers", [])
-    if t["date"] != (triggers[-1]["date"] if triggers else None):
-        triggers.clear()
-    triggers.append(t)
-    del triggers[:-_MAX_TRIGGERS_KEPT]
-    _save_state(st)
+def _record_trigger(t: dict, cooldown_min: int, cap: int) -> str:
+    """原子检查冷却/日上限并登记触发，返回 recorded/cooldown/cap。"""
+    def claim(current):
+        st = dict(current or {})
+        if not _cooldown_ok(st, t["rule_id"], cooldown_min):
+            raise _TriggerRejected("cooldown")
+        if not _daily_cap_ok(st, t["rule_id"], t["date"], cap):
+            raise _TriggerRejected("cap")
+        st.setdefault("cooldowns", {})[t["rule_id"]] = t["ts"]
+        counts = st.setdefault("daily_counts", {}).setdefault(t["rule_id"], {})
+        counts[t["date"]] = counts.get(t["date"], 0) + 1
+        # 仅保留当日触发，历史滚进 triggers 日志（截断）
+        triggers = st.setdefault("triggers", [])
+        if t["date"] != (triggers[-1]["date"] if triggers else None):
+            triggers.clear()
+        triggers.append(t)
+        del triggers[:-_MAX_TRIGGERS_KEPT]
+        return st
+
+    try:
+        JsonStore().mutate("state", "data", claim, {})
+    except _TriggerRejected as exc:
+        return exc.outcome
+    return "recorded"
 
 
 def _trigger_text(quote: dict, brief: dict) -> str:
@@ -122,7 +137,6 @@ def run_watch_cycle(manual: bool = False) -> dict:
             codes.add(a["ticker"])
 
     quotes_map = {q["code"]: q for q in quotes.cache().get_quotes(sorted(codes))}
-    st = _state()
     now = datetime.now(ZoneInfo(settings.timezone))
     today = now.strftime("%Y-%m-%d")
 
@@ -141,12 +155,6 @@ def run_watch_cycle(manual: bool = False) -> dict:
             if not res["triggered"]:
                 continue
             summary["evaluated"] += 1
-            if not _cooldown_ok(st, rule["id"], rule.get("cooldown_min", 0)):
-                summary["skipped_cooldown"] += 1
-                continue
-            if not _daily_cap_ok(st, rule["id"], today, rule.get("daily_cap", 0)):
-                summary["skipped_cap"] += 1
-                continue
             ts = now.isoformat(timespec="seconds")
             # value = 命中条件的字段值（combine=or 取首个命中；and 取首个条件）
             ok_results = [r for r in res["results"] if r and r["ok"]]
@@ -161,7 +169,17 @@ def run_watch_cycle(manual: bool = False) -> dict:
                 "id": rule["id"], "name": rule.get("name", ""),
                 "condition_text": rules.describe_rule(rule),
             }
-            _record_trigger(st, trig)
+            outcome = _record_trigger(
+                trig,
+                rule.get("cooldown_min", 0),
+                rule.get("daily_cap", 0),
+            )
+            if outcome == "cooldown":
+                summary["skipped_cooldown"] += 1
+                continue
+            if outcome == "cap":
+                summary["skipped_cap"] += 1
+                continue
             summary["triggered"].append(trig)
 
             interp = _interpret(quote, brief)

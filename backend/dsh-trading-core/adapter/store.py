@@ -10,7 +10,7 @@ import os
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 _FILE_LOCKS: dict[Path, threading.Lock] = {}
@@ -105,6 +105,25 @@ class JsonStore:
             data = self._read(collection)
             data[key] = value
             self._write(collection, data)
+
+    def mutate(
+        self,
+        collection: str,
+        key: str,
+        transform: Callable[[Any], Any],
+        default: Any = None,
+    ) -> Any:
+        """在单次文件锁内变换一个 key，并返回已提交的新值。
+
+        回调只接收当前 key 的值（不存在时为 default），必须返回替换值；
+        回调抛错时不写文件，也不得在回调内重入同一 collection。
+        """
+        with self._lock(collection):
+            data = self._read(collection)
+            value = transform(data.get(key, default))
+            data[key] = value
+            self._write(collection, data)
+            return value
 
     def update(self, collection: str, key: str, **fields: Any) -> None:
         with self._lock(collection):

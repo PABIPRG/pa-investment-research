@@ -271,13 +271,23 @@ class BacktestRunner:
         结构化记录：原样 + eval_meta；文本兜底记录：建轻量记录（无 source 字段，
         不会升级为结构化候选）。供 GET /backtest/performance 重算。
         """
-        rec = dict(cand)
-        rec.pop("key", None)
-        rec["eval_meta"] = {
+        eval_meta = {
             "engine_version": ENGINE_VERSION,
             "eval_window_days": int(params.get("eval_window_days", 10)),
             "eval_status": item.get("eval_status"),
             "evaluated_at": _now_iso(),
             "last_eval": item,
         }
-        self.store.set("decisions", f"{cand['ticker']}_{cand['trade_date']}", rec)
+        fallback = dict(cand)
+        fallback.pop("key", None)
+
+        def persist(current):
+            rec = dict(current or fallback)
+            rec["eval_meta"] = eval_meta
+            return rec
+
+        self.store.mutate(
+            "decisions",
+            f"{cand['ticker']}_{cand['trade_date']}",
+            persist,
+        )

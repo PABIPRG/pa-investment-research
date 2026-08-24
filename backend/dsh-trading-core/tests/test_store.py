@@ -2,6 +2,7 @@
 """JsonStore 的并发、原子写与损坏文件语义。"""
 
 import tempfile
+import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -39,6 +40,26 @@ class JsonStoreTests(unittest.TestCase):
                 {f"key-{index}": index for index in range(96)},
             )
             self.assertEqual(list(root.glob(".shared.json.*.tmp")), [])
+
+    def test_concurrent_same_key_mutations_preserve_every_append(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            stores = [JsonStore(root) for _ in range(8)]
+            barrier = threading.Barrier(len(stores))
+
+            def append(index: int) -> None:
+                barrier.wait()
+                stores[index].mutate(
+                    "behavior",
+                    "default",
+                    lambda current: [*list(current or []), index],
+                    [],
+                )
+
+            with ThreadPoolExecutor(max_workers=len(stores)) as executor:
+                list(executor.map(append, range(len(stores))))
+
+            self.assertCountEqual(stores[0].get("behavior", "default"), range(8))
 
     def test_corrupt_json_fails_without_replacing_the_original(self):
         with tempfile.TemporaryDirectory() as temporary:

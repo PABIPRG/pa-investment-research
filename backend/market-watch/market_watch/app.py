@@ -40,10 +40,6 @@ def _list(key: str, default: list | None = None) -> list:
     return store.get(key, "default", [] if default is None else default)
 
 
-def _save_list(key: str, items: list) -> None:
-    store.set(key, "default", items)
-
-
 # ---- 自选 ---------------------------------------------------------------
 
 
@@ -58,25 +54,48 @@ def watchlist_add(req: WatchAddRequest):
         code = quotes.normalize_code(req.code)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    items = _list("watchlist")
-    for w in items:
-        if w["code"] == code:
-            return {"ok": True, "duplicate": True, "code": code, "name": w.get("name")}
+    for item in _list("watchlist"):
+        if item["code"] == code:
+            return {
+                "ok": True,
+                "duplicate": True,
+                "code": code,
+                "name": item.get("name"),
+            }
     q = quotes.cache().get_quote(code)
     name = req.name or (q or {}).get("name") or code
-    items.append({"code": code, "name": name, "added_at": time.strftime("%Y-%m-%d %H:%M:%S")})
-    _save_list("watchlist", items)
-    return {"ok": True, "duplicate": False, "code": code, "name": name}
+    result = {"duplicate": False, "name": name}
+
+    def append_watch(current):
+        items = list(current or [])
+        for item in items:
+            if item["code"] == code:
+                result.update(duplicate=True, name=item.get("name"))
+                return items
+        items.append({
+            "code": code,
+            "name": name,
+            "added_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        return items
+
+    store.mutate("watchlist", "default", append_watch, [])
+    return {"ok": True, "code": code, **result}
 
 
 @app.post("/watchlist/remove")
 def watchlist_remove(req: WatchRemoveRequest):
-    items = _list("watchlist")
-    kept = [w for w in items if w["code"] != req.code]
-    if len(kept) == len(items):
-        return {"ok": True, "removed": False, "code": req.code}
-    _save_list("watchlist", kept)
-    return {"ok": True, "removed": True, "code": req.code}
+    removed = False
+
+    def remove_watch(current):
+        nonlocal removed
+        items = list(current or [])
+        kept = [item for item in items if item["code"] != req.code]
+        removed = len(kept) != len(items)
+        return kept
+
+    store.mutate("watchlist", "default", remove_watch, [])
+    return {"ok": True, "removed": removed, "code": req.code}
 
 
 @app.get("/watchlist")
@@ -113,20 +132,28 @@ def alerts_add(rule: AlertRule):
     rule_dict = rule.model_dump()
     rule_dict["id"] = uuid.uuid4().hex[:12]
     rule_dict["created_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    items = _list("alerts")
-    items.append(rule_dict)
-    _save_list("alerts", items)
+    store.mutate(
+        "alerts",
+        "default",
+        lambda current: [*list(current or []), rule_dict],
+        [],
+    )
     return {"ok": True, "id": rule_dict["id"], "rule": rule_dict}
 
 
 @app.delete("/alerts/{rule_id}")
 def alerts_remove(rule_id: str):
-    items = _list("alerts")
-    kept = [r for r in items if r.get("id") != rule_id]
-    if len(kept) == len(items):
-        return {"ok": True, "removed": False, "id": rule_id}
-    _save_list("alerts", kept)
-    return {"ok": True, "removed": True, "id": rule_id}
+    removed = False
+
+    def remove_alert(current):
+        nonlocal removed
+        items = list(current or [])
+        kept = [item for item in items if item.get("id") != rule_id]
+        removed = len(kept) != len(items)
+        return kept
+
+    store.mutate("alerts", "default", remove_alert, [])
+    return {"ok": True, "removed": removed, "id": rule_id}
 
 
 # ---- 盯盘面板 / 扫描 / 技术信号 ---------------------------------------------

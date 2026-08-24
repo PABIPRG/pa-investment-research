@@ -56,9 +56,12 @@ def _seen_ids() -> set[str]:
 
 
 def _save_seen(ids: list[str]) -> None:
-    store = JsonStore()
-    old = list(store.get("events", "seen_ids") or [])
-    store.set("events", "seen_ids", (old + ids)[-200:])
+    JsonStore().mutate(
+        "events",
+        "seen_ids",
+        lambda current: (list(current or []) + ids)[-200:],
+        [],
+    )
 
 
 def _resolve_code(name: str) -> str:
@@ -174,9 +177,14 @@ def extract_events(limit: int = 30) -> list[dict]:
         # 无论抽取结果多寡都推进游标，避免反复打 LLM
         _save_seen([it["id"] for it in fresh])
         if new_events:
-            store = JsonStore()
-            merged = new_events + list(store.get("events", "latest") or [])
-            store.set("events", "latest", _dedup(merged, "item_id")[:60])
+            JsonStore().mutate(
+                "events",
+                "latest",
+                lambda current: _dedup(
+                    new_events + list(current or []), "item_id"
+                )[:60],
+                [],
+            )
 
     events = _dedup(list(JsonStore().get("events", "latest") or []), "item_id")
     events.sort(key=lambda e: e["time"], reverse=True)
