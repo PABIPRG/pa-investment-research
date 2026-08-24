@@ -1,8 +1,10 @@
-import { access, mkdtemp, mkdir, readFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { InvestmentPythonRuntime } from '../src/index.ts'
@@ -70,6 +72,28 @@ class StubSubprocess extends SubprocessRuntime {
   async resolveExecutable(command: string): Promise<string> { return command }
   spawn(): never { throw new Error('unexpected spawn') }
   async spawnTerminal(_spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle> { throw new Error('unexpected terminal') }
+}
+
+class StubCredentials extends CredentialProvider {
+  readonly resolveCalls: CredentialRef[] = []
+  readonly describeCalls: CredentialRef[] = []
+
+  resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
+    this.resolveCalls.push(ref)
+    return Promise.resolve({ value: 'runtime-bound-secret', source: 'memory' })
+  }
+
+  describe(ref: CredentialRef): Promise<CredentialInfo> {
+    this.describeCalls.push(ref)
+    return Promise.resolve({ configured: true, source: 'memory', writable: true })
+  }
+
+  set(): Promise<void> { return Promise.resolve() }
+  unset(): Promise<void> { return Promise.resolve() }
+
+  update(ref: CredentialRef): void {
+    this.notifyUpdated(ref)
+  }
 }
 
 describe('InvestmentBackendManager', () => {
@@ -880,6 +904,7 @@ describe('InvestmentBackendManager', () => {
       headers: { 'content-type': 'application/json' },
     }))
     const ctx = new Context()
+    const credentialsFiber = await ctx.plugin(StubCredentials)
     const subprocessFiber = await ctx.plugin(StubSubprocess)
     const runtimeFiber = await ctx.plugin(InvestmentPythonRuntime)
     const runtime = ctx.investmentPythonRuntime
@@ -890,11 +915,64 @@ describe('InvestmentBackendManager', () => {
     unregister()
     await runtimeFiber.dispose()
     await subprocessFiber.dispose()
+    await credentialsFiber.dispose()
 
     const directContext = new Context()
+    new StubCredentials(directContext)
     new StubSubprocess(directContext)
     const direct = new InvestmentPythonRuntime(directContext)
     expect(direct.invariantSnapshot()).toEqual({ active: [], flights: [] })
+  })
+
+  it('binds the credential facade and withdraws its update listener with the Runtime service', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-runtime-service-'))
+    const projectDir = join(home, 'backend')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    await writeFile(join(projectDir, 'env', 'bin', 'python'), '')
+    let probes = 0
+    vi.stubGlobal('fetch', async () => {
+      if (probes++ === 0) {
+        const cause = Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' })
+        throw new TypeError('fetch failed', { cause })
+      }
+      return new Response(JSON.stringify({ service: 'trading-core', status: 'ok' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const ctx = new Context()
+    const credentialsFiber = await ctx.plugin(StubCredentials)
+    const subprocessFiber = await ctx.plugin(StubSubprocess)
+    const credentials = ctx.credentials as StubCredentials
+    const subprocess = ctx.subprocess as StubSubprocess
+    const handle = fakeHandle()
+    subprocess.spawn = vi.fn(() => handle)
+    const updated = vi.spyOn(InvestmentBackendManager.prototype, 'credentialUpdated')
+    const runtimeFiber = await ctx.plugin(InvestmentPythonRuntime, { dshHome: home, healthPollMs: 1 })
+    const runtime = ctx.investmentPythonRuntime
+    runtime.register({
+      ...definition,
+      projectDir,
+      credentialEnv: [{ ref: credentialRef('DEEPSEEK_API_KEY'), env: 'DEEPSEEK_API_KEY', role: 'required' }],
+    })
+    const lease = await runtime.acquire('trading-core')
+    expect(credentials.resolveCalls).toEqual([credentialRef('DEEPSEEK_API_KEY')])
+    expect(credentials.describeCalls).toEqual([credentialRef('DEEPSEEK_API_KEY')])
+    expect(subprocess.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({ DEEPSEEK_API_KEY: 'runtime-bound-secret' }),
+    }))
+    runtime.registerCapability({ backendId: 'trading-core', toolCount: 9, llm: 'required' })
+    credentials.update(credentialRef('DEEPSEEK_API_KEY'))
+    expect(runtime.readiness().backends[0]?.restartRequired).toBe(true)
+    expect(updated).toHaveBeenCalledOnce()
+
+    handle.exit()
+    await runtimeFiber.dispose()
+    credentials.update(credentialRef('DEEPSEEK_API_KEY'))
+    expect(updated).toHaveBeenCalledOnce()
+    await lease.release()
+    await subprocessFiber.dispose()
+    await credentialsFiber.dispose()
   })
 
   it('registers and exercises the invariant companion', async () => {

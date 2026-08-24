@@ -1,9 +1,13 @@
 import { access } from 'node:fs/promises'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
+import type { CredentialInfo, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { checkBackendHealth as defaultCheckHealth } from './health.ts'
 import { BackendLog, backendLogPaths, safeErrorMessage } from './log.ts'
+import type { BackendLogPaths } from './log.ts'
 import { resolveBackendAddress, resolveBackendPaths as defaultResolvePaths } from './path.ts'
+import { InvestmentReadinessTracker } from './readiness.ts'
+import type { BackendReadinessState, RuntimeCredentialFact } from './readiness.ts'
 import {
   clearOwnedBackendState,
   ownedBackendStatePath,
@@ -15,6 +19,9 @@ import type {
   BackendHealthResult,
   Config,
   InvestmentBackendId,
+  InvestmentCapabilityDefinition,
+  InvestmentCapabilityUse,
+  InvestmentReadinessSnapshot,
   ManagedCredentialEnv,
   PythonBackendDefinition,
   PythonBackendLease,
@@ -43,12 +50,21 @@ interface ActiveEntryBase {
 }
 
 type ActiveEntry =
-  | (ActiveEntryBase & Readonly<{ ownership: 'owned'; handle: SubprocessHandle; log: BackendLog; state: OwnedBackendState }>)
+  | (ActiveEntryBase & {
+    readonly ownership: 'owned'
+    readonly handle: SubprocessHandle
+    readonly log: BackendLog
+    readonly state: OwnedBackendState
+    readonly credentials: readonly RuntimeCredentialFact[]
+    restartRequired: boolean
+  })
   | (ActiveEntryBase & Readonly<{ ownership: 'attached' | 'external'; handle?: never; log?: never; state?: never }>)
 
 type HealthCheck = (definition: PythonBackendDefinition, options?: { signal?: AbortSignal }) => Promise<BackendHealthResult>
-type CredentialResolver = (ref: CredentialRef) => Promise<string | undefined>
+type CredentialResolver = (ref: CredentialRef) => Promise<string | ResolvedCredential | undefined>
+type CredentialDescriber = (ref: CredentialRef) => Promise<CredentialInfo>
 type EnvironmentKeyNormalizer = (key: string) => string
+type LogPathResolver = (dshHome: string, id: InvestmentBackendId) => BackendLogPaths
 
 const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -92,6 +108,10 @@ export interface InvestmentBackendManagerOptions {
   readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths
   /** Resolve one credential only when an owned child is about to spawn. */
   readonly resolveCredential?: CredentialResolver
+  /** Describe one credential without its value during owned spawn. */
+  readonly describeCredential?: CredentialDescriber
+  /** Resolve Runtime log locations from the same source used by preflight diagnostics. */
+  readonly resolveLogPaths?: LogPathResolver
   /** Normalize child environment keys for the target platform's spawn semantics. */
   readonly normalizeEnvironmentKey?: EnvironmentKeyNormalizer
   readonly executableExists?: (path: string) => Promise<boolean>
@@ -212,7 +232,10 @@ export class InvestmentBackendManager {
   private readonly checkHealth: HealthCheck
   private readonly resolvePaths: (definition: PythonBackendDefinition) => ResolvedBackendPaths
   private readonly resolveCredential: CredentialResolver
+  private readonly describeCredential: CredentialDescriber | undefined
+  private readonly resolveLogPaths: LogPathResolver
   private readonly normalizeEnvironmentKey: EnvironmentKeyNormalizer
+  private readonly readinessTracker = new InvestmentReadinessTracker()
   /** Injectable filesystem and timing operations retained for deterministic lifecycle tests. */
   readonly internals: {
     executableExists: (path: string) => Promise<boolean>
@@ -226,6 +249,8 @@ export class InvestmentBackendManager {
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
     this.resolvePaths = options.resolvePaths ?? defaultResolvePaths
     this.resolveCredential = options.resolveCredential ?? (async () => undefined)
+    this.describeCredential = options.describeCredential
+    this.resolveLogPaths = options.resolveLogPaths ?? backendLogPaths
     this.normalizeEnvironmentKey = options.normalizeEnvironmentKey ?? defaultNormalizeEnvironmentKey
     this.internals = {
       executableExists: options.executableExists ?? executableExists,
@@ -260,6 +285,49 @@ export class InvestmentBackendManager {
       if (entry === undefined) return
       entry.registrations -= 1
       if (entry.registrations === 0) this.definitions.delete(normalized.id)
+    }
+  }
+
+  /**
+   * Publish one backend capability after its tools are registered.
+   * @param definition - backend, tool count, and LLM relationship.
+   * @returns idempotent disposer for the capability contribution.
+   */
+  registerCapability(definition: InvestmentCapabilityDefinition): () => void {
+    if (this.disposed) throw new Error('investment Python runtime is disposed')
+    return this.readinessTracker.registerCapability(definition)
+  }
+
+  /**
+   * Reject an operation that cannot safely use the active backend capability.
+   * @param backendId - backend required by the operation.
+   * @param use - operation's LLM relationship.
+   */
+  assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void {
+    if (this.disposed) throw new Error('investment Python runtime is disposed')
+    const state = this.readinessStates().find(candidate => candidate.definition.id === backendId)
+    this.readinessTracker.assertCapability(backendId, state, use, this.runtimeLogPath(backendId))
+  }
+
+  /**
+   * Project current backend, credential, and capability facts without secrets.
+   * @returns immutable JSON-safe readiness snapshot.
+   */
+  readiness(): InvestmentReadinessSnapshot {
+    return this.readinessTracker.readiness(this.readinessStates(), id => this.runtimeLogPath(id))
+  }
+
+  /**
+   * Mark active owned children that actually reference an updated credential.
+   * @param ref - committed credential reference update.
+   */
+  credentialUpdated(ref: CredentialRef): void {
+    if (this.disposed) return
+    for (const entry of this.active.values()) {
+      if (entry.ownership !== 'owned') continue
+      if (entry.definition.credentialEnv?.some(credential => credential.ref === ref) === true) {
+        entry.restartRequired = true
+      }
     }
   }
 
@@ -383,22 +451,47 @@ export class InvestmentBackendManager {
     await stopping
   }
 
-  private async resolveCredentialEnv(definition: PythonBackendDefinition): Promise<Readonly<Record<string, string>> | undefined> {
-    if (definition.credentialEnv === undefined) return undefined
+  private async resolveCredentialEnv(definition: PythonBackendDefinition): Promise<Readonly<{
+    environment: Readonly<Record<string, string>> | undefined
+    facts: readonly RuntimeCredentialFact[]
+  }>> {
+    if (definition.credentialEnv === undefined) return { environment: undefined, facts: [] }
     const values = new Map<CredentialRef, string | undefined>()
+    const facts = new Map<CredentialRef, RuntimeCredentialFact>()
     const environment: Record<string, string> = {}
     for (const credential of definition.credentialEnv) {
       if (!values.has(credential.ref)) {
+        let resolved: string | ResolvedCredential | undefined
         try {
-          values.set(credential.ref, await this.resolveCredential(credential.ref))
+          resolved = await this.resolveCredential(credential.ref)
         } catch {
           throw new Error(`investment Python backend "${definition.id}" credential "${credential.ref}" resolution failed`)
         }
+        let info: CredentialInfo | undefined
+        if (this.describeCredential !== undefined) {
+          try {
+            info = await this.describeCredential(credential.ref)
+          } catch {
+            throw new Error(`investment Python backend "${definition.id}" credential "${credential.ref}" description failed`)
+          }
+        }
+        const value = typeof resolved === 'string' ? resolved : resolved?.value
+        const source = typeof resolved === 'string' ? info?.source ?? 'resolver' : resolved?.source
+        values.set(credential.ref, value)
+        facts.set(credential.ref, Object.freeze({
+          ref: credential.ref,
+          configured: value !== undefined,
+          ...(value === undefined || source === undefined ? {} : { source }),
+          writable: info?.writable ?? true,
+        }))
       }
       const value = values.get(credential.ref)
       if (value !== undefined) environment[credential.env] = value
     }
-    return Object.keys(environment).length === 0 ? undefined : environment
+    return Object.freeze({
+      environment: Object.keys(environment).length === 0 ? undefined : environment,
+      facts: Object.freeze([...facts.values()].sort((left, right) => left.ref.localeCompare(right.ref))),
+    })
   }
 
   private async start(definition: PythonBackendDefinition, signal: AbortSignal): Promise<ActiveEntry> {
@@ -418,7 +511,7 @@ export class InvestmentBackendManager {
       const init = process.platform === 'win32' ? definition.initCommand.windows : definition.initCommand.posix
       throw new Error(`investment Python backend "${definition.id}" virtual environment is missing; run ${init} in ${paths.projectDir}`)
     }
-    const log = await BackendLog.open(backendLogPaths(this.config.dshHome, definition.id), {
+    const log = await BackendLog.open(this.resolveLogPaths(this.config.dshHome, definition.id), {
       tailBytes: this.config.logTailBytes,
       maxBytes: this.config.logMaxBytes,
     })
@@ -426,7 +519,8 @@ export class InvestmentBackendManager {
     if (oldState.kind !== 'missing') await log.append('runtime', `previous runtime state: ${oldState.kind}\n`)
 
     const address = resolveBackendAddress(definition)
-    const credentialEnv = await this.resolveCredentialEnv(definition)
+    const resolvedCredentials = await this.resolveCredentialEnv(definition)
+    const credentialEnv = resolvedCredentials.environment
     const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined
       ? undefined
       : { ...definition.managedEnv, ...credentialEnv }
@@ -501,12 +595,30 @@ export class InvestmentBackendManager {
       }
 
       await writeOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state)
-      return { definition, ownership: 'owned', handle, log, state, refs: 0 }
+      return {
+        definition,
+        ownership: 'owned',
+        handle,
+        log,
+        state,
+        credentials: resolvedCredentials.facts,
+        restartRequired: false,
+        refs: 0,
+      }
     } catch (error) {
       try {
         await this.failOwned(handle, drain)
       } catch (cleanupError) {
-        this.active.set(definition.id, { definition, ownership: 'owned', handle, log, state, refs: 0 })
+        this.active.set(definition.id, {
+          definition,
+          ownership: 'owned',
+          handle,
+          log,
+          state,
+          credentials: resolvedCredentials.facts,
+          restartRequired: false,
+          refs: 0,
+        })
         const original = this.startupFailureMessage(definition, error, log, spawnEnv)
         const cleanup = safeErrorMessage(cleanupError, spawnEnv)
         throw new AggregateError(
@@ -577,6 +689,38 @@ export class InvestmentBackendManager {
     }))
     const failures = results.filter(result => result.status === 'rejected')
     if (failures.length > 0) throw new AggregateError(failures.map(result => asError(result.reason)), 'investment Python runtime disposal failed')
+  }
+
+  private runtimeLogPath(id: InvestmentBackendId): string {
+    return this.resolveLogPaths(this.config.dshHome, id).active
+  }
+
+  private readinessStates(): readonly BackendReadinessState[] {
+    const states = new Map<InvestmentBackendId, BackendReadinessState>()
+    for (const entry of this.definitions.values()) {
+      states.set(entry.definition.id, {
+        definition: entry.definition,
+        ownership: null,
+        credentials: [],
+        restartRequired: false,
+      })
+    }
+    for (const entry of this.active.values()) {
+      states.set(entry.definition.id, entry.ownership === 'owned'
+        ? {
+          definition: entry.definition,
+          ownership: entry.ownership,
+          credentials: entry.credentials,
+          restartRequired: entry.restartRequired,
+        }
+        : {
+          definition: entry.definition,
+          ownership: entry.ownership,
+          credentials: [],
+          restartRequired: false,
+        })
+    }
+    return [...states.values()]
   }
 
   /**

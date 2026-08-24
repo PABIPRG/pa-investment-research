@@ -6,6 +6,67 @@ export type InvestmentBackendId = 'trading-core' | 'market-watch'
 /** Backend ownership modes selected by plugin configuration. */
 export type InvestmentBackendMode = 'managed' | 'external'
 
+/** Capability facts published after one backend's business tools are registered. */
+export interface InvestmentCapabilityDefinition {
+  /** Backend whose tools implement this capability. */
+  readonly backendId: InvestmentBackendId
+  /** Complete number of tools published by the business plugin. */
+  readonly toolCount: number
+  /** How the capability uses the backend's declared LLM credential. */
+  readonly llm: 'required' | 'enhancement' | 'none'
+}
+
+/** Synchronous capability use checked immediately before a business operation. */
+export type InvestmentCapabilityUse = 'llm-required' | 'llm-enhancement' | 'non-llm'
+
+/** Client-safe credential state captured when an owned child started. */
+export interface InvestmentCredentialReadiness {
+  /** Credential reference; never its value. */
+  readonly ref: CredentialRef
+  /** Whether the owned child received this credential, absent for externally managed credentials. */
+  readonly configured?: boolean
+  /** Provider source captured at owned spawn, absent while missing or externally managed. */
+  readonly source?: string
+  /** Provider writability captured at owned spawn, absent for externally managed credentials. */
+  readonly writable?: boolean
+  /** Safe credential lifecycle state. */
+  readonly status: 'missing' | 'configured' | 'read-only' | 'restart-required' | 'external-managed'
+}
+
+/** Client-safe capability projection for one investment backend. */
+export interface InvestmentCapabilityReadiness {
+  /** Declared LLM relationship. */
+  readonly llm: InvestmentCapabilityDefinition['llm']
+  /** Complete registered tool count, including tools unavailable in the current credential state. */
+  readonly toolCount: number
+  /** User-visible capability level derived from backend and credential state. */
+  readonly status: 'stock-full' | 'market-template-only' | 'market-full' | 'unavailable'
+}
+
+/** Serializable readiness facts for one registered investment backend. */
+export interface InvestmentBackendReadiness {
+  /** Stable backend identifier. */
+  readonly backendId: InvestmentBackendId
+  /** Current verified ownership, or `null` while stopped. */
+  readonly ownership: PythonBackendLease['ownership'] | null
+  /** Current backend lifecycle projection. */
+  readonly backendStatus: 'stopped' | 'healthy-owned' | 'healthy-attached' | 'external'
+  /** Credential references and non-secret facts captured for this backend. */
+  readonly credentials: readonly InvestmentCredentialReadiness[]
+  /** Published capability, or `null` before or after business-tool registration. */
+  readonly capability: InvestmentCapabilityReadiness | null
+  /** Whether an owned child must be replaced before another LLM-dependent call. */
+  readonly restartRequired: boolean
+  /** Active Runtime log path used by actionable diagnostics. */
+  readonly runtimeLogPath: string
+}
+
+/** Synchronous, immutable, JSON-safe investment Runtime readiness projection. */
+export interface InvestmentReadinessSnapshot {
+  /** Stable backend-id-sorted readiness entries. */
+  readonly backends: readonly InvestmentBackendReadiness[]
+}
+
 /** One credential reference injected into an owned backend child environment. */
 export interface ManagedCredentialEnv {
   /** Provider-managed credential reference resolved only for an owned child. */

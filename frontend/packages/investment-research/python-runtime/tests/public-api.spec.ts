@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
+import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import InvestmentPythonRuntime, {
   InvestmentPythonRuntime as NamedInvestmentPythonRuntime,
 } from '../src/index.ts'
@@ -17,6 +19,13 @@ const externalBackend: PythonBackendDefinition = {
   initCommand: { posix: './init.sh', windows: 'init.bat' },
 }
 
+class StubCredentials extends CredentialProvider {
+  resolve(_ref: CredentialRef): Promise<ResolvedCredential | undefined> { return Promise.resolve(undefined) }
+  describe(_ref: CredentialRef): Promise<CredentialInfo> { return Promise.resolve({ configured: false, writable: true }) }
+  set(): Promise<void> { return Promise.resolve() }
+  unset(): Promise<void> { return Promise.resolve() }
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -25,7 +34,7 @@ describe('InvestmentPythonRuntime public API', () => {
   it('exports one Service class and merges ctx.investmentPythonRuntime into Context', () => {
     expect(InvestmentPythonRuntime).toBe(NamedInvestmentPythonRuntime)
     expect(InvestmentPythonRuntime.prototype).toBeInstanceOf(Service)
-    expect(InvestmentPythonRuntime.inject).toEqual(['subprocess'])
+    expect(InvestmentPythonRuntime.inject).toEqual(['credentials', 'subprocess'])
     expectTypeOf<Context['investmentPythonRuntime']>().toEqualTypeOf<InvestmentPythonRuntime>()
   })
 
@@ -67,6 +76,7 @@ describe('InvestmentPythonRuntime public API', () => {
       headers: { 'content-type': 'application/json' },
     }))
     const ctx = new Context()
+    new StubCredentials(ctx)
     new InvestmentPythonRuntime(ctx)
     const runtime = ctx.investmentPythonRuntime
 
@@ -86,6 +96,7 @@ describe('InvestmentPythonRuntime public API', () => {
 
   it('attaches to a matching managed service and rejects an occupied endpoint', async () => {
     const ctx = new Context()
+    new StubCredentials(ctx)
     const runtime = new InvestmentPythonRuntime(ctx)
     runtime.register({ ...externalBackend, mode: 'managed', baseUrl: 'http://127.0.0.1:8000' })
     const signal = new AbortController().signal

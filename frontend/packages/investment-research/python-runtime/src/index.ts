@@ -7,6 +7,9 @@ import { InvestmentBackendManager } from './runtime.ts'
 import type {
   Config,
   InvestmentBackendId,
+  InvestmentCapabilityDefinition,
+  InvestmentCapabilityUse,
+  InvestmentReadinessSnapshot,
   PythonBackendDefinition,
   PythonBackendLease,
 } from './types.ts'
@@ -26,6 +29,12 @@ export type {
   Config,
   InvestmentBackendId,
   InvestmentBackendMode,
+  InvestmentBackendReadiness,
+  InvestmentCapabilityDefinition,
+  InvestmentCapabilityReadiness,
+  InvestmentCapabilityUse,
+  InvestmentCredentialReadiness,
+  InvestmentReadinessSnapshot,
   ManagedCredentialEnv,
   PythonBackendDefinition,
   PythonBackendLease,
@@ -41,7 +50,7 @@ declare module '@deepseek-ai/cordis' {
 
 /** Runtime service that verifies registered investment Python backends and leases their URLs. */
 export class InvestmentPythonRuntime extends Service {
-  static inject = ['subprocess']
+  static inject = ['credentials', 'subprocess']
 
   static Config: z<Config> = z.object({
     dshHome: z.string(),
@@ -61,7 +70,13 @@ export class InvestmentPythonRuntime extends Service {
    */
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'investmentPythonRuntime')
-    this.manager = new InvestmentBackendManager({ subprocess: ctx.subprocess, config })
+    this.manager = new InvestmentBackendManager({
+      subprocess: ctx.subprocess,
+      config,
+      resolveCredential: ctx.credentials.resolve.bind(ctx.credentials),
+      describeCredential: ctx.credentials.describe.bind(ctx.credentials),
+    })
+    ctx.on('credentials/updated', ref => this.manager.credentialUpdated(ref))
     ctx.effect(() => async () => this.manager.dispose(), 'investment Python runtime teardown')
   }
 
@@ -82,6 +97,32 @@ export class InvestmentPythonRuntime extends Service {
    */
   async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease> {
     return this.manager.acquire(id, signal)
+  }
+
+  /**
+   * Publish one backend capability after its business tools are registered.
+   * @param definition - backend, tool count, and LLM relationship.
+   * @returns idempotent disposer for the capability contribution.
+   */
+  registerCapability(definition: InvestmentCapabilityDefinition): () => void {
+    return this.manager.registerCapability(definition)
+  }
+
+  /**
+   * Reject an operation that cannot safely use the active backend capability.
+   * @param backendId - backend required by the operation.
+   * @param use - operation's LLM relationship.
+   */
+  assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void {
+    this.manager.assertCapability(backendId, use)
+  }
+
+  /**
+   * Read the immutable, client-safe Runtime readiness projection.
+   * @returns current backend, credential, and capability facts.
+   */
+  readiness(): InvestmentReadinessSnapshot {
+    return this.manager.readiness()
   }
 
   /**
