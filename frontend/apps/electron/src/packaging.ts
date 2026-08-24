@@ -42,6 +42,16 @@ interface PackagerOptionsInput {
 }
 
 /**
+ * Report whether Node must invoke a command through the Windows command shell.
+ * @param command - Executable or command-script path.
+ * @param platform - Host platform running the packaging command.
+ * @returns Whether the command is a Windows batch script.
+ */
+export function commandRequiresShell(command: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' && /\.(?:bat|cmd)$/iu.test(command)
+}
+
+/**
  * Describe the isolated deploy and sidecar build performed for one package invocation.
  * @param rootDir - Temporary root removed after packaging succeeds or fails.
  * @param platform - Electron target platform.
@@ -52,6 +62,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
   const stagingDir = join(rootDir, 'app')
   const sidecarDir = join(rootDir, 'investment-python')
   const sidecarCacheDir = join(rootDir, 'sidecar-cache')
+  const pnpmCommand = platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   return {
     deploy: {
       args: [
@@ -62,7 +73,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
         '--legacy',
         stagingDir,
       ],
-      command: 'pnpm',
+      command: pnpmCommand,
       cwd: workspaceDir,
     },
     rootDir,
@@ -71,7 +82,6 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
         '--workspace-root',
         'run',
         'investment:sidecar:build',
-        '--',
         '--target',
         `${platform}-${arch}`,
         '--output',
@@ -79,7 +89,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
         '--cache',
         sidecarCacheDir,
       ],
-      command: 'pnpm',
+      command: pnpmCommand,
       cwd: workspaceDir,
     },
     sidecarCacheDir,
@@ -116,6 +126,7 @@ async function run(command: string, args: string[], cwd: string): Promise<void> 
     const child = spawn(command, args, {
       cwd,
       env: process.env,
+      shell: commandRequiresShell(command),
       stdio: 'inherit',
     })
     child.once('error', reject)

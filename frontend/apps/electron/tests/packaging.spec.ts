@@ -4,11 +4,19 @@ import { isAbsolute, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import {
+  commandRequiresShell,
   createPackagerOptions,
   createPackagingPlan,
 } from '../src/packaging.ts'
 
 describe('Electron investment sidecar packaging', () => {
+  it('uses the Windows command shell only for batch entrypoints', () => {
+    expect(commandRequiresShell('pnpm.cmd', 'win32')).toBe(true)
+    expect(commandRequiresShell('electron-forge.bat', 'win32')).toBe(true)
+    expect(commandRequiresShell('pnpm', 'win32')).toBe(false)
+    expect(commandRequiresShell('pnpm.cmd', 'darwin')).toBe(false)
+  })
+
   it('deploys before building the current platform sidecar in isolated temporary paths', () => {
     const plan = createPackagingPlan('/tmp/dsh-electron-test', 'win32', 'x64')
 
@@ -20,11 +28,11 @@ describe('Electron investment sidecar packaging', () => {
       '--legacy',
       plan.stagingDir,
     ])
+    expect(plan.deploy.command).toBe('pnpm.cmd')
     expect(plan.sidecar.args).toEqual([
       '--workspace-root',
       'run',
       'investment:sidecar:build',
-      '--',
       '--target',
       'win32-x64',
       '--output',
@@ -32,6 +40,7 @@ describe('Electron investment sidecar packaging', () => {
       '--cache',
       plan.sidecarCacheDir,
     ])
+    expect(plan.sidecar.command).toBe('pnpm.cmd')
     expect(isAbsolute(plan.sidecarDir)).toBe(true)
     expect(relative(plan.stagingDir, plan.sidecarDir)).toMatch(/^\.\./)
     expect(relative(plan.stagingDir, plan.sidecarCacheDir)).toMatch(/^\.\./)
@@ -39,6 +48,8 @@ describe('Electron investment sidecar packaging', () => {
 
   it('copies the built directory as Resources/investment-python', () => {
     const plan = createPackagingPlan('/tmp/dsh-electron-test', 'darwin', 'arm64')
+    expect(plan.deploy.command).toBe('pnpm')
+    expect(plan.sidecar.command).toBe('pnpm')
     const options = createPackagerOptions({
       arch: 'arm64',
       electronVersion: '43.2.0',
