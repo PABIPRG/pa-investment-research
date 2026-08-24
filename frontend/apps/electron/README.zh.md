@@ -23,6 +23,14 @@ pnpm dsh electron --profile investment-research
 
 managed 虚拟环境缺失时，启动会给出项目目录与 `./init.sh` 或 `init.bat` 指引并失败，绝不会执行安装。Runtime 日志与诊断状态位于 `$DSH_HOME/investment-research/<backend-id>/`，状态绝不授权按 PID 接管。股票分析的对话内简报投递默认 `enableInChatPush: false`；Python scheduler 与外部投递设置仍归 backend 所有。路径、保留策略与归属细节见 [Runtime 包约定](../../packages/investment-research/python-runtime/README.md)。
 
+## 投研使用流程
+
+源码启动先运行一次 `pnpm run investment:python:init`，需要检查环境时运行 `pnpm run investment:python:verify`。在现有 Models 设置页只保存一次 DeepSeek Key，不要把它复制到任一 backend `.env`。投研设置页会显示两个 backend 的状态、9 个股票工具、11 个盯盘工具、凭据就绪状态、能力等级及各自日志路径。attached 或 external 服务自行管理凭据，绝不会收到本机 Key。
+
+Key 更新后，页面会请求一次明确的应用重启。Electron 会先排空 IPC、dispose Profile，并等待工具、lease 与 owned 进程树退出，再使用相同 profile 参数重新启动。重启完成前，新的 LLM 依赖调用会被拒绝，不会继续使用 child 中的旧凭据。
+
+验收由用户显式执行：在对话中检查 `watch_list`，运行 `watch_add` 后再次运行 `watch_list`，再运行 `get_watchlist`；随后明确确认一次收费的 `analyze_stock` 及一个盯盘数据工具。设置页只列出这些步骤，绝不自动调用。
+
 ## 打包应用
 
 在仓库根目录可使用桌面打包流程与 Electron Forge maker：

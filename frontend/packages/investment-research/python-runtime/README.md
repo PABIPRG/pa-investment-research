@@ -23,9 +23,15 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 
 Concurrent acquisitions for one backend id share one startup. Identical registrations are reference-counted; conflicting command, URL, mode, identity, or path definitions fail. Business tools are registered only after acquisition succeeds and are removed before their lease is released.
 
+## Credentials and readiness
+
+The investment profile reuses the Models settings page as the only product input for `DEEPSEEK_API_KEY`. The credential provider resolves that reference only while an `owned` managed child is being spawned, and the Runtime forwards it only to backend definitions that explicitly allow it. The value is never copied into a backend `.env`, Runtime state, logs, readiness snapshots, or Client Remote data. An `attached` or `external` endpoint receives no local credential; its operator owns that service's credentials.
+
+Readiness reports backend ownership, safe credential facts, capability level, tool count, restart requirement, and the diagnostic log path. Updating the Key marks active owned backends `restart-required`; new LLM-dependent tool calls fail preflight until the application completes a quiescent restart. Non-LLM operations remain available according to their capability declaration.
+
 ## Project discovery and initialization
 
-Source launches discover `backend/dsh-trading-core` and `backend/market-watch` by walking upward from this installed package. A deployment without that repository layout must set the business plugin's absolute `backendProjectDir`; relative paths and missing directories fail. The interpreter is `<projectDir>/env/bin/python` on POSIX and `<projectDir>\env\Scripts\python.exe` on Windows. When it is absent, startup prints the project directory and the platform-specific command to run there: `./init.sh` or `init.bat`; the runtime does not install dependencies.
+Source launches discover `backend/dsh-trading-core` and `backend/market-watch` by walking upward from this installed package. Initialize both environments in fixed order with `pnpm run investment:python:init`, then run the read-only check with `pnpm run investment:python:verify`. The verify command reports each missing environment and its init command without installing anything. A deployment without the repository layout must set the business plugin's absolute `backendProjectDir`; relative paths and missing directories fail. The interpreter is `<projectDir>/env/bin/python` on POSIX and `<projectDir>\env\Scripts\python.exe` on Windows.
 
 The trading backend forwards an explicitly set `ADAPTER_RUNNER` to its owned child. Backend scheduler and push settings remain Python-owned; the shipped profile leaves stock-analysis in-chat push disabled (`enableInChatPush: false`) and does not reinterpret those settings as profile composition.
 

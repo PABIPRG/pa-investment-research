@@ -23,6 +23,14 @@ The shipped business rows default to `managed`: stock analysis uses `http://127.
 
 A missing managed virtual environment fails with the project directory and `./init.sh` or `init.bat` instruction; startup never installs it. Runtime logs and diagnostic state live under `$DSH_HOME/investment-research/<backend-id>/`, and state never authorizes PID takeover. Stock-analysis in-chat brief delivery defaults to `enableInChatPush: false`; Python scheduler and external delivery settings stay backend-owned. See the [Runtime package contract](../../packages/investment-research/python-runtime/README.md) for paths, retention, and ownership details.
 
+## Investment workflow
+
+For a source launch, run `pnpm run investment:python:init` once and `pnpm run investment:python:verify` whenever the environments need checking. Open the existing Models settings page and store the DeepSeek Key once; do not copy it into either backend `.env`. The Investment settings page shows the two backend states, 9 stock tools, 11 market-watch tools, credential readiness, capability level, and each log path. An attached or external service manages its own credentials and never receives the local Key.
+
+After a Key update, the page requests one explicit application restart. Electron first drains IPC, disposes the Profile, waits for tools, leases, and owned process trees, then relaunches with the same profile arguments. Before the restart finishes, new LLM-dependent calls are refused instead of using the old child credential.
+
+Acceptance remains user-driven: in a conversation, check `watch_list`, run `watch_add` and `watch_list` again, run `get_watchlist`, and then explicitly approve one paid `analyze_stock` call plus one market-watch data tool. The settings page lists these steps but never invokes them automatically.
+
 ## Package the application
 
 The desktop package pipeline and Electron Forge maker are available from the repository root:

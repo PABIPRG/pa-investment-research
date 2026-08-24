@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -76,6 +76,23 @@ function shippedRows() {
 
 function NativeMarker(): void {}
 
+class KeylessCredentials extends Service {
+  readonly resolveCalls: string[] = []
+  readonly describeCalls: string[] = []
+
+  constructor(ctx: Context) { super(ctx, 'credentials') }
+
+  resolve(ref: string): Promise<undefined> {
+    this.resolveCalls.push(ref)
+    return Promise.resolve(undefined)
+  }
+
+  describe(ref: string): Promise<{ configured: false; writable: true }> {
+    this.describeCalls.push(ref)
+    return Promise.resolve({ configured: false, writable: true })
+  }
+}
+
 describe('Electron investment Profile composition', () => {
   it('replaces every browser carrier and keeps the runtime plus twenty investment tools without opening a window', async () => {
     const effective = shippedRows()
@@ -86,6 +103,10 @@ describe('Electron investment Profile composition', () => {
     expect(byId.get('directory-picker-native')?.name).toBe('@deepseek-ai/dsh-host-directory-picker-native')
     expect(byId.get('ui-directory-picker-native')?.name).toBe('@deepseek-ai/dsh-client-ui-directory-picker-native')
     expect(byId.get('electron-connection')?.name).toBe('@deepseek-ai/dsh-electron')
+    expect(byId.get('client-investment-research-runtime')?.name)
+      .toBe('@deepseek-ai/dsh-client-investment-research-runtime')
+    expect(byId.get('client-ui-settings-investment-research')?.name)
+      .toBe('@deepseek-ai/dsh-client-ui-settings-investment-research')
 
     const root = await mkdtemp(join(tmpdir(), 'dsh electron investment '))
     roots.push(root)
@@ -96,6 +117,7 @@ describe('Electron investment Profile composition', () => {
       { name: '@deepseek-ai/dsh-system-prompt' },
       { name: '@deepseek-ai/dsh-tools' },
       { name: '@deepseek-ai/dsh-subprocess-local' },
+      { name: '@test/credentials' },
       { id: 'investment-python-runtime', name: byId.get('investment-python-runtime')?.name, config: { dshHome: join(root, 'home') } },
       { id: 'investment-stock-analysis', name: byId.get('investment-stock-analysis')?.name, config: { backendMode: 'external', backendBaseUrl: tradingUrl } },
       { id: 'investment-market-watch', name: byId.get('investment-market-watch')?.name, config: { backendMode: 'external', backendBaseUrl: marketUrl } },
@@ -116,6 +138,7 @@ describe('Electron investment Profile composition', () => {
       ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
       ['@deepseek-ai/dsh-tools', ToolRuntime],
       ['@deepseek-ai/dsh-subprocess-local', LocalSubprocessRuntime],
+      ['@test/credentials', KeylessCredentials],
       ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],
       ['@deepseek-ai/dsh-investment-stock-analysis', StockAnalysis],
       ['@deepseek-ai/dsh-investment-market-watch', MarketWatch],
@@ -136,10 +159,13 @@ describe('Electron investment Profile composition', () => {
     await ctx.loader.await()
 
     expect(ctx.tools.schemas()).toHaveLength(20)
+    expect((ctx.credentials as unknown as KeylessCredentials).resolveCalls).toEqual([])
+    expect((ctx.credentials as unknown as KeylessCredentials).describeCalls).toEqual([])
     expect(imported).toEqual(expect.arrayContaining([
       '@deepseek-ai/dsh-investment-python-runtime',
       '@deepseek-ai/dsh-investment-stock-analysis',
       '@deepseek-ai/dsh-investment-market-watch',
+      '@test/credentials',
       '@deepseek-ai/dsh-host-directory-picker-native',
       '@deepseek-ai/dsh-client-ui-directory-picker-native',
       '@deepseek-ai/dsh-electron',

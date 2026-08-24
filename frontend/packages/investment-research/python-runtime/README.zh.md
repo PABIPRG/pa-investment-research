@@ -23,9 +23,15 @@
 
 同一 backend id 的并发获取共享一次启动。相同定义按引用计数注册；命令、URL、模式、身份或路径定义冲突时明确失败。业务工具只在获取成功后注册，并在释放 lease 前移除。
 
+## 凭据与就绪状态
+
+投研 profile 复用 Models 设置页作为 `DEEPSEEK_API_KEY` 的唯一产品输入。只有在启动 `owned` managed child 时，凭据 provider 才会解析该引用；Runtime 也只会把它转发给显式允许该引用的 backend 定义。凭据值不会复制进 backend `.env`、Runtime state、日志、就绪快照或 Client Remote 数据。`attached` 与 `external` endpoint 不接收本机凭据，其凭据由该服务的 operator 负责。
+
+就绪状态会报告 backend 归属、安全凭据事实、能力等级、工具数、重启要求和诊断日志路径。Key 更新后，活动 owned backend 会标记为 `restart-required`；应用完成 quiescent restart（静默收敛重启）前，新的 LLM 依赖工具调用会在 preflight 阶段失败。非 LLM 操作继续按能力声明保持可用。
+
 ## 项目发现与初始化
 
-源码启动会从本安装包向上查找 `backend/dsh-trading-core` 与 `backend/market-watch`。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。解释器缺失时，启动错误会给出项目目录及应在其中运行的平台命令：`./init.sh` 或 `init.bat`；runtime 不会安装依赖。
+源码启动会从本安装包向上查找 `backend/dsh-trading-core` 与 `backend/market-watch`。使用 `pnpm run investment:python:init` 按固定顺序初始化两个环境，再用 `pnpm run investment:python:verify` 执行只读检查。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
 
 trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程。backend scheduler（调度器）与 push（推送）设置仍归 Python 端所有；随附 profile 保持股票分析的对话内推送关闭（`enableInChatPush: false`），也不会把这些设置解释为 profile 组合维度。
 

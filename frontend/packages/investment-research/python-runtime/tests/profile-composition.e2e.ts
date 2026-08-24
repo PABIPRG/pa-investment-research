@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
+import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -24,6 +26,43 @@ const execFileAsync = promisify(execFile)
 const roots: string[] = []
 const contexts: Context[] = []
 const servers: Server[] = []
+const DEEPSEEK_API_KEY = 'DEEPSEEK_API_KEY' as CredentialRef
+const CANARY = 'sk-dsh-secret-canary-profile-restart'
+
+class TestCredentials extends CredentialProvider {
+  readonly resolveCalls: CredentialRef[] = []
+  readonly describeCalls: CredentialRef[] = []
+
+  constructor(ctx: Context, private value: string | undefined) {
+    super(ctx)
+  }
+
+  resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
+    this.resolveCalls.push(ref)
+    return Promise.resolve(this.value === undefined ? undefined : { value: this.value, source: 'test' })
+  }
+
+  describe(ref: CredentialRef): Promise<CredentialInfo> {
+    this.describeCalls.push(ref)
+    return Promise.resolve({
+      configured: this.value !== undefined,
+      ...(this.value === undefined ? {} : { source: 'test' }),
+      writable: true,
+    })
+  }
+
+  set(ref: CredentialRef, value: string): Promise<void> {
+    this.value = value
+    this.notifyUpdated(ref)
+    return Promise.resolve()
+  }
+
+  unset(ref: CredentialRef): Promise<void> {
+    this.value = undefined
+    this.notifyUpdated(ref)
+    return Promise.resolve()
+  }
+}
 
 afterEach(async () => {
   await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
@@ -69,13 +108,14 @@ async function createProject(root: string, name: string): Promise<string> {
   return project
 }
 
-async function mount(config: string): Promise<Context> {
+async function mount(config: string, credential?: string): Promise<Context> {
   const root = roots.at(-1)!
   const configPath = join(root, `cordis-${contexts.length}.yml`)
   await writeFile(configPath, config)
   const { default: LocalSubprocessRuntime } = await importLocalRuntime()
   const ctx = new Context()
   contexts.push(ctx)
+  new TestCredentials(ctx, credential)
   ctx.baseUrl = pathToFileURL(root).href + '/'
   await ctx.plugin(Loader)
   ctx.loader.builtins.include = Include
@@ -166,16 +206,31 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
       createProject(root, 'market project'),
     ])
     const [tradingPort, marketPort] = await Promise.all([freePort(), freePort()])
-    const ctx = await mount(composition({
+    const config = composition({
       home: join(root, 'dsh home'),
       tradingUrl: `http://127.0.0.1:${tradingPort}`,
       marketUrl: `http://127.0.0.1:${marketPort}`,
       mode: 'managed',
       tradingProject,
       marketProject,
-    }))
+    })
+    const ctx = await mount(config)
 
     expect(ctx.tools.schemas()).toHaveLength(20)
+    expect(ctx.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        backendId: 'trading-core',
+        backendStatus: 'healthy-owned',
+        capability: expect.objectContaining({ toolCount: 9, status: 'unavailable' }),
+        restartRequired: false,
+      }),
+      expect.objectContaining({
+        backendId: 'market-watch',
+        backendStatus: 'healthy-owned',
+        capability: expect.objectContaining({ toolCount: 11, status: 'market-template-only' }),
+        restartRequired: false,
+      }),
+    ]))
     const signal = new AbortController().signal
     await expect(ctx.tools.execute({ signal, callId: CallId('stock-watchlist'), name: 'get_watchlist', arguments: {} }))
       .resolves.toMatchObject({ isError: false, value: { tickers: ['AAPL'] } })
@@ -185,12 +240,53 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
         value: { items: [{ code: '000001', name: '平安银行' }], count: 1 },
       })
 
-    const stock = [...ctx.loader.entries()].find(entry => entry.options.name === '@deepseek-ai/dsh-investment-stock-analysis')
+    const credentials = ctx.credentials as TestCredentials
+    await credentials.set(DEEPSEEK_API_KEY, CANARY)
+    expect(ctx.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        backendId: 'trading-core',
+        restartRequired: true,
+        capability: expect.objectContaining({ status: 'unavailable' }),
+      }),
+      expect.objectContaining({
+        backendId: 'market-watch',
+        restartRequired: true,
+        capability: expect.objectContaining({ status: 'unavailable' }),
+      }),
+    ]))
+    const stockBlocked = await ctx.tools.execute({
+      signal,
+      callId: CallId('stock-restart-required'),
+      name: 'analyze_stock',
+      arguments: { ticker: '000001' },
+    })
+    expect(stockBlocked).toMatchObject({ isError: true, error: { message: expect.stringMatching(/restart/i) } })
+    expect(JSON.stringify(stockBlocked)).not.toContain(CANARY)
+
+    contexts.splice(contexts.indexOf(ctx), 1)
+    await ctx.fiber.dispose()
+    const restarted = await mount(config, CANARY)
+    expect(restarted.tools.schemas()).toHaveLength(20)
+    expect(restarted.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        backendId: 'trading-core',
+        capability: expect.objectContaining({ toolCount: 9, status: 'stock-full' }),
+        restartRequired: false,
+      }),
+      expect.objectContaining({
+        backendId: 'market-watch',
+        capability: expect.objectContaining({ toolCount: 11, status: 'market-full' }),
+        restartRequired: false,
+      }),
+    ]))
+    expect(JSON.stringify(restarted.investmentPythonRuntime.readiness())).not.toContain(CANARY)
+
+    const stock = [...restarted.loader.entries()].find(entry => entry.options.name === '@deepseek-ai/dsh-investment-stock-analysis')
     await stock!.fiber!.dispose()
-    expect(ctx.tools.schemas()).toHaveLength(11)
-    expect([...ctx.loader.entries()].some(entry => entry.options.name === '@deepseek-ai/dsh-investment-python-runtime')).toBe(true)
-    expect(ctx.tools.schemas().some(schema => schema.name === 'watch_list')).toBe(true)
-  }, 45_000)
+    expect(restarted.tools.schemas()).toHaveLength(11)
+    expect([...restarted.loader.entries()].some(entry => entry.options.name === '@deepseek-ai/dsh-investment-python-runtime')).toBe(true)
+    expect(restarted.tools.schemas().some(schema => schema.name === 'watch_list')).toBe(true)
+  }, 60_000)
 
   it('attaches to external identities and rejects an occupied port with the wrong identity', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh profile external '))
@@ -207,6 +303,21 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
       mode: 'external',
     }))
     expect(ctx.tools.schemas()).toHaveLength(20)
+    expect((ctx.credentials as TestCredentials).resolveCalls).toEqual([])
+    expect((ctx.credentials as TestCredentials).describeCalls).toEqual([])
+    expect(ctx.investmentPythonRuntime.readiness().backends.map(backend => backend.backendStatus).sort())
+      .toEqual(['external', 'external'])
+    const attached = await mount(composition({
+      home: join(root, 'attached home'),
+      tradingUrl,
+      marketUrl,
+      mode: 'managed',
+    }), CANARY)
+    expect((attached.credentials as TestCredentials).resolveCalls).toEqual([])
+    expect((attached.credentials as TestCredentials).describeCalls).toEqual([])
+    expect(attached.investmentPythonRuntime.readiness().backends.map(backend => backend.backendStatus).sort())
+      .toEqual(['healthy-attached', 'healthy-attached'])
+    expect(JSON.stringify(attached.investmentPythonRuntime.readiness())).not.toContain(CANARY)
     await expect(checkBackendHealth({
       id: 'trading-core',
       service: 'trading-core',
@@ -238,9 +349,12 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
     }))
     const rows = composeEntries(layers.map(layer => layer.patches))
     expect(rows.some(row => row.id === 'investment-python-runtime')).toBe(true)
+    expect(rows.some(row => row.id === 'client-investment-research-runtime')).toBe(true)
+    expect(rows.some(row => row.id === 'client-ui-settings-investment-research')).toBe(true)
     const dump = renderConfigDump('dsh-investment-profile-test', base, layers)
     expect(dump.indexOf('investment-python-runtime')).toBeLessThan(dump.indexOf('investment-stock-analysis'))
     expect(dump.indexOf('investment-python-runtime')).toBeLessThan(dump.indexOf('investment-market-watch'))
     expect(dump).not.toMatch(/file:\/\/(?:[A-Za-z]:)?\//u)
+    expect(dump).not.toContain(CANARY)
   })
 })
