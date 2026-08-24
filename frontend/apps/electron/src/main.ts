@@ -51,66 +51,104 @@ if (!singleInstance) {
 }
 
 async function runApplication(): Promise<void> {
-  await app.whenReady()
-  const { ctx, shutdown } = await runProfile({
-    environment: loadLayeredEnv('dsh'),
-    profile: PROFILE,
-    patchFiles: [ELECTRON_PATCH],
-    args: [],
-    installAnchor: APP_MANIFEST,
-    watchPatches: false,
-  })
-  const connection = ctx.get('connection')
-  if (!(connection instanceof ElectronConnectionService)) {
-    throw new Error('dsh-electron: Electron connection provider did not activate')
+  const lifecycleReady = Promise.withResolvers<void>()
+  void lifecycleReady.promise.catch(() => {})
+  let ipc: IpcBinding | undefined
+  let profileShutdown: { shutdown(code: number): Promise<void> } | undefined
+  let disposePromise: Promise<void> | undefined
+  let restartPromise: Promise<void> | undefined
+  let normalQuitPromise: Promise<void> | undefined
+  let quitCommitted = false
+  const disposeOnce = (): Promise<void> => {
+    if (disposePromise !== undefined) return disposePromise
+    disposePromise = (async () => {
+      await lifecycleReady.promise
+      if (ipc === undefined || profileShutdown === undefined) {
+        throw new Error('dsh-electron: restart lifecycle did not initialize')
+      }
+      await ipc.dispose()
+      await profileShutdown.shutdown(0)
+    })()
+    return disposePromise
   }
-  protocol.handle(APP_SCHEME, createAppProtocolHandler({
-    rendererDir: RENDERER_DIR,
-    connection,
-    modules: ctx.clientModules,
-    fetchFile: fileUrl => net.fetch(fileUrl),
-  }))
-  const window = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 900,
-    minHeight: 640,
-    show: false,
-    backgroundColor: '#111827',
-    webPreferences: {
-      preload: PRELOAD,
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
-    },
-  })
-  const ipc = bindIpc(window.webContents, connection)
-  hardenNavigation(window)
-  window.once('ready-to-show', () => { window.show() })
-  await window.loadURL(APP_INDEX_URL)
-
-  app.on('second-instance', () => {
-    if (window.isMinimized()) window.restore()
-    window.show()
-    window.focus()
-  })
-
-  let quitting = false
-  let disposed = false
-  const dispose = async (): Promise<void> => {
-    if (disposed) return
-    disposed = true
-    await ipc.dispose()
-    await shutdown.shutdown(0)
+  const quitOnce = (): Promise<void> => {
+    if (normalQuitPromise !== undefined) return normalQuitPromise
+    normalQuitPromise = (async () => {
+      await disposeOnce()
+      if (restartPromise !== undefined || quitCommitted) return
+      quitCommitted = true
+      app.quit()
+    })()
+    return normalQuitPromise
   }
-  app.on('before-quit', (event) => {
-    if (quitting) return
-    event.preventDefault()
-    quitting = true
-    void dispose().then(() => { app.quit() })
-  })
-  app.on('window-all-closed', () => { app.quit() })
+  function restartOnce(): Promise<void> {
+    if (restartPromise !== undefined) return restartPromise
+    restartPromise = (async () => {
+      await disposeOnce()
+      app.relaunch({ args: process.argv.slice(1) })
+      quitCommitted = true
+      app.quit()
+    })()
+    return restartPromise
+  }
+  try {
+    await app.whenReady()
+    const { ctx, shutdown } = await runProfile({
+      environment: loadLayeredEnv('dsh'),
+      profile: PROFILE,
+      patchFiles: [ELECTRON_PATCH],
+      args: [],
+      installAnchor: APP_MANIFEST,
+      restart: restartOnce,
+      watchPatches: false,
+    })
+    profileShutdown = shutdown
+    const connection = ctx.get('connection')
+    if (!(connection instanceof ElectronConnectionService)) {
+      throw new Error('dsh-electron: Electron connection provider did not activate')
+    }
+    protocol.handle(APP_SCHEME, createAppProtocolHandler({
+      rendererDir: RENDERER_DIR,
+      connection,
+      modules: ctx.clientModules,
+      fetchFile: fileUrl => net.fetch(fileUrl),
+    }))
+    const window = new BrowserWindow({
+      width: 1280,
+      height: 840,
+      minWidth: 900,
+      minHeight: 640,
+      show: false,
+      backgroundColor: '#111827',
+      webPreferences: {
+        preload: PRELOAD,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+      },
+    })
+    ipc = bindIpc(window.webContents, connection)
+    hardenNavigation(window)
+    window.once('ready-to-show', () => { window.show() })
+    await window.loadURL(APP_INDEX_URL)
+
+    app.on('second-instance', () => {
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    })
+    app.on('before-quit', (event) => {
+      if (quitCommitted) return
+      event.preventDefault()
+      return quitOnce()
+    })
+    app.on('window-all-closed', () => quitOnce())
+    lifecycleReady.resolve()
+  } catch (error) {
+    lifecycleReady.reject(error)
+    throw error
+  }
 }
 
 function hardenNavigation(window: BrowserWindow): void {

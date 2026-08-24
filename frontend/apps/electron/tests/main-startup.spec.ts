@@ -72,6 +72,7 @@ describe('Electron main startup', () => {
     expect(mocks.runProfile).toHaveBeenCalledWith(expect.objectContaining({
       profile: 'investment-research',
       patchFiles: [expect.stringMatching(/electron\.patch\.yml$/u)],
+      restart: expect.any(Function),
       watchPatches: false,
     }))
   })

@@ -41,12 +41,20 @@ export interface AppExit {
   (code: number): void
 }
 
+/** Request an application restart; only a launcher that owns one provides it. */
+export interface AppRestart {
+  /** Request one launcher-owned restart. */
+  (): void
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** The invocation's inner arguments; provided by a launcher before the tree mounts. */
     cmdlineArgs?: CmdlineArgs
     /** Bounded process-exit request; provided by a launcher before the tree mounts. */
     appExit?: AppExit
+    /** Application restart request; absent on launchers that cannot restart the app. */
+    appRestart?: AppRestart
   }
 }
 
@@ -56,6 +64,8 @@ export interface CmdlineHost {
   args: readonly string[]
   /** Bounded process-exit request. */
   exit: AppExit
+  /** Optional application restart request. */
+  restart?: AppRestart
 }
 
 /**
@@ -69,6 +79,7 @@ export function provideCmdline(ctx: Context, host: CmdlineHost): void {
   const snapshot: readonly string[] = Object.freeze([...host.args])
   ctx.provide('cmdlineArgs', { get: () => snapshot })
   ctx.provide('appExit', host.exit)
+  if (host.restart !== undefined) ctx.provide('appRestart', host.restart)
 }
 
 /** The process streams commander output is written to; production writes to the process. */
