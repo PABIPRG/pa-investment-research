@@ -6,7 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { SubprocessHandle, SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { InvestmentPythonRuntime } from '../src/index.ts'
 import { InvestmentBackendManager } from '../src/runtime.ts'
 import type { BackendHealthResult, PythonBackendDefinition } from '../src/types.ts'
@@ -70,7 +70,7 @@ async function harness(health: BackendHealthResult[] = [healthy]) {
 
 class StubSubprocess extends SubprocessRuntime {
   async resolveExecutable(command: string): Promise<string> { return command }
-  spawn(): never { throw new Error('unexpected spawn') }
+  spawn(_spec: SubprocessSpawnSpec): SubprocessHandle { throw new Error('unexpected spawn') }
   async spawnTerminal(_spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle> { throw new Error('unexpected terminal') }
 }
 
@@ -581,9 +581,9 @@ describe('InvestmentBackendManager', () => {
       checkHealth: async () => unresolved.specs.length === 0 ? refused : healthy,
       resolveCredential: resolveUndefined,
     })
+    const { managedEnv: _managedEnv, ...definitionWithoutManagedEnv } = definition
     unresolvedManager.register({
-      ...definition,
-      managedEnv: undefined,
+      ...definitionWithoutManagedEnv,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
     const unresolvedLease = await unresolvedManager.acquire('trading-core')

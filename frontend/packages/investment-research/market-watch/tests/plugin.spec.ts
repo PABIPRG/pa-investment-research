@@ -182,7 +182,9 @@ describe('market-watch function plugin', () => {
 
   it('preflights every operation and permits the daily template fallback when enhancement is keyless', async () => {
     const assertCapability = vi.fn()
-    const fetch = vi.fn(async () => new Response('{"id":"brief-1","period":"pre","content":"模板简报","llm_used":false}'))
+    const fetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () => new Response('{"id":"brief-1","period":"pre","content":"模板简报","llm_used":false}'),
+    )
     vi.stubGlobal('fetch', fetch)
     const byName = new Map((await installWithPreflight(assertCapability)).map(tool => [tool.name, tool]))
     const argumentsByTool: Record<string, Record<string, unknown>> = {

@@ -436,7 +436,14 @@ describe('investment readiness and capability preflight', () => {
       describeCredential: async () => ({ configured: true, source: 'file', writable: true }),
     }) as InvestmentBackendManager & ReadinessManager
     manager.register(definitions['trading-core'])
-    const startupError = await manager.acquire('trading-core').catch(reason => reason as Error)
+    let startupError: Error
+    try {
+      await manager.acquire('trading-core')
+      throw new Error('expected cleanup failure')
+    } catch (error) {
+      if (!(error instanceof Error)) throw error
+      startupError = error
+    }
     registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
 
     expect(startupError).toBeInstanceOf(AggregateError)
