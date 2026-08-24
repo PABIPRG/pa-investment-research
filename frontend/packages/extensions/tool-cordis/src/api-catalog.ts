@@ -752,6 +752,29 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'a verified URL lease.',
       },
       {
+        signature: 'registerCapability(definition: InvestmentCapabilityDefinition): () => void',
+        description: 'Publish one backend capability after its business tools are registered.',
+        parameters: [{ name: 'definition', description: 'backend, tool count, and LLM relationship.' }],
+        returns: 'idempotent disposer for the capability contribution.',
+      },
+      {
+        signature: 'assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void',
+        description: 'Reject an operation that cannot safely use the active backend capability.',
+        parameters: [{ name: 'backendId', description: 'backend required by the operation.' }, { name: 'use', description: 'operation\'s LLM relationship.' }],
+      },
+      {
+        signature: '@Remote(\'readiness\') readiness(): InvestmentReadinessSnapshot',
+        description: 'Read the immutable, client-safe Runtime readiness projection.',
+        parameters: [],
+        returns: 'current backend, credential, and capability facts.',
+      },
+      {
+        signature: '@Remote(\'request-restart\') requestRestart(): InvestmentRestartResult',
+        description: 'Request the launcher to restart the complete application after the Remote acknowledgement is sent.',
+        parameters: [],
+        returns: 'an accepted result, or an actionable unavailable result when this launcher cannot restart.',
+      },
+      {
         signature: 'invariantSnapshot(): ReturnType<InvestmentBackendManager[\'invariantSnapshot\']>',
         description: 'Read the mutable lifecycle relations consumed by the invariant companion.',
         parameters: [],
@@ -3212,15 +3235,43 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'InvestmentBackendManager',
-    declaration: 'export class InvestmentBackendManager {\n    readonly internals: {\n        executableExists: (path: string) => Promise<boolean>;\n        sleep: (ms: number) => Promise<void>;\n        now: () => number;\n    };\n    constructor(options: InvestmentBackendManagerOptions);\n    register(definition: PythonBackendDefinition): () => void;\n    async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease>;\n    async dispose(): Promise<void>;\n    invariantSnapshot(): Readonly<{\n        active: readonly ActiveEntry[];\n        flights: readonly InvestmentBackendId[];\n    }>;\n}',
+    declaration: 'export class InvestmentBackendManager {\n    readonly internals: {\n        executableExists: (path: string) => Promise<boolean>;\n        sleep: (ms: number) => Promise<void>;\n        now: () => number;\n    };\n    constructor(options: InvestmentBackendManagerOptions);\n    register(definition: PythonBackendDefinition): () => void;\n    registerCapability(definition: InvestmentCapabilityDefinition): () => void;\n    assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void;\n    readiness(): InvestmentReadinessSnapshot;\n    credentialUpdated(ref: CredentialRef): void;\n    async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease>;\n    async dispose(): Promise<void>;\n    invariantSnapshot(): Readonly<{\n        active: readonly ActiveEntry[];\n        flights: readonly InvestmentBackendId[];\n    }>;\n}',
   },
   {
     name: 'InvestmentBackendManagerOptions',
-    declaration: 'export interface InvestmentBackendManagerOptions {\n    readonly subprocess: SubprocessRuntime;\n    readonly config?: Config;\n    readonly checkHealth?: HealthCheck;\n    readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths;\n    readonly executableExists?: (path: string) => Promise<boolean>;\n    readonly sleep?: (ms: number) => Promise<void>;\n    readonly now?: () => number;\n}',
+    declaration: 'export interface InvestmentBackendManagerOptions {\n    readonly subprocess: SubprocessRuntime;\n    readonly config?: Config;\n    readonly checkHealth?: HealthCheck;\n    readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths;\n    readonly resolveCredential?: CredentialResolver;\n    readonly describeCredential?: CredentialDescriber;\n    readonly resolveLogPaths?: LogPathResolver;\n    readonly normalizeEnvironmentKey?: EnvironmentKeyNormalizer;\n    readonly executableExists?: (path: string) => Promise<boolean>;\n    readonly sleep?: (ms: number) => Promise<void>;\n    readonly now?: () => number;\n}',
   },
   {
     name: 'InvestmentBackendMode',
     declaration: 'export type InvestmentBackendMode = \'managed\' | \'external\';',
+  },
+  {
+    name: 'InvestmentBackendReadiness',
+    declaration: 'export interface InvestmentBackendReadiness {\n    readonly backendId: InvestmentBackendId;\n    readonly ownership: PythonBackendLease[\'ownership\'] | null;\n    readonly backendStatus: \'stopped\' | \'healthy-owned\' | \'healthy-attached\' | \'external\' | \'failed\';\n    readonly credentials: readonly InvestmentCredentialReadiness[];\n    readonly capability: InvestmentCapabilityReadiness | null;\n    readonly restartRequired: boolean;\n    readonly runtimeLogPath: string;\n}',
+  },
+  {
+    name: 'InvestmentCapabilityDefinition',
+    declaration: 'export interface InvestmentCapabilityDefinition {\n    readonly backendId: InvestmentBackendId;\n    readonly toolCount: number;\n    readonly llm: \'required\' | \'enhancement\' | \'none\';\n}',
+  },
+  {
+    name: 'InvestmentCapabilityReadiness',
+    declaration: 'export interface InvestmentCapabilityReadiness {\n    readonly llm: InvestmentCapabilityDefinition[\'llm\'];\n    readonly toolCount: number;\n    readonly status: \'stock-full\' | \'market-template-only\' | \'market-full\' | \'unavailable\';\n}',
+  },
+  {
+    name: 'InvestmentCapabilityUse',
+    declaration: 'export type InvestmentCapabilityUse = \'llm-required\' | \'llm-enhancement\' | \'non-llm\';',
+  },
+  {
+    name: 'InvestmentCredentialReadiness',
+    declaration: 'export interface InvestmentCredentialReadiness {\n    readonly ref: CredentialRef;\n    readonly configured?: boolean;\n    readonly source?: string;\n    readonly writable?: boolean;\n    readonly status: \'missing\' | \'configured\' | \'read-only\' | \'restart-required\' | \'external-managed\';\n}',
+  },
+  {
+    name: 'InvestmentReadinessSnapshot',
+    declaration: 'export interface InvestmentReadinessSnapshot {\n    readonly backends: readonly InvestmentBackendReadiness[];\n}',
+  },
+  {
+    name: 'InvestmentRestartResult',
+    declaration: 'export type InvestmentRestartResult = Readonly<{\n    status: \'accepted\';\n}> | Readonly<{\n    status: \'unavailable\';\n    reason: string;\n}>;',
   },
   {
     name: 'InvocationDescriptor',
@@ -3413,6 +3464,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'LspRange',
     declaration: 'export interface LspRange {\n    readonly start: LspPosition;\n    readonly end: LspPosition;\n}',
+  },
+  {
+    name: 'ManagedCredentialEnv',
+    declaration: 'export interface ManagedCredentialEnv {\n    readonly ref: CredentialRef;\n    readonly env: string;\n    readonly role: \'required\' | \'enhancement\';\n}',
   },
   {
     name: 'ManualCompactAgentContext',
@@ -3616,7 +3671,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PythonBackendDefinition',
-    declaration: 'export interface PythonBackendDefinition {\n    readonly id: InvestmentBackendId;\n    readonly service: InvestmentBackendId;\n    readonly mode: InvestmentBackendMode;\n    readonly baseUrl: string;\n    readonly projectDir?: string;\n    readonly repositoryPath: readonly string[];\n    readonly module: \'adapter.app:app\' | \'market_watch.app:app\';\n    readonly healthPath: \'/health\';\n    readonly healthOk: Readonly<Record<string, string | boolean>>;\n    readonly initCommand: Readonly<{\n        posix: \'./init.sh\';\n        windows: \'init.bat\';\n    }>;\n    readonly managedEnv?: Readonly<Record<string, string | undefined>>;\n}',
+    declaration: 'export interface PythonBackendDefinition {\n    readonly id: InvestmentBackendId;\n    readonly service: InvestmentBackendId;\n    readonly mode: InvestmentBackendMode;\n    readonly baseUrl: string;\n    readonly projectDir?: string;\n    readonly repositoryPath: readonly string[];\n    readonly module: \'adapter.app:app\' | \'market_watch.app:app\';\n    readonly healthPath: \'/health\';\n    readonly healthOk: Readonly<Record<string, string | boolean>>;\n    readonly initCommand: Readonly<{\n        posix: \'./init.sh\';\n        windows: \'init.bat\';\n    }>;\n    readonly managedEnv?: Readonly<Record<string, string | undefined>>;\n    readonly credentialEnv?: readonly ManagedCredentialEnv[];\n}',
   },
   {
     name: 'PythonBackendLease',

@@ -139,11 +139,37 @@ register(definition: PythonBackendDefinition): () => void
 async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease>
 
 /**
+ * Publish one backend capability after its business tools are registered.
+ * @param definition - backend, tool count, and LLM relationship.
+ * @returns idempotent disposer for the capability contribution.
+ */
+registerCapability(definition: InvestmentCapabilityDefinition): () => void
+
+/**
+ * Reject an operation that cannot safely use the active backend capability.
+ * @param backendId - backend required by the operation.
+ * @param use - operation's LLM relationship.
+ */
+assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void
+
+/**
+ * Read the immutable, client-safe Runtime readiness projection.
+ * @returns current backend, credential, and capability facts.
+ */
+@Remote('readiness') readiness(): InvestmentReadinessSnapshot
+
+/**
+ * Request the launcher to restart the complete application after the Remote acknowledgement is sent.
+ * @returns an accepted result, or an actionable unavailable result when this launcher cannot restart.
+ */
+@Remote('request-restart') requestRestart(): InvestmentRestartResult
+
+/**
  * Read the mutable lifecycle relations consumed by the invariant companion.
  * @returns active backend entries and backend ids with in-flight acquisition.
  */
 invariantSnapshot(): ReturnType<InvestmentBackendManager['invariantSnapshot']>
 ```
 
-Source: [`packages/investment-research/python-runtime/src/index.ts:42`](../../packages/investment-research/python-runtime/src/index.ts)
+Source: [`packages/investment-research/python-runtime/src/index.ts:55`](../../packages/investment-research/python-runtime/src/index.ts)
 <!-- END GENERATED cordis-surface -->
