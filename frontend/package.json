@@ -38,6 +38,8 @@
     "test:investment-runtime:matrix": "node -e \"if (!process.env.DSH_INVESTMENT_TEST_PYTHON) throw new Error('DSH_INVESTMENT_TEST_PYTHON is required')\" && vitest run --config vitest.e2e.config.ts packages/investment-research/python-runtime/tests/managed-fake-runner.e2e.ts packages/investment-research/python-runtime/tests/profile-composition.e2e.ts packages/investment-research/python-runtime/tests/credential-security.e2e.ts --retry=0 && node --input-type=module -e \"import { startVitest } from 'vitest/node'; const v = await startVitest('test', [], { run: true, config: 'vitest.e2e.config.ts', include: ['apps/electron/tests/investment-profile.e2e.ts'], retry: 0 }); await v.close()\"",
     "investment:python:init": "tsx scripts/investment-python.ts init",
     "investment:python:verify": "tsx scripts/investment-python.ts verify",
+    "investment:sidecar:build": "tsx scripts/build-investment-python-sidecar.ts",
+    "investment:sidecar:smoke": "tsx scripts/smoke-investment-python-sidecar.ts",
     "test:issue-management": "node .github/issue-management/policy.test.mjs",
     "test:snapshot": "vitest run --config vitest.snapshot.config.ts",
     "test:snapshot:record": "DSH_SNAPSHOT=record vitest run --config vitest.snapshot.config.ts --update",

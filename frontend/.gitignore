@@ -6,6 +6,7 @@ lib/
 pnpm-debug.log
 .pnpm-store/
 .cache/
+.investment-python-build-*/
 examples/*/*.jsonl
 .storages/
 .sessions/
