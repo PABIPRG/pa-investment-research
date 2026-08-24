@@ -1,8 +1,20 @@
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
+
 /** Stable investment Python backend identifiers. */
 export type InvestmentBackendId = 'trading-core' | 'market-watch'
 
 /** Backend ownership modes selected by plugin configuration. */
 export type InvestmentBackendMode = 'managed' | 'external'
+
+/** One credential reference injected into an owned backend child environment. */
+export interface ManagedCredentialEnv {
+  /** Provider-managed credential reference resolved only for an owned child. */
+  readonly ref: CredentialRef
+  /** Child environment-variable target for the resolved credential value. */
+  readonly env: string
+  /** Capability importance consumed by the readiness layer. */
+  readonly role: 'required' | 'enhancement'
+}
 
 /** Complete definition required to verify or start one Python backend. */
 export interface PythonBackendDefinition {
@@ -28,6 +40,8 @@ export interface PythonBackendDefinition {
   readonly initCommand: Readonly<{ posix: './init.sh'; windows: 'init.bat' }>
   /** Explicit non-secret entries forwarded only to an owned child. */
   readonly managedEnv?: Readonly<Record<string, string | undefined>>
+  /** Credential references resolved only into an owned child environment. */
+  readonly credentialEnv?: readonly ManagedCredentialEnv[]
 }
 
 /** One verified backend reference owned by its caller until release. */

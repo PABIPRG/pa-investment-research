@@ -1,4 +1,4 @@
-import { access, mkdtemp, mkdir } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import type { SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalS
 import { InvestmentPythonRuntime } from '../src/index.ts'
 import { InvestmentBackendManager } from '../src/runtime.ts'
 import type { BackendHealthResult, PythonBackendDefinition } from '../src/types.ts'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import { apply as applyInvariant, inject as invariantInject, name as invariantName } from '../src/invariant.ts'
 import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import { ownedBackendStatePath, writeOwnedBackendState } from '../src/state.ts'
@@ -28,6 +29,10 @@ const definition: PythonBackendDefinition = {
 
 const healthy: BackendHealthResult = { status: 'healthy', healthUrl: 'http://127.0.0.1:8000/health', httpStatus: 200 }
 const refused: BackendHealthResult = { status: 'refused', healthUrl: 'http://127.0.0.1:8000/health', error: new Error('refused') }
+
+function credentialRef(value: string): CredentialRef {
+  return value as CredentialRef
+}
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -195,6 +200,180 @@ describe('InvestmentBackendManager', () => {
     unregisterSecond()
     unregisterSecond()
     await expect(manager.acquire('trading-core')).rejects.toThrow(/not registered/)
+  })
+
+  it('rejects invalid credential environment target names', async () => {
+    const { manager } = await harness()
+    expect(() => manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING-API-KEY', role: 'required' }],
+    })).toThrow(/invalid credential environment/i)
+  })
+
+  it('rejects duplicate credential environment targets', async () => {
+    const { manager } = await harness()
+    expect(() => manager.register({
+      ...definition,
+      credentialEnv: [
+        { ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' },
+        { ref: credentialRef('trading-api-secret'), env: 'TRADING_API_KEY', role: 'enhancement' },
+      ],
+    })).toThrow(/duplicate credential environment/i)
+  })
+
+  it('rejects credential targets that collide with managed environment entries', async () => {
+    const { manager } = await harness()
+    expect(() => manager.register({
+      ...definition,
+      managedEnv: { TRADING_API_KEY: 'runner-name' },
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })).toThrow(/managed environment/i)
+  })
+
+  it('uses injected Windows environment-key semantics while POSIX preserves exact keys', async () => {
+    const credentialEnv = [{ ref: credentialRef('trading-api-key'), env: 'trading_api_key', role: 'required' }] as const
+    const posix = await harness()
+    expect(() => posix.manager.register({ ...definition, managedEnv: { TRADING_API_KEY: 'runner-name' }, credentialEnv })).not.toThrow()
+
+    const windows = new InvestmentBackendManager({
+      subprocess: posix.subprocess,
+      config: { dshHome: posix.home },
+      normalizeEnvironmentKey: key => key.toUpperCase(),
+    })
+    expect(() => windows.register({ ...definition, managedEnv: { TRADING_API_KEY: 'runner-name' }, credentialEnv })).toThrow(/managed environment/i)
+    expect(() => windows.register({
+      ...definition,
+      credentialEnv: [
+        { ref: credentialRef('trading-api-key'), env: 'trading_api_key', role: 'required' },
+        { ref: credentialRef('trading-api-secret'), env: 'TRADING_API_KEY', role: 'enhancement' },
+      ],
+    })).toThrow(/duplicate credential environment/i)
+  })
+
+  it('treats normalized equivalent credential mappings as identical registrations and rejects other mappings', async () => {
+    const current = await harness()
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => healthy,
+      normalizeEnvironmentKey: key => key.toUpperCase(),
+    })
+    const first = manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'trading_api_key', role: 'required' }],
+    })
+    const second = manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    expect(() => manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-secret'), env: 'TRADING_API_KEY', role: 'required' }],
+    })).toThrow(/conflict/)
+    first()
+    await expect(manager.acquire('trading-core')).resolves.toMatchObject({ ownership: 'attached' })
+    second()
+  })
+
+  it('resolves each credential only for an owned spawn after a refused health probe', async () => {
+    const secret = 'credential-value-must-stay-private'
+    for (const [mode, health] of [
+      ['managed', healthy],
+      ['external', healthy],
+    ] as const) {
+      const current = await harness([health])
+      const resolveCredential = vi.fn(async () => secret)
+      const manager = new InvestmentBackendManager({
+        subprocess: current.subprocess,
+        config: { dshHome: current.home },
+        checkHealth: async () => health,
+        resolveCredential,
+      })
+      manager.register({
+        ...definition,
+        mode,
+        credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+      })
+      const lease = await manager.acquire('trading-core')
+      expect(resolveCredential).not.toHaveBeenCalled()
+      expect(current.specs).toHaveLength(0)
+      await lease.release()
+    }
+
+    const current = await harness()
+    const events: string[] = []
+    let probes = 0
+    const resolveCredential = vi.fn(async (ref: CredentialRef) => {
+      events.push(`resolve:${ref}`)
+      return secret
+    })
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => {
+        const result = probes++ === 0 ? refused : healthy
+        events.push(`health:${result.status}`)
+        return result
+      },
+      resolveCredential,
+    })
+    manager.register({
+      ...definition,
+      credentialEnv: [
+        { ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' },
+        { ref: credentialRef('trading-api-key'), env: 'TRADING_API_SECRET', role: 'enhancement' },
+      ],
+    })
+    current.handle.stderrChunks.push('ordinary diagnostic')
+    const lease = await manager.acquire('trading-core')
+    expect(events).toEqual(['health:refused', 'resolve:trading-api-key', 'health:healthy'])
+    expect(resolveCredential).toHaveBeenCalledTimes(1)
+    expect(current.specs[0]?.env).toMatchObject({
+      ADAPTER_RUNNER: 'runner-name',
+      TRADING_API_KEY: secret,
+      TRADING_API_SECRET: secret,
+    })
+    expect(JSON.stringify(manager.invariantSnapshot())).not.toContain(secret)
+    await expect(readFile(ownedBackendStatePath(current.home, 'trading-core'), 'utf8')).resolves.not.toContain(secret)
+    await expect(readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')).resolves.not.toContain(secret)
+    current.handle.exit()
+    await lease.release()
+  })
+
+  it('omits unresolved credentials from the owned child environment and redacts resolver values from spawn errors', async () => {
+    const unresolved = await harness([refused, healthy])
+    const resolveUndefined = vi.fn(async () => undefined)
+    const unresolvedManager = new InvestmentBackendManager({
+      subprocess: unresolved.subprocess,
+      config: { dshHome: unresolved.home },
+      checkHealth: async () => unresolved.specs.length === 0 ? refused : healthy,
+      resolveCredential: resolveUndefined,
+    })
+    unresolvedManager.register({
+      ...definition,
+      managedEnv: undefined,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const unresolvedLease = await unresolvedManager.acquire('trading-core')
+    expect(resolveUndefined).toHaveBeenCalledOnce()
+    expect(unresolved.specs[0]).not.toHaveProperty('env')
+    unresolved.handle.exit()
+    await unresolvedLease.release()
+
+    const secret = 'credential-value-must-be-redacted'
+    const failed = await harness([refused])
+    failed.subprocess.spawn = () => { throw new Error(`spawn failed with ${secret}`) }
+    const failedManager = new InvestmentBackendManager({
+      subprocess: failed.subprocess,
+      config: { dshHome: failed.home },
+      checkHealth: async () => refused,
+      resolveCredential: async () => secret,
+    })
+    failedManager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    await expect(failedManager.acquire('trading-core')).rejects.not.toThrow(secret)
   })
 
   it('uses argv without a shell and forwards only the explicit managed environment', async () => {

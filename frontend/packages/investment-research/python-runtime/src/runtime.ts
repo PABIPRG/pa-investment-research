@@ -15,10 +15,12 @@ import type {
   BackendHealthResult,
   Config,
   InvestmentBackendId,
+  ManagedCredentialEnv,
   PythonBackendDefinition,
   PythonBackendLease,
   ResolvedBackendPaths,
 } from './types.ts'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 
 const DEFAULT_CONFIG = {
   startupTimeoutMs: 30_000,
@@ -45,6 +47,10 @@ type ActiveEntry =
   | (ActiveEntryBase & Readonly<{ ownership: 'attached' | 'external'; handle?: never; log?: never; state?: never }>)
 
 type HealthCheck = (definition: PythonBackendDefinition, options?: { signal?: AbortSignal }) => Promise<BackendHealthResult>
+type CredentialResolver = (ref: CredentialRef) => Promise<string | undefined>
+type EnvironmentKeyNormalizer = (key: string) => string
+
+const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 interface StartupFlight {
   controller: AbortController
@@ -84,6 +90,10 @@ export interface InvestmentBackendManagerOptions {
   readonly config?: Config
   readonly checkHealth?: HealthCheck
   readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths
+  /** Resolve one credential only when an owned child is about to spawn. */
+  readonly resolveCredential?: CredentialResolver
+  /** Normalize child environment keys for the target platform's spawn semantics. */
+  readonly normalizeEnvironmentKey?: EnvironmentKeyNormalizer
   readonly executableExists?: (path: string) => Promise<boolean>
   readonly sleep?: (ms: number) => Promise<void>
   readonly now?: () => number
@@ -91,6 +101,45 @@ export interface InvestmentBackendManagerOptions {
 
 function sameDefinition(left: PythonBackendDefinition, right: PythonBackendDefinition): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function defaultNormalizeEnvironmentKey(key: string): string {
+  return process.platform === 'win32' ? key.toUpperCase() : key
+}
+
+function normalizeCredentialEnv(
+  definition: PythonBackendDefinition,
+  normalizeEnvironmentKey: EnvironmentKeyNormalizer,
+): readonly ManagedCredentialEnv[] | undefined {
+  if (definition.credentialEnv === undefined) return undefined
+  const managed = new Set(Object.keys(definition.managedEnv ?? {}).map(normalizeEnvironmentKey))
+  const targets = new Set<string>()
+  const normalized = definition.credentialEnv.map((credential) => {
+    if (!ENVIRONMENT_NAME.test(credential.env)) {
+      throw new Error(`investment Python backend "${definition.id}" has invalid credential environment "${credential.env}"`)
+    }
+    const env = normalizeEnvironmentKey(credential.env)
+    if (targets.has(env)) {
+      throw new Error(`investment Python backend "${definition.id}" has duplicate credential environment "${env}"`)
+    }
+    if (managed.has(env)) {
+      throw new Error(`investment Python backend "${definition.id}" credential environment "${env}" conflicts with managed environment`)
+    }
+    targets.add(env)
+    return Object.freeze({ ref: credential.ref, env, role: credential.role })
+  })
+  return Object.freeze(normalized)
+}
+
+function normalizeDefinition(
+  definition: PythonBackendDefinition,
+  normalizeEnvironmentKey: EnvironmentKeyNormalizer,
+): PythonBackendDefinition {
+  const credentialEnv = normalizeCredentialEnv(definition, normalizeEnvironmentKey)
+  return Object.freeze({
+    ...definition,
+    ...(credentialEnv === undefined ? {} : { credentialEnv }),
+  })
 }
 
 async function executableExists(path: string): Promise<boolean> {
@@ -115,6 +164,8 @@ export class InvestmentBackendManager {
   private readonly config: RuntimeConfig
   private readonly checkHealth: HealthCheck
   private readonly resolvePaths: (definition: PythonBackendDefinition) => ResolvedBackendPaths
+  private readonly resolveCredential: CredentialResolver
+  private readonly normalizeEnvironmentKey: EnvironmentKeyNormalizer
   /** Injectable filesystem and timing operations retained for deterministic lifecycle tests. */
   readonly internals: {
     executableExists: (path: string) => Promise<boolean>
@@ -127,6 +178,8 @@ export class InvestmentBackendManager {
     this.config = { ...DEFAULT_CONFIG, ...options.config, dshHome: resolveDshHome(options.config?.dshHome) }
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
     this.resolvePaths = options.resolvePaths ?? defaultResolvePaths
+    this.resolveCredential = options.resolveCredential ?? (async () => undefined)
+    this.normalizeEnvironmentKey = options.normalizeEnvironmentKey ?? defaultNormalizeEnvironmentKey
     this.internals = {
       executableExists: options.executableExists ?? executableExists,
       sleep: options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))),
@@ -141,24 +194,25 @@ export class InvestmentBackendManager {
    */
   register(definition: PythonBackendDefinition): () => void {
     if (this.disposed) throw new Error('investment Python runtime is disposed')
-    const current = this.definitions.get(definition.id)
+    const normalized = normalizeDefinition(definition, this.normalizeEnvironmentKey)
+    const current = this.definitions.get(normalized.id)
     if (current !== undefined) {
-      if (!sameDefinition(current.definition, definition)) {
-        throw new Error(`investment Python backend "${definition.id}" registration conflict`)
+      if (!sameDefinition(current.definition, normalized)) {
+        throw new Error(`investment Python backend "${normalized.id}" registration conflict`)
       }
       current.registrations += 1
     } else {
-      this.definitions.set(definition.id, { definition, registrations: 1 })
+      this.definitions.set(normalized.id, { definition: normalized, registrations: 1 })
     }
     let released = false
     return () => {
       if (released) return
       released = true
-      const entry = this.definitions.get(definition.id)
+      const entry = this.definitions.get(normalized.id)
       /* v8 ignore next -- another owner cannot delete a still-counted definition */
       if (entry === undefined) return
       entry.registrations -= 1
-      if (entry.registrations === 0) this.definitions.delete(definition.id)
+      if (entry.registrations === 0) this.definitions.delete(normalized.id)
     }
   }
 
@@ -282,6 +336,24 @@ export class InvestmentBackendManager {
     await stopping
   }
 
+  private async resolveCredentialEnv(definition: PythonBackendDefinition): Promise<Readonly<Record<string, string>> | undefined> {
+    if (definition.credentialEnv === undefined) return undefined
+    const values = new Map<CredentialRef, string | undefined>()
+    const environment: Record<string, string> = {}
+    for (const credential of definition.credentialEnv) {
+      if (!values.has(credential.ref)) {
+        try {
+          values.set(credential.ref, await this.resolveCredential(credential.ref))
+        } catch {
+          throw new Error(`investment Python backend "${definition.id}" credential "${credential.ref}" resolution failed`)
+        }
+      }
+      const value = values.get(credential.ref)
+      if (value !== undefined) environment[credential.env] = value
+    }
+    return Object.keys(environment).length === 0 ? undefined : environment
+  }
+
   private async start(definition: PythonBackendDefinition, signal: AbortSignal): Promise<ActiveEntry> {
     resolveBackendAddress(definition)
     const health = await this.checkHealth(definition, { signal })
@@ -307,6 +379,10 @@ export class InvestmentBackendManager {
     if (oldState.kind !== 'missing') await log.append('runtime', `previous runtime state: ${oldState.kind}\n`)
 
     const address = resolveBackendAddress(definition)
+    const credentialEnv = await this.resolveCredentialEnv(definition)
+    const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined
+      ? undefined
+      : { ...definition.managedEnv, ...credentialEnv }
     let handle: SubprocessHandle
     try {
       handle = this.subprocess.spawn({
@@ -319,10 +395,10 @@ export class InvestmentBackendManager {
         },
         graceMs: this.config.shutdownGraceMs,
         signal,
-        ...(definition.managedEnv === undefined ? {} : { env: { ...definition.managedEnv } }),
+        ...(spawnEnv === undefined ? {} : { env: spawnEnv }),
       })
     } catch (error) {
-      throw new Error(`investment Python backend "${definition.id}" spawn failed: ${safeErrorMessage(error, definition.managedEnv)}`)
+      throw new Error(`investment Python backend "${definition.id}" spawn failed: ${safeErrorMessage(error, spawnEnv)}`)
     }
     const offsets = { stdout: 0, stderr: 0 }
     let outcome: Awaited<SubprocessHandle['done']> | undefined
@@ -360,7 +436,7 @@ export class InvestmentBackendManager {
         if (spawnFailure !== undefined || outcome !== undefined) {
           const fact = spawnFailure === undefined
             ? `exit ${String(outcome?.exitCode)}`
-            : safeErrorMessage(spawnFailure, definition.managedEnv)
+            : safeErrorMessage(spawnFailure, spawnEnv)
           throw new Error(`investment Python backend "${definition.id}" exited before healthy (${fact})\n${log.tail()}`)
         }
         if (this.internals.now() >= deadlineAt) {
@@ -376,8 +452,8 @@ export class InvestmentBackendManager {
         await this.failOwned(handle, drain)
       } catch (cleanupError) {
         this.active.set(definition.id, { definition, ownership: 'owned', handle, log, state, refs: 0 })
-        const original = safeErrorMessage(error, definition.managedEnv)
-        const cleanup = safeErrorMessage(cleanupError, definition.managedEnv)
+        const original = safeErrorMessage(error, spawnEnv)
+        const cleanup = safeErrorMessage(cleanupError, spawnEnv)
         throw new AggregateError(
           [new Error(original), new Error(cleanup)],
           `${original}; owned process cleanup failed: ${cleanup}`,

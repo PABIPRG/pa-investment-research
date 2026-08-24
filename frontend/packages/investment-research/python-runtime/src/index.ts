@@ -26,6 +26,7 @@ export type {
   Config,
   InvestmentBackendId,
   InvestmentBackendMode,
+  ManagedCredentialEnv,
   PythonBackendDefinition,
   PythonBackendLease,
   ResolvedBackendAddress,

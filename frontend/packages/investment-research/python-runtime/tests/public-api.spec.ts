@@ -89,16 +89,22 @@ describe('InvestmentPythonRuntime public API', () => {
     const runtime = new InvestmentPythonRuntime(ctx)
     runtime.register({ ...externalBackend, mode: 'managed', baseUrl: 'http://127.0.0.1:8000' })
     const signal = new AbortController().signal
+    const healthSignals: AbortSignal[] = []
 
-    vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => (
-      init?.signal === signal
-        ? new Response(JSON.stringify({ service: 'trading-core', status: 'ok' }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
-        : new Response('signal missing', { status: 503 })
-    ))
+    vi.stubGlobal('fetch', async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!(init?.signal instanceof AbortSignal) || init.signal.aborted) {
+        return new Response('signal missing', { status: 503 })
+      }
+      healthSignals.push(init.signal)
+      return new Response(JSON.stringify({ service: 'trading-core', status: 'ok' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
     await expect(runtime.acquire('trading-core', signal)).resolves.toMatchObject({ ownership: 'attached' })
+    expect(healthSignals).toHaveLength(1)
+    expect(healthSignals[0]).not.toBe(signal)
+    expect(healthSignals[0]?.aborted).toBe(false)
 
     vi.stubGlobal('fetch', async () => new Response('busy', { status: 503 }))
     await expect(runtime.acquire('trading-core')).rejects.toThrow(/trading-core.*occupied/)
