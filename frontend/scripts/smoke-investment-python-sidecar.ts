@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { isAbsolute, join, posix, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -37,6 +38,34 @@ async function sha256(path: string): Promise<string> {
   return createHash('sha256').update(await readFile(path)).digest('hex')
 }
 
+async function verifyFiles(root: string, files: RuntimeDescriptor['files']): Promise<void> {
+  const actual: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = join(directory, entry.name)
+      const relative = absolute.slice(root.length + 1).split('\\').join('/')
+      if (entry.isSymbolicLink()) throw new Error(`sidecar contains a symbolic link: ${relative}`)
+      if (entry.isDirectory()) await visit(absolute)
+      else if (entry.isFile() && relative !== 'runtime.json') actual.push(relative)
+      else if (!entry.isFile()) throw new Error(`sidecar contains an unsupported file: ${relative}`)
+    }
+  }
+  await visit(root)
+  actual.sort()
+  const declared = files.map(file => safePath(file.path))
+  if (actual.length !== declared.length || actual.some((path, index) => path !== declared[index])) {
+    throw new Error('sidecar descriptor has an incomplete file list')
+  }
+  for (const file of files) {
+    const path = safePath(file.path)
+    if (!/^[0-9a-f]{64}$/u.test(file.sha256)) throw new Error(`invalid descriptor hash: ${path}`)
+    const absolute = join(root, ...path.split('/'))
+    if (!(await stat(absolute)).isFile() || await sha256(absolute) !== file.sha256) {
+      throw new Error(`sidecar file hash mismatch: ${path}`)
+    }
+  }
+}
+
 /** Verify the immutable descriptor, backend apps, health routes, and representative native dependencies. */
 export async function smokeInvestmentPythonSidecar(
   rootValue: string,
@@ -51,16 +80,13 @@ export async function smokeInvestmentPythonSidecar(
     if (backend === undefined) throw new Error(`missing backend descriptor: ${id}`)
     return { projectDir: safePath(backend.projectDir), module: backend.module }
   })
-  for (const file of descriptor.files) {
-    const path = safePath(file.path)
-    if (!/^[0-9a-f]{64}$/u.test(file.sha256)) throw new Error(`invalid descriptor hash: ${path}`)
-    const absolute = join(root, ...path.split('/'))
-    if (!(await stat(absolute)).isFile() || await sha256(absolute) !== file.sha256) {
-      throw new Error(`sidecar file hash mismatch: ${path}`)
-    }
-  }
+  await verifyFiles(root, descriptor.files)
+  const stateRoot = await mkdtemp(join(tmpdir(), 'dsh-investment-sidecar-smoke-'))
   const script = [
-    'import importlib, sys',
+    'import importlib, os, sys',
+    `os.environ["DSH_INVESTMENT_STATE_DIR"] = ${JSON.stringify(stateRoot)}`,
+    'os.environ["PYTHONDONTWRITEBYTECODE"] = "1"',
+    'sys.dont_write_bytecode = True',
     `sys.path[:0] = ${JSON.stringify([sitePackages, ...modules.map(entry => entry.projectDir)])}`,
     'for name in ("numpy", "pandas", "uvicorn"): importlib.import_module(name)',
     `modules = ${JSON.stringify(modules.map(entry => entry.module))}`,
@@ -69,12 +95,17 @@ export async function smokeInvestmentPythonSidecar(
     '    app = getattr(importlib.import_module(module_name), app_name)',
     '    assert any(getattr(route, "path", None) == "/health" for route in app.routes)',
   ].join('\n')
-  const exitCode = await (dependencies.runCommand ?? defaultRunCommand)(
-    join(root, ...executable.split('/')),
-    ['-c', script],
-    root,
-  )
-  if (exitCode !== 0) throw new Error(`investment Python sidecar smoke failed with exit code ${exitCode}`)
+  try {
+    const exitCode = await (dependencies.runCommand ?? defaultRunCommand)(
+      join(root, ...executable.split('/')),
+      ['-c', script],
+      root,
+    )
+    if (exitCode !== 0) throw new Error(`investment Python sidecar smoke failed with exit code ${exitCode}`)
+    await verifyFiles(root, descriptor.files)
+  } finally {
+    await rm(stateRoot, { recursive: true, force: true })
+  }
 }
 
 function parseRoot(argv: readonly string[]): string {

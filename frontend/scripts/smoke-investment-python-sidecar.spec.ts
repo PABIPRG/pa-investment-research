@@ -53,6 +53,8 @@ describe('investment Python sidecar smoke', () => {
     expect(cwd).toBe(root)
     expect(args[0]).toBe('-c')
     expect(args[1]).toContain('"numpy", "pandas", "uvicorn"')
+    expect(args[1]).toContain('DSH_INVESTMENT_STATE_DIR')
+    expect(args[1]).toContain('sys.dont_write_bytecode = True')
     expect(args[1]).toContain('/health')
     expect(args[1]).toContain('adapter.app:app')
     expect(args[1]).toContain('market_watch.app:app')
@@ -64,6 +66,10 @@ describe('investment Python sidecar smoke', () => {
     await writeFile(join(root, 'site-packages/native.so'), 'corrupt')
     await expect(smokeInvestmentPythonSidecar(root, { runCommand })).rejects.toThrow(/hash mismatch/u)
     expect(runCommand).not.toHaveBeenCalled()
+
+    const extra = await fixture()
+    await writeFile(join(extra.root, 'site-packages/unlisted.py'), 'extra')
+    await expect(smokeInvestmentPythonSidecar(extra.root, { runCommand })).rejects.toThrow(/incomplete file list/u)
 
     const healthy = await fixture()
     await expect(smokeInvestmentPythonSidecar(healthy.root, {

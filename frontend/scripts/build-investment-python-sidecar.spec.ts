@@ -110,10 +110,11 @@ describe('investment Python sidecar builder', () => {
     expect(first.files.some(entry => /(?:^|\/)(?:env|data|logs|tests|__pycache__)(?:\/|$)|\.env$|\.pyc$|\.log$/u.test(entry.path))).toBe(false)
     expect(setup.runCommand).toHaveBeenCalledWith(
       expect.stringContaining(join('runtime', 'bin', 'python3')),
-      expect.arrayContaining(['--no-compile', '--only-binary=:all:']),
+      expect.arrayContaining(['--no-compile']),
       expect.any(String),
     )
     expect(setup.runCommand.mock.calls[0]?.[1]).not.toContain('--require-hashes')
+    expect(setup.runCommand.mock.calls[0]?.[1]).not.toContain('--only-binary=:all:')
   })
 
   it('fails closed for missing targets, cache/hash failures, requirements drift, and traversal', async () => {

@@ -646,13 +646,14 @@ describe('InvestmentBackendManager', () => {
       ADAPTER_RUNNER: 'runner-name',
       PYTHONPATH: sitePackages,
       DSH_INVESTMENT_STATE_DIR: stateDir,
+      PYTHONDONTWRITEBYTECODE: '1',
     })
     expect(manager.readiness().runtimeAsset.status).toBe('bundled-ready')
     current.handle.exit()
     await lease.release()
   })
 
-  it.each(['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR'])('reserves the bundled Runtime environment key %s', async (key) => {
+  it.each(['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR', 'PYTHONDONTWRITEBYTECODE'])('reserves the bundled Runtime environment key %s', async (key) => {
     const { manager } = await harness()
     expect(() => manager.register({ ...definition, managedEnv: { [key]: 'override' } })).toThrow(/reserved/)
     expect(() => manager.register({

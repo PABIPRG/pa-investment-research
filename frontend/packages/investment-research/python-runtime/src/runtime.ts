@@ -69,7 +69,7 @@ type EnvironmentKeyNormalizer = (key: string) => string
 type LogPathResolver = (dshHome: string, id: InvestmentBackendId) => BackendLogPaths
 
 const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-const BUNDLED_ENVIRONMENT_KEYS = ['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR'] as const
+const BUNDLED_ENVIRONMENT_KEYS = ['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR', 'PYTHONDONTWRITEBYTECODE'] as const
 
 interface StartupFlight {
   controller: AbortController
@@ -591,6 +591,7 @@ export class InvestmentBackendManager {
       ? {
           PYTHONPATH: paths.sitePackages!,
           DSH_INVESTMENT_STATE_DIR: paths.stateDir!,
+          PYTHONDONTWRITEBYTECODE: '1',
         }
       : undefined
     const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined && bundledEnv === undefined

@@ -283,7 +283,7 @@ export async function buildInvestmentPythonSidecar(
     const executableTail = targetLock.archiveExecutable.slice(targetLock.archiveRuntimeRoot.length + 1)
     const runtimeDestination = join(staging, 'runtime')
     if (!(await lstat(runtimeSource)).isDirectory()) throw new Error(`${target} archive runtime root is missing`)
-    await rename(runtimeSource, runtimeDestination)
+    await cp(runtimeSource, runtimeDestination, { recursive: true, dereference: true })
     await rm(extracted, { recursive: true, force: true })
 
     const sitePackages = join(staging, 'site-packages')
@@ -291,7 +291,7 @@ export async function buildInvestmentPythonSidecar(
     const pythonExecutable = join(runtimeDestination, ...executableTail.split('/'))
     const runCommand = dependencies.runCommand ?? defaultRunCommand
     const pipExit = await runCommand(pythonExecutable, [
-      '-m', 'pip', 'install', '--disable-pip-version-check', '--no-compile', '--only-binary=:all:',
+      '-m', 'pip', 'install', '--disable-pip-version-check', '--no-compile',
       '--target', sitePackages, '-r', requirementsLockPath,
     ], staging)
     if (pipExit !== 0) throw new Error(`locked dependency installation failed with exit code ${pipExit}`)
