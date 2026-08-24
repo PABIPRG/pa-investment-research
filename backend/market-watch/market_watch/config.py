@@ -20,6 +20,16 @@ load_dotenv(ROOT / ".env", override=False)
 os.environ.setdefault("NO_PROXY", DEFAULT_NO_PROXY)
 
 
+def _investment_state_root() -> Path | None:
+    raw = os.getenv("DSH_INVESTMENT_STATE_DIR", "").strip()
+    if not raw:
+        return None
+    root = Path(raw)
+    if not root.is_absolute():
+        raise ValueError("DSH_INVESTMENT_STATE_DIR 必须是绝对路径")
+    return root.resolve()
+
+
 def _true(name: str, default: bool = False) -> bool:
     return os.getenv(name, "true" if default else "false").lower() == "true"
 
@@ -27,6 +37,19 @@ def _true(name: str, default: bool = False) -> bool:
 class Settings:
     def __init__(self) -> None:
         self.root = ROOT
+        self.state_root = _investment_state_root()
+        if self.state_root is None:
+            self.data_dir = self.root / "data"
+            self.cache_dir = self.root / "data" / "cache"
+            self.logs_dir = self.root / "logs"
+            self.state_dir = self.root
+            self.user_config_dir = self.root / "config"
+        else:
+            self.data_dir = self.state_root / "data"
+            self.cache_dir = self.state_root / "cache"
+            self.logs_dir = self.state_root / "logs"
+            self.state_dir = self.state_root / "state"
+            self.user_config_dir = self.state_root / "user-config"
         # LLM（可选，触发解读 / 新闻摘要 / 盘前盘后简报）
         self.llm_enabled = _true("MW_LLM_ENABLED")
         self.llm_model = os.getenv("MW_LLM_MODEL", "deepseek-chat")

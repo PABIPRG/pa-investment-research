@@ -30,6 +30,12 @@ from .store import JsonStore
 ENGINE_VERSION = "v1"
 
 
+def backtest_eval_results_root() -> Path:
+    if settings.state_root is not None:
+        return settings.state_dir / "eval_results"
+    return settings.root / "eval_results"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -127,7 +133,7 @@ class BacktestRunner:
     def _gather_candidates(self, params: dict) -> tuple[list[dict], int]:
         """返回 (候选列表, 因缓存跳过的数量)。候选按 (trade_date desc, ticker) 排序。"""
         structured = self._candidates_structured()
-        text = self._candidates_from_eval_results(settings.root / "eval_results")
+        text = self._candidates_from_eval_results(backtest_eval_results_root())
         dedup: dict[str, dict] = {}
         # 结构化优先（覆盖同名文本兜底）
         for cand in structured + text:

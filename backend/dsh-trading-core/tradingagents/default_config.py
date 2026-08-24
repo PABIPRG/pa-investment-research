@@ -1,14 +1,25 @@
 import os
 
+from adapter.config import settings as investment_settings
+
 # 项目根目录（dsh-trading-core/）= default_config.py 所在目录的父目录
 _PROJECT_ROOT = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))  # tradingagents/
 _APP_ROOT = os.path.dirname(_PROJECT_ROOT)  # dsh-trading-core/
 
 DEFAULT_CONFIG = {
     "project_dir": _PROJECT_ROOT,
-    "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_APP_ROOT, "results")),
-    "data_dir": os.path.join(_APP_ROOT, "data"),
-    "data_cache_dir": os.path.join(_PROJECT_ROOT, "dataflows/data_cache"),
+    "results_dir": (
+        str(investment_settings.state_dir / "results")
+        if investment_settings.state_root is not None
+        else os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_APP_ROOT, "results"))
+    ),
+    "data_dir": str(investment_settings.data_dir),
+    "data_cache_dir": str(investment_settings.cache_dir),
+    "eval_results_dir": (
+        str(investment_settings.state_dir / "eval_results")
+        if investment_settings.state_root is not None
+        else "eval_results"
+    ),
     # LLM settings
     "llm_provider": "openai",
     "deep_think_llm": "o4-mini",

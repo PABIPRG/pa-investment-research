@@ -14,6 +14,8 @@ from typing import Dict, Any, Optional, Union
 import json
 import toml
 
+from adapter.config import settings as investment_settings
+
 # 注意：这里不能导入自己，会造成循环导入
 # 在日志系统初始化前，使用标准库自举日志器，避免未定义引用
 _bootstrap_logger = logging.getLogger("tradingagents.logging_manager")
@@ -82,11 +84,19 @@ class TradingAgentsLogger:
         # 尝试从配置文件加载
         config = self._load_config_file()
         if config:
+            if investment_settings.state_root is not None:
+                log_dir = str(investment_settings.logs_dir)
+                for handler in ("file", "error", "structured"):
+                    config.get("handlers", {}).get(handler, {})["directory"] = log_dir
             return config
 
         # 从环境变量获取配置
         log_level = os.getenv('TRADINGAGENTS_LOG_LEVEL', 'INFO').upper()
-        log_dir = os.getenv('TRADINGAGENTS_LOG_DIR', './logs')
+        log_dir = (
+            str(investment_settings.logs_dir)
+            if investment_settings.state_root is not None
+            else os.getenv('TRADINGAGENTS_LOG_DIR', './logs')
+        )
 
         return {
             'level': log_level,
@@ -139,11 +149,20 @@ class TradingAgentsLogger:
     def _load_config_file(self) -> Optional[Dict[str, Any]]:
         """从配置文件加载日志配置"""
         # 确定配置文件路径
-        config_paths = [
-            'config/logging_docker.toml' if os.getenv('DOCKER_CONTAINER') == 'true' else None,
-            'config/logging.toml',
-            './logging.toml'
-        ]
+        if investment_settings.state_root is not None:
+            config_root = investment_settings.root / "config"
+            config_paths = [
+                config_root / "logging_docker.toml"
+                if os.getenv('DOCKER_CONTAINER') == 'true'
+                else None,
+                config_root / "logging.toml",
+            ]
+        else:
+            config_paths = [
+                'config/logging_docker.toml' if os.getenv('DOCKER_CONTAINER') == 'true' else None,
+                'config/logging.toml',
+                './logging.toml'
+            ]
 
         for config_path in config_paths:
             if config_path and Path(config_path).exists():
