@@ -946,6 +946,8 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
 等权估算：持仓 `N` → 单股权重 `1/N`、集中度 `HHI=1/N`，对比
 `risk_profiles.profile()["risk_budget"]`（balanced：单股 0.25 / HHI 0.30 / 波动 0.18）。
 影子回撤/波动来自 `shadow_equity` 净值序列，**≥2 日才评估**，否则 `null` + `data_note="数据不足"`。
+服务端按持仓、影子净值和画像版本保存 `RISK_PORTFOLIO_CACHE_TTL` 秒的进程内短缓存；
+文件版本变化立即失效，同版本的并发请求通过 single-flight 共享一次计算。
 
 ```jsonc
 // 200
@@ -979,6 +981,13 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
 {
   "as_of": "2026-08-24 16:37:09", "profile": "balanced", "profile_label": "稳健型",
   "count": 3,
+  "degraded": false,
+  "upstreams": {
+    "market_watch_events": {
+      "degraded": false, "stale": false, "source": "upstream",
+      "reason": null, "age_seconds": 0.0, "deadline_seconds": 0.35
+    }
+  },
   "items": [
     { "id": "risk-…", "source": "portfolio", "severity": "高",
       "title": "单股权重超预算",
@@ -1003,9 +1012,14 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
   - `shadow`：影子策略 `nav<1`（净值回撤，<0.95→高 / 其余中）、已平仓净负（`shadows/trades:{sid}`）、
     运行错误（`shadow_equity.strategy_errors`）三项；
   - `event`：`fetch_events` → 命中持仓/自选 且 **利空** 事件（持仓→高、自选→中，再用
-    `_risk_level` 按画像校准）；market-watch 不可用 → 该源自动缺失（不 500）；
+    `_risk_level` 按画像校准）；market-watch 在 `RISK_EVENT_DEADLINE` 内不可用时优先读取
+    `EVENT_STALE_TTL` 内旧值，无旧值则该源自动缺失（不 500）；
   - `profile`：一条画像预算 advisory（低）。
-- 事件源复用 `personalize._classify/_risk_level`，C 影响图谱注入后间接波及标的也会命中持仓/自选。
+- 顶层 `degraded` 表示事件上游是否降级；`upstreams.market_watch_events` 给出
+  `source=upstream|fresh-cache|stale-cache|fail-open`、`stale`、`reason`、缓存年龄和 deadline，
+  方便前端区分旧数据与完全缺失。
+- 事件源复用 `personalize._classify/_risk_level`。为保证持仓分析 deadline，风险路由只使用
+  已缓存的 C 影响图谱补充间接波及标的，不会在请求内冷调用 industry-chain；事件直接关联标的语义不变。
 - **V→Q 效果归因**：每项带 `feedback{useful,useless}`（该预警被标记的次数）；`effect` 是
   R→V 整体漏斗（曝光→点击→有用/没用→CTR）。**事件源**预警若被标记没用 ≥2 次且 ≥ 有用次数，
   `severity` 自动降一档（高→中/中→低）并在 `detail` 注明「灵敏度已下调」——**组合/影子/画像源永不抑制**。
@@ -1645,6 +1659,12 @@ interface RiskAlert {               // GET /risk/alerts → items[]
   feedback: { useful: number; useless: number }   // V→Q 归因：该预警被标记次数
 }
 // GET /risk/alerts 顶层额外：
+//   degraded: boolean
+//   upstreams: { market_watch_events: {
+//     degraded: boolean; stale: boolean
+//     source: 'upstream' | 'fresh-cache' | 'stale-cache' | 'fail-open'
+//     reason: string | null; age_seconds: number | null; deadline_seconds: number
+//   } }
 //   effect: { window_hours: number; views: number; clicks: number;
 //             useful: number; useless: number; ctr: number | null }  // R→V 整体漏斗
 // 事件源预警 feedback.useless>=2 且 >=useful → severity 降一档（detail 注明「灵敏度已下调」）
