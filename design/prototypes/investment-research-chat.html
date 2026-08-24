@@ -37,10 +37,40 @@
     button { cursor: pointer; }
     svg { display: block; }
 
-    .app { height: 100vh; display: flex; flex-direction: column; background: var(--white); }
+    .app { height: 100vh; display: flex; background: var(--white); }
+    .main-shell { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .sidebar { width: 260px; flex: 0 0 260px; height: 100vh; padding: 12px; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--surface-low); position: relative; z-index: 50; }
+    .sidebar .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 10px; }
+    .sidebar .brand-mark { width: 32px; height: 32px; border-radius: 8px; box-shadow: 0 1px 2px rgba(15,23,42,.04); }
+    .brand-title { color: var(--primary); font-size: 15px; font-weight: 800; letter-spacing: -.2px; }
+    .brand-sub { margin-top: 1px; color: var(--muted); font-size: 11px; font-weight: 500; }
+    .workspace-switch { width: 100%; margin: 0 0 12px; padding: 10px; display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 9px; background: var(--white); box-shadow: 0 1px 2px rgba(15,23,42,.04); text-align: left; transition: .15s; }
+    .workspace-switch:hover { border-color: var(--primary); background: #f4f8ff; }
+    .workspace-left { min-width: 0; display: flex; align-items: center; gap: 8px; }
+    .workspace-icon { width: 25px; height: 25px; flex: none; display: grid; place-items: center; border-radius: 6px; color: var(--primary); background: #dbeafe; }
+    .workspace-copy { min-width: 0; }
+    .workspace-name, .workspace-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .workspace-name { font-size: 12px; font-weight: 700; }
+    .workspace-meta { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .nav-list { display: flex; flex-direction: column; gap: 4px; }
+    .nav-item { width: 100%; min-height: 37px; padding: 8px 10px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 8px; color: var(--text-2); background: transparent; text-decoration: none; text-align: left; transition: .13s; }
+    .nav-item:hover { color: var(--text); background: #e7e9ec; }
+    .nav-item.active { color: var(--primary); background: #dbe7fb; font-weight: 700; }
+    .nav-icon { width: 17px; height: 17px; flex: none; display: inline-grid; place-items: center; }
+    .nav-label { font-size: 13px; }
+    .nav-badge { margin-left: auto; padding: 2px 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--white); font-size: 10px; white-space: nowrap; }
+    .nav-item.active .nav-badge { border-color: transparent; color: var(--primary); background: #dbeafe; }
+    .sidebar-footer { margin-top: auto; padding-top: 10px; display: grid; gap: 4px; border-top: 1px solid var(--line); }
+    .side-action { padding: 7px 10px; display: flex; align-items: center; gap: 9px; border: 0; border-radius: 8px; color: var(--text-2); background: transparent; font-size: 13px; text-align: left; }
+    .side-action:hover { background: #e0e3e5; }
+    .profile { padding: 10px 8px 2px; display: flex; align-items: center; gap: 8px; }
+    .avatar { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--primary); background: #dbeafe; font-size: 12px; font-weight: 800; }
+    .profile-title { font-size: 12px; font-weight: 600; }
+    .profile-state { margin-top: 2px; display: flex; align-items: center; gap: 5px; color: #16a34a; font-size: 10px; }
+    .profile-state .dot { width: 6px; height: 6px; display: inline-block; border-radius: 50%; background: currentColor; }
     .topbar {
-      height: 60px;
-      min-height: 60px;
+      height: 56px;
+      min-height: 56px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -102,7 +132,12 @@
     .ghost-button { height: 32px; gap: 6px; padding: 0 10px; border: 1px solid var(--line-soft); background: var(--white); font-size: 12px; }
     .ghost-button:hover, .icon-button:hover { border-color: var(--primary-line); color: var(--primary); background: var(--primary-soft); }
     .icon-button { width: 32px; height: 32px; padding: 0; border: 1px solid transparent; background: transparent; color: var(--muted-2); }
-    .mobile-history-button { display: none; }
+    .mobile-history-button, .mobile-route-button { display: none; }
+    .global-search { width: min(390px, 36vw); position: relative; margin-left: auto; }
+    .global-search > svg { position: absolute; left: 11px; top: 10px; color: var(--muted); pointer-events: none; }
+    .global-search input { width: 100%; height: 36px; padding: 0 74px 0 34px; border: 1px solid var(--line-soft); border-radius: 9px; outline: 0; background: var(--surface); font-size: 11px; }
+    .global-search input:focus { border-color: var(--primary); background: var(--white); box-shadow: 0 0 0 2px rgba(17,85,196,.1); }
+    .global-search button { position: absolute; right: 4px; top: 4px; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; color: var(--primary); background: var(--primary-soft); font-size: 10px; font-weight: 700; }
 
     .workspace { flex: 1; min-height: 0; display: flex; overflow: hidden; }
     .chat-panel { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; background: var(--white); }
@@ -197,9 +232,17 @@
     .history-rail { display: none; height: 100%; flex-direction: column; align-items: center; padding: 10px 7px; }
     .history-panel[data-collapsed="true"] .history-rail { display: flex; }
     .rail-spacer { flex: 1; }
-    .history-head { min-height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line-soft); background: var(--white); }
-    .history-head strong { font-size: 13px; }
-    .history-count { margin-left: 6px; padding: 2px 6px; border-radius: 999px; color: var(--muted); background: var(--surface-high); font: 10px var(--mono); }
+    .history-head { min-height: 66px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid var(--primary-line); background: linear-gradient(135deg, #f7faff, #fff); box-shadow: inset 3px 0 var(--primary); }
+    .history-head-main { display: flex; align-items: center; gap: 9px; }
+    .history-head-icon, .history-rail-icon { display: grid; place-items: center; color: var(--white); background: var(--primary); box-shadow: 0 4px 10px rgba(17,85,196,.22); }
+    .history-head-icon { width: 32px; height: 32px; border-radius: 9px; }
+    .history-head-copy strong { display: block; color: var(--primary); font-size: 13px; }
+    .history-head-copy small { display: block; color: var(--muted); font-size: 9px; }
+    .history-count { margin-left: 6px; padding: 2px 7px; border-radius: 999px; color: var(--white); background: var(--primary); font: 10px var(--mono); }
+    .history-rail { gap: 10px; background: linear-gradient(180deg, #f4f8ff, #fff 40%); border-left: 2px solid var(--primary-line); }
+    .history-rail-icon { width: 32px; height: 32px; border: 0; border-radius: 9px; }
+    .history-rail-label { color: var(--primary); font-size: 10px; font-weight: 750; line-height: 1; letter-spacing: .12em; writing-mode: vertical-rl; }
+    .history-rail-count { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 999px; color: var(--white); background: var(--primary); font: 9px var(--mono); }
     .history-search { padding: 12px 12px 8px; }
     .search-box { position: relative; }
     .search-box svg { position: absolute; left: 10px; top: 9px; color: var(--muted); }
@@ -224,23 +267,50 @@
     .history-foot { padding: 10px 14px; border-top: 1px solid var(--line-soft); color: var(--muted); background: var(--white); font-size: 9px; }
     .history-foot b { color: var(--green); }
 
-    .mobile-backdrop { display: none; position: fixed; inset: 60px 0 0; z-index: 20; background: rgba(25, 28, 30, .34); }
+    .mobile-backdrop { display: none; position: fixed; inset: 56px 0 0; z-index: 35; background: rgba(25, 28, 30, .34); }
     .dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(25,28,30,.35); backdrop-filter: blur(2px); }
     .confirm-dialog { width: min(390px, 100%); padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--white); box-shadow: var(--shadow-float); }
     .confirm-dialog h2 { margin: 0; font-size: 16px; }
     .confirm-dialog p { margin: 7px 0 18px; color: var(--muted-2); font-size: 12px; }
     .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
     .danger-button { height: 34px; padding: 0 12px; border: 1px solid var(--red); border-radius: 8px; color: var(--white); background: var(--red); font-size: 12px; }
+    .shell-modal-backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(15,23,42,.42); backdrop-filter: blur(2px); }
+    .shell-modal { width: min(520px, 96vw); max-height: 86vh; overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--white); box-shadow: var(--shadow-float); }
+    .shell-modal-head { padding: 16px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line-soft); }
+    .shell-modal-title { font-size: 16px; font-weight: 800; }
+    .shell-modal-sub { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .shell-modal-body { padding: 18px; }
+    .shell-modal-foot { padding: 13px 18px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line-soft); background: #fafbfc; }
+    .shell-close { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; color: var(--muted); background: transparent; }
+    .shell-close:hover { color: var(--text); background: var(--surface-low); }
+    .workspace-modal-list .workspace-switch { margin-bottom: 8px; }
+    .workspace-modal-list .workspace-switch.active { border-color: var(--primary); box-shadow: 0 0 0 2px #dbeafe; }
+    .shell-tag { margin-left: auto; padding: 3px 8px; border: 1px solid #bfdbfe; border-radius: 999px; color: var(--primary); background: #eff6ff; font-size: 10px; font-weight: 700; }
+    .shell-divider { height: 1px; margin: 12px 0; background: var(--line-soft); }
+    .shell-field { margin-bottom: 12px; }
+    .shell-field label { display: block; margin-bottom: 5px; color: var(--muted-2); font-size: 11px; font-weight: 600; }
+    .shell-input, .shell-textarea { width: 100%; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; outline: 0; background: var(--surface); font-size: 12px; }
+    .shell-input { height: 34px; }
+    .shell-textarea { min-height: 76px; padding-top: 9px; resize: vertical; }
+    .shell-input:focus, .shell-textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 2px #dbeafe; }
+    .risk-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .risk-card { padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--white); text-align: left; }
+    .risk-card.active { border-color: var(--primary); background: #f5f9ff; }
+    .risk-card b { display: block; font-size: 12px; }
+    .risk-card span { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+    .help-copy { font-size: 13px; line-height: 1.8; }
     .toast { position: fixed; right: 24px; bottom: 22px; z-index: 100; padding: 9px 12px; border-radius: 8px; color: var(--white); background: #252a2e; box-shadow: var(--shadow-float); font-size: 11px; animation: toast-in .18s ease; }
     @keyframes toast-in { from { opacity: 0; transform: translateY(5px); } }
 
     @media (max-width: 900px) {
-      .history-panel { position: fixed; top: 60px; right: 0; bottom: 0; width: min(340px, 88vw); transform: translateX(100%); box-shadow: var(--shadow-float); transition: transform .22s ease; }
+      .sidebar { position: fixed; top: 0; left: 0; bottom: 0; transform: translateX(-100%); box-shadow: var(--shadow-float); transition: transform .18s ease; }
+      .sidebar.open { transform: translateX(0); }
+      .history-panel { position: fixed; top: 56px; right: 0; bottom: 0; width: min(340px, 88vw); transform: translateX(100%); box-shadow: var(--shadow-float); transition: transform .22s ease; z-index: 42; }
       .history-panel[data-collapsed="true"] { width: min(340px, 88vw); }
       .history-panel[data-mobile-open="true"] { transform: translateX(0); }
       .history-panel[data-collapsed="true"] .history-expanded { opacity: 1; pointer-events: auto; }
       .history-rail { display: none !important; }
-      .mobile-history-button { display: inline-flex; }
+      .mobile-history-button, .mobile-route-button { display: inline-flex; }
       .mobile-backdrop[data-open="true"] { display: block; }
       .topbar { padding-left: 14px; }
       .context-bar { padding: 0 16px; }
@@ -249,7 +319,7 @@
 
     @media (max-width: 640px) {
       .topbar { gap: 8px; padding: 0 10px 0 12px; }
-      .brand-copy span, .top-divider, .session-title-icon, .session-title-text span, .context-meta { display: none; }
+      .brand-copy, .top-divider, .session-title-icon, .session-title-text span, .context-meta, .global-search { display: none; }
       .brand-side { gap: 8px; }
       .brand-copy strong { font-size: 13px; }
       .session-title-text strong { max-width: 110px; font-size: 11px; }
@@ -286,7 +356,20 @@
         globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm6.9 9h-3c-.2-2.4-.9-4.5-1.8-5.8A8 8 0 0 1 18.9 11ZM12 4c.8.7 1.7 3.1 1.9 7h-3.8C10.3 7.1 11.2 4.7 12 4ZM5.1 13h3c.2 2.4.9 4.5 1.8 5.8A8 8 0 0 1 5.1 13Zm6.9 7c-.8-.7-1.7-3.1-1.9-7h3.8c-.2 3.9-1.1 6.3-1.9 7Z',
         send: 'm3 20 18-8L3 4v6l12 2-12 2v6Z',
         alert: 'M12 3 2 21h20L12 3Zm0 4 6.6 12H5.4L12 7Zm-1 4v4h2v-4h-2Zm0 5v2h2v-2h-2Z',
-        close: 'M6.7 5.3 12 10.6l5.3-5.3 1.4 1.4-5.3 5.3 5.3 5.3-1.4 1.4-5.3-5.3-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3 1.4-1.4Z'
+        close: 'M6.7 5.3 12 10.6l5.3-5.3 1.4 1.4-5.3 5.3 5.3 5.3-1.4 1.4-5.3-5.3-5.3 5.3-1.4-1.4 5.3-5.3-5.3-5.3 1.4-1.4Z',
+        menu: 'M3 5h18v2H3V5Zm0 6h18v2H3v-2Zm0 6h18v2H3v-2Z',
+        trend: 'M3 17l6-6 4 4 7-8v4h2V3h-8v2h4.1L13 10.8l-4-4-7 7L3 17Z',
+        pie: 'M11 2a9 9 0 1 0 9 9h-9V2Zm2 0v7h7a9 9 0 0 0-7-7Z',
+        portfolio: 'M4 4h7v7H4V4Zm9 0h7v4h-7V4ZM4 13h7v7H4v-7Zm9-3h7v10h-7V10Z',
+        compass: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm4.7 5.3-2.4 7-7 2.4 2.4-7 7-2.4Zm-5.5 3.9-.9 2.5 2.5-.9.9-2.5-2.5.9Z',
+        framework: 'M4 3h7v7H4V3Zm9 0h7v7h-7V3ZM4 12h7v9H4v-9Zm9 0h7v9h-7v-9Z',
+        folder: 'M3 5h7l2 2h9v12H3V5Zm2 4v8h14V9H5Z',
+        check: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm3.7 9.3-1.4 1.4 3 3 6.4-6.4-1.4-1.4-5 5-1.6-1.6Z',
+        book: 'M4 3h7a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4V3Zm16 0h-4v13.2c.6-.2 1.3-.2 2-.2h2V3Z',
+        settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 5.5v-3l-2.2-.8-.6-1.4 1-2.1-2.1-2.1-2.1 1-1.5-.6L12.5 2h-3l-.8 2.5-1.4.6-2.1-1-2.1 2.1 1 2.1-.6 1.4-2.5.8v3l2.5.8.6 1.4-1 2.1 2.1 2.1 2.1-1 1.4.6.8 2.5h3l.8-2.5 1.4-.6 2.1 1 2.1-2.1-1-2.1.6-1.4 2.5-.8Z',
+        help: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm0-4.5a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4ZM12 6c-2.2 0-4 1.5-4 3.5h2c0-.9.9-1.6 2-1.6s2 .7 2 1.6c0 .8-.5 1.2-1.4 1.8-1 .6-1.6 1.3-1.6 2.7h2c0-.6.2-.8 1-1.3 1-.6 2-1.5 2-3.2C16 7.5 14.2 6 12 6Z',
+        briefcase: 'M9 4h6a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V6a2 2 0 0 1 2-2Zm0 3h6V6H9v1Zm-5 4v7h16v-7h-6v2h-4v-2H4Z',
+        down: 'm6 9 6 6 6-6-1.4-1.4-4.6 4.6-4.6-4.6L6 9Z'
       };
       const icon = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="${paths[name] || paths.spark}"></path></svg>`;
       const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -339,10 +422,13 @@
       let editingId = null;
       let pendingDeleteId = null;
       let mobileHistoryOpen = false;
+      let mobileRoutesOpen = false;
       let liveMode = true;
       let storageWarning = false;
       let typingConversationId = null;
       let toastTimer = null;
+      let shellModal = null;
+      let selectedRisk = localStorage.getItem('proto-risk') || 'balanced';
 
       const activeConversation = () => state.conversations.find(item => item.id === state.activeConversationId);
       function persistState() {
@@ -463,10 +549,61 @@
         if (editingId === conversation.id) return `<div class="conversation-item" aria-current="${active}"><input class="conversation-rename" value="${escapeHtml(conversation.title)}" data-id="${conversation.id}" aria-label="输入新的会话名称"></div>`;
         return `<div class="conversation-item" aria-current="${active}"><button class="conversation-main" data-select="${conversation.id}"><span class="conversation-title">${escapeHtml(conversation.title)}</span><span class="conversation-preview">${escapeHtml(previewOf(conversation))}</span></button><div class="conversation-actions"><button class="mini-action" data-action="rename" data-id="${conversation.id}" aria-label="重命名会话">${icon('edit', 13)}</button><button class="mini-action danger" data-action="delete" data-id="${conversation.id}" aria-label="删除会话">${icon('trash', 13)}</button></div></div>`;
       }
+      const IN_ORIGINAL_PAGES = decodeURIComponent(window.location.pathname).includes('/投研智能体交互 v0.0.1/pages/');
+      const ORIGINAL_PAGES_ROOT = IN_ORIGINAL_PAGES ? './' : '../../../../Downloads/投研智能体交互 v0.0.1/pages/';
+      const CURRENT_ASSISTANT_URL = IN_ORIGINAL_PAGES ? './ai-assistant.html' : './investment-research-chat.html';
+      const originalPageUrl = page => `${ORIGINAL_PAGES_ROOT}${page}.html`;
+      const INITIAL_WORKSPACES = [
+        { id: 'ws-1', name: '核心科技成长组合', description: '聚焦半导体国产化、AI 算力与全球科技龙头的进攻型投资组合', totalAssets: '¥1,245,680.00', stocksCount: 6 },
+        { id: 'ws-2', name: '高股息红利防御组合', description: '以央企红利、公用事业与优质银行打底的稳健现金流组合', totalAssets: '¥580,000.00', stocksCount: 8 },
+        { id: 'ws-3', name: '全球宏观ETF全天候组合', description: '跨市场配置美股科技、黄金、美债与港股互联网的平衡型策略', totalAssets: '¥850,000.00', stocksCount: 5 }
+      ];
+      function getWorkspaces() {
+        try { return JSON.parse(localStorage.getItem('proto-workspaces')) || INITIAL_WORKSPACES; }
+        catch { return INITIAL_WORKSPACES; }
+      }
+      function getActiveWorkspace() {
+        const workspaces = getWorkspaces();
+        const id = localStorage.getItem('proto-active-workspace') || workspaces[0].id;
+        return workspaces.find(item => item.id === id) || workspaces[0];
+      }
+      function routeSidebarTemplate() {
+        const activeWorkspace = getActiveWorkspace();
+        const routes = [
+          ['ai-assistant', 'bot', '智能助手', 'AI', CURRENT_ASSISTANT_URL],
+          ['opportunity', 'trend', '机会发现', '3个高潜力', originalPageUrl('opportunity')],
+          ['portfolio', 'pie', '持仓分析', '', originalPageUrl('portfolio')],
+          ['framework', 'compass', '投研框架', '持续迭代', originalPageUrl('framework')],
+          ['projects', 'folder', '项目组合', '', originalPageUrl('projects')],
+          ['tasks', 'check', '投研任务', '4', originalPageUrl('tasks')],
+          ['knowledge', 'book', '知识库', '', originalPageUrl('knowledge')]
+        ];
+        const links = routes.map(([route, iconName, label, badge, href]) => `<a class="nav-item ${route === 'ai-assistant' ? 'active' : ''}" data-route="${route}" href="${href}" ${route === 'ai-assistant' ? 'aria-current="page"' : ''}><span class="nav-icon">${icon(iconName, 17)}</span><span class="nav-label">${label}</span>${badge ? `<span class="nav-badge">${badge}</span>` : ''}</a>`).join('');
+        return `<aside class="sidebar ${mobileRoutesOpen ? 'open' : ''}" data-testid="route-sidebar"><div class="brand"><div class="brand-mark">${icon('spark', 19)}</div><div><div class="brand-title">投研智能体</div><div class="brand-sub">v2.4.0 · 智能投研系统</div></div></div><button class="workspace-switch" data-action="open-workspaces"><div class="workspace-left"><span class="workspace-icon">${icon('briefcase', 15)}</span><span class="workspace-copy"><span class="workspace-name">${escapeHtml(activeWorkspace.name)}</span><span class="workspace-meta">${escapeHtml(activeWorkspace.totalAssets)} · ${activeWorkspace.stocksCount}只持仓</span></span></div>${icon('down', 14)}</button><nav class="nav-list" data-testid="route-navigation" aria-label="产品导航">${links}</nav><div class="sidebar-footer"><button class="side-action" data-action="open-settings">${icon('settings', 16)}<span>系统设置</span></button><button class="side-action" data-action="open-help">${icon('help', 16)}<span>使用帮助与指引</span></button><div class="profile"><div class="avatar">投</div><div><div class="profile-title">高级量化投研员</div><div class="profile-state"><span class="dot"></span>专业版 · 实时行情</div></div></div></div></aside>`;
+      }
+      function shellModalHeader(title, subtitle = '') {
+        return `<div class="shell-modal-head"><div><div class="shell-modal-title">${title}</div>${subtitle ? `<div class="shell-modal-sub">${subtitle}</div>` : ''}</div><button type="button" class="shell-close" data-action="close-shell-modal" aria-label="关闭">${icon('close', 18)}</button></div>`;
+      }
+      function shellModalTemplate() {
+        if (!shellModal) return '';
+        if (shellModal === 'workspaces') {
+          const active = getActiveWorkspace();
+          const rows = getWorkspaces().map(workspace => `<button class="workspace-switch ${workspace.id === active.id ? 'active' : ''}" data-workspace-id="${workspace.id}"><div class="workspace-left"><span class="workspace-icon">${icon('briefcase', 15)}</span><span class="workspace-copy"><span class="workspace-name">${escapeHtml(workspace.name)}</span><span class="workspace-meta">${escapeHtml(workspace.description)}</span></span></div>${workspace.id === active.id ? '<span class="shell-tag">当前</span>' : icon('expand', 14)}</button>`).join('');
+          return `<div class="shell-modal-backdrop" data-action="shell-modal-backdrop"><section class="shell-modal" role="dialog" aria-modal="true" data-testid="workspace-modal">${shellModalHeader('切换或管理投资工作区', '隔离管理多账户、实盘自选与模拟量化策略')}<div class="shell-modal-body"><div class="workspace-modal-list">${rows}</div><div class="shell-divider"></div><button class="primary-button" style="width:100%" data-action="open-create-workspace">${icon('plus', 15)}新建投资策略组合</button></div></section></div>`;
+        }
+        if (shellModal === 'create-workspace') {
+          return `<div class="shell-modal-backdrop" data-action="shell-modal-backdrop"><form class="shell-modal" id="workspace-create-form" role="dialog" aria-modal="true">${shellModalHeader('新建投资策略组合', '创建用于演示的独立工作区')}<div class="shell-modal-body"><div class="shell-field"><label>组合名称</label><input class="shell-input" name="name" required placeholder="例如：先进制程半导体专项基金"></div><div class="shell-field"><label>投资策略说明</label><textarea class="shell-textarea" name="description" placeholder="简要描述选股逻辑、风控阈值与配置目标…"></textarea></div><div class="shell-field"><label>初始虚拟资金 (CNY)</label><input class="shell-input" name="capital" value="1000000" inputmode="numeric"></div></div><div class="shell-modal-foot"><button type="button" class="ghost-button" data-action="open-workspaces">返回列表</button><button class="primary-button" type="submit">创建并激活</button></div></form></div>`;
+        }
+        if (shellModal === 'settings') {
+          const risks = [['conservative', '稳健型', '最大回撤优先'], ['balanced', '平衡型', '风险收益均衡'], ['aggressive', '进取型', '提高成长弹性']];
+          return `<div class="shell-modal-backdrop" data-action="shell-modal-backdrop"><section class="shell-modal" role="dialog" aria-modal="true" data-testid="settings-modal">${shellModalHeader('系统参数与风控偏好', '自定义量化模型参数、风控阈值与行情刷新周期')}<div class="shell-modal-body"><div class="shell-field"><label>默认风险偏好</label><div class="risk-grid">${risks.map(([id, name, note]) => `<button class="risk-card ${selectedRisk === id ? 'active' : ''}" data-risk="${id}"><b>${name}</b><span>${note}</span></button>`).join('')}</div></div><div class="shell-divider"></div><div class="shell-field"><label>组合单一行业预警线</label><input type="range" min="20" max="50" value="30" style="width:100%;accent-color:var(--primary)"><div class="shell-modal-sub">当前：30%（超过后触发集中度警报）</div></div></div><div class="shell-modal-foot"><button class="ghost-button" data-action="close-shell-modal">取消</button><button class="primary-button" data-action="save-settings">保存参数</button></div></section></div>`;
+        }
+        return `<div class="shell-modal-backdrop" data-action="shell-modal-backdrop"><section class="shell-modal" role="dialog" aria-modal="true" data-testid="help-modal">${shellModalHeader('投研智能体使用指引')}<div class="shell-modal-body help-copy"><b>1. 智能助手</b>：自由对话与多因子选股诊断。<br><b>2. 机会发现</b>：估值、K 线、资金流向与研报拆解。<br><b>3. 持仓分析</b>：资产结构、行业集中度与风险收益分布。<br><b>4. 投研框架</b>：沉淀个人投资公理、买入清单、估值锚点与版本复盘。<br><b>5. 项目 / 任务 / 知识库</b>：组织研究过程与证据沉淀。</div></section></div>`;
+      }
       function historyTemplate() {
         const groups = filteredGroups();
         const sections = Object.entries(groups).filter(([, items]) => items.length).map(([label, items]) => `<section class="history-group"><div class="group-label">${label}</div>${items.map(historyItemTemplate).join('')}</section>`).join('');
-        return `<aside class="history-panel" data-testid="history-panel" data-collapsed="${state.historyCollapsed}" data-mobile-open="${mobileHistoryOpen}"><div class="history-expanded"><div class="history-head"><div><strong>历史对话</strong><span class="history-count">${state.conversations.length}</span></div><button class="icon-button" data-action="toggle-history" aria-label="收起历史记录">${icon('expand', 15)}</button></div><div class="history-search"><div class="search-box">${icon('search', 14)}<input id="history-search" value="${escapeHtml(searchQuery)}" placeholder="搜索对话内容" aria-label="搜索历史对话"></div></div><div class="history-list">${sections || '<div class="history-empty">没有找到匹配的对话</div>'}</div><div class="history-foot"><b>● 本地保存</b> · 对话数据仅保存在此浏览器</div></div><div class="history-rail"><button class="icon-button" data-action="toggle-history" aria-label="展开历史记录">${icon('collapse', 16)}</button><div class="rail-spacer"></div><button class="icon-button" data-action="open-mobile-history" aria-label="历史记录">${icon('history', 16)}</button></div></aside>`;
+        return `<aside class="history-panel" data-testid="history-panel" data-collapsed="${state.historyCollapsed}" data-mobile-open="${mobileHistoryOpen}"><div class="history-expanded"><div class="history-head" data-testid="history-marker"><div class="history-head-main"><span class="history-head-icon">${icon('history', 16)}</span><span class="history-head-copy"><strong>历史对话 <span class="history-count">${state.conversations.length}</span></strong><small>切换与管理本地会话</small></span></div><button class="icon-button" data-action="toggle-history" aria-label="收起历史记录">${icon('expand', 15)}</button></div><div class="history-search"><div class="search-box">${icon('search', 14)}<input id="history-search" value="${escapeHtml(searchQuery)}" placeholder="搜索对话内容" aria-label="搜索历史对话"></div></div><div class="history-list">${sections || '<div class="history-empty">没有找到匹配的对话</div>'}</div><div class="history-foot"><b>● 本地保存</b> · 对话数据仅保存在此浏览器</div></div><div class="history-rail" data-testid="history-marker"><button class="icon-button" data-action="toggle-history" aria-label="展开历史记录">${icon('collapse', 16)}</button><button class="history-rail-icon" data-action="toggle-history" aria-label="展开历史记录">${icon('history', 16)}</button><span class="history-rail-label">历史对话</span><span class="history-rail-count">${state.conversations.length}</span><div class="rail-spacer"></div></div></aside>`;
       }
       function confirmTemplate() {
         if (!pendingDeleteId) return '';
@@ -477,7 +614,7 @@
         const conversation = activeConversation() || state.conversations[0];
         if (!conversation) { createConversation(); return; }
         state.activeConversationId = conversation.id;
-        $('#app').innerHTML = `<div class="app"><header class="topbar"><div class="brand-side"><div class="brand"><div class="brand-mark">${icon('spark', 19)}</div><div class="brand-copy"><strong>投研智能体</strong><span>Technical Precision · 对话工作台</span></div></div><div class="top-divider"></div><div class="session-title"><span class="session-title-icon">${icon('bot', 15)}</span><div class="session-title-text"><strong data-testid="current-title">${escapeHtml(conversation.title)}</strong><span>${conversation.messages.length} 条消息 · ${groupFor(conversation.updatedAt)}更新</span></div></div></div><div class="top-actions"><button class="icon-button mobile-history-button" data-action="open-mobile-history" aria-label="打开历史记录">${icon('history', 17)}</button><button class="primary-button" data-action="new-conversation">${icon('plus', 16)}<span>新对话</span></button></div></header><div class="workspace"><main class="chat-panel"><div class="context-bar"><div class="status-line"><span class="status-dot"></span><span class="context-copy"><b>智能投研对话助理</b> · A / 港 / 美股行情与多因子分析</span></div><span class="context-meta">前端交互原型</span></div><div class="messages-scroll" id="messages-scroll"><div class="conversation">${messagesTemplate(conversation)}</div></div><div class="composer-wrap"><div class="composer">${storageWarning ? '<div class="storage-warning">本次更改仅在当前页面有效</div>' : ''}<div class="composer-card"><textarea id="composer-input" rows="1" placeholder="输入股票代码、问题或指令…">${escapeHtml(conversation.draft)}</textarea><div class="composer-tools"><div class="tool-group"><button class="tool-button" data-action="attach" aria-label="关联附件">${icon('paperclip', 15)}</button><button class="tool-button ${liveMode ? 'active' : ''}" data-action="toggle-live">${icon('globe', 15)}<span>${liveMode ? '实时联网中' : '离线模型'}</span></button></div><button class="send-button" data-action="send" aria-label="发送" ${conversation.draft.trim() || '' ? '' : 'disabled'}>${icon('send', 15)}</button></div></div><div class="disclaimer">AI 分析仅供投研参考，不构成实质性投资建议或买卖依据。</div></div></div></main>${historyTemplate()}</div><div class="mobile-backdrop" data-open="${mobileHistoryOpen}" data-action="close-mobile-history"></div></div>${confirmTemplate()}`;
+        $('#app').innerHTML = `<div class="app">${routeSidebarTemplate()}<div class="main-shell"><header class="topbar"><div class="brand-side"><button class="icon-button mobile-route-button" data-action="open-mobile-routes" aria-label="打开路由菜单">${icon('menu', 18)}</button><div class="session-title"><span class="session-title-icon">${icon('bot', 15)}</span><div class="session-title-text"><strong data-testid="current-title">${escapeHtml(conversation.title)}</strong><span>${conversation.messages.length} 条消息 · ${groupFor(conversation.updatedAt)}更新</span></div></div></div><form class="global-search" data-action="global-search">${icon('search', 15)}<input id="global-search-input" placeholder="搜索股票代码 / 名称，前往机会发现" aria-label="全局股票搜索"><button type="submit">搜索</button></form><div class="top-actions"><button class="icon-button mobile-history-button" data-action="open-mobile-history" aria-label="打开历史记录">${icon('history', 17)}</button><button class="primary-button" data-action="new-conversation">${icon('plus', 16)}<span>新对话</span></button></div></header><div class="workspace"><main class="chat-panel"><div class="context-bar"><div class="status-line"><span class="status-dot"></span><span class="context-copy"><b>智能投研对话助理</b> · A / 港 / 美股行情与多因子分析</span></div><span class="context-meta">前端交互原型</span></div><div class="messages-scroll" id="messages-scroll"><div class="conversation">${messagesTemplate(conversation)}</div></div><div class="composer-wrap"><div class="composer">${storageWarning ? '<div class="storage-warning">本次更改仅在当前页面有效</div>' : ''}<div class="composer-card"><textarea id="composer-input" rows="1" placeholder="输入股票代码、问题或指令…">${escapeHtml(conversation.draft)}</textarea><div class="composer-tools"><div class="tool-group"><button class="tool-button" data-action="attach" aria-label="关联附件">${icon('paperclip', 15)}</button><button class="tool-button ${liveMode ? 'active' : ''}" data-action="toggle-live">${icon('globe', 15)}<span>${liveMode ? '实时联网中' : '离线模型'}</span></button></div><button class="send-button" data-action="send" aria-label="发送" ${conversation.draft.trim() || '' ? '' : 'disabled'}>${icon('send', 15)}</button></div></div><div class="disclaimer">AI 分析仅供投研参考，不构成实质性投资建议或买卖依据。</div></div></div></main>${historyTemplate()}</div></div><div class="mobile-backdrop" data-open="${mobileHistoryOpen || mobileRoutesOpen}" data-action="close-mobile-layer"></div></div>${confirmTemplate()}${shellModalTemplate()}`;
         bindEvents();
         const scrollToLatest = () => { const scroller = $('#messages-scroll'); if (scroller) scroller.scrollTop = scroller.scrollHeight; };
         if (window.requestAnimationFrame) window.requestAnimationFrame(scrollToLatest);
@@ -487,9 +624,39 @@
       function resizeComposer(input) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; }
       function bindEvents() {
         $('[data-action="new-conversation"]')?.addEventListener('click', createConversation);
+        $$('[data-action="open-workspaces"]').forEach(button => button.addEventListener('click', () => { shellModal = 'workspaces'; mobileRoutesOpen = false; render(); }));
+        $('[data-action="open-create-workspace"]')?.addEventListener('click', () => { shellModal = 'create-workspace'; render(); });
+        $('[data-action="open-settings"]')?.addEventListener('click', () => { shellModal = 'settings'; mobileRoutesOpen = false; render(); });
+        $('[data-action="open-help"]')?.addEventListener('click', () => { shellModal = 'help'; mobileRoutesOpen = false; render(); });
+        $$('[data-action="close-shell-modal"]').forEach(button => button.addEventListener('click', () => { shellModal = null; render(); }));
+        $('[data-action="shell-modal-backdrop"]')?.addEventListener('click', event => { if (event.target === event.currentTarget) { shellModal = null; render(); } });
+        $$('[data-workspace-id]').forEach(button => button.addEventListener('click', () => { localStorage.setItem('proto-active-workspace', button.dataset.workspaceId); shellModal = null; render(); showToast('工作区已切换'); }));
+        $$('[data-risk]').forEach(button => button.addEventListener('click', () => { selectedRisk = button.dataset.risk; render(); }));
+        $('[data-action="save-settings"]')?.addEventListener('click', () => { localStorage.setItem('proto-risk', selectedRisk); shellModal = null; render(); showToast('参数已保存'); });
+        $('#workspace-create-form')?.addEventListener('submit', event => {
+          event.preventDefault();
+          const form = new FormData(event.currentTarget);
+          const capital = Number(form.get('capital') || 1000000);
+          const workspace = { id: `ws-${Date.now()}`, name: String(form.get('name') || '').trim(), description: String(form.get('description') || '自定义量化投资组合'), totalAssets: `¥${capital.toLocaleString('zh-CN', { minimumFractionDigits: 2 })}`, stocksCount: 0 };
+          if (!workspace.name) return;
+          const workspaces = getWorkspaces();
+          workspaces.unshift(workspace);
+          localStorage.setItem('proto-workspaces', JSON.stringify(workspaces));
+          localStorage.setItem('proto-active-workspace', workspace.id);
+          shellModal = null;
+          render();
+          showToast('工作区已创建并激活');
+        });
         $$('[data-action="toggle-history"]').forEach(button => button.addEventListener('click', toggleHistory));
-        $$('[data-action="open-mobile-history"]').forEach(button => button.addEventListener('click', () => { mobileHistoryOpen = true; render(); }));
-        $('[data-action="close-mobile-history"]')?.addEventListener('click', () => { mobileHistoryOpen = false; render(); });
+        $$('[data-action="open-mobile-history"]').forEach(button => button.addEventListener('click', () => { mobileRoutesOpen = false; mobileHistoryOpen = true; render(); }));
+        $('[data-action="open-mobile-routes"]')?.addEventListener('click', () => { mobileHistoryOpen = false; mobileRoutesOpen = true; render(); });
+        $('[data-action="close-mobile-layer"]')?.addEventListener('click', () => { mobileHistoryOpen = false; mobileRoutesOpen = false; render(); });
+        $('[data-action="global-search"]')?.addEventListener('submit', event => {
+          event.preventDefault();
+          const query = $('#global-search-input')?.value.trim();
+          window.location.href = `${originalPageUrl('opportunity')}${query ? `?stock=${encodeURIComponent(query)}` : ''}`;
+        });
+        $$('[data-action="shell-feedback"]').forEach(button => button.addEventListener('click', () => showToast(`${button.textContent.trim()}沿用原页面交互，本稿暂不展开`)));
         $$('[data-select]').forEach(button => button.addEventListener('click', () => selectConversation(button.dataset.select)));
         $$('[data-action="rename"]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); editingId = button.dataset.id; render(); setTimeout(() => { const input = $('.conversation-rename'); input?.focus(); input?.select(); }, 0); }));
         $$('[data-action="delete"]').forEach(button => button.addEventListener('click', event => { event.stopPropagation(); pendingDeleteId = button.dataset.id; render(); }));
