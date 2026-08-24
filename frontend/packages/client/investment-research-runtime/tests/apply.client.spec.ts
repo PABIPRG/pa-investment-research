@@ -10,13 +10,16 @@ import type {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, inject } from '../src/client/index.ts'
 
+type CredentialRef = InvestmentReadinessSnapshot['backends'][number]['credentials'][number]['ref']
+const DEEPSEEK_REF = 'DEEPSEEK_API_KEY' as CredentialRef
+
 const FIRST: InvestmentReadinessSnapshot = {
   backends: [{
     backendId: 'trading-core',
     ownership: 'owned',
     backendStatus: 'healthy-owned',
     credentials: [{
-      ref: 'DEEPSEEK_API_KEY',
+      ref: DEEPSEEK_REF,
       configured: true,
       source: 'memory',
       writable: true,
@@ -32,7 +35,7 @@ const CHANGED: InvestmentReadinessSnapshot = {
   backends: [{
     ...FIRST.backends[0]!,
     credentials: [{
-      ref: 'DEEPSEEK_API_KEY',
+      ref: DEEPSEEK_REF,
       configured: true,
       source: 'memory',
       writable: true,
