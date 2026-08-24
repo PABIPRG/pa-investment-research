@@ -83,6 +83,70 @@ interface ManagedHarness {
   handle: ReturnType<typeof fakeHandle>
 }
 
+type PromiseSettlement<T> =
+  | { readonly status: 'fulfilled'; readonly value: T }
+  | { readonly status: 'rejected'; readonly reason: unknown }
+
+interface PendingCredentialHarness {
+  readonly manager: InvestmentBackendManager & ReadinessManager
+  readonly firstResolveEntered: Promise<void>
+  readonly firstResolve: PromiseWithResolvers<ResolvedCredential | undefined>
+  readonly resolveCredential: ReturnType<typeof vi.fn<() => Promise<ResolvedCredential | undefined>>>
+  readonly describeCredential: ReturnType<typeof vi.fn<() => Promise<CredentialInfo>>>
+  readonly spawn: ReturnType<typeof vi.fn<() => ReturnType<typeof fakeHandle>>>
+}
+
+function captureSettlement<T>(promise: Promise<T>): Promise<PromiseSettlement<T>> {
+  return promise.then(
+    value => ({ status: 'fulfilled', value }),
+    (reason: unknown) => ({ status: 'rejected', reason }),
+  )
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs = 100): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const timedOut = new Promise<false>((resolve) => {
+    timeout = setTimeout(() => { resolve(false) }, timeoutMs)
+  })
+  const settled = await Promise.race([promise.then(() => true, () => true), timedOut])
+  if (timeout !== undefined) clearTimeout(timeout)
+  return settled
+}
+
+async function pendingCredentialHarness(): Promise<PendingCredentialHarness> {
+  const home = await mkdtemp(join(tmpdir(), 'investment-readiness-cancel-pending-resolve-'))
+  const projectDir = join(home, 'backend')
+  const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+  await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+  const handle = fakeHandle()
+  handle.autoExitOnTerminate = true
+  const spawn = vi.fn(() => handle)
+  const firstResolveEntered = Promise.withResolvers<void>()
+  const firstResolve = Promise.withResolvers<ResolvedCredential | undefined>()
+  let resolveCalls = 0
+  const resolveCredential = vi.fn(async () => {
+    resolveCalls += 1
+    if (resolveCalls === 1) {
+      firstResolveEntered.resolve()
+      return firstResolve.promise
+    }
+    return { value: NEW_SECRET, source: 'file' }
+  })
+  const describeCredential = vi.fn(async () => ({ configured: true, source: 'file', writable: true }))
+  let probes = 0
+  const manager = new InvestmentBackendManager({
+    subprocess: { spawn } as unknown as SubprocessRuntime,
+    config: { dshHome: home },
+    checkHealth: async () => probes++ === 0 ? refused : healthy,
+    resolvePaths: () => ({ projectDir, pythonExecutable }),
+    executableExists: async () => true,
+    resolveCredential,
+    describeCredential,
+  }) as InvestmentBackendManager & ReadinessManager
+  manager.register(definitions['trading-core'])
+  return { manager, firstResolveEntered: firstResolveEntered.promise, firstResolve, resolveCredential, describeCredential, spawn }
+}
+
 async function managedHarness(
   id: InvestmentBackendId,
   credential: ResolvedCredential | undefined,
@@ -119,6 +183,68 @@ function registerCapability(manager: ReadinessManager, definition: InvestmentCap
 }
 
 describe('investment readiness and capability preflight', () => {
+  it('cancels the last acquire waiter without retrying a pending credential read', async () => {
+    const current = await pendingCredentialHarness()
+    const controller = new AbortController()
+    const acquiring = captureSettlement(current.manager.acquire('trading-core', controller.signal))
+    await current.firstResolveEntered
+    current.manager.credentialUpdated(DEEPSEEK_API_KEY)
+    controller.abort(new Error('caller cancelled'))
+
+    const settledBeforeProvider = await settlesWithin(acquiring)
+    current.firstResolve.resolve({ value: OLD_SECRET, source: 'file' })
+    const acquisition = await acquiring
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(settledBeforeProvider).toBe(true)
+    expect(acquisition).toMatchObject({ status: 'rejected' })
+    expect(current.resolveCredential).toHaveBeenCalledOnce()
+    expect(current.describeCredential).not.toHaveBeenCalled()
+    expect(current.spawn).not.toHaveBeenCalled()
+    expect(current.manager.invariantSnapshot()).toEqual({ active: [], flights: [] })
+    const serialized = JSON.stringify({
+      snapshot: current.manager.readiness(),
+      invariant: current.manager.invariantSnapshot(),
+    }) + (acquisition.status === 'rejected' ? String(acquisition.reason) : '')
+    expect(serialized).not.toContain(OLD_SECRET)
+    expect(serialized).not.toContain(NEW_SECRET)
+    await current.manager.dispose()
+  })
+
+  it('disposes during a pending credential read without waiting for or retrying the provider', async () => {
+    const current = await pendingCredentialHarness()
+    const acquiring = captureSettlement(current.manager.acquire('trading-core'))
+    await current.firstResolveEntered
+    current.manager.credentialUpdated(DEEPSEEK_API_KEY)
+    const disposing = captureSettlement(current.manager.dispose())
+
+    const [acquireSettled, disposeSettled] = await Promise.all([
+      settlesWithin(acquiring),
+      settlesWithin(disposing),
+    ])
+    current.firstResolve.resolve({ value: OLD_SECRET, source: 'file' })
+    const [acquisition, disposal] = await Promise.all([acquiring, disposing])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(acquireSettled).toBe(true)
+    expect(disposeSettled).toBe(true)
+    expect(acquisition).toMatchObject({ status: 'rejected' })
+    expect(disposal).toMatchObject({ status: 'fulfilled' })
+    expect(current.resolveCredential).toHaveBeenCalledOnce()
+    expect(current.describeCredential).not.toHaveBeenCalled()
+    expect(current.spawn).not.toHaveBeenCalled()
+    expect(current.manager.invariantSnapshot()).toEqual({ active: [], flights: [] })
+    const serialized = JSON.stringify({
+      snapshot: current.manager.readiness(),
+      invariant: current.manager.invariantSnapshot(),
+    }) + (acquisition.status === 'rejected' ? String(acquisition.reason) : '')
+      + (disposal.status === 'rejected' ? String(disposal.reason) : '')
+    expect(serialized).not.toContain(OLD_SECRET)
+    expect(serialized).not.toContain(NEW_SECRET)
+  })
+
   it.each([
     ['the new value', NEW_SECRET],
     ['the old value', OLD_SECRET],

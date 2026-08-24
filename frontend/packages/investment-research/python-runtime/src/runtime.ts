@@ -469,7 +469,7 @@ export class InvestmentBackendManager {
     await stopping
   }
 
-  private async resolveCredentialEnv(definition: PythonBackendDefinition): Promise<Readonly<{
+  private async resolveCredentialEnv(definition: PythonBackendDefinition, signal: AbortSignal): Promise<Readonly<{
     environment: Readonly<Record<string, string>> | undefined
     facts: readonly RuntimeCredentialFact[]
     generations: readonly CredentialGenerationCapture[]
@@ -481,7 +481,9 @@ export class InvestmentBackendManager {
     const environment: Record<string, string> = {}
     for (const credential of definition.credentialEnv) {
       if (!values.has(credential.ref)) {
-        const stable = await this.resolveStableCredential(definition.id, credential.ref)
+        signal.throwIfAborted()
+        const stable = await this.resolveStableCredential(definition.id, credential.ref, signal)
+        signal.throwIfAborted()
         values.set(credential.ref, stable.value)
         facts.set(credential.ref, stable.fact)
         generations.set(credential.ref, stable.generation)
@@ -499,24 +501,35 @@ export class InvestmentBackendManager {
   private async resolveStableCredential(
     backendId: InvestmentBackendId,
     ref: CredentialRef,
+    signal: AbortSignal,
   ): Promise<StableCredentialRead> {
     for (;;) {
+      signal.throwIfAborted()
       const generation = this.credentialGenerations.get(ref) ?? 0
       let resolved: string | ResolvedCredential | undefined
       try {
-        resolved = await this.resolveCredential(ref)
+        signal.throwIfAborted()
+        resolved = await waitWithSignal(this.resolveCredential(ref), signal)
+        signal.throwIfAborted()
       } catch {
+        signal.throwIfAborted()
         throw new Error(`investment Python backend "${backendId}" credential "${ref}" resolution failed`)
       }
       let info: CredentialInfo | undefined
       if (this.describeCredential !== undefined) {
         try {
-          info = await this.describeCredential(ref)
+          signal.throwIfAborted()
+          info = await waitWithSignal(this.describeCredential(ref), signal)
+          signal.throwIfAborted()
         } catch {
+          signal.throwIfAborted()
           throw new Error(`investment Python backend "${backendId}" credential "${ref}" description failed`)
         }
       }
-      if ((this.credentialGenerations.get(ref) ?? 0) !== generation) continue
+      if ((this.credentialGenerations.get(ref) ?? 0) !== generation) {
+        signal.throwIfAborted()
+        continue
+      }
       const value = typeof resolved === 'string' ? resolved : resolved?.value
       const source = typeof resolved === 'string' ? info?.source ?? 'resolver' : resolved?.source
       return {
@@ -557,7 +570,8 @@ export class InvestmentBackendManager {
     if (oldState.kind !== 'missing') await log.append('runtime', `previous runtime state: ${oldState.kind}\n`)
 
     const address = resolveBackendAddress(definition)
-    const resolvedCredentials = await this.resolveCredentialEnv(definition)
+    const resolvedCredentials = await this.resolveCredentialEnv(definition, signal)
+    signal.throwIfAborted()
     const credentialEnv = resolvedCredentials.environment
     const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined
       ? undefined
