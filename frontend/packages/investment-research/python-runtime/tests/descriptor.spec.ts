@@ -109,4 +109,10 @@ describe('investment packaged Runtime descriptor', () => {
     await rm(join(root, 'runtime', 'bin', 'python3'))
     expect(() => verifyInvestmentRuntimeDescriptor(descriptorPath)).toThrow(/missing.*reinstall/i)
   })
+
+  it('rejects an unlisted file instead of treating a partial digest list as complete', async () => {
+    const { root, descriptorPath } = await fixture()
+    await writeFile(join(root, 'site-packages', 'unlisted.py'), 'unexpected')
+    expect(() => verifyInvestmentRuntimeDescriptor(descriptorPath)).toThrow(/incomplete file list.*reinstall/i)
+  })
 })

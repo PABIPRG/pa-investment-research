@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path, { dirname } from 'node:path'
 import type { PlatformPath } from 'node:path'
 import type { InvestmentBackendId } from './types.ts'
@@ -67,6 +67,8 @@ export interface InvestmentRuntimeDescriptorOptions {
   readonly isFile?: (candidate: string) => boolean
   /** Return whether a candidate is an existing directory. */
   readonly isDirectory?: (candidate: string) => boolean
+  /** List canonical relative regular files below the sidecar root. */
+  readonly listFiles?: (root: string) => readonly string[]
 }
 
 function fileExists(candidate: string): boolean {
@@ -83,6 +85,22 @@ function directoryExists(candidate: string): boolean {
   } catch {
     return false
   }
+}
+
+function listRuntimeFiles(root: string): readonly string[] {
+  const files: string[] = []
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      const absolute = path.join(directory, entry.name)
+      if (entry.isSymbolicLink()) throw invalid(`symbolic link: ${relative}`)
+      if (entry.isDirectory()) visit(absolute, relative)
+      else if (entry.isFile() && relative !== 'runtime.json') files.push(relative)
+      else if (!entry.isFile()) throw invalid(`unsupported file: ${relative}`)
+    }
+  }
+  visit(root, '')
+  return files.sort()
 }
 
 function invalid(detail: string): Error {
@@ -189,6 +207,7 @@ export function verifyInvestmentRuntimeDescriptor(
   const readFile = options.readFile ?? readFileSync
   const isFile = options.isFile ?? fileExists
   const isDirectory = options.isDirectory ?? directoryExists
+  const listFiles = options.listFiles ?? listRuntimeFiles
   let decoded: unknown
   try {
     decoded = JSON.parse(Buffer.from(readFile(descriptorPath)).toString('utf8'))
@@ -214,6 +233,11 @@ export function verifyInvestmentRuntimeDescriptor(
     if (!isFile(absolute)) throw invalid(`file missing: ${entry.path}`)
     const actual = createHash('sha256').update(readFile(absolute)).digest('hex')
     if (actual !== entry.sha256) throw invalid(`hash mismatch: ${entry.path}`)
+  }
+  const actualFiles = listFiles(root)
+  const declaredFiles = descriptor.files.map(entry => entry.path)
+  if (actualFiles.length !== declaredFiles.length || actualFiles.some((entry, index) => entry !== declaredFiles[index])) {
+    throw invalid('incomplete file list')
   }
   return Object.freeze({ descriptor, root, pythonExecutable, sitePackages, projectDirs })
 }
