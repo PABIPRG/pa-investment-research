@@ -33,11 +33,15 @@
 
 源码启动会从本安装包向上查找 `backend/dsh-trading-core` 与 `backend/market-watch`。使用 `pnpm run investment:python:init` 按固定顺序初始化两个环境，再用 `pnpm run investment:python:verify` 执行只读检查。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
 
+解析采用严格优先级：显式绝对项目／解释器组合最高，其次是两个 Python 环境都完整的源码 checkout，最后是 Electron `Resources/investment-python/runtime.json` sidecar。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单：每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内；缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
+
 trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程。backend scheduler（调度器）与 push（推送）设置仍归 Python 端所有；随附 profile 保持股票分析的对话内推送关闭（`enableInChatPush: false`），也不会把这些设置解释为 profile 组合维度。
 
 ## 日志与状态
 
 每个 backend 写入 `$DSH_HOME/investment-research/<id>/backend.log`，超出上限的文件会在下次打开时轮转为 `backend.previous.log`。owned 进程元数据以私有权限原子写入 `runtime.json`，并且仅在其仍与内存中的精确 owned 进程匹配时删除。启动诊断会遮蔽显式转发的环境值。
+
+打包应用资源只读。Host 为 owned bundled child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，backend 的 data、cache、logs、state 和用户配置均从该可写目录派生；源码模式未设置该变量时保留既有仓库内默认值。
 
 ## 模型体验
 
@@ -49,6 +53,7 @@ trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程
 
 ## 已知限制与暂缓事项
 
-- **仓库发现依赖源码布局**：不保留 monorepo 布局的安装部署必须为每个业务插件配置绝对 `backendProjectDir`。
+- **打包目标是有限集合**：当前 lock 构建 macOS arm64、macOS x64 与 Windows x64 sidecar；其他目标使用源码或显式配置。
+- **依赖分发文件哈希属于后续加固**：目标文件已经固定所有安装版本且自身受哈希保护；逐个 wheel／sdist 哈希留给后续发布供应链门禁。
 - **状态只用于诊断，不是恢复授权**：重启后的 dsh 实例会报告 stale state（过期状态），但绝不会采用或终止磁盘记录的 PID；独立监管的服务应使用 `external`。
 - **只保留一个活动日志和一个历史日志**：轮转仅在打开时按大小触发；长时间运行的子进程不会在运行中轮转。
