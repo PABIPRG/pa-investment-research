@@ -176,11 +176,14 @@ def tech_signal(req: TechSignalRequest):
         code = quotes.normalize_code(req.code)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    df = quotes.get_kline(code, lookback=req.lookback)
+    try:
+        df = quotes.get_kline(code, lookback=req.lookback)
+    except quotes.KlineDeadlineExceeded as exc:
+        raise HTTPException(504, f"{exc}，后台刷新仍在继续，请稍后重试")
     if df is None or df.empty:
         raise HTTPException(404, f"{code} 无 K 线数据")
     ind = compute_indicators(df)
-    q = quotes.cache().get_quote(code)
+    q = quotes.get_quote_bounded(code)
     return {
         "code": code, "name": (q or {}).get("name") or "",
         "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -207,9 +210,10 @@ def news_latest():
 
 @app.get("/news/flash")
 def news_flash(limit: int = 30, enrich: int = 0, personal: int = 0):
-    """实时快讯（源目录聚合）：前端滚动刷新 + 点开看全文。limit 5-100。
-    enrich=1 时每项附加 event（结构化事件）与 matched（命中自选/持仓）；
-    personal=1 时命中项置顶（个性化排序）。"""
+    """实时快讯。基础档使用快速来源和首屏 deadline；enrich=1 显式启用完整来源与事件层。
+
+    personal=1 时命中项置顶（个性化排序），只在 enrich=1 时有意义。
+    """
     limit = max(5, min(limit, 100))
     if enrich:
         return events.enriched_flash(limit=limit, personal=bool(personal))

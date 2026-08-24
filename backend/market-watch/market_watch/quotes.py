@@ -18,7 +18,7 @@ import re
 import requests
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -229,13 +229,13 @@ def _clist_top(fid: str, top_n: int, po: int = 1, page_size: int | None = None) 
     """东财 clist 服务端排序取前 N（涨幅/量比/换手/成交额榜），浏览器 UA + 直连。
     fid: f3=涨跌幅 f10=量比 f8=换手率 f6=成交额；po: 1=降序 0=升序。"""
     size = page_size or max(top_n * 3, 50)
-    # timeout=5 retries=1（3 子域 × 2 轮 = 6 次），东财限流时 ~2-3s 放弃，让 /scan 快速降级或 422 提示
+    # 三个 push2 子域各尝试一次，总体约 4 秒内失败，让 /scan 尽快降级。
     j = _http_get("https://82.push2.eastmoney.com/api/qt/clist/get", {
         "pn": "1", "pz": str(size), "po": str(po), "np": "1",
         "ut": "bd1d9ddb04089700cf9c27f6f7426281",
         "fltt": "2", "invt": "2", "fid": fid, "fs": _CLIST_FS,
         "fields": "f2,f3,f5,f6,f8,f10,f12,f14",
-    }, timeout=5, retries=1).json()
+    }, timeout=1.2, retries=0).json()
     diff = ((j or {}).get("data") or {}).get("diff") or []
     return [row for row in (_row_from_diff(d) for d in diff) if row]
 
@@ -307,7 +307,7 @@ def _sina_market(sort: str, top_n: int, asc: int = 0) -> list[dict]:
     r = _http_get(_SINA_MARKET, {
         "page": "1", "num": str(max(top_n, 20)), "sort": sort, "asc": str(asc),
         "node": "hs_a", "_s_r_a": "init",
-    })
+    }, timeout=1.5, retries=0)
     out = []
     for d in (r.json() or []):
         code = str(d.get("code", "")).strip()
@@ -332,6 +332,8 @@ def _sina_kline(sym: str, lookback: int) -> list[dict] | None:
     r = _http_get(
         "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData",
         {"symbol": sym, "scale": "240", "ma": "no", "datalen": str(max(lookback, 60))},
+        timeout=settings.kline_source_timeout,
+        retries=0,
     )
     out = []
     for d in (r.json() or []):
@@ -546,6 +548,21 @@ def get_fund_flow(code: str) -> float | None:
 
 # ---- K 线 ---------------------------------------------------------------
 
+_KLINE_CACHE: dict[tuple[str, int], tuple[float, pd.DataFrame]] = {}
+_KLINE_FLIGHTS: dict[tuple[str, int], Future] = {}
+_KLINE_LOCK = threading.RLock()
+_KLINE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="kline-refresh")
+_KLINE_CLOCK = time.monotonic
+
+_POINT_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
+_POINT_QUOTE_FLIGHTS: dict[str, Future] = {}
+_POINT_QUOTE_LOCK = threading.RLock()
+_POINT_QUOTE_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="quote-name")
+
+
+class KlineDeadlineExceeded(TimeoutError):
+    """冷 K 线请求超过前台等待预算，后台 single-flight 仍继续刷新。"""
+
 
 def _bs_hist_ohlcv(code: str, start: str, end: str) -> list[dict]:
     """带锁 baostock 前复权日线，返回 [{date,open,high,low,close,volume,amount}] 升序。"""
@@ -578,7 +595,7 @@ def _bs_hist_ohlcv(code: str, start: str, end: str) -> list[dict]:
             bs.logout()
 
 
-def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
+def _fetch_kline_uncached(code: str, lookback: int = 120) -> pd.DataFrame | None:
     """前复权日线，返回列 date/open/close/high/low/volume/amount（升序）。
     主源新浪（稳定）→ 东财 push2his → baostock，逐级降级。无数据返回 None。"""
     today = date.today()
@@ -601,7 +618,7 @@ def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
             "fields1": "f1,f2,f3,f4,f5,f6",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
             "klt": "101", "fqt": "1", "beg": start_s, "end": end_s,
-        }).json()
+        }, timeout=settings.kline_source_timeout, retries=0).json()
         klines = ((j or {}).get("data") or {}).get("klines") or []
         if klines:
             rows = []
@@ -630,6 +647,93 @@ def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
     df = df.dropna(subset=["open", "close", "high", "low"])
     df = df.reset_index(drop=True)
     return df
+
+
+def _finish_kline_refresh(key: tuple[str, int], future: Future) -> None:
+    try:
+        result = future.result()
+    except Exception as exc:
+        logger.warning("K线后台刷新 %s 失败: %s", key[0], exc)
+        result = None
+    with _KLINE_LOCK:
+        if result is not None and not result.empty:
+            _KLINE_CACHE[key] = (_KLINE_CLOCK(), result.copy(deep=True))
+        if _KLINE_FLIGHTS.get(key) is future:
+            _KLINE_FLIGHTS.pop(key, None)
+
+
+def _start_kline_refresh(key: tuple[str, int]) -> Future:
+    future = _KLINE_FLIGHTS.get(key)
+    if future is None:
+        future = _KLINE_EXECUTOR.submit(_fetch_kline_uncached, key[0], key[1])
+        _KLINE_FLIGHTS[key] = future
+        future.add_done_callback(lambda done: _finish_kline_refresh(key, done))
+    return future
+
+
+def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
+    """以短冷请求 deadline 读取 K 线，复用 TTL/stale cache 与并发 single-flight。
+
+    fresh cache 直接返回；stale cache 立即返回并后台刷新。冷请求超过 deadline
+    抛出 KlineDeadlineExceeded，但唯一后台 flight 会继续填充缓存，后续请求可直接命中。
+    """
+    key = (code, lookback)
+    now = _KLINE_CLOCK()
+    with _KLINE_LOCK:
+        cached = _KLINE_CACHE.get(key)
+        age = (now - cached[0]) if cached else None
+        if cached and age is not None and age <= settings.kline_cache_ttl:
+            return cached[1].copy(deep=True)
+        future = _start_kline_refresh(key)
+        if cached and age is not None and age <= settings.kline_stale_ttl:
+            return cached[1].copy(deep=True)
+    try:
+        result = future.result(timeout=max(0.0, settings.kline_cold_deadline))
+    except FutureTimeout:
+        raise KlineDeadlineExceeded(f"{code} K线冷请求超过前台等待预算")
+    except Exception as exc:
+        logger.warning("K线冷请求 %s 失败: %s", code, exc)
+        return None
+    if result is None or result.empty:
+        return None
+    return result.copy(deep=True)
+
+
+def _fetch_point_quote(code: str) -> dict | None:
+    rows = _ulist([code]) or _sina_hq([code])
+    return rows.get(code)
+
+
+def _finish_point_quote(code: str, future: Future) -> None:
+    try:
+        result = future.result()
+    except Exception as exc:
+        logger.warning("名称行情后台刷新 %s 失败: %s", code, exc)
+        result = None
+    with _POINT_QUOTE_LOCK:
+        if result:
+            _POINT_QUOTE_CACHE[code] = (_KLINE_CLOCK(), dict(result))
+        if _POINT_QUOTE_FLIGHTS.get(code) is future:
+            _POINT_QUOTE_FLIGHTS.pop(code, None)
+
+
+def get_quote_bounded(code: str) -> dict | None:
+    """短 deadline 获取技术信号展示名；超时不阻塞技术指标响应。"""
+    now = _KLINE_CLOCK()
+    with _POINT_QUOTE_LOCK:
+        cached = _POINT_QUOTE_CACHE.get(code)
+        if cached and (now - cached[0]) <= settings.kline_stale_ttl:
+            return dict(cached[1])
+        future = _POINT_QUOTE_FLIGHTS.get(code)
+        if future is None:
+            future = _POINT_QUOTE_EXECUTOR.submit(_fetch_point_quote, code)
+            _POINT_QUOTE_FLIGHTS[code] = future
+            future.add_done_callback(lambda done: _finish_point_quote(code, done))
+    try:
+        result = future.result(timeout=max(0.0, settings.quote_name_deadline))
+    except Exception:
+        return None
+    return dict(result) if result else None
 
 
 # ---- 交易日历 ------------------------------------------------------------

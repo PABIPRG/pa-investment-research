@@ -29,6 +29,26 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
+  it('maps base news explicitly without event enrichment or personalization', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await requestInvestmentData({
+      operation: 'market-watch.news-flash',
+      input: { limit: 12, enrich: false, personal: false },
+    }, async () => ({ baseUrl: 'http://127.0.0.1:8100', release }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8100/news/flash?limit=12&enrich=0&personal=0',
+      { method: 'GET' },
+    )
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('rejects unknown input keys before acquiring a backend', async () => {
     const acquire = vi.fn()
     await expect(requestInvestmentData({

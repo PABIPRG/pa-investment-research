@@ -156,7 +156,7 @@ def extract_events(limit: int = 30) -> list[dict]:
     if hit and (now - hit[0]) < settings.event_ttl:
         return hit[1][:limit]
 
-    items = news.fetch_flash(limit=max(limit, 40))["items"]
+    items = news.fetch_flash(limit=max(limit, 40), include_slow=True)["items"]
     seen = _seen_ids()
     fresh = [it for it in items if it["id"] not in seen][: settings.event_batch]
     if fresh:
@@ -283,7 +283,7 @@ def event_alerts() -> dict:
 def enriched_flash(limit: int = 30, personal: bool = False) -> dict:
     """fetch_flash 快讯 → 每项附加 event/matched（命中自选/持仓标 "hit"）。
     personal=True 命中置顶；否则保持时间倒序。"""
-    flash = news.fetch_flash(limit=limit)
+    flash = news.fetch_flash(limit=limit, include_slow=True)
     events = extract_events(limit=max(limit * 2, 40))
     by_item = {e["item_id"]: e for e in events if e.get("item_id")}
     watch = set(_watch_codes())

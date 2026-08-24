@@ -6,6 +6,7 @@
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -46,8 +47,11 @@ def scan(kind: str = "gainers", top_n: int = 10, min_amount_yi: float | None = N
 
     if kind == "limit":
         try:
-            up = [r for r in quotes._clist_top("f3", 100, po=1) if is_limit_up(r)]
-            down = [r for r in quotes._clist_top("f3", 100, po=0) if is_limit_down(r)]
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                up_future = executor.submit(quotes._clist_top, "f3", 100, 1)
+                down_future = executor.submit(quotes._clist_top, "f3", 100, 0)
+                up = [r for r in up_future.result() if is_limit_up(r)]
+                down = [r for r in down_future.result() if is_limit_down(r)]
         except Exception:
             raise ValueError("行情源暂不可用，请稍后再试")
         up.sort(key=lambda r: r["pct_change"] or 0, reverse=True)
