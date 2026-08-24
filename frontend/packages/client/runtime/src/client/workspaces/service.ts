@@ -192,6 +192,31 @@ export class WorkspaceRuntime implements IWorkspaces {
   }
 
   /**
+   * Create and open a genuinely new blank Session for product flows whose
+   * "new conversation" affordance must not reuse an existing empty one.
+   * Target resolution intentionally matches {@link startSession}; the shared
+   * action keeps its reuse semantics while opt-in profile actions use this
+   * explicit fresh path.
+   * @param workspaceId - explicit target Workspace, when already chosen.
+   * @returns the new Session id, or undefined when there is no Workspace.
+   */
+  async startFreshSession(workspaceId?: WorkspaceId): Promise<SessionId | undefined> {
+    const workspace = this.list.getSnapshot()
+    const current = this.sessions.list.getSnapshot().current
+    const currentWorkspaceId = current === undefined
+      ? undefined
+      : workspace.items.find(item => item.sessionIds.includes(current))?.workspaceId
+    const target = workspaceId ?? currentWorkspaceId ?? workspace.recentWorkspaceId
+    if (target === undefined) {
+      this.sessions.clear()
+      return undefined
+    }
+    const sessionId = await this.sessions.create({ workspaceId: target })
+    this.sessions.open(sessionId)
+    return sessionId
+  }
+
+  /**
    * Register an existing path as a Workspace.
    * @param input - the Host create payload.
    * @returns the created or idempotently resolved Workspace.

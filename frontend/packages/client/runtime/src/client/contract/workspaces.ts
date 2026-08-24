@@ -29,6 +29,15 @@ export interface IWorkspaces {
    */
   startSession(workspaceId?: WorkspaceId): void
   /**
+   * Create and open a brand-new blank Session in the explicit, current, or
+   * recent Workspace. Unlike {@link startSession}, this never reuses an
+   * existing blank Session.
+   * @param workspaceId - explicit target; omitted follows the shared target
+   * resolution policy.
+   * @returns the new Session id, or undefined when no Workspace exists.
+   */
+  startFreshSession(workspaceId?: WorkspaceId): Promise<SessionId | undefined>
+  /**
    * Register an existing path as a Workspace.
    * @param input - the Host create payload.
    * @returns the created or idempotently resolved Workspace.

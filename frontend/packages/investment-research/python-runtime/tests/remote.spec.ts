@@ -45,7 +45,7 @@ afterEach(() => {
 })
 
 describe('InvestmentPythonRuntime Remote', () => {
-  it('binds the investment Runtime namespace and exports only the readiness and restart aliases', () => {
+  it('binds the investment Runtime namespace and exports only the allow-listed aliases', () => {
     const runtime = runtimeWith()
 
     expect(runtime.typertRemote).toMatchObject({
@@ -54,6 +54,7 @@ describe('InvestmentPythonRuntime Remote', () => {
     })
     expect(remoteMethods(runtime)).toEqual([
       { method: 'readiness', invocation: { kind: 'direct' } },
+      { method: 'requestData', exportName: 'request-data', invocation: { kind: 'direct' } },
       { method: 'requestRestart', exportName: 'request-restart', invocation: { kind: 'direct' } },
     ])
   })

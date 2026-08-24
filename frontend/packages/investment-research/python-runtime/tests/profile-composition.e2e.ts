@@ -350,6 +350,7 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
     const rows = composeEntries(layers.map(layer => layer.patches))
     expect(rows.some(row => row.id === 'investment-python-runtime')).toBe(true)
     expect(rows.some(row => row.id === 'client-investment-research-runtime')).toBe(true)
+    expect(rows.some(row => row.id === 'client-ui-investment-research')).toBe(true)
     expect(rows.some(row => row.id === 'client-ui-settings-investment-research')).toBe(true)
     const dump = renderConfigDump('dsh-investment-profile-test', base, layers)
     expect(dump.indexOf('investment-python-runtime')).toBeLessThan(dump.indexOf('investment-stock-analysis'))

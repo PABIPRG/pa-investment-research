@@ -8,10 +8,14 @@ import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import investmentRuntimeRemote from '@deepseek-ai/dsh-investment-python-runtime/remote'
 import type {
+  InvestmentDataRequest,
+  InvestmentJsonValue,
   InvestmentReadinessSnapshot,
   InvestmentRestartResult,
 } from '@deepseek-ai/dsh-investment-python-runtime/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+
+export type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-investment-python-runtime/types'
 
 const DEEPSEEK_CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const EMPTY_SNAPSHOT: InvestmentReadinessSnapshot = Object.freeze({
@@ -38,6 +42,8 @@ export interface InvestmentResearchRuntimeClient {
    * @throws the current flight's Remote or transport failure; superseded and disposed flights settle quietly.
    */
   refresh(): Promise<void>
+  /** Execute one Host-allow-listed investment backend operation. */
+  requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>
   /**
    * Ask the Host launcher to restart the complete application.
    * @returns the launcher-safe acknowledgement.
@@ -126,6 +132,11 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     return unwrapRemote(await this.remote['request-restart'](), 'request-restart')
   }
 
+  async requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue> {
+    if (this.disposed) throw new Error('investment Runtime Client facade is disposed')
+    return unwrapRemote(await this.remote['request-data'](request), 'request-data')
+  }
+
   refreshInBackground(reason: string): void {
     const flight = this.startRefresh()
     if (flight !== undefined) this.observeBackground(flight.promise, reason)
@@ -147,6 +158,7 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
       getSnapshot: this.getSnapshot,
       subscribe: this.subscribe,
       refresh: () => this.refresh(),
+      requestData: (request: InvestmentDataRequest) => this.requestData(request),
       requestRestart: () => this.requestRestart(),
     })
   }

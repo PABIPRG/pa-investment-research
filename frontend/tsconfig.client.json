@@ -59,6 +59,7 @@
     { "path": "./packages/api/gateway/tsconfig.client.json" },
     { "path": "./packages/api/remotes/tsconfig.client.json" },
     { "path": "./packages/client/investment-research-runtime" },
+    { "path": "./packages/client/ui-investment-research" },
     { "path": "./packages/client/runtime" },
     { "path": "./packages/extensions/cordis-client-runner" },
     { "path": "./packages/extensions/ui-cordis" },

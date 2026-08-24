@@ -442,6 +442,28 @@ describe('WorkspaceRuntime', () => {
     expect(clear).toHaveBeenCalledOnce()
   })
 
+  it('creates a genuinely fresh Session even when the Workspace already has a reusable blank', async () => {
+    const ctx = new Context()
+    const api = new FakeApiClient()
+    const sessions = new SessionRuntime(ctx, api, fakeRemote())
+    const workspaces = new WorkspaceRuntime(ctx, api, sessions)
+    api.onWorkspaceList = () => Promise.resolve(ok({
+      items: [workspace('alpha', [sid('s-blank')])] as never[],
+    }))
+    api.onList = () => Promise.resolve(ok({ items: [
+      { sessionId: sid('s-blank'), updatedAt: 1, running: false, blank: true, cwd: '/alpha' },
+    ] as never[] }))
+    await Promise.all([workspaces.refresh(), sessions.refresh()])
+    await Promise.resolve()
+    sessions.open(sid('s-blank'))
+    api.onCreate = () => Promise.resolve(ok({ sessionId: sid('s-fresh') }))
+    const open = vi.spyOn(sessions, 'open')
+
+    await expect(workspaces.startFreshSession()).resolves.toBe('s-fresh')
+    expect(api.callsOf('session.create')).toEqual([{ workspaceId: 'alpha' }])
+    expect(open).toHaveBeenLastCalledWith(sid('s-fresh'))
+  })
+
   it('archives a session, projects the set from the response, list, and frame, and clears only the current one', async () => {
     const ctx = new Context()
     const api = new FakeApiClient()

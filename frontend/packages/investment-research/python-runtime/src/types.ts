@@ -82,6 +82,40 @@ export type InvestmentRestartResult =
   | Readonly<{ status: 'accepted' }>
   | Readonly<{ status: 'unavailable'; reason: string }>
 
+/** Browser-safe, allow-listed investment backend operations. */
+export type InvestmentDataOperation =
+  | 'market-watch.overview'
+  | 'market-watch.scan'
+  | 'market-watch.tech-signal'
+  | 'market-watch.news-flash'
+  | 'market-watch.news-events'
+  | 'market-watch.watchlist'
+  | 'market-watch.watch-add'
+  | 'market-watch.watch-remove'
+  | 'market-watch.alerts'
+  | 'trading-core.holdings'
+  | 'trading-core.holdings-save'
+  | 'trading-core.risk-portfolio'
+  | 'trading-core.risk-alerts'
+  | 'trading-core.personalized-cards'
+
+/** Lossless JSON value accepted across the generated Remote boundary. */
+export type InvestmentJsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | InvestmentJsonValue[]
+  | { [key: string]: InvestmentJsonValue }
+
+/** One allow-listed request from the investment Profile browser UI. */
+export interface InvestmentDataRequest {
+  /** Stable operation name; the Host maps it to one fixed backend and route. */
+  readonly operation: InvestmentDataOperation
+  /** Operation-specific JSON input. Unknown keys are rejected by the Host. */
+  readonly input?: Readonly<Record<string, InvestmentJsonValue>>
+}
+
 /** One credential reference injected into an owned backend child environment. */
 export interface ManagedCredentialEnv {
   /** Provider-managed credential reference resolved only for an owned child. */

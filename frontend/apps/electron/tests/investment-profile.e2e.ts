@@ -105,6 +105,8 @@ describe('Electron investment Profile composition', () => {
     expect(byId.get('electron-connection')?.name).toBe('@deepseek-ai/dsh-electron')
     expect(byId.get('client-investment-research-runtime')?.name)
       .toBe('@deepseek-ai/dsh-client-investment-research-runtime')
+    expect(byId.get('client-ui-investment-research')?.name)
+      .toBe('@deepseek-ai/dsh-client-ui-investment-research')
     expect(byId.get('client-ui-settings-investment-research')?.name)
       .toBe('@deepseek-ai/dsh-client-ui-settings-investment-research')
 

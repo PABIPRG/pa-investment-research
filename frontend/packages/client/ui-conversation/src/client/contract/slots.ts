@@ -143,6 +143,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * the next one rather than applied to a current one.
      */
     'conversation.hero.agentPreset': { kind: 'single'; scope: 'root'; owner: HeroAgentPresetOwnerProps }
+    /**
+     * The complete welcome content above the workspace row on a blank
+     * conversation. Profiles may replace the default product mark and copy
+     * without replacing the resident composer or hiding shared DOM with CSS.
+     */
+    'conversation.hero.welcome': { kind: 'single'; scope: 'root'; owner: HeroWelcomeOwnerProps }
     // 'conversation.input.overlay' merges in ui-input-trigger (the dependency
     // direction is the hard constraint — ui-input-trigger cannot import
     // this package, while this package's input contract already imports
@@ -244,6 +250,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 export interface HeroAgentPresetOwnerProps {
   /** Marker field: the chip owns its own roster, staging, and menu state. */
   children?: never
+}
+
+/** Owner share for a profile-replaceable blank-conversation welcome. */
+export interface HeroWelcomeOwnerProps {
+  /** True while the composer cannot accept a suggested prompt. */
+  disabled: boolean
+  /** Put a suggested prompt into the resident composer for user review. */
+  onPrompt: (prompt: string) => void
 }
 
 /** Owner share of the strict session content seat. */
@@ -575,6 +589,7 @@ export type ConversationSlotProps =
     | 'conversation.input.left' | 'conversation.input.right'
     | 'conversation.hero.workspace'
     | 'conversation.hero.agentPreset'
+    | 'conversation.hero.welcome'
   >
   & InjectFace<ConversationInjected>
   & PropsLocale<'conversation'>
