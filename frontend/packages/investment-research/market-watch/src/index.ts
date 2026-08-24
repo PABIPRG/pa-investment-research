@@ -8,6 +8,7 @@
 //   GET  /watchlist · /alerts · /overview
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PythonBackendDefinition, PythonBackendLease } from '@deepseek-ai/dsh-investment-python-runtime'
@@ -78,7 +79,16 @@ function setupTools(ctx: Context, base: string): () => void {
     toolDisposers.push(ctx.tools.register(tool))
   }
   const disposeTools = (): void => {
-    for (const dispose of toolDisposers.reverse()) dispose()
+    const disposers = toolDisposers.reverse()
+    const disposeFrom = (index: number): void => {
+      if (index === disposers.length) return
+      try {
+        disposers[index]!()
+      } finally {
+        disposeFrom(index + 1)
+      }
+    }
+    disposeFrom(0)
   }
 
   try {
@@ -109,10 +119,10 @@ function setupTools(ctx: Context, base: string): () => void {
           ],
         },
         ...present('加入自选'),
-        execute: args => watchAdd(base, {
-          code: args.code,
-          ...(args.name === undefined ? {} : { name: args.name }),
-        }),
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return watchAdd(base, { code: args.code, ...(args.name === undefined ? {} : { name: args.name }) })
+        },
       }),
     )
 
@@ -134,7 +144,10 @@ function setupTools(ctx: Context, base: string): () => void {
           ],
         },
         ...present('移除自选'),
-        execute: args => watchRemove(base, { code: args.code }),
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return watchRemove(base, { code: args.code })
+        },
       }),
     )
 
@@ -155,7 +168,10 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderWatchlist(value as { items?: Array<{ code: string; name: string }>; count?: number }) }],
         },
         ...present('自选列表'),
-        execute: () => watchList(base),
+        execute: () => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return watchList(base)
+        },
       }),
     )
 
@@ -188,15 +204,17 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: `✅ 规则已创建：${(value as { id: string }).id}` }],
         },
         ...present('新建盯盘规则'),
-        execute: args =>
-          addAlert(base, {
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return addAlert(base, {
             name: args.name,
             ...(args.ticker === undefined ? {} : { ticker: args.ticker }),
             ...(args.combine === undefined ? {} : { combine: args.combine }),
             conditions: args.conditions as unknown as AlertConditionInput[],
             ...(args.cooldown_min === undefined ? {} : { cooldown_min: args.cooldown_min }),
             ...(args.daily_cap === undefined ? {} : { daily_cap: args.daily_cap }),
-          }),
+          })
+        },
       }),
     )
 
@@ -214,7 +232,10 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderAlerts(value as { items?: Array<Record<string, unknown>>; count?: number }) }],
         },
         ...present('规则列表'),
-        execute: () => listAlerts(base),
+        execute: () => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return listAlerts(base)
+        },
       }),
     )
 
@@ -236,7 +257,10 @@ function setupTools(ctx: Context, base: string): () => void {
           ],
         },
         ...present('删除规则'),
-        execute: args => removeAlert(base, args.id),
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return removeAlert(base, args.id)
+        },
       }),
     )
 
@@ -266,11 +290,14 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderScan(value as Record<string, unknown>) }],
         },
         ...present('异动扫描'),
-        execute: args => scanMovers(base, {
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return scanMovers(base, {
           kind: args.kind ?? 'gainers',
           top_n: args.top_n ?? 10,
           ...(args.min_amount_yi === undefined ? {} : { min_amount_yi: args.min_amount_yi }),
-        }),
+          })
+        },
       }),
     )
 
@@ -294,7 +321,10 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderOverview(value as { items?: Array<Record<string, unknown>>; trade_date?: string }) }],
         },
         ...present('盯盘面板'),
-        execute: () => watchOverview(base),
+        execute: () => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return watchOverview(base)
+        },
       }),
     )
 
@@ -322,10 +352,13 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderTechSignal(value as Record<string, unknown>) }],
         },
         ...present('技术信号'),
-        execute: args => techSignal(base, {
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return techSignal(base, {
           code: args.code,
           ...(args.lookback === undefined ? {} : { lookback: args.lookback }),
-        }),
+          })
+        },
       }),
     )
 
@@ -350,7 +383,10 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderNews(value as Record<string, unknown>) }],
         },
         ...present('新闻速递'),
-        execute: () => newsExpress(base),
+        execute: () => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
+          return newsExpress(base)
+        },
       }),
     )
 
@@ -377,7 +413,10 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderBrief(value as Record<string, unknown>) }],
         },
         ...present('简报'),
-        execute: args => dailyBrief(base, { period: args.period ?? 'pre', manual: args.manual ?? false }),
+        execute: args => {
+          ctx.investmentPythonRuntime.assertCapability('market-watch', 'llm-enhancement')
+          return dailyBrief(base, { period: args.period ?? 'pre', manual: args.manual ?? false })
+        },
       }),
     )
     return disposeTools
@@ -399,6 +438,8 @@ function marketWatchBackend(config: Config): PythonBackendDefinition {
     healthPath: '/health',
     healthOk: { ok: true },
     initCommand: { posix: './init.sh', windows: 'init.bat' },
+    managedEnv: { MW_LLM_ENABLED: 'true' },
+    credentialEnv: [{ ref: 'DEEPSEEK_API_KEY' as CredentialRef, env: 'DEEPSEEK_API_KEY', role: 'enhancement' }],
   }
 }
 
@@ -408,12 +449,13 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     const unregister = ctx.investmentPythonRuntime.register(marketWatchBackend(config))
     let lease: PythonBackendLease | undefined
     let disposeTools: (() => void) | undefined
-    try {
-      lease = await ctx.investmentPythonRuntime.acquire('market-watch')
-      disposeTools = setupTools(ctx, lease.baseUrl)
-      return async () => {
+    let disposeCapability: (() => void) | undefined
+    const disposeResources = async (): Promise<void> => {
+      try {
+        disposeTools?.()
+      } finally {
         try {
-          disposeTools?.()
+          disposeCapability?.()
         } finally {
           try {
             await lease?.release()
@@ -422,13 +464,16 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
           }
         }
       }
+    }
+    try {
+      lease = await ctx.investmentPythonRuntime.acquire('market-watch')
+      disposeTools = setupTools(ctx, lease.baseUrl)
+      disposeCapability = ctx.investmentPythonRuntime.registerCapability({
+        backendId: 'market-watch', toolCount: 11, llm: 'enhancement',
+      })
+      return disposeResources
     } catch (error) {
-      try {
-        disposeTools?.()
-        await lease?.release()
-      } finally {
-        unregister()
-      }
+      await disposeResources()
       throw error
     }
   }, 'investment market-watch runtime lifecycle')

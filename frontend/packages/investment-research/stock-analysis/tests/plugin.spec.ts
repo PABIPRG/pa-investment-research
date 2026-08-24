@@ -69,10 +69,28 @@ async function install(config: Plugin.Config = {
     investmentPythonRuntime: {
       register(definition: { baseUrl: string }) { baseUrl = definition.baseUrl; return () => {} },
       async acquire() { return { id: 'trading-core', baseUrl, ownership: 'external', async release() {} } },
+      registerCapability() { return () => {} },
+      assertCapability() {},
     },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
     agents: { roots: () => [] },
   } as never, config)
+  return tools
+}
+
+async function installWithPreflight(assertCapability: (backendId: string, use: string) => void): Promise<RegisteredTool[]> {
+  const tools: RegisteredTool[] = []
+  await Plugin.apply({
+    async effect(callback: () => Promise<() => void>) { return callback() },
+    investmentPythonRuntime: {
+      register() { return () => {} },
+      async acquire() { return { id: 'trading-core', baseUrl: 'http://adapter.test', ownership: 'external', async release() {} } },
+      registerCapability() { return () => {} },
+      assertCapability,
+    },
+    tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
+    agents: { roots: () => [] },
+  } as never, { backendMode: 'external', backendBaseUrl: 'http://adapter.test', enableInChatPush: false })
   return tools
 }
 
@@ -230,6 +248,47 @@ describe('stock-analysis function plugin', () => {
     expect(byName.get('get_latest_brief')!.output.render?.({}, {})[0]!.text).toBe('暂无简报')
   })
 
+  it('preflights every operation before its adapter HTTP or SSE side effect', async () => {
+    const assertCapability = vi.fn()
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/stream')) return new Response('event: result\ndata: {"signal":{},"reports":{},"performance_metrics":{}}\n\nevent: done\ndata: {}\n\n')
+      if (init?.method === 'POST' && (url.endsWith('/analyze') || url.endsWith('/holdings/analyze') || url.endsWith('/brief'))) return new Response('{"task_id":"t1"}')
+      return new Response('{"saved":1,"tickers":[],"risk_profile":"balanced","label":"稳健"}')
+    })
+    vi.stubGlobal('fetch', fetch)
+    const byName = new Map((await installWithPreflight(assertCapability)).map(tool => [tool.name, tool]))
+    const exec = { signal: new AbortController().signal }
+    await byName.get('analyze_stock')!.execute({ ticker: '600519' }, exec)
+    await byName.get('analyze_holdings')!.execute({}, exec)
+    await byName.get('market_brief')!.execute({}, exec)
+    await byName.get('set_watchlist')!.execute({ tickers: [] }, exec)
+    await byName.get('set_holdings')!.execute({ holdings: [] }, exec)
+    await byName.get('get_watchlist')!.execute({}, exec)
+    await byName.get('set_risk_profile')!.execute({ risk_profile: 'balanced' }, exec)
+    await byName.get('get_risk_profile')!.execute({}, exec)
+    await byName.get('get_latest_brief')!.execute({}, exec)
+    expect(assertCapability.mock.calls).toEqual([
+      ['trading-core', 'llm-required'], ['trading-core', 'llm-required'], ['trading-core', 'llm-required'],
+      ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
+      ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
+    ])
+
+    const blocked = vi.fn(() => { throw new Error('credential missing') })
+    const blockedTools = new Map((await installWithPreflight(blocked)).map(tool => [tool.name, tool]))
+    const agent = { inject: vi.fn() }
+    for (const [name, args] of [
+      ['analyze_stock', { ticker: '600519' }],
+      ['analyze_holdings', {}],
+      ['market_brief', {}],
+    ] as const) {
+      fetch.mockClear()
+      agent.inject.mockClear()
+      await expect(blockedTools.get(name)!.execute(args, { signal: new AbortController().signal, agent })).rejects.toThrow('credential missing')
+      expect(fetch).not.toHaveBeenCalled()
+      expect(agent.inject).not.toHaveBeenCalled()
+    }
+  })
+
   it('retains presenter and saved-holdings fallbacks behind the validated public tool wrapper', async () => {
     vi.resetModules()
     vi.doMock('@deepseek-ai/dsh-tools', async (importOriginal) => {
@@ -248,6 +307,8 @@ describe('stock-analysis function plugin', () => {
       investmentPythonRuntime: {
         register() { return () => {} },
         async acquire() { return { id: 'trading-core', baseUrl: 'http://127.0.0.1:8000', ownership: 'external', async release() {} } },
+        registerCapability() { return () => {} },
+        assertCapability() {},
       },
       tools: { register(tool: Record<string, unknown>) { rawTools.push(tool); return () => {} } },
       agents: { roots: () => [] },

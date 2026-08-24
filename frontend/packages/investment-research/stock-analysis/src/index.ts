@@ -12,6 +12,7 @@
 //   参考：docs/cookbook/adding-a-tool.md · docs/cookbook/extension-cookbook.md
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
@@ -51,6 +52,8 @@ export interface Config {
   backendBaseUrl?: string
   /** Explicit absolute trading-core checkout when repository discovery is unavailable. */
   backendProjectDir?: string
+  /** Trading backend implementation selected explicitly for managed startup. Defaults to engine. */
+  backendRunner?: 'engine' | 'fake'
   /** Maximum SSE task duration in milliseconds. Defaults to 600000. */
   streamTimeoutMs?: number
   /** Enable periodic brief delivery to root agent sessions. Defaults to false. */
@@ -81,6 +84,7 @@ export const Config: Schema<Config> = Schema.object({
   backendMode: Schema.union(['managed', 'external']).default('managed'),
   backendBaseUrl: Schema.string().default('http://127.0.0.1:8000'),
   backendProjectDir: Schema.string(),
+  backendRunner: Schema.union(['engine', 'fake']).default('engine'),
   streamTimeoutMs: Schema.number().default(600_000),
   enableInChatPush: Schema.boolean().description('dsh 对话内定时播报简报（外部推送由适配器 scheduler 负责）').default(false),
   pushPollMs: Schema.number().description('对话内播报轮询周期 ms').default(120_000),
@@ -126,8 +130,20 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
   }
 
   const disposeFeatures = async (): Promise<void> => {
-    for (const dispose of toolDisposers.reverse()) dispose()
-    await disposePusher?.()
+    const disposers = toolDisposers.reverse()
+    const disposeFrom = async (index: number): Promise<void> => {
+      if (index === disposers.length) return
+      try {
+        disposers[index]!()
+      } finally {
+        await disposeFrom(index + 1)
+      }
+    }
+    try {
+      await disposeFrom(0)
+    } finally {
+      await disposePusher?.()
+    }
   }
 
   try {
@@ -196,6 +212,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           ],
         }),
         async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'llm-required')
         // 1) 启动分析任务
           const body: Record<string, unknown> = {
             ticker: args.ticker,
@@ -271,6 +288,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: '组合市值/浮盈/集中度/逐股风险已生成。' }],
         }),
         async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'llm-required')
           const body: Record<string, unknown> = { mode: args.mode ?? 'deep' }
           if (args.holdings !== undefined) body.holdings = args.holdings
           if (args.use_saved !== undefined) body.use_saved = args.use_saved
@@ -331,6 +349,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: '查看模型回复中的完整简报与机会点。' }],
         }),
         async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'llm-required')
           const body: Record<string, unknown> = { period: args.period ?? 'now' }
           if (args.scope !== undefined) body.scope = args.scope
           if (args.tickers !== undefined) body.tickers = args.tickers
@@ -369,6 +388,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: `已保存 ${String((result as { saved?: number }).saved ?? 0)} 只自选股。` }],
         }),
         async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
           const tickers = (args as { tickers: string[] }).tickers
           return (await setWatchlist(resolvedConfig.adapterBaseUrl, tickers, exec.signal)) as { saved?: number }
         },
@@ -406,6 +426,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: `已保存 ${String((result as { saved?: number }).saved ?? 0)} 条持仓。` }],
         }),
         async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
           const holdings = ((args as { holdings: unknown }).holdings ?? []) as HoldingInput[]
           return (await saveHoldings(resolvedConfig.adapterBaseUrl, holdings, exec.signal)) as { saved?: number }
         },
@@ -434,6 +455,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: JSON.stringify((result as { tickers?: string[] }).tickers ?? []) }],
         }),
         async execute(_args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
           return (await getWatchlist(resolvedConfig.adapterBaseUrl, exec.signal)) as { tickers?: string[] }
         },
       }),
@@ -480,6 +502,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: stringValue((result as { label?: string }).label ?? '') }],
         }),
         async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
           const riskProfile = stringValue(args.risk_profile)
           return (await setRiskProfile(resolvedConfig.adapterBaseUrl, riskProfile, exec.signal)) as {
             risk_profile?: string
@@ -520,6 +543,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: stringValue((result as { label?: string }).label ?? '') }],
         }),
         async execute(_args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
           return (await getRiskProfile(resolvedConfig.adapterBaseUrl, exec.signal)) as {
             risk_profile?: string
             label?: string
@@ -566,6 +590,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           content: [{ type: 'text', text: stringValue((result as { id?: string }).id ?? '暂无简报') }],
         }),
         async execute(_args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
           return (await getLatestBrief(resolvedConfig.adapterBaseUrl, exec.signal)) as {
             id?: string
             period?: string
@@ -595,9 +620,11 @@ function tradingBackend(config: Config): PythonBackendDefinition {
     healthPath: '/health',
     healthOk: { status: 'ok' },
     initCommand: { posix: './init.sh', windows: 'init.bat' },
-    managedEnv: process.env.ADAPTER_RUNNER === undefined
-      ? {}
-      : { ADAPTER_RUNNER: process.env.ADAPTER_RUNNER },
+    managedEnv: { ADAPTER_RUNNER: config.backendRunner ?? 'engine' },
+    credentialEnv: [
+      { ref: 'DEEPSEEK_API_KEY' as CredentialRef, env: 'DEEPSEEK_API_KEY', role: 'required' },
+      { ref: 'DEEPSEEK_API_KEY' as CredentialRef, env: 'OPENAI_API_KEY', role: 'required' },
+    ],
   }
 }
 
@@ -607,6 +634,22 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     const unregister = ctx.investmentPythonRuntime.register(tradingBackend(config))
     let lease: PythonBackendLease | undefined
     let disposeFeatures: (() => Promise<void>) | undefined
+    let disposeCapability: (() => void) | undefined
+    const disposeResources = async (): Promise<void> => {
+      try {
+        await disposeFeatures?.()
+      } finally {
+        try {
+          disposeCapability?.()
+        } finally {
+          try {
+            await lease?.release()
+          } finally {
+            unregister()
+          }
+        }
+      }
+    }
     try {
       lease = await ctx.investmentPythonRuntime.acquire('trading-core')
       const resolvedConfig: ResolvedConfig = {
@@ -617,24 +660,12 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
         pushSessions: config.pushSessions ?? [],
       }
       disposeFeatures = await setupFeatures(ctx, resolvedConfig)
-      return async () => {
-        try {
-          await disposeFeatures?.()
-        } finally {
-          try {
-            await lease?.release()
-          } finally {
-            unregister()
-          }
-        }
-      }
+      disposeCapability = ctx.investmentPythonRuntime.registerCapability({
+        backendId: 'trading-core', toolCount: 9, llm: 'required',
+      })
+      return disposeResources
     } catch (error) {
-      try {
-        await disposeFeatures?.()
-        await lease?.release()
-      } finally {
-        unregister()
-      }
+      await disposeResources()
       throw error
     }
   }, 'investment stock-analysis runtime lifecycle')

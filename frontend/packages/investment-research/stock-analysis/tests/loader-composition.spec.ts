@@ -19,6 +19,12 @@ class StubSubprocessRuntime extends Service {
   constructor(ctx: Context) { super(ctx, 'subprocess') }
 }
 
+class StubCredentials extends Service {
+  constructor(ctx: Context) { super(ctx, 'credentials') }
+  resolve() { return Promise.resolve(undefined) }
+  describe() { return Promise.resolve({ configured: false, writable: true }) }
+}
+
 afterEach(async () => {
   await context?.fiber.dispose()
   context = undefined
@@ -35,6 +41,7 @@ async function loadComposition(): Promise<Context> {
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
     "- name: '@test/subprocess'",
+    "- name: '@test/credentials'",
     "- name: '@deepseek-ai/dsh-investment-python-runtime'",
     "- name: '@deepseek-ai/dsh-investment-stock-analysis'",
     '  config:',
@@ -56,6 +63,7 @@ async function loadComposition(): Promise<Context> {
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRuntime],
     ['@test/subprocess', StubSubprocessRuntime],
+    ['@test/credentials', StubCredentials],
     ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],
     ['@deepseek-ai/dsh-investment-stock-analysis', StockAnalysis],
   ])

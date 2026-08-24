@@ -43,9 +43,26 @@ async function install(config: Plugin.Config = { backendMode: 'external', backen
     investmentPythonRuntime: {
       register(definition: { baseUrl: string }) { baseUrl = definition.baseUrl; return () => {} },
       async acquire() { return { id: 'market-watch', baseUrl, ownership: 'external', async release() {} } },
+      registerCapability() { return () => {} },
+      assertCapability() {},
     },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
   } as never, config)
+  return tools
+}
+
+async function installWithPreflight(assertCapability: (backendId: string, use: string) => void): Promise<RegisteredTool[]> {
+  const tools: RegisteredTool[] = []
+  await Plugin.apply({
+    async effect(callback: () => Promise<() => void>) { return callback() },
+    investmentPythonRuntime: {
+      register() { return () => {} },
+      async acquire() { return { id: 'market-watch', baseUrl: 'http://market.test', ownership: 'external', async release() {} } },
+      registerCapability() { return () => {} },
+      assertCapability,
+    },
+    tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
+  } as never, { backendMode: 'external', backendBaseUrl: 'http://market.test' })
   return tools
 }
 
@@ -161,5 +178,32 @@ describe('market-watch function plugin', () => {
     expect(byName.get('watch_add')!.output.render?.({}, { name: '茅台', code: '600519' })).toEqual([{ type: 'text', text: '✅ 已加入自选 茅台（600519）' }])
     expect(byName.get('watch_remove')!.output.render?.({}, { code: '600519', removed: false })).toEqual([{ type: 'text', text: '600519 不在自选' }])
     expect(byName.get('remove_alert')!.output.render?.({}, { id: 'a1', removed: true })).toEqual([{ type: 'text', text: '🗑 已删除规则 a1' }])
+  })
+
+  it('preflights every operation and permits the daily template fallback when enhancement is keyless', async () => {
+    const assertCapability = vi.fn()
+    const fetch = vi.fn(async () => new Response('{"id":"brief-1","period":"pre","content":"模板简报","llm_used":false}'))
+    vi.stubGlobal('fetch', fetch)
+    const byName = new Map((await installWithPreflight(assertCapability)).map(tool => [tool.name, tool]))
+    const argumentsByTool: Record<string, Record<string, unknown>> = {
+      watch_add: { code: '600519' }, watch_remove: { code: '600519' }, watch_list: {},
+      add_alert: { name: '规则', conditions: [] }, list_alerts: {}, remove_alert: { id: 'a1' },
+      scan_movers: {}, watch_overview: {}, tech_signal: { code: '600519' }, news_express: {}, daily_brief: {},
+    }
+    for (const [name, args] of Object.entries(argumentsByTool)) await byName.get(name)!.execute(args)
+    expect(assertCapability.mock.calls).toEqual([
+      ['market-watch', 'non-llm'], ['market-watch', 'non-llm'], ['market-watch', 'non-llm'],
+      ['market-watch', 'non-llm'], ['market-watch', 'non-llm'], ['market-watch', 'non-llm'],
+      ['market-watch', 'non-llm'], ['market-watch', 'non-llm'], ['market-watch', 'non-llm'],
+      ['market-watch', 'non-llm'], ['market-watch', 'llm-enhancement'],
+    ])
+    expect(await byName.get('daily_brief')!.execute({})).toMatchObject({ content: '模板简报', llm_used: false })
+    expect(fetch.mock.calls.some(([url]) => url === 'http://market.test/brief/generate')).toBe(true)
+
+    const blocked = vi.fn(() => { throw new Error('backend failed') })
+    const blockedTools = new Map((await installWithPreflight(blocked)).map(tool => [tool.name, tool]))
+    fetch.mockClear()
+    await expect(blockedTools.get('daily_brief')!.execute({})).rejects.toThrow('backend failed')
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
