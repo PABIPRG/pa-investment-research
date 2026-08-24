@@ -18,6 +18,7 @@ import { fakeHandle } from './fixtures/fake-handle.ts'
 
 const SECRET = 'sentinel-investment-secret-must-never-leak'
 const DEEPSEEK_API_KEY = 'DEEPSEEK_API_KEY' as CredentialRef
+const SECOND_API_KEY = 'SECOND_API_KEY' as CredentialRef
 const UNRELATED_API_KEY = 'UNRELATED_API_KEY' as CredentialRef
 const healthy: BackendHealthResult = {
   status: 'healthy',
@@ -28,6 +29,11 @@ const refused: BackendHealthResult = {
   status: 'refused',
   healthUrl: 'http://127.0.0.1:8000/health',
   error: new Error('refused'),
+}
+const occupied: BackendHealthResult = {
+  status: 'occupied',
+  healthUrl: 'http://127.0.0.1:8000/health',
+  httpStatus: 503,
 }
 
 const definitions: Record<InvestmentBackendId, PythonBackendDefinition> = {
@@ -111,6 +117,202 @@ function registerCapability(manager: ReadinessManager, definition: InvestmentCap
 }
 
 describe('investment readiness and capability preflight', () => {
+  it('marks an owned flight restart-required when its resolved credential changes before active publication', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-readiness-flight-update-'))
+    const projectDir = join(home, 'backend')
+    const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    const handle = fakeHandle()
+    const spawn = vi.fn(() => handle)
+    const resolved = Promise.withResolvers<ResolvedCredential | undefined>()
+    const health = Promise.withResolvers<BackendHealthResult>()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: { spawn } as unknown as SubprocessRuntime,
+      config: { dshHome: home },
+      checkHealth: async () => probes++ === 0 ? refused : health.promise,
+      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      executableExists: async () => true,
+      resolveCredential: async () => resolved.promise,
+      describeCredential: async () => ({ configured: true, source: 'file', writable: true }),
+    }) as InvestmentBackendManager & ReadinessManager
+    manager.register(definitions['trading-core'])
+    const acquiring = manager.acquire('trading-core')
+    resolved.resolve({ value: SECRET, source: 'file' })
+    await vi.waitFor(() => { expect(spawn).toHaveBeenCalledOnce() })
+    manager.credentialUpdated(DEEPSEEK_API_KEY)
+    health.resolve(healthy)
+    const lease = await acquiring
+    registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
+
+    expect(manager.readiness().backends[0]?.restartRequired).toBe(true)
+    expect(() => manager.assertCapability('trading-core', 'llm-required')).toThrow(/restart/i)
+    expect(() => manager.assertCapability('trading-core', 'llm-enhancement')).toThrow(/restart/i)
+    expect(JSON.stringify(manager.readiness())).not.toContain(SECRET)
+
+    handle.exit()
+    await lease.release()
+  })
+
+  it('does not mark restart-required when the update precedes credential resolution', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-readiness-before-resolve-'))
+    const projectDir = join(home, 'backend')
+    const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    const handle = fakeHandle()
+    let probes = 0
+    const resolveCredential = vi.fn(async () => ({ value: SECRET, source: 'file' }))
+    const manager = new InvestmentBackendManager({
+      subprocess: { spawn: vi.fn(() => handle) } as unknown as SubprocessRuntime,
+      config: { dshHome: home },
+      checkHealth: async () => probes++ === 0 ? refused : healthy,
+      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      executableExists: async () => true,
+      resolveCredential,
+      describeCredential: async () => ({ configured: true, source: 'file', writable: true }),
+    }) as InvestmentBackendManager & ReadinessManager
+    manager.register(definitions['trading-core'])
+    manager.credentialUpdated(DEEPSEEK_API_KEY)
+    const lease = await manager.acquire('trading-core')
+    registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
+
+    expect(resolveCredential).toHaveBeenCalledOnce()
+    expect(manager.readiness().backends[0]?.restartRequired).toBe(false)
+    expect(() => manager.assertCapability('trading-core', 'llm-required')).not.toThrow()
+
+    handle.exit()
+    await lease.release()
+  })
+
+  it('marks an active backend failed after a non-healthy re-probe and rejects every capability use', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-readiness-reprobe-'))
+    const projectDir = join(home, 'backend')
+    const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    const handle = fakeHandle()
+    const results = [refused, healthy, occupied]
+    let probe = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: { spawn: vi.fn(() => handle) } as unknown as SubprocessRuntime,
+      config: { dshHome: home },
+      checkHealth: async () => results[Math.min(probe++, results.length - 1)]!,
+      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      executableExists: async () => true,
+      resolveCredential: async () => ({ value: SECRET, source: 'file' }),
+      describeCredential: async () => ({ configured: true, source: 'file', writable: true }),
+    }) as InvestmentBackendManager & ReadinessManager
+    manager.register(definitions['trading-core'])
+    const lease = await manager.acquire('trading-core')
+    registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
+
+    await expect(manager.acquire('trading-core')).rejects.toThrow(/occupied/)
+    const snapshot = manager.readiness()
+    expect(snapshot.backends[0]).toMatchObject({
+      ownership: 'owned',
+      backendStatus: 'failed',
+      capability: { status: 'unavailable' },
+    })
+    for (const use of ['llm-required', 'llm-enhancement', 'non-llm'] as const) {
+      const error = (() => {
+        try {
+          manager.assertCapability('trading-core', use)
+        } catch (reason) {
+          return reason as Error
+        }
+        throw new Error(`expected ${use} rejection`)
+      })()
+      expect(error.message).toMatch(/trading-core.*health/i)
+      expect(error.message).not.toContain(SECRET)
+    }
+    expect(JSON.stringify(snapshot)).not.toContain(SECRET)
+
+    handle.exit()
+    await lease.release()
+  })
+
+  it('keeps cleanup-failure ownership for teardown but projects it failed and rejects every capability use', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-readiness-cleanup-failure-'))
+    const projectDir = join(home, 'backend')
+    const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    const handle = fakeHandle()
+    void handle.done.catch(() => {})
+    handle.fail(new Error(`cleanup wait failed ${SECRET}`))
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: { spawn: vi.fn(() => handle) } as unknown as SubprocessRuntime,
+      config: { dshHome: home },
+      checkHealth: async () => probes++ === 0 ? refused : occupied,
+      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      executableExists: async () => true,
+      resolveCredential: async () => ({ value: SECRET, source: 'file' }),
+      describeCredential: async () => ({ configured: true, source: 'file', writable: true }),
+    }) as InvestmentBackendManager & ReadinessManager
+    manager.register(definitions['trading-core'])
+    const startupError = await manager.acquire('trading-core').catch(reason => reason as Error)
+    registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
+
+    expect(startupError).toBeInstanceOf(AggregateError)
+    expect(startupError.message).not.toContain(SECRET)
+    const snapshot = manager.readiness()
+    expect(snapshot.backends[0]).toMatchObject({
+      ownership: 'owned',
+      backendStatus: 'failed',
+      capability: { status: 'unavailable' },
+    })
+    for (const use of ['llm-required', 'llm-enhancement', 'non-llm'] as const) {
+      expect(() => manager.assertCapability('trading-core', use)).toThrow(/health/i)
+    }
+    expect(JSON.stringify({ snapshot, active: manager.invariantSnapshot() })).not.toContain(SECRET)
+  })
+
+  it('rejects required use with the actual missing ref when another required ref is configured', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-readiness-multiple-required-'))
+    const projectDir = join(home, 'backend')
+    const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    const handle = fakeHandle()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: { spawn: vi.fn(() => handle) } as unknown as SubprocessRuntime,
+      config: { dshHome: home },
+      checkHealth: async () => probes++ === 0 ? refused : healthy,
+      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      executableExists: async () => true,
+      resolveCredential: async ref => ref === DEEPSEEK_API_KEY
+        ? { value: SECRET, source: 'file' }
+        : undefined,
+      describeCredential: async ref => ref === DEEPSEEK_API_KEY
+        ? { configured: true, source: 'file', writable: true }
+        : { configured: false, writable: true },
+    }) as InvestmentBackendManager & ReadinessManager
+    manager.register({
+      ...definitions['trading-core'],
+      credentialEnv: [
+        { ref: DEEPSEEK_API_KEY, env: 'DEEPSEEK_API_KEY', role: 'required' },
+        { ref: SECOND_API_KEY, env: 'SECOND_API_KEY', role: 'required' },
+      ],
+    })
+    const lease = await manager.acquire('trading-core')
+    registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
+
+    const snapshot = manager.readiness()
+    expect(snapshot.backends[0]).toMatchObject({
+      credentials: [
+        { ref: DEEPSEEK_API_KEY, configured: true, status: 'configured' },
+        { ref: SECOND_API_KEY, configured: false, status: 'missing' },
+      ],
+      capability: { status: 'unavailable' },
+    })
+    expect(() => manager.assertCapability('trading-core', 'llm-required')).toThrow(SECOND_API_KEY)
+    expect(() => manager.assertCapability('trading-core', 'llm-enhancement')).not.toThrow()
+    expect(() => manager.assertCapability('trading-core', 'non-llm')).not.toThrow()
+    expect(JSON.stringify(snapshot)).not.toContain(SECRET)
+
+    handle.exit()
+    await lease.release()
+  })
+
   it('keeps keyless owned tools published while projecting required unavailable and enhancement template-only', async () => {
     const stock = await managedHarness('trading-core', undefined, { configured: false, writable: true })
     const market = await managedHarness('market-watch', undefined, { configured: false, writable: true })

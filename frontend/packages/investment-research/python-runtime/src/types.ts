@@ -50,7 +50,7 @@ export interface InvestmentBackendReadiness {
   /** Current verified ownership, or `null` while stopped. */
   readonly ownership: PythonBackendLease['ownership'] | null
   /** Current backend lifecycle projection. */
-  readonly backendStatus: 'stopped' | 'healthy-owned' | 'healthy-attached' | 'external'
+  readonly backendStatus: 'stopped' | 'healthy-owned' | 'healthy-attached' | 'external' | 'failed'
   /** Credential references and non-secret facts captured for this backend. */
   readonly credentials: readonly InvestmentCredentialReadiness[]
   /** Published capability, or `null` before or after business-tool registration. */

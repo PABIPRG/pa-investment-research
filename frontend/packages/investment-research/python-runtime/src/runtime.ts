@@ -47,6 +47,7 @@ interface RegistryEntry {
 interface ActiveEntryBase {
   readonly definition: PythonBackendDefinition
   refs: number
+  health: 'healthy' | 'failed'
 }
 
 type ActiveEntry =
@@ -72,6 +73,11 @@ interface StartupFlight {
   controller: AbortController
   promise: Promise<ActiveEntry>
   waiters: number
+}
+
+interface CredentialGenerationCapture {
+  readonly ref: CredentialRef
+  readonly generation: number
 }
 
 function asError(reason: unknown): Error {
@@ -236,6 +242,8 @@ export class InvestmentBackendManager {
   private readonly resolveLogPaths: LogPathResolver
   private readonly normalizeEnvironmentKey: EnvironmentKeyNormalizer
   private readonly readinessTracker = new InvestmentReadinessTracker()
+  private readonly credentialGenerations = new Map<CredentialRef, number>()
+  private readonly startupCredentialGenerations = new WeakMap<ActiveEntry, readonly CredentialGenerationCapture[]>()
   /** Injectable filesystem and timing operations retained for deterministic lifecycle tests. */
   readonly internals: {
     executableExists: (path: string) => Promise<boolean>
@@ -323,6 +331,7 @@ export class InvestmentBackendManager {
    */
   credentialUpdated(ref: CredentialRef): void {
     if (this.disposed) return
+    this.credentialGenerations.set(ref, (this.credentialGenerations.get(ref) ?? 0) + 1)
     for (const entry of this.active.values()) {
       if (entry.ownership !== 'owned') continue
       if (entry.definition.credentialEnv?.some(credential => credential.ref === ref) === true) {
@@ -358,8 +367,10 @@ export class InvestmentBackendManager {
       const probe = this.track(this.checkHealth(registered.definition, { signal: probeSignal }))
       const health = await waitWithSignal(probe, probeSignal)
       if (health.status !== 'healthy') {
+        entry.health = 'failed'
         throw new Error(`investment Python backend "${id}" health is ${health.status}`)
       }
+      entry.health = 'healthy'
       if (this.active.get(id) !== entry || this.stopping.has(id)) return this.acquire(id, signal)
     }
     if (entry === undefined) {
@@ -375,6 +386,7 @@ export class InvestmentBackendManager {
               /* v8 ignore next -- both messages describe the same defensive publication race. */
               throw new Error(this.disposed ? 'investment Python runtime is disposed' : 'investment Python backend acquisition cancelled')
             }
+            this.applyCredentialUpdatesDuringStartup(started)
             this.active.set(id, started)
             return started
           })
@@ -454,13 +466,19 @@ export class InvestmentBackendManager {
   private async resolveCredentialEnv(definition: PythonBackendDefinition): Promise<Readonly<{
     environment: Readonly<Record<string, string>> | undefined
     facts: readonly RuntimeCredentialFact[]
+    generations: readonly CredentialGenerationCapture[]
   }>> {
-    if (definition.credentialEnv === undefined) return { environment: undefined, facts: [] }
+    if (definition.credentialEnv === undefined) return { environment: undefined, facts: [], generations: [] }
     const values = new Map<CredentialRef, string | undefined>()
     const facts = new Map<CredentialRef, RuntimeCredentialFact>()
+    const generations = new Map<CredentialRef, CredentialGenerationCapture>()
     const environment: Record<string, string> = {}
     for (const credential of definition.credentialEnv) {
       if (!values.has(credential.ref)) {
+        generations.set(credential.ref, {
+          ref: credential.ref,
+          generation: this.credentialGenerations.get(credential.ref) ?? 0,
+        })
         let resolved: string | ResolvedCredential | undefined
         try {
           resolved = await this.resolveCredential(credential.ref)
@@ -491,6 +509,7 @@ export class InvestmentBackendManager {
     return Object.freeze({
       environment: Object.keys(environment).length === 0 ? undefined : environment,
       facts: Object.freeze([...facts.values()].sort((left, right) => left.ref.localeCompare(right.ref))),
+      generations: Object.freeze([...generations.values()]),
     })
   }
 
@@ -499,7 +518,7 @@ export class InvestmentBackendManager {
     const health = await this.checkHealth(definition, { signal })
     signal.throwIfAborted()
     if (health.status === 'healthy') {
-      return { definition, ownership: definition.mode === 'external' ? 'external' : 'attached', refs: 0 }
+      return { definition, ownership: definition.mode === 'external' ? 'external' : 'attached', health: 'healthy', refs: 0 }
     }
     if (definition.mode === 'external' || health.status !== 'refused') {
       throw new Error(`investment Python backend "${definition.id}" health is ${health.status}`)
@@ -595,7 +614,7 @@ export class InvestmentBackendManager {
       }
 
       await writeOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state)
-      return {
+      const entry: ActiveEntry = {
         definition,
         ownership: 'owned',
         handle,
@@ -603,13 +622,16 @@ export class InvestmentBackendManager {
         state,
         credentials: resolvedCredentials.facts,
         restartRequired: false,
+        health: 'healthy',
         refs: 0,
       }
+      this.startupCredentialGenerations.set(entry, resolvedCredentials.generations)
+      return entry
     } catch (error) {
       try {
         await this.failOwned(handle, drain)
       } catch (cleanupError) {
-        this.active.set(definition.id, {
+        const retained: ActiveEntry = {
           definition,
           ownership: 'owned',
           handle,
@@ -617,8 +639,12 @@ export class InvestmentBackendManager {
           state,
           credentials: resolvedCredentials.facts,
           restartRequired: false,
+          health: 'failed',
           refs: 0,
-        })
+        }
+        this.startupCredentialGenerations.set(retained, resolvedCredentials.generations)
+        this.applyCredentialUpdatesDuringStartup(retained)
+        this.active.set(definition.id, retained)
         const original = this.startupFailureMessage(definition, error, log, spawnEnv)
         const cleanup = safeErrorMessage(cleanupError, spawnEnv)
         throw new AggregateError(
@@ -695,12 +721,22 @@ export class InvestmentBackendManager {
     return this.resolveLogPaths(this.config.dshHome, id).active
   }
 
+  private applyCredentialUpdatesDuringStartup(entry: ActiveEntry): void {
+    if (entry.ownership !== 'owned') return
+    const generations = this.startupCredentialGenerations.get(entry)
+    this.startupCredentialGenerations.delete(entry)
+    if (generations?.some(({ ref, generation }) => (this.credentialGenerations.get(ref) ?? 0) !== generation) === true) {
+      entry.restartRequired = true
+    }
+  }
+
   private readinessStates(): readonly BackendReadinessState[] {
     const states = new Map<InvestmentBackendId, BackendReadinessState>()
     for (const entry of this.definitions.values()) {
       states.set(entry.definition.id, {
         definition: entry.definition,
         ownership: null,
+        health: 'inactive',
         credentials: [],
         restartRequired: false,
       })
@@ -710,12 +746,14 @@ export class InvestmentBackendManager {
         ? {
           definition: entry.definition,
           ownership: entry.ownership,
+          health: entry.health,
           credentials: entry.credentials,
           restartRequired: entry.restartRequired,
         }
         : {
           definition: entry.definition,
           ownership: entry.ownership,
+          health: entry.health,
           credentials: [],
           restartRequired: false,
         })

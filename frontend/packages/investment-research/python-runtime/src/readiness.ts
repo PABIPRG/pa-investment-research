@@ -29,6 +29,8 @@ export interface BackendReadinessState {
   readonly definition: PythonBackendDefinition
   /** Verified ownership, or `null` while inactive. */
   readonly ownership: PythonBackendLease['ownership'] | null
+  /** Latest verified health, or inactive when no entry is active. */
+  readonly health: 'healthy' | 'failed' | 'inactive'
   /** Captured owned-child credential facts. */
   readonly credentials: readonly RuntimeCredentialFact[]
   /** Whether a referenced credential changed after the owned child started. */
@@ -75,20 +77,31 @@ function projectCredentials(state: BackendReadinessState): readonly InvestmentCr
   }))
 }
 
+function credentialCoverage(
+  state: BackendReadinessState,
+  role: 'required' | 'enhancement',
+): Readonly<{
+  refs: readonly CredentialRef[]
+  missing: CredentialRef | undefined
+  configured: boolean
+}> {
+  const refs = relevantCredentialRefs(state.definition, role)
+  const missing = refs.find(ref => !state.credentials.some(credential => credential.ref === ref && credential.configured))
+  return { refs, missing, configured: refs.length > 0 && missing === undefined }
+}
+
 function isConfigured(state: BackendReadinessState, definition: InvestmentCapabilityDefinition): boolean {
   if (state.ownership === 'attached' || state.ownership === 'external') return true
   if (state.ownership !== 'owned' || state.restartRequired) return false
   if (definition.llm === 'none') return true
-  const refs = relevantCredentialRefs(state.definition, definition.llm)
-  if (refs.length === 0) return false
-  return refs.every(ref => state.credentials.some(credential => credential.ref === ref && credential.configured))
+  return credentialCoverage(state, definition.llm).configured
 }
 
 function capabilityStatus(
   state: BackendReadinessState,
   definition: InvestmentCapabilityDefinition,
 ): InvestmentCapabilityReadiness['status'] {
-  if (state.ownership === null || state.restartRequired) return 'unavailable'
+  if (state.ownership === null || state.health !== 'healthy' || state.restartRequired) return 'unavailable'
   const configured = isConfigured(state, definition)
   if (definition.backendId === 'trading-core') return configured ? 'stock-full' : 'unavailable'
   if (definition.llm === 'enhancement' && !configured) return 'market-template-only'
@@ -96,6 +109,7 @@ function capabilityStatus(
 }
 
 function backendStatus(state: BackendReadinessState): InvestmentBackendReadiness['backendStatus'] {
+  if (state.health === 'failed') return 'failed'
   if (state.ownership === 'owned') return 'healthy-owned'
   if (state.ownership === 'attached') return 'healthy-attached'
   if (state.ownership === 'external') return 'external'
@@ -185,17 +199,24 @@ export class InvestmentReadinessTracker {
       const ref = state === undefined ? undefined : credentialRefs(state.definition)[0]
       throw new Error(this.errorMessage(backendId, ref, 'is not active with a registered capability', runtimeLogPath))
     }
+    if (state.health !== 'healthy') {
+      const ref = credentialRefs(state.definition)[0]
+      throw new Error(this.errorMessage(backendId, ref, 'failed its latest health check', runtimeLogPath))
+    }
     if (use === 'non-llm' || state.ownership === 'attached' || state.ownership === 'external') return
-    const ref = relevantCredentialRefs(state.definition, use === 'llm-required' ? 'required' : 'enhancement')[0]
-      ?? credentialRefs(state.definition)[0]
+    const coverage = credentialCoverage(state, use === 'llm-required' ? 'required' : 'enhancement')
+    const ref = coverage.refs[0] ?? credentialRefs(state.definition)[0]
     if (state.restartRequired) {
       throw new Error(this.errorMessage(state.definition.id, ref, 'must restart after its credential changed', runtimeLogPath))
     }
     if (use === 'llm-enhancement') return
-    const configured = ref !== undefined
-      && state.credentials.some(credential => credential.ref === ref && credential.configured)
-    if (!configured) {
-      throw new Error(this.errorMessage(state.definition.id, ref, 'requires a configured credential', runtimeLogPath))
+    if (!coverage.configured) {
+      throw new Error(this.errorMessage(
+        state.definition.id,
+        coverage.missing ?? ref,
+        'requires a configured credential',
+        runtimeLogPath,
+      ))
     }
   }
 
