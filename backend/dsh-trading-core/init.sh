@@ -24,4 +24,4 @@ env/bin/python -m pip install -r requirements.txt "$@"
 echo "[3/3] verifying Python imports..."
 env/bin/python -c "import fastapi, uvicorn; from adapter.app import app; print('Python imports OK')"
 
-echo "Initialization complete. Configure .env if engine mode needs credentials."
+echo "Initialization complete. Product users manage keys in the existing Models page; .env is only for standalone Python or compatibility development."

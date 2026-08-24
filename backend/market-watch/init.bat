@@ -43,5 +43,5 @@ echo [3/3] Verifying Python imports...
 env\Scripts\python.exe -c "import fastapi, uvicorn; from market_watch.app import app; print('Python imports OK')"
 if errorlevel 1 exit /b 1
 
-echo Initialization complete. Configure .env if optional services need credentials.
+echo Initialization complete. Product users manage keys in the existing Models page; .env is only for standalone Python or compatibility development.
 endlocal
