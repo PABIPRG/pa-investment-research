@@ -17,6 +17,42 @@ async function loadPrototype(): Promise<JSDOM> {
 }
 
 describe('投研对话交互稿', () => {
+  it('保留左侧七个产品路由并链接到原交互稿页面', async () => {
+    const dom = await loadPrototype()
+    const { document } = dom.window
+    const navigation = document.querySelector('[data-testid="route-navigation"]')
+
+    expect(document.querySelector('[data-testid="route-sidebar"]')?.classList.contains('sidebar'))
+      .toBe(true)
+    expect(document.querySelector('.brand-sub')?.textContent)
+      .toBe('v2.4.0 · 智能投研系统')
+    expect(navigation?.querySelectorAll('a')).toHaveLength(7)
+    expect(navigation?.querySelector('[data-route="ai-assistant"]')?.getAttribute('aria-current'))
+      .toBe('page')
+    expect(navigation?.querySelector('[data-route="opportunity"]')?.getAttribute('href'))
+      .toContain('pages/opportunity.html')
+    expect(navigation?.querySelector('[data-route="portfolio"]')?.getAttribute('href'))
+      .toContain('pages/portfolio.html')
+    expect(navigation?.querySelector('[data-route="opportunity"] .nav-badge')?.textContent)
+      .toBe('3个高潜力')
+    document.querySelector<HTMLElement>('[data-action="open-workspaces"]')?.click()
+    expect(document.querySelector('[data-testid="workspace-modal"]')).not.toBeNull()
+    dom.window.close()
+  })
+
+  it('左侧系统设置和帮助入口保持可交互', async () => {
+    const dom = await loadPrototype()
+    const { document } = dom.window
+
+    document.querySelector<HTMLElement>('[data-action="open-settings"]')?.click()
+    expect(document.querySelector('[data-testid="settings-modal"]')).not.toBeNull()
+    document.querySelector<HTMLElement>('[data-action="close-shell-modal"]')?.click()
+    document.querySelector<HTMLElement>('[data-action="open-help"]')?.click()
+    expect(document.querySelector('[data-testid="help-modal"]')?.textContent)
+      .toContain('投研智能体使用指引')
+    dom.window.close()
+  })
+
   it('新建会话并在首条消息后生成标题和助手回复', async () => {
     const dom = await loadPrototype()
     const { document, localStorage } = dom.window
@@ -47,6 +83,8 @@ describe('投研对话交互稿', () => {
 
     expect(document.querySelector('[data-testid="history-panel"]')?.getAttribute('data-collapsed'))
       .toBe('true')
+    expect(document.querySelector('[data-testid="history-marker"]')?.textContent)
+      .toContain('历史对话')
     expect(document.querySelector('[data-action="new-conversation"]')).not.toBeNull()
     dom.window.close()
   })
