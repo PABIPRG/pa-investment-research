@@ -180,6 +180,15 @@ class CredentialOutputRedactor {
   }
 }
 
+class OwnedStartupFailure extends Error {
+  constructor(
+    readonly kind: 'exited' | 'timed-out',
+    readonly fact?: string,
+  ) {
+    super(kind)
+  }
+}
+
 async function executableExists(path: string): Promise<boolean> {
   try {
     await access(path)
@@ -480,15 +489,13 @@ export class InvestmentBackendManager {
           throw new Error(`investment Python backend "${definition.id}" health is ${next.status}`)
         }
         if (spawnFailure !== undefined || outcome !== undefined) {
-          await drain(true)
           const fact = spawnFailure === undefined
             ? `exit ${String(outcome?.exitCode)}`
             : safeErrorMessage(spawnFailure, spawnEnv)
-          throw new Error(`investment Python backend "${definition.id}" exited before healthy (${fact})\n${log.tail()}`)
+          throw new OwnedStartupFailure('exited', fact)
         }
         if (this.internals.now() >= deadlineAt) {
-          await drain(true)
-          throw new Error(`investment Python backend "${definition.id}" startup timed out after ${this.config.startupTimeoutMs}ms\n${log.tail()}`)
+          throw new OwnedStartupFailure('timed-out')
         }
         await this.internals.sleep(this.config.healthPollMs)
       }
@@ -500,7 +507,7 @@ export class InvestmentBackendManager {
         await this.failOwned(handle, drain)
       } catch (cleanupError) {
         this.active.set(definition.id, { definition, ownership: 'owned', handle, log, state, refs: 0 })
-        const original = safeErrorMessage(error, spawnEnv)
+        const original = this.startupFailureMessage(definition, error, log, spawnEnv)
         const cleanup = safeErrorMessage(cleanupError, spawnEnv)
         throw new AggregateError(
           [new Error(original), new Error(cleanup)],
@@ -510,8 +517,26 @@ export class InvestmentBackendManager {
       await Promise.allSettled([
         clearOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state),
       ])
+      if (error instanceof OwnedStartupFailure) {
+        throw new Error(this.startupFailureMessage(definition, error, log, spawnEnv))
+      }
       throw error
     }
+  }
+
+  private startupFailureMessage(
+    definition: PythonBackendDefinition,
+    error: unknown,
+    log: BackendLog,
+    env: Readonly<Record<string, string | undefined>> | undefined,
+  ): string {
+    if (error instanceof OwnedStartupFailure) {
+      if (error.kind === 'exited') {
+        return `investment Python backend "${definition.id}" exited before healthy (${error.fact ?? 'unknown exit'})\n${log.tail()}`
+      }
+      return `investment Python backend "${definition.id}" startup timed out after ${this.config.startupTimeoutMs}ms\n${log.tail()}`
+    }
+    return `${safeErrorMessage(error, env)}\n${log.tail()}`
   }
 
   private async failOwned(handle: SubprocessHandle, drain: (final?: boolean) => Promise<void>): Promise<void> {
