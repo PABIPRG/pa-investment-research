@@ -14,6 +14,8 @@ Runtime 为每个活动 backend 保留最近一次成功健康结果的时间。
 
 新鲜度带有 generation（代次）。owned 进程退出、要求重启的凭据更新、teardown、dispose 和非健康探测都会让可复用结果失效。在退出或重启失效之前启动的探测，不能恢复旧代次。调用方取消只停止该调用方的等待，不会取消其他获取仍需要的共享探测。
 
+teardown 在旧探测期间改变代次时，验证会让回获取生命周期，由其等待 stopping 并解析替换 entry，而不是再次探测旧 entry。Runtime 跟踪有界探测包装器；timeout 或生命周期 signal 胜出后，不再跟踪注入的健康 promise，因此忽略 `AbortSignal` 的实现不能让 dispose 永久等待。cleanup 失败后保留的 owned entry 也会在后续恢复健康前安装同一个退出观察器。
+
 聚焦 Runtime 测试固定了并发共享、过期、新鲜结果复用、超时取消、进程退出失效、重启失效和非健康就绪结果。
 
 ## 考虑过的替代方案
@@ -28,4 +30,4 @@ Runtime 为每个活动 backend 保留最近一次成功健康结果的时间。
 
 对于一个活动 backend，新鲜度窗口内的 `N` 次获取不会增加探测。结果过期时，`N` 次并发获取只增加一次探测，而不是 `N` 次；该探测成功后，窗口内后续获取又会增加零次探测。慢探测现在会在配置的截止时间内失败，并明确报告 backend id 与时长。
 
-Runtime 最多会在 `healthFreshnessMs` 内复用健康结果，但生命周期与就绪失效会立即结束该窗口。本变更不修改 Typert transport、Host protocol、工作台 UI、聊天行为、backend 业务请求或 lease 归属。
+Runtime 最多会在 `healthFreshnessMs` 内复用健康结果，但生命周期与就绪失效会立即结束该窗口。即使注入的健康实现把自身已被忽略的 promise 留在 Runtime 所有权之外，dispose 仍会在有界工作结束后达到 Runtime 管理的 quiescence。本变更不修改 Typert transport、Host protocol、工作台 UI、聊天行为、backend 业务请求或 lease 归属。

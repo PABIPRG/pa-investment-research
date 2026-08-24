@@ -745,9 +745,7 @@ describe('InvestmentBackendManager', () => {
       config: { dshHome: current.home, healthTimeoutMs: 5 },
       checkHealth: async (_definition, options) => {
         probeSignal = options?.signal
-        return new Promise<BackendHealthResult>((_resolve, reject) => {
-          options?.signal?.addEventListener('abort', () => { reject(options.signal?.reason) }, { once: true })
-        })
+        return new Promise<BackendHealthResult>(() => {})
       },
     })
     manager.register({ ...definition, mode: 'external' })
@@ -844,7 +842,48 @@ describe('InvestmentBackendManager', () => {
     await second.release()
   })
 
-  it('aborts and awaits an active-entry health probe during disposal', async () => {
+  it('does not re-probe an owned entry that starts stopping during its stale health flight', async () => {
+    const gate = Promise.withResolvers<BackendHealthResult>()
+    const current = await harness()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthFreshnessMs: 0 },
+      checkHealth: async () => {
+        probes += 1
+        if (probes === 1) return refused
+        if (probes === 2) return healthy
+        if (probes === 3) return gate.promise
+        return healthy
+      },
+      resolvePaths: () => ({
+        source: 'source',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'env', 'bin', 'python'),
+      }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    const first = await manager.acquire('trading-core')
+    const acquiring = manager.acquire('trading-core')
+    await vi.waitFor(() => { expect(probes).toBe(3) })
+
+    const releasing = first.release()
+    expect(current.handle.terminateCalls).toBe(1)
+    gate.resolve(healthy)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(probes).toBe(3)
+
+    current.handle.exit()
+    await releasing
+    const second = await acquiring
+    expect(probes).toBe(4)
+    expect(second.ownership).toBe('attached')
+    await second.release()
+  })
+
+  it('aborts an active health probe without awaiting an uncooperative health promise', async () => {
     const gate = Promise.withResolvers<BackendHealthResult>()
     const current = await harness()
     let probes = 0
@@ -862,14 +901,11 @@ describe('InvestmentBackendManager', () => {
     await manager.acquire('trading-core')
     const acquiring = manager.acquire('trading-core')
     await vi.waitFor(() => { expect(probeSignal).toBeDefined() })
-    let disposed = false
-    const disposing = manager.dispose().then(() => { disposed = true })
+    const disposing = manager.dispose()
     await expect(acquiring).rejects.toThrow(/disposed/)
     expect(probeSignal?.aborted).toBe(true)
-    expect(disposed).toBe(false)
+    await expect(disposing).resolves.toBeUndefined()
     gate.resolve(healthy)
-    await disposing
-    expect(disposed).toBe(true)
   })
 
   it('normalizes a non-Error caller cancellation while probing an active entry', async () => {
@@ -1067,6 +1103,46 @@ describe('InvestmentBackendManager', () => {
     await expect(access(ownedBackendStatePath(current.home, 'trading-core'))).resolves.toBeUndefined()
     await expect(current.manager.dispose()).rejects.toThrow('runtime disposal failed')
     expect(current.manager.invariantSnapshot().active).toHaveLength(1)
+  })
+
+  it('observes exit after a cleanup-failure retained entry recovers health', async () => {
+    const current = await harness()
+    const occupied: BackendHealthResult = { status: 'occupied', healthUrl: 'x', httpStatus: 200 }
+    let probes = 0
+    let waits = 0
+    const waitForExit = current.handle.waitForExit.bind(current.handle)
+    current.handle.waitForExit = vi.fn(async () => {
+      waits += 1
+      if (waits === 1) throw new Error('cleanup wait failed')
+      return waitForExit()
+    })
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthFreshnessMs: 60_000 },
+      checkHealth: async () => {
+        probes += 1
+        if (probes === 1) return refused
+        if (probes === 2 || probes === 4) return occupied
+        return healthy
+      },
+      resolvePaths: () => ({
+        source: 'source',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'env', 'bin', 'python'),
+      }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    await expect(manager.acquire('trading-core')).rejects.toBeInstanceOf(AggregateError)
+    expect(manager.invariantSnapshot().active).toHaveLength(1)
+
+    const recovered = await manager.acquire('trading-core')
+    expect(probes).toBe(3)
+    current.handle.exit()
+    await Promise.resolve()
+    await expect(manager.acquire('trading-core')).rejects.toThrow(/occupied/)
+    expect(probes).toBe(4)
+    await recovered.release()
   })
 
   it('delegates the public Service API and awaits its Cordis teardown effect', async () => {

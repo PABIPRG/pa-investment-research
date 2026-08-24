@@ -14,6 +14,8 @@ The Runtime keeps the time of the last successful health result for each active 
 
 Freshness carries a generation. Owned-process exit, credential updates that require restart, teardown, disposal, and a non-healthy probe invalidate the reusable result. A probe started before an exit or restart invalidation cannot restore the older generation. Caller cancellation stops only that caller's wait; it does not cancel the shared probe needed by other acquisitions.
 
+When teardown changes a generation during a stale probe, verification yields to the acquisition lifecycle so it waits for stopping and resolves the replacement entry instead of probing the old entry again. The Runtime tracks the bounded probe wrapper, not an injected health promise after its timeout or lifetime signal wins, so an implementation that ignores `AbortSignal` cannot keep disposal pending forever. An owned entry retained after cleanup failure installs the same exit observer before later health recovery.
+
 Focused Runtime tests pin concurrent sharing, expiry, freshness reuse, timeout cancellation, process-exit invalidation, restart invalidation, and non-healthy readiness.
 
 ## Alternatives considered
@@ -28,4 +30,4 @@ Focused Runtime tests pin concurrent sharing, expiry, freshness reuse, timeout c
 
 For one active backend, `N` acquisitions inside the freshness window add zero probes. When the result is stale, `N` concurrent acquisitions add one probe rather than `N`; after that probe succeeds, later acquisitions inside the window again add zero. Slow probes now fail within the configured deadline with an actionable backend id and duration.
 
-The Runtime may reuse a healthy result for at most `healthFreshnessMs`, except that lifecycle and readiness invalidations end the window immediately. This change does not alter Typert transport, Host protocol, workbench UI, chat behavior, backend business requests, or lease ownership.
+The Runtime may reuse a healthy result for at most `healthFreshnessMs`, except that lifecycle and readiness invalidations end the window immediately. Disposal reaches Runtime-managed quiescence after bounded work settles, even though an injected health implementation can leave its own ignored promise pending outside Runtime ownership. This change does not alter Typert transport, Host protocol, workbench UI, chat behavior, backend business requests, or lease ownership.

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-24-investment-runtime-health-freshness.md
-2026-08-24-investment-runtime-health-freshness.md: 79295ae093169a9dd0ae60a5b998f206c0d8b3a2
-2026-08-24-investment-runtime-health-freshness.zh.md: 482ccac035bf86318be64bcca12eaaadc9561d76
+2026-08-24-investment-runtime-health-freshness.md: b95a7a8d4e18fda026e81fe339c5344ea232380f
+2026-08-24-investment-runtime-health-freshness.zh.md: 62eb43ca11cb9c589536cce4c3932397056d9b7b

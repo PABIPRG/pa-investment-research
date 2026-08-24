@@ -468,6 +468,7 @@ export class InvestmentBackendManager {
     }
     const health = await waitWithSignal(flight.promise, signal)
     if (entry.healthGeneration !== flight.generation) {
+      if (this.active.get(id) !== entry || this.stopping.has(id)) return
       return this.verifyActiveHealth(id, entry, signal)
     }
     if (health.status !== 'healthy') {
@@ -495,8 +496,7 @@ export class InvestmentBackendManager {
     const timer = setTimeout(() => { timeout.abort(timeoutError) }, this.config.healthTimeoutMs)
     const probeSignal = AbortSignal.any([signal, timeout.signal])
     try {
-      const probe = this.track(this.checkHealth(definition, { signal: probeSignal }))
-      return await waitWithSignal(probe, probeSignal)
+      return await waitWithSignal(this.checkHealth(definition, { signal: probeSignal }), probeSignal)
     } catch (error) {
       if (timeout.signal.aborted && !signal.aborted) throw timeoutError
       throw error
@@ -791,6 +791,7 @@ export class InvestmentBackendManager {
         this.startupCredentialGenerations.set(retained, resolvedCredentials.generations)
         this.applyCredentialUpdatesDuringStartup(retained)
         this.active.set(definition.id, retained)
+        this.observeOwnedExit(retained)
         const original = this.startupFailureMessage(definition, error, log, spawnEnv)
         const cleanup = safeErrorMessage(cleanupError, spawnEnv)
         throw new AggregateError(
