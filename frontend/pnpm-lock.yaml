@@ -1348,6 +1348,9 @@ importers:
 
   packages/bundle/investment-runtime:
     dependencies:
+      '@deepseek-ai/dsh-client-investment-research-runtime':
+        specifier: workspace:^
+        version: link:../../client/investment-research-runtime
       '@deepseek-ai/dsh-investment-python-runtime':
         specifier: workspace:^
         version: link:../../investment-research/python-runtime
@@ -1632,6 +1635,36 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+
+  packages/client/investment-research-runtime:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-api-gateway':
+        specifier: workspace:^
+        version: link:../../api/gateway
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: workspace:^
+        version: link:../../api/remotes
+      '@deepseek-ai/dsh-client-connection':
+        specifier: workspace:^
+        version: link:../connection
+      '@deepseek-ai/dsh-client-runtime':
+        specifier: workspace:^
+        version: link:../runtime
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../typert/protocol
+      '@deepseek-ai/dsh-typert-registry':
+        specifier: workspace:^
+        version: link:../../typert/registry
 
   packages/client/locale:
     dependencies:
