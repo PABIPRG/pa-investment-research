@@ -78,6 +78,11 @@ async function fixture() {
     listArchive: async () => ['python/', 'python/install/', 'python/install/bin/python3'],
     extractArchive: async (_archive: string, destination: string) => {
       await write(join(destination, 'python/install/bin/python3'), 'python')
+      await write(
+        join(destination, 'python/install/lib/python3.10/__pycache__/_collections_abc.cpython-310.pyc'),
+        'runtime bytecode cache',
+      )
+      await write(join(destination, 'python/install/lib/python3.10/site.pyc'), 'runtime bytecode cache')
     },
     runCommand,
   }

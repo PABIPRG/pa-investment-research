@@ -13,7 +13,12 @@ interface RuntimeDescriptor {
 }
 
 export interface SmokeInvestmentSidecarDependencies {
-  readonly runCommand?: (command: string, args: readonly string[], cwd: string) => Promise<number>
+  readonly runCommand?: (
+    command: string,
+    args: readonly string[],
+    cwd: string,
+    env: Readonly<Record<string, string>>,
+  ) => Promise<number>
 }
 
 function safePath(value: string): string {
@@ -26,9 +31,14 @@ function safePath(value: string): string {
   return value
 }
 
-async function defaultRunCommand(command: string, args: readonly string[], cwd: string): Promise<number> {
+async function defaultRunCommand(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env: Readonly<Record<string, string>>,
+): Promise<number> {
   return await new Promise<number>((resolveExit, reject) => {
-    const child = spawn(command, [...args], { cwd, stdio: 'inherit' })
+    const child = spawn(command, [...args], { cwd, env: { ...process.env, ...env }, stdio: 'inherit' })
     child.once('error', reject)
     child.once('exit', code => { resolveExit(code ?? 1) })
   })
@@ -83,10 +93,7 @@ export async function smokeInvestmentPythonSidecar(
   await verifyFiles(root, descriptor.files)
   const stateRoot = await mkdtemp(join(tmpdir(), 'dsh-investment-sidecar-smoke-'))
   const script = [
-    'import importlib, os, sys',
-    `os.environ["DSH_INVESTMENT_STATE_DIR"] = ${JSON.stringify(stateRoot)}`,
-    'os.environ["PYTHONDONTWRITEBYTECODE"] = "1"',
-    'sys.dont_write_bytecode = True',
+    'import importlib, sys',
     `sys.path[:0] = ${JSON.stringify([sitePackages, ...modules.map(entry => entry.projectDir)])}`,
     'for name in ("numpy", "pandas", "uvicorn"): importlib.import_module(name)',
     `modules = ${JSON.stringify(modules.map(entry => entry.module))}`,
@@ -98,8 +105,12 @@ export async function smokeInvestmentPythonSidecar(
   try {
     const exitCode = await (dependencies.runCommand ?? defaultRunCommand)(
       join(root, ...executable.split('/')),
-      ['-c', script],
+      ['-B', '-c', script],
       root,
+      {
+        DSH_INVESTMENT_STATE_DIR: stateRoot,
+        PYTHONDONTWRITEBYTECODE: '1',
+      },
     )
     if (exitCode !== 0) throw new Error(`investment Python sidecar smoke failed with exit code ${exitCode}`)
     await verifyFiles(root, descriptor.files)

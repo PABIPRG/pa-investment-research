@@ -197,6 +197,18 @@ async function copyBackend(source: string, destination: string): Promise<void> {
   }
 }
 
+async function removeBytecodeCaches(directory: string): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) {
+      if (entry.name.toLowerCase() === '__pycache__') await rm(path, { recursive: true, force: true })
+      else await removeBytecodeCaches(path)
+    } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.pyc')) {
+      await rm(path)
+    }
+  }
+}
+
 async function collectFiles(
   root: string,
   hashFile: (path: string) => Promise<string>,
@@ -307,6 +319,7 @@ export async function buildInvestmentPythonSidecar(
     for (const backend of BACKENDS) {
       await copyBackend(join(repoRoot, 'backend', backend), join(staging, 'backends', backend))
     }
+    await removeBytecodeCaches(staging)
     const [platform, arch] = target.split('-') as ['darwin' | 'win32', 'arm64' | 'x64']
     const descriptor: RuntimeDescriptor = {
       schemaVersion: 1,

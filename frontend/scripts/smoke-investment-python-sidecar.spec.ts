@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { smokeInvestmentPythonSidecar } from './smoke-investment-python-sidecar.ts'
+import {
+  smokeInvestmentPythonSidecar,
+  type SmokeInvestmentSidecarDependencies,
+} from './smoke-investment-python-sidecar.ts'
 
 const roots: string[] = []
 
@@ -44,20 +47,31 @@ async function fixture() {
 describe('investment Python sidecar smoke', () => {
   it('uses the sidecar interpreter to import native dependencies and verify both health routes', async () => {
     const { root } = await fixture()
-    const runCommand = vi.fn(async (_command: string, _args: readonly string[], _cwd: string) => 0)
+    let observedEnv: Readonly<Record<string, string>> | undefined
+    const runCommand = vi.fn<NonNullable<SmokeInvestmentSidecarDependencies['runCommand']>>(async (
+      _command: string,
+      _args: readonly string[],
+      _cwd: string,
+      env: Readonly<Record<string, string>>,
+    ) => {
+      observedEnv = env
+      return 0
+    })
     await smokeInvestmentPythonSidecar(root, { runCommand })
 
     expect(runCommand).toHaveBeenCalledOnce()
     const [command, args, cwd] = runCommand.mock.calls[0]!
     expect(command).toBe(join(root, 'runtime/bin/python3'))
     expect(cwd).toBe(root)
-    expect(args[0]).toBe('-c')
-    expect(args[1]).toContain('"numpy", "pandas", "uvicorn"')
-    expect(args[1]).toContain('DSH_INVESTMENT_STATE_DIR')
-    expect(args[1]).toContain('sys.dont_write_bytecode = True')
-    expect(args[1]).toContain('/health')
-    expect(args[1]).toContain('adapter.app:app')
-    expect(args[1]).toContain('market_watch.app:app')
+    expect(args[0]).toBe('-B')
+    expect(args[1]).toBe('-c')
+    expect(args[2]).toContain('"numpy", "pandas", "uvicorn"')
+    expect(args[2]).not.toContain('sys.dont_write_bytecode')
+    expect(args[2]).toContain('/health')
+    expect(args[2]).toContain('adapter.app:app')
+    expect(args[2]).toContain('market_watch.app:app')
+    expect(observedEnv?.DSH_INVESTMENT_STATE_DIR).toContain('dsh-investment-sidecar-smoke-')
+    expect(observedEnv?.PYTHONDONTWRITEBYTECODE).toBe('1')
   })
 
   it('rejects corrupt files before launch and reports interpreter/import failures', async () => {
