@@ -31,7 +31,8 @@ export interface InvestmentResearchRuntimeClient {
   subscribe(listener: () => void): () => void
   /**
    * Re-read readiness from the mounted investment Runtime Remote.
-   * @returns settlement after the latest response is published or superseded.
+   * @returns settlement after the response is published or superseded.
+   * @throws the current flight's Remote or transport failure; superseded and disposed flights settle quietly.
    */
   refresh(): Promise<void>
   /**
@@ -50,13 +51,18 @@ declare module '@deepseek-ai/cordis' {
 
 type InvestmentRemote = Context['remote']['investmentPythonRuntime']
 
+interface RefreshFlight {
+  readonly generation: number
+  readonly promise: Promise<void>
+}
+
 class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient {
   private readonly listeners = new Set<() => void>()
   private snapshot: InvestmentReadinessSnapshot = EMPTY_SNAPSHOT
   private serialized = JSON.stringify(EMPTY_SNAPSHOT)
   private generation = 0
   private loaded = false
-  private initialReadPending = false
+  private initialReadOwner: number | undefined
   private disposed = false
 
   constructor(private readonly remote: InvestmentRemote) {}
@@ -66,21 +72,44 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
   subscribe = (listener: () => void): (() => void) => {
     if (this.disposed) return () => {}
     this.listeners.add(listener)
-    if (!this.loaded && !this.initialReadPending) {
-      this.initialReadPending = true
-      void this.refresh()
-        .catch((error: unknown) => { this.reportRefreshFailure('initial subscription', error) })
-        .finally(() => { this.initialReadPending = false })
+    if (!this.loaded && this.initialReadOwner === undefined) {
+      const flight = this.startRefresh()
+      if (flight !== undefined) {
+        this.initialReadOwner = flight.generation
+        this.observeBackground(flight.promise, 'initial subscription')
+      }
     }
     return () => { this.listeners.delete(listener) }
   }
 
-  async refresh(): Promise<void> {
-    if (this.disposed) return
+  refresh(): Promise<void> {
+    return this.startRefresh()?.promise ?? Promise.resolve()
+  }
+
+  private startRefresh(): RefreshFlight | undefined {
+    if (this.disposed) return undefined
     const generation = ++this.generation
-    const result = await this.remote.readiness()
+    // While no snapshot has loaded, each newer refresh owns the initial-read
+    // admission token so an older settlement cannot reopen it early.
+    if (this.initialReadOwner !== undefined) this.initialReadOwner = generation
+    const promise = this.settleRefresh(generation)
+    const releaseInitialRead = (): void => {
+      if (this.initialReadOwner === generation) this.initialReadOwner = undefined
+    }
+    void promise.then(releaseInitialRead, releaseInitialRead)
+    return { generation, promise }
+  }
+
+  private async settleRefresh(generation: number): Promise<void> {
+    let result: RemoteResult<InvestmentReadinessSnapshot>
+    try {
+      result = await this.remote.readiness()
+    } catch (error) {
+      if (this.isSuperseded(generation)) return
+      throw error
+    }
+    if (this.isSuperseded(generation)) return
     const next = unwrapRemote(result, 'readiness')
-    if (this.disposed || generation !== this.generation) return
     this.loaded = true
     const serialized = JSON.stringify(next)
     if (serialized === this.serialized) return
@@ -95,7 +124,8 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
   }
 
   refreshInBackground(reason: string): void {
-    void this.refresh().catch((error: unknown) => { this.reportRefreshFailure(reason, error) })
+    const flight = this.startRefresh()
+    if (flight !== undefined) this.observeBackground(flight.promise, reason)
   }
 
   dispose(): void {
@@ -120,6 +150,14 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
 
   private reportRefreshFailure(reason: string, error: unknown): void {
     console.error(`investment Runtime Client: ${reason} refresh failed:`, error)
+  }
+
+  private observeBackground(promise: Promise<void>, reason: string): void {
+    void promise.catch((error: unknown) => { this.reportRefreshFailure(reason, error) })
+  }
+
+  private isSuperseded(generation: number): boolean {
+    return this.disposed || generation !== this.generation
   }
 }
 
