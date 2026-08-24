@@ -23,9 +23,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14-xlarge
+          - runner: macos-14
             target: darwin-arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             target: darwin-x64
           - runner: windows-latest
             target: win32-x64
