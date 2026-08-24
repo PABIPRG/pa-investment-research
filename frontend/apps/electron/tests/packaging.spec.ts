@@ -63,6 +63,10 @@ describe('Electron investment sidecar packaging', () => {
     expect(options).toEqual(expect.objectContaining({
       dir: plan.stagingDir,
       extraResource: [plan.sidecarDir],
+      osxSign: {
+        identity: '-',
+        identityValidation: false,
+      },
     }))
   })
 

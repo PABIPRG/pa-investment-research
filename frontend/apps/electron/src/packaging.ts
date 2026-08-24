@@ -116,6 +116,12 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     name: APP_NAME,
     out: input.outDir,
     overwrite: true,
+    ...(input.platform === 'darwin' ? {
+      osxSign: {
+        identity: '-',
+        identityValidation: false,
+      },
+    } : {}),
     platform: input.platform,
     prune: false,
   }
