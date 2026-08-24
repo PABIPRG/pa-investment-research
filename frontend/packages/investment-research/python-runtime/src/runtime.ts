@@ -80,6 +80,12 @@ interface CredentialGenerationCapture {
   readonly generation: number
 }
 
+interface StableCredentialRead {
+  readonly value: string | undefined
+  readonly fact: RuntimeCredentialFact
+  readonly generation: CredentialGenerationCapture
+}
+
 function asError(reason: unknown): Error {
   return reason instanceof Error ? reason : new Error(String(reason))
 }
@@ -475,33 +481,10 @@ export class InvestmentBackendManager {
     const environment: Record<string, string> = {}
     for (const credential of definition.credentialEnv) {
       if (!values.has(credential.ref)) {
-        generations.set(credential.ref, {
-          ref: credential.ref,
-          generation: this.credentialGenerations.get(credential.ref) ?? 0,
-        })
-        let resolved: string | ResolvedCredential | undefined
-        try {
-          resolved = await this.resolveCredential(credential.ref)
-        } catch {
-          throw new Error(`investment Python backend "${definition.id}" credential "${credential.ref}" resolution failed`)
-        }
-        let info: CredentialInfo | undefined
-        if (this.describeCredential !== undefined) {
-          try {
-            info = await this.describeCredential(credential.ref)
-          } catch {
-            throw new Error(`investment Python backend "${definition.id}" credential "${credential.ref}" description failed`)
-          }
-        }
-        const value = typeof resolved === 'string' ? resolved : resolved?.value
-        const source = typeof resolved === 'string' ? info?.source ?? 'resolver' : resolved?.source
-        values.set(credential.ref, value)
-        facts.set(credential.ref, Object.freeze({
-          ref: credential.ref,
-          configured: value !== undefined,
-          ...(value === undefined || source === undefined ? {} : { source }),
-          writable: info?.writable ?? true,
-        }))
+        const stable = await this.resolveStableCredential(definition.id, credential.ref)
+        values.set(credential.ref, stable.value)
+        facts.set(credential.ref, stable.fact)
+        generations.set(credential.ref, stable.generation)
       }
       const value = values.get(credential.ref)
       if (value !== undefined) environment[credential.env] = value
@@ -511,6 +494,42 @@ export class InvestmentBackendManager {
       facts: Object.freeze([...facts.values()].sort((left, right) => left.ref.localeCompare(right.ref))),
       generations: Object.freeze([...generations.values()]),
     })
+  }
+
+  private async resolveStableCredential(
+    backendId: InvestmentBackendId,
+    ref: CredentialRef,
+  ): Promise<StableCredentialRead> {
+    for (;;) {
+      const generation = this.credentialGenerations.get(ref) ?? 0
+      let resolved: string | ResolvedCredential | undefined
+      try {
+        resolved = await this.resolveCredential(ref)
+      } catch {
+        throw new Error(`investment Python backend "${backendId}" credential "${ref}" resolution failed`)
+      }
+      let info: CredentialInfo | undefined
+      if (this.describeCredential !== undefined) {
+        try {
+          info = await this.describeCredential(ref)
+        } catch {
+          throw new Error(`investment Python backend "${backendId}" credential "${ref}" description failed`)
+        }
+      }
+      if ((this.credentialGenerations.get(ref) ?? 0) !== generation) continue
+      const value = typeof resolved === 'string' ? resolved : resolved?.value
+      const source = typeof resolved === 'string' ? info?.source ?? 'resolver' : resolved?.source
+      return {
+        value,
+        fact: Object.freeze({
+          ref,
+          configured: value !== undefined,
+          ...(value === undefined || source === undefined ? {} : { source }),
+          writable: info?.writable ?? true,
+        }),
+        generation: Object.freeze({ ref, generation }),
+      }
+    }
   }
 
   private async start(definition: PythonBackendDefinition, signal: AbortSignal): Promise<ActiveEntry> {

@@ -17,6 +17,8 @@ import type {
 import { fakeHandle } from './fixtures/fake-handle.ts'
 
 const SECRET = 'sentinel-investment-secret-must-never-leak'
+const OLD_SECRET = 'sentinel-old-investment-secret-must-never-leak'
+const NEW_SECRET = 'sentinel-new-investment-secret-must-never-leak'
 const DEEPSEEK_API_KEY = 'DEEPSEEK_API_KEY' as CredentialRef
 const SECOND_API_KEY = 'SECOND_API_KEY' as CredentialRef
 const UNRELATED_API_KEY = 'UNRELATED_API_KEY' as CredentialRef
@@ -117,6 +119,65 @@ function registerCapability(manager: ReadinessManager, definition: InvestmentCap
 }
 
 describe('investment readiness and capability preflight', () => {
+  it.each([
+    ['the new value', NEW_SECRET],
+    ['the old value', OLD_SECRET],
+  ] as const)('re-reads a credential when an update crosses a pending resolver returning %s', async (_case, firstValue) => {
+    const home = await mkdtemp(join(tmpdir(), 'investment-readiness-pending-resolve-'))
+    const projectDir = join(home, 'backend')
+    const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
+    await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
+    const handle = fakeHandle()
+    const spawn = vi.fn(() => handle)
+    const firstResolveEntered = Promise.withResolvers<void>()
+    const firstResolve = Promise.withResolvers<ResolvedCredential | undefined>()
+    let resolveCalls = 0
+    const resolveCredential = vi.fn(async () => {
+      resolveCalls += 1
+      if (resolveCalls === 1) {
+        firstResolveEntered.resolve()
+        return firstResolve.promise
+      }
+      return { value: NEW_SECRET, source: 'file' }
+    })
+    const describeCredential = vi.fn(async () => ({ configured: true, source: 'file', writable: true }))
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: { spawn } as unknown as SubprocessRuntime,
+      config: { dshHome: home },
+      checkHealth: async () => probes++ === 0 ? refused : healthy,
+      resolvePaths: () => ({ projectDir, pythonExecutable }),
+      executableExists: async () => true,
+      resolveCredential,
+      describeCredential,
+    }) as InvestmentBackendManager & ReadinessManager
+    manager.register(definitions['trading-core'])
+    const acquiring = manager.acquire('trading-core')
+    await firstResolveEntered.promise
+    expect(spawn).not.toHaveBeenCalled()
+    manager.credentialUpdated(DEEPSEEK_API_KEY)
+    firstResolve.resolve({ value: firstValue, source: 'file' })
+    const lease = await acquiring
+    registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
+
+    expect(resolveCredential).toHaveBeenCalledTimes(2)
+    expect(describeCredential).toHaveBeenCalledTimes(2)
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
+      env: expect.objectContaining({
+        DEEPSEEK_API_KEY: NEW_SECRET,
+        OPENAI_API_KEY: NEW_SECRET,
+      }),
+    }))
+    expect(manager.readiness().backends[0]?.restartRequired).toBe(false)
+    expect(() => manager.assertCapability('trading-core', 'llm-required')).not.toThrow()
+    const serialized = JSON.stringify(manager.readiness())
+    expect(serialized).not.toContain(OLD_SECRET)
+    expect(serialized).not.toContain(NEW_SECRET)
+
+    handle.exit()
+    await lease.release()
+  })
+
   it('marks an owned flight restart-required when its resolved credential changes before active publication', async () => {
     const home = await mkdtemp(join(tmpdir(), 'investment-readiness-flight-update-'))
     const projectDir = join(home, 'backend')
