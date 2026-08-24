@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "requirements": {
+    "backend/dsh-trading-core/requirements.txt": "2ab3ec6b2fcb5f80509643d124755bae408ce8c8fd4f56fabfc98b2d19c0a780",
+    "backend/market-watch/requirements.txt": "8ccd6f579039edeb2efba69301f4cd4d626b10b41f79a60cc820ab8af51fd39c"
+  },
+  "targets": {
+    "darwin-arm64": {
+      "pythonVersion": "3.10.20",
+      "archiveUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-aarch64-apple-darwin-install_only.tar.gz",
+      "archiveSha256": "5ce056c4294bc7155cdd98ea35ee764bffebb08854c4910eb433cc5f4e45e9a5",
+      "archiveRuntimeRoot": "python",
+      "archiveExecutable": "python/bin/python3",
+      "requirementsLock": "frontend/config/investment-python-requirements/darwin-arm64.txt",
+      "requirementsSha256": "eb340ca64f897c6d61c97f06fa05f30908ddf1d22c5c4946bbaecb94e507ff58"
+    },
+    "darwin-x64": {
+      "pythonVersion": "3.10.20",
+      "archiveUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-x86_64-apple-darwin-install_only.tar.gz",
+      "archiveSha256": "2dd748d347829d90cec271cdfe25cc6d87e105c27936fd20d1f50188cd0be096",
+      "archiveRuntimeRoot": "python",
+      "archiveExecutable": "python/bin/python3",
+      "requirementsLock": "frontend/config/investment-python-requirements/darwin-x64.txt",
+      "requirementsSha256": "eb340ca64f897c6d61c97f06fa05f30908ddf1d22c5c4946bbaecb94e507ff58"
+    },
+    "win32-x64": {
+      "pythonVersion": "3.10.20",
+      "archiveUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-x86_64-pc-windows-msvc-install_only.tar.gz",
+      "archiveSha256": "97a6d248dcd27d8abdf0fbf225d183c4a40d24a25b9ac2e146c82c64053bedaa",
+      "archiveRuntimeRoot": "python",
+      "archiveExecutable": "python/python.exe",
+      "requirementsLock": "frontend/config/investment-python-requirements/win32-x64.txt",
+      "requirementsSha256": "cabbaf0a33c14c5352ecb91b0ee9d15547681affcd226c94456975ec66774246"
+    }
+  }
+}

@@ -117,6 +117,9 @@ flowchart TD
   subgraph group_bundle["packages/bundle"]
     pkg_base["base"]
     pkg_headless["headless"]
+    pkg_investment_market_watch_bundle["investment-market-watch-bundle"]
+    pkg_investment_runtime_bundle["investment-runtime-bundle"]
+    pkg_investment_stock_analysis_bundle["investment-stock-analysis-bundle"]
     pkg_web_app["web-app"]
   end
   subgraph group_client["packages/client"]
@@ -226,6 +229,7 @@ flowchart TD
   end
   subgraph group_investment_research["packages/investment-research"]
     pkg_investment_market_watch["investment-market-watch"]
+    pkg_investment_python_runtime["investment-python-runtime"]
     pkg_investment_stock_analysis["investment-stock-analysis"]
   end
   subgraph group_jobs["packages/jobs"]
@@ -340,6 +344,9 @@ flowchart TD
   pkg_scope --> pkg_invariants
   pkg_cmdline --> pkg_invariants
   pkg_base --> pkg_invariants
+  pkg_investment_market_watch_bundle --> pkg_invariants
+  pkg_investment_runtime_bundle --> pkg_invariants
+  pkg_investment_stock_analysis_bundle --> pkg_invariants
   pkg_client_modules --> pkg_invariants
   pkg_client_schema_form --> pkg_invariants
   pkg_client_ui_attachment --> pkg_invariants
@@ -382,6 +389,8 @@ flowchart TD
   pkg_anonymous_user_id --> pkg_brand
   pkg_anonymous_user_id --> pkg_home_paths
   pkg_anonymous_user_id --> pkg_invariants
+  pkg_investment_python_runtime --> pkg_invariants
+  pkg_investment_python_runtime --> pkg_subprocess
   pkg_settings --> pkg_brand
   pkg_settings --> pkg_invariants
   pkg_storage_domain --> pkg_invariants
@@ -865,10 +874,12 @@ flowchart TD
   pkg_tool_ask_user --> pkg_tools
   pkg_tool_ask_user --> pkg_user_questions
   pkg_investment_market_watch --> pkg_invariants
+  pkg_investment_market_watch --> pkg_investment_python_runtime
   pkg_investment_market_watch --> pkg_session
   pkg_investment_market_watch --> pkg_tools
   pkg_investment_stock_analysis --> pkg_agent
   pkg_investment_stock_analysis --> pkg_invariants
+  pkg_investment_stock_analysis --> pkg_investment_python_runtime
   pkg_investment_stock_analysis --> pkg_llm
   pkg_investment_stock_analysis --> pkg_session
   pkg_investment_stock_analysis --> pkg_tools
@@ -1445,6 +1456,9 @@ flowchart TD
 | [`scope`](../packages/core/scope) | `core` | [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`cmdline`](../packages/boot/cmdline) | `boot` | [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`base`](../packages/bundle/base) | `bundle` | [`invariants`](../packages/runtime-diagnostics/invariants) |
+| [`investment-market-watch-bundle`](../packages/bundle/investment-market-watch) | `bundle` | [`invariants`](../packages/runtime-diagnostics/invariants) |
+| [`investment-runtime-bundle`](../packages/bundle/investment-runtime) | `bundle` | [`invariants`](../packages/runtime-diagnostics/invariants) |
+| [`investment-stock-analysis-bundle`](../packages/bundle/investment-stock-analysis) | `bundle` | [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`client-modules`](../packages/client/modules) | `client` | [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`client-schema-form`](../packages/client/schema-form) | `client` | [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`client-ui-attachment`](../packages/client/ui-attachment) | `client` | [`invariants`](../packages/runtime-diagnostics/invariants) |
@@ -1474,6 +1488,7 @@ flowchart TD
 | [`host-frontend-static`](../packages/host/frontend-static) | `host` | [`host-webserver`](../packages/host/webserver), [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`host-plugin-inventory`](../packages/host/plugin-inventory) | `host` | [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants), [`typert-protocol`](../packages/typert/protocol) |
 | [`anonymous-user-id`](../packages/identity/anonymous-user-id) | `identity` | [`brand`](../packages/util/brand), [`home-paths`](../packages/util/home-paths), [`invariants`](../packages/runtime-diagnostics/invariants) |
+| [`investment-python-runtime`](../packages/investment-research/python-runtime) | `investment-research` | [`invariants`](../packages/runtime-diagnostics/invariants), [`subprocess`](../packages/subprocess/subprocess) |
 | [`settings`](../packages/settings/settings) | `settings` | [`brand`](../packages/util/brand), [`invariants`](../packages/runtime-diagnostics/invariants) |
 | [`storage-domain`](../packages/storage/storage-domain) | `storage` | [`invariants`](../packages/runtime-diagnostics/invariants), [`storage`](../packages/storage/storage) |
 | [`storage-json`](../packages/storage/storage-json) | `storage` | [`invariants`](../packages/runtime-diagnostics/invariants), [`storage`](../packages/storage/storage) |
@@ -1576,8 +1591,8 @@ flowchart TD
 | [`repeat-tool-reminder`](../packages/guard/repeat-tool-reminder) | `guard` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`tools`](../packages/core/tools) |
 | [`tool-call-timeout-policy`](../packages/guard/timeout-policy) | `guard` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |
 | [`tool-ask-user`](../packages/interaction/tool-ask-user) | `interaction` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`tools`](../packages/core/tools), [`user-questions`](../packages/interaction/user-questions) |
-| [`investment-market-watch`](../packages/investment-research/market-watch) | `investment-research` | [`invariants`](../packages/runtime-diagnostics/invariants), [`session`](../packages/core/session), [`tools`](../packages/core/tools) |
-| [`investment-stock-analysis`](../packages/investment-research/stock-analysis) | `investment-research` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`tools`](../packages/core/tools) |
+| [`investment-market-watch`](../packages/investment-research/market-watch) | `investment-research` | [`invariants`](../packages/runtime-diagnostics/invariants), [`investment-python-runtime`](../packages/investment-research/python-runtime), [`session`](../packages/core/session), [`tools`](../packages/core/tools) |
+| [`investment-stock-analysis`](../packages/investment-research/stock-analysis) | `investment-research` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`investment-python-runtime`](../packages/investment-research/python-runtime), [`llm`](../packages/llm/llm), [`session`](../packages/core/session), [`tools`](../packages/core/tools) |
 | [`tool-jobs`](../packages/jobs/tool-jobs) | `jobs` | [`agent`](../packages/core/agent), [`invariants`](../packages/runtime-diagnostics/invariants), [`jobs`](../packages/jobs/jobs), [`llm`](../packages/llm/llm), [`output-retention`](../packages/util/output-retention), [`system-prompt`](../packages/core/system-prompt), [`tools`](../packages/core/tools) |
 | [`tool-lsp`](../packages/lsp/tool-lsp) | `lsp` | [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`lsp`](../packages/lsp/lsp), [`system-prompt`](../packages/core/system-prompt), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |
 | [`mcp-client`](../packages/mcp/mcp-client) | `mcp` | [`attachment`](../packages/attachment/attachment), [`invariants`](../packages/runtime-diagnostics/invariants), [`llm`](../packages/llm/llm), [`subprocess`](../packages/subprocess/subprocess), [`timeout`](../packages/util/timeout), [`tools`](../packages/core/tools) |

@@ -15,7 +15,7 @@ from .config import settings
 
 class JsonStore:
     def __init__(self, base_dir: Path | None = None):
-        self.base_dir = base_dir or (settings.root / "data")
+        self.base_dir = base_dir if base_dir is not None else settings.data_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.Lock] = {}
 

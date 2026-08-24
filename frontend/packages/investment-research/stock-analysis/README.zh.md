@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-该函数插件通过一个外部运行的 Python HTTP endpoint 注册股票分析工具。它持有 Cordis 注册、请求映射、SSE 消费和工具结果渲染；endpoint 持有行情数据、分析执行、存储以及任何外部投递。
+该函数插件通过从 [`ctx.investmentPythonRuntime`](../python-runtime/README.md) 租用的 Python HTTP endpoint 注册股票分析工具。它持有 backend 定义、Cordis 注册、请求映射、SSE 消费和工具结果渲染；Runtime 持有生命周期验证，endpoint 持有行情数据、分析执行、存储以及任何外部投递。
 
 ## 工具
 
@@ -12,7 +12,9 @@
 
 | 配置键 | 默认值 | 含义 |
 |---|---|---|
-| `adapterBaseUrl` | `http://127.0.0.1:8000` | 外部运行的股票分析 endpoint 的基础 URL。 |
+| `backendMode` | `managed` | `managed` 只启动明确 connection-refused 的本地 backend；`external` 只验证服务。 |
+| `backendBaseUrl` | `http://127.0.0.1:8000` | 注册到 Runtime，并通过 lease 提供给本插件的 backend URL。 |
+| `backendProjectDir` | — | 无法从源码 checkout 自动发现时，显式指定绝对 `backend/dsh-trading-core` 目录。 |
 | `streamTimeoutMs` | `600000` | 流式 endpoint 响应的最长等待时间。 |
 | `enableInChatPush` | `false` | 开启轮询未推送的最新简报，并将其投递给选定的活跃 agent。 |
 | `pushPollMs` | `120000` | 简报轮询间隔，单位为毫秒；插件强制最小值为 30 秒。 |
@@ -22,7 +24,7 @@
 
 `analyze_stock` 发起 `POST /analyze`；`analyze_holdings` 发起 `POST /holdings/analyze`；`market_brief` 发起 `POST /brief`。每个任务随后以 SSE 读取 `GET /analyze/<taskId>/stream`。插件通过 `exec.agent.inject()` 将 `stage` 消息映射为带插件来源的用户消息，且不唤醒 agent；它将 `result` 载荷保留为无损 JSON，并从该载荷渲染结果卡和 Markdown 报告。轻量状态工具通过 endpoint 的 JSON 路由访问自选列表、持仓、风险偏好和最新简报。
 
-所有工具注册和可选的简报轮询定时器均位于 Cordis effect 中，因此 dispose 插件会移除注册并清除定时器。插件不会启动、停止、监管或以其他方式管理 Python endpoint。
+插件激活时注册 `trading-core`，只把显式设置的 `ADAPTER_RUNNER` 转发给 owned managed 子进程，并在注册工具前获取经过验证的 lease。所有工具注册和可选的简报轮询定时器均位于 Cordis effect 中。dispose 时先移除它们，再释放 lease 并注销 backend 定义。进程创建与终止仍归 Runtime 持有。
 
 ## 失败与面向模型的行为
 
@@ -52,6 +54,6 @@ HTTP 响应失败时，工具调用会以 endpoint 状态和响应体拒绝。�
 
 ## 已知限制与延后工作
 
-- **外部 endpoint 生命周期** — 该包要求 `adapterBaseUrl` 上有独立运行的 Python endpoint；它既不启动也不监管该进程，因此 endpoint 不可用会使其工具失败。
+- **仓库之外的项目发现** — 不含源码 checkout 布局的 managed 部署必须配置绝对 `backendProjectDir`；缺少虚拟环境时会给出平台初始化命令并失败，绝不会自动安装。
 - **endpoint 持有的持久化与投递** — 自选列表、持仓、风险偏好、简报和外部推送调度仍由 endpoint 持有；只有可选的对话内简报轮询由本插件持有。
 - **生成工具目录的范围** — 生成的工具目录只枚举 `packages/*/tool-*` 包，因此这些 schema 由本包文档记录，而非目录条目。

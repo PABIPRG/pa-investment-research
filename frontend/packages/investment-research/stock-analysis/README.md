@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-This function plugin registers stock-analysis tools over an externally running Python HTTP endpoint. It owns the Cordis registrations, request mapping, SSE consumption, and tool-result rendering; the endpoint owns market data, analysis execution, storage, and any external delivery.
+This function plugin registers stock-analysis tools over a Python HTTP endpoint leased from [`ctx.investmentPythonRuntime`](../python-runtime/README.md). It owns the backend definition, Cordis registrations, request mapping, SSE consumption, and tool-result rendering; the Runtime owns lifecycle verification, and the endpoint owns market data, analysis execution, storage, and any external delivery.
 
 ## Tools
 
@@ -12,7 +12,9 @@ The plugin registers `analyze_stock`, `analyze_holdings`, and `market_brief` for
 
 | Key | Default | Meaning |
 |---|---|---|
-| `adapterBaseUrl` | `http://127.0.0.1:8000` | Base URL of the externally running stock-analysis endpoint. |
+| `backendMode` | `managed` | `managed` starts only a connection-refused local backend; `external` only verifies it. |
+| `backendBaseUrl` | `http://127.0.0.1:8000` | Backend URL registered with the Runtime and supplied to this plugin through its lease. |
+| `backendProjectDir` | — | Explicit absolute `backend/dsh-trading-core` directory when source-checkout discovery is unavailable. |
 | `streamTimeoutMs` | `600000` | Maximum time for a streaming endpoint response. |
 | `enableInChatPush` | `false` | Enables polling for an unpushed latest brief and delivering it to selected active agents. |
 | `pushPollMs` | `120000` | Brief-poll interval in milliseconds; the plugin enforces a 30-second minimum. |
@@ -22,7 +24,7 @@ The plugin registers `analyze_stock`, `analyze_holdings`, and `market_brief` for
 
 `analyze_stock` starts `POST /analyze`; `analyze_holdings` starts `POST /holdings/analyze`; and `market_brief` starts `POST /brief`. Each task then reads `GET /analyze/<taskId>/stream` as SSE. The plugin maps `stage` messages into plugin-sourced user messages through `exec.agent.inject()` without waking the agent, retains the `result` payload as lossless JSON, and renders result cards and Markdown reports from that payload. Lightweight state tools use the endpoint's JSON routes for watchlists, holdings, risk profiles, and the latest brief.
 
-All tool registrations and the optional brief-poll timer live in Cordis effects, so disposing the plugin removes registrations and clears the timer. The plugin does not start, stop, supervise, or otherwise manage the Python endpoint.
+On activation the plugin registers `trading-core`, forwards an explicitly set `ADAPTER_RUNNER` only to an owned managed child, and acquires a verified lease before registering tools. All tool registrations and the optional brief-poll timer live in Cordis effects. Disposal removes them first, releases the lease, and unregisters the backend definition. Process creation and termination remain Runtime-owned.
 
 ## Failures and model-visible behavior
 
@@ -52,6 +54,6 @@ Tool schemas are prefix-stable while registration is unchanged. Progress, result
 
 ## Known Limitations and Deferred Work
 
-- **External endpoint lifecycle** — the package requires a separately running Python endpoint at `adapterBaseUrl`; it neither launches nor supervises that process, so an unavailable endpoint makes its tools fail.
+- **Project discovery outside the repository** — managed deployments without the source checkout layout must configure an absolute `backendProjectDir`; a missing virtual environment fails with the platform-specific init command and is never installed automatically.
 - **Endpoint-owned persistence and delivery** — watchlists, holdings, risk profiles, briefs, and external push scheduling remain endpoint-owned; only the optional in-chat brief polling is owned by this plugin.
 - **Generated tool catalog scope** — the generated tool catalog enumerates `packages/*/tool-*` packages, so these schemas remain documented by this package rather than a catalog entry.

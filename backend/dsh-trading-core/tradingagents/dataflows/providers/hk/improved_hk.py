@@ -11,6 +11,7 @@ import pandas as pd
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 
+from adapter.config import settings as investment_settings
 from tradingagents.config.runtime_settings import get_int
 # 导入统一日志系统
 from tradingagents.utils.logging_init import get_logger
@@ -22,7 +23,15 @@ try:
 except Exception:
     # 回退：在项目根目录下的 data/cache/hk
     def get_cache_dir(subdir: Optional[str] = None, create: bool = True):
-        base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'cache')
+        base = (
+            str(investment_settings.cache_dir)
+            if investment_settings.state_root is not None
+            else os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                'data',
+                'cache',
+            )
+        )
         if subdir:
             base = os.path.join(base, subdir)
         if create:

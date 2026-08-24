@@ -15,9 +15,32 @@ ROOT = Path(__file__).resolve().parent.parent  # TradingAgents-CN/
 load_dotenv(ROOT / ".env", override=False)
 
 
+def _investment_state_root() -> Path | None:
+    raw = os.getenv("DSH_INVESTMENT_STATE_DIR", "").strip()
+    if not raw:
+        return None
+    root = Path(raw)
+    if not root.is_absolute():
+        raise ValueError("DSH_INVESTMENT_STATE_DIR 必须是绝对路径")
+    return root.resolve()
+
+
 class Settings:
     def __init__(self) -> None:
         self.root = ROOT
+        self.state_root = _investment_state_root()
+        if self.state_root is None:
+            self.data_dir = self.root / "data"
+            self.cache_dir = self.root / "tradingagents" / "dataflows" / "data_cache"
+            self.logs_dir = Path(os.getenv("TRADINGAGENTS_LOG_DIR", "./logs"))
+            self.state_dir = self.root
+            self.user_config_dir = self.root / "config"
+        else:
+            self.data_dir = self.state_root / "data"
+            self.cache_dir = self.state_root / "cache"
+            self.logs_dir = self.state_root / "logs"
+            self.state_dir = self.state_root / "state"
+            self.user_config_dir = self.state_root / "user-config"
         # 持仓数据源（功能3b）
         self.holdings_provider = os.getenv("HOLDINGS_PROVIDER", "manual")
         # 外部推送（功能4）

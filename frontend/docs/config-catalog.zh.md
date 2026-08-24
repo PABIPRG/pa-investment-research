@@ -300,7 +300,7 @@ export interface GoalConfig {
 
 ## `@deepseek-ai/dsh-agent-tool-presentation`
 
-需要：`tools`
+需要：`tools` · `investmentPythonRuntime`
 
 ```ts config-catalog
 /** Plugin config. */
@@ -846,24 +846,58 @@ export interface Config {
 ```ts config-catalog
 /** Market-watch adapter connection settings. */
 export interface Config {
-  /** Adapter origin used by all synchronous JSON tools. Defaults to `http://127.0.0.1:8100`. */
-  adapterBaseUrl?: string
+  /** Runtime ownership mode. Defaults to managed. */
+  backendMode?: 'managed' | 'external'
+  /** Backend origin verified by the runtime. Defaults to `http://127.0.0.1:8100`. */
+  backendBaseUrl?: string
+  /** Explicit absolute market-watch checkout when repository discovery is unavailable. */
+  backendProjectDir?: string
 }
 ```
 
-来源：[`packages/investment-research/market-watch/src/index.ts:40`](../packages/investment-research/market-watch/src/index.ts)
+来源：[`packages/investment-research/market-watch/src/index.ts:41`](../packages/investment-research/market-watch/src/index.ts)
+
+<a id="deepseek-aidsh-investment-python-runtime"></a>
+
+## `@deepseek-ai/dsh-investment-python-runtime`
+
+需要：`subprocess`
+
+```ts config-catalog
+/** Investment Python Runtime deployment configuration. */
+export interface Config {
+  /** Explicit Harness home for runtime logs and state. */
+  dshHome?: string
+  /** Maximum managed startup duration in milliseconds. */
+  startupTimeoutMs?: number
+  /** Delay between managed health probes in milliseconds. */
+  healthPollMs?: number
+  /** Grace period before process-tree termination escalates. */
+  shutdownGraceMs?: number
+  /** Maximum in-memory diagnostic log tail in bytes. */
+  logTailBytes?: number
+  /** Maximum active backend log size before rotation in bytes. */
+  logMaxBytes?: number
+}
+```
+
+来源：[`packages/investment-research/python-runtime/src/types.ts:46`](../packages/investment-research/python-runtime/src/types.ts)
 
 <a id="deepseek-aidsh-investment-stock-analysis"></a>
 
 ## `@deepseek-ai/dsh-investment-stock-analysis`
 
-需要：`tools` · `agents`
+需要：`tools` · `agents` · `investmentPythonRuntime`
 
 ```ts config-catalog
 /** Stock-analysis adapter, streaming, and optional in-chat brief settings. */
 export interface Config {
-  /** Adapter origin used by all stock-analysis tools. Defaults to `http://127.0.0.1:8000`. */
-  adapterBaseUrl?: string
+  /** Runtime ownership mode. Defaults to managed. */
+  backendMode?: 'managed' | 'external'
+  /** Backend origin verified by the runtime. Defaults to `http://127.0.0.1:8000`. */
+  backendBaseUrl?: string
+  /** Explicit absolute trading-core checkout when repository discovery is unavailable. */
+  backendProjectDir?: string
   /** Maximum SSE task duration in milliseconds. Defaults to 600000. */
   streamTimeoutMs?: number
   /** Enable periodic brief delivery to root agent sessions. Defaults to false. */
@@ -875,7 +909,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/investment-research/stock-analysis/src/index.ts:46`](../packages/investment-research/stock-analysis/src/index.ts)
+来源：[`packages/investment-research/stock-analysis/src/index.ts:47`](../packages/investment-research/stock-analysis/src/index.ts)
 
 <a id="deepseek-aidsh-jobs-local"></a>
 
@@ -3188,6 +3222,9 @@ export interface Config {
 - `@deepseek-ai/dsh-cmdline`（[`packages/boot/cmdline/src/index.ts`](../packages/boot/cmdline/src/index.ts)）
 - `@deepseek-ai/dsh-home-paths`（[`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts)）
 - `@deepseek-ai/dsh-hook-protocol`（[`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts)）
+- `@deepseek-ai/dsh-investment-market-watch-bundle`（[`packages/bundle/investment-market-watch/src/index.ts`](../packages/bundle/investment-market-watch/src/index.ts)）
+- `@deepseek-ai/dsh-investment-runtime-bundle`（[`packages/bundle/investment-runtime/src/index.ts`](../packages/bundle/investment-runtime/src/index.ts)）
+- `@deepseek-ai/dsh-investment-stock-analysis-bundle`（[`packages/bundle/investment-stock-analysis/src/index.ts`](../packages/bundle/investment-stock-analysis/src/index.ts)）
 - `@deepseek-ai/dsh-launch-environment`（[`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts)）
 - `@deepseek-ai/dsh-llm-mock-server`（[`packages/test-support/llm-mock-server/src/index.ts`](../packages/test-support/llm-mock-server/src/index.ts)）
 - `@deepseek-ai/dsh-loader-smoke`（[`packages/test-support/loader-smoke/src/index.ts`](../packages/test-support/loader-smoke/src/index.ts)）

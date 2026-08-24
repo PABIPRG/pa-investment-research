@@ -29,7 +29,7 @@ const invocation = parseDshArgs(process.argv.slice(2), readVersion())
 switch (invocation.mode) {
   case 'electron': {
     const { runElectronApplication } = await import('./electron.ts')
-    process.exit(await runElectronApplication())
+    process.exit(await runElectronApplication({ profile: invocation.profile }))
     break
   }
   case 'profile': {

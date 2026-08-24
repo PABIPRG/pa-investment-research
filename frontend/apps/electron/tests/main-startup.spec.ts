@@ -8,8 +8,14 @@
  * mocks the module body observes.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_SCHEME } from '../src/protocol.ts'
+
+const originalArgv = [...process.argv]
+
+afterEach(() => {
+  process.argv = [...originalArgv]
+})
 
 const mocks = vi.hoisted(() => {
   const ready = Promise.withResolvers<undefined>()
@@ -23,6 +29,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('electron', () => ({
   app: {
+    on: vi.fn(),
     requestSingleInstanceLock: mocks.requestSingleInstanceLock,
     quit: vi.fn(),
     whenReady: () => mocks.ready.promise,
@@ -43,7 +50,8 @@ vi.mock('@deepseek-ai/dsh/profile-boot', () => ({
 }))
 
 describe('Electron main startup', () => {
-  it('claims the scheme privileges and finishes evaluation before readiness, then boots the web profile', async () => {
+  it('claims the scheme privileges and finishes evaluation before readiness, then boots the selected profile', async () => {
+    process.argv = ['/electron', '/app', '--profile', 'investment-research']
     const loading = import('../src/main.ts')
     await vi.waitFor(() => { expect(mocks.requestSingleInstanceLock).toHaveBeenCalledOnce() })
 
@@ -63,7 +71,9 @@ describe('Electron main startup', () => {
 
     await vi.waitFor(() => { expect(mocks.runProfile).toHaveBeenCalledOnce() })
     expect(mocks.runProfile).toHaveBeenCalledWith(expect.objectContaining({
-      profile: 'web',
+      profile: 'investment-research',
+      patchFiles: [expect.stringMatching(/electron\.patch\.yml$/u)],
+      restart: expect.any(Function),
       watchPatches: false,
     }))
   })

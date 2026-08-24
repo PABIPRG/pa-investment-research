@@ -1,0 +1,69 @@
+name: Investment packaged sidecar
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-smoke:
+    name: ${{ matrix.target }} packaged smoke
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14-xlarge
+            target: darwin-arm64
+          - runner: macos-13
+            target: darwin-x64
+          - runner: windows-latest
+            target: win32-x64
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Verify native target
+        shell: bash
+        run: test "$(node -p "process.platform+'-'+process.arch")" = "${{ matrix.target }}"
+
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packaged application and sidecar
+        run: pnpm run package:electron
+
+      - name: Smoke packaged sidecar (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          descriptor=$(find apps/electron/out -path '*/Resources/investment-python/runtime.json' -print -quit)
+          test -n "$descriptor"
+          node scripts/smoke-investment-python-sidecar.ts --root "${descriptor%/runtime.json}"
+          app=$(find apps/electron/out -name '*.app' -type d -maxdepth 3 -print -quit)
+          test -n "$app"
+          codesign --deep --force --sign - "$app"
+          codesign --verify --deep --strict "$app"
+
+      - name: Smoke packaged sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $descriptor = Get-ChildItem apps/electron/out -Filter runtime.json -Recurse |
+            Where-Object { $_.FullName -match 'resources[\\/]investment-python[\\/]runtime.json$' } |
+            Select-Object -First 1
+          if ($null -eq $descriptor) { throw 'packaged investment sidecar not found' }
+          node scripts/smoke-investment-python-sidecar.ts --root $descriptor.Directory.FullName

@@ -25,6 +25,10 @@ const advancedScenarioDir = join(snapshotsDir, 'advanced-toolchain')
 const advancedSessionFixture = join(advancedScenarioDir, 'session.jsonl')
 const advancedStreamExpected = join(advancedScenarioDir, 'stream-json.expected.jsonl')
 const advancedConfigPath = fileURLToPath(new URL('../advanced.cordis.snapshot.yml', import.meta.url))
+const investmentScenarioDir = join(snapshotsDir, 'investment-research')
+const investmentSessionFixture = join(investmentScenarioDir, 'session.jsonl')
+const investmentStreamExpected = join(investmentScenarioDir, 'stream-json.expected.jsonl')
+const investmentConfigPath = fileURLToPath(new URL('../investment-research.cordis.snapshot.yml', import.meta.url))
 const ptyScenarioDir = join(snapshotsDir, 'pty-tools')
 const ptySessionFixture = join(ptyScenarioDir, 'session.jsonl')
 const ptyStreamExpected = join(ptyScenarioDir, 'stream-json.expected.jsonl')
@@ -73,6 +77,21 @@ interface DeepSeekDefaultsServer {
   readonly url: string
   readonly requests: JsonObject[]
   close(): Promise<void>
+}
+
+async function freeLoopbackPort(): Promise<number> {
+  const server = createServer()
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('snapshot port allocator has no port')
+  await new Promise<void>((resolve, reject) => server.close((error) => {
+    if (error === undefined) resolve()
+    else reject(error)
+  }))
+  return address.port
 }
 
 /** Serve one deterministic DeepSeek-compatible response while retaining its request body. */
@@ -643,6 +662,68 @@ describe('headless stream-json snapshots', () => {
     const normalized = normalizeHeadlessStream(result.stdout, runCwd)
     if (refreshing) await writeFile(advancedStreamExpected, normalized)
     expect(normalized).toBe(await readFile(advancedStreamExpected, 'utf8'))
+  }, LOADER_SMOKE_TEST_TIMEOUT_MS)
+
+  it('replays investment research HTTP, SSE progress, and Markdown without credentials', async () => {
+    const prompt = await scenarioPrompt(investmentScenarioDir, 'investment-research')
+    let expectedSession = await readFile(investmentSessionFixture, 'utf8')
+    const [tradingPort, marketPort] = await Promise.all([freeLoopbackPort(), freeLoopbackPort()])
+    let runCwd = ''
+    const result = await runLoaderSmoke({
+      label: 'investment research headless stream-json snapshot',
+      tempDirPrefix: 'headless-snapshot-investment-',
+      binScript,
+      libBinScript: binScript,
+      configPath: investmentConfigPath,
+      binArgs: [investmentConfigPath, prompt],
+      tsconfigPath,
+      env: {
+        DSH_SNAPSHOT: 'replay',
+        DSH_SNAPSHOT_FILE: investmentSessionFixture,
+        DSH_INVESTMENT_TRADING_PORT: String(tradingPort),
+        DSH_INVESTMENT_MARKET_PORT: String(marketPort),
+        DSH_INVESTMENT_TRADING_URL: `http://127.0.0.1:${tradingPort}`,
+        DSH_INVESTMENT_MARKET_URL: `http://127.0.0.1:${marketPort}`,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--disable-warning=ExperimentalWarning'].filter(Boolean).join(' '),
+      },
+      prepare: (cwd) => { runCwd = cwd },
+      inspect: async (cwd) => {
+        const logs = await persistedLogs(cwd)
+        expect(logs).toHaveLength(1)
+        const actual = logs[0]
+        if (actual === undefined) throw new Error('investment snapshot did not persist its session')
+        expect(actual.content).toContain('"name":"analyze_stock"')
+        expect(actual.content).toContain('"name":"watch_list"')
+        expect(actual.content).toContain('正在分析 600519')
+        expect(actual.content).toContain('市场阶段 Markdown')
+        expect(actual.content).toContain('平安银行')
+        const actualContext = contextFromLogs([actual.content])
+        if (refreshing) {
+          const harvested: HarvestedLog = {
+            id: String(actual.header.id),
+            createdAt: Number(actual.header.createdAt),
+            content: actual.content,
+          }
+          const replacements = refreshFixtureReplacements([harvested], [expectedSession])
+          expectedSession = tokenizeSessionFixtureCwd(
+            stabilizeRefreshLog(actual.content, expectedSession, replacements, actualContext),
+          )
+          await writeFile(investmentSessionFixture, expectedSession)
+        }
+        const expectedContext = contextFromLogs([expectedSession])
+        expect(scrubRequestHeaders(normalizeSessionLog(actual.content, actualContext)))
+          .toBe(scrubRequestHeaders(normalizeSessionLog(expectedSession, expectedContext)))
+      },
+    })
+
+    expect(result.stderr).toBe('')
+    expect(parseJsonl(result.stdout).at(-1)).toMatchObject({
+      type: 'result',
+      output: 'INVESTMENT_RESEARCH_OK',
+    })
+    const normalized = normalizeHeadlessStream(result.stdout, runCwd)
+    if (refreshing) await writeFile(investmentStreamExpected, normalized)
+    expect(normalized).toBe(await readFile(investmentStreamExpected, 'utf8'))
   }, LOADER_SMOKE_TEST_TIMEOUT_MS)
 
   it('replays persisted goal tools through the one-shot app', async () => {

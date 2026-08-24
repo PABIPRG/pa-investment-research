@@ -13,7 +13,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { internals, parseCmdline, provideCmdline } from '../src/index.ts'
 
 /** Every value one boot of the fixture tree observed. */
@@ -179,6 +179,21 @@ describe('parseCmdline', () => {
 })
 
 describe('provideCmdline', () => {
+  it('publishes the launcher restart callback only when the host provides one', () => {
+    const withoutRestart = new Context()
+    provideCmdline(withoutRestart, { args: [], exit: () => {} })
+    expect(withoutRestart.get('appRestart')).toBeUndefined()
+
+    const withRestart = new Context()
+    const restart = vi.fn()
+    provideCmdline(withRestart, { args: [], exit: () => {}, restart })
+
+    const published = withRestart.get('appRestart')
+    expect(published).toBe(restart)
+    published?.()
+    expect(restart).toHaveBeenCalledOnce()
+  })
+
   it('hands the app a snapshot the caller cannot mutate afterwards', () => {
     const ctx = new Context()
     const args = ['--resume', 'abc']

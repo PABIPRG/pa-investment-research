@@ -252,6 +252,15 @@ _PHASE_PERCENT = {
 }
 
 
+def eval_results_directory(config: Dict[str, Any], ticker: str) -> Path:
+    """返回分析状态日志目录；packaged 模式不得回写 Resources 或依赖 cwd。"""
+    return (
+        Path(config.get("eval_results_dir", "eval_results"))
+        / ticker
+        / "TradingAgentsStrategy_logs"
+    )
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -277,7 +286,7 @@ class TradingAgentsGraph:
 
         # Create necessary directories
         os.makedirs(
-            os.path.join(self.config["project_dir"], "dataflows/data_cache"),
+            self.config["data_cache_dir"],
             exist_ok=True,
         )
 
@@ -1313,13 +1322,10 @@ class TradingAgentsGraph:
         }
 
         # Save to file
-        directory = Path(f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/")
+        directory = eval_results_directory(self.config, self.ticker)
         directory.mkdir(parents=True, exist_ok=True)
 
-        with open(
-            f"eval_results/{self.ticker}/TradingAgentsStrategy_logs/full_states_log.json",
-            "w",
-        ) as f:
+        with (directory / "full_states_log.json").open("w", encoding="utf-8") as f:
             json.dump(self.log_states_dict, f, indent=4)
 
     def reflect_and_remember(self, returns_losses):

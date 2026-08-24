@@ -1929,6 +1929,32 @@
       "doc": "docs/subsystems/feedback.md",
       "symbol": "MessageFeedbackDeleteResult",
       "source": "packages/feedback/message-feedback/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/investment-research.md",
+      "symbol": "InvestmentBackendId",
+      "source": "packages/investment-research/python-runtime/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/investment-research.md",
+      "symbol": "InvestmentBackendMode",
+      "source": "packages/investment-research/python-runtime/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/investment-research.md",
+      "symbol": "PythonBackendDefinition",
+      "source": "packages/investment-research/python-runtime/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/investment-research.md",
+      "symbol": "PythonBackendLease",
+      "source": "packages/investment-research/python-runtime/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/investment-research.md",
+      "symbol": "InvestmentPythonRuntime",
+      "source": "packages/investment-research/python-runtime/src/index.ts",
+      "projection": "public-api"
     }
   ]
 }

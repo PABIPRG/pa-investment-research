@@ -32,6 +32,7 @@ type PanelProps = {
   renderSlot: SettingsRootComponentProps['renderSlot']
   activeId: string | undefined
   onSelect: (id: string) => void
+  openSection: (id: string) => void
   onClose: () => void
 }
 
@@ -40,11 +41,13 @@ type PanelProps = {
  * header button, a mask click, and document-level Escape (mounted only while
  * open, so the listener lifetime is the panel's).
  */
-function SettingsPanel({ rows, renderSlot, activeId, onSelect, onClose }: PanelProps) {
+function SettingsPanel({ rows, renderSlot, activeId, onSelect, openSection, onClose }: PanelProps) {
   // Entries can unmount underneath the requested id, so the render-time
   // projection falls back to the first row when the id is gone.
   const active = rows.find(r => r.id === activeId)?.id ?? rows[0]?.id
   const titleId = useId()
+  const activeNav = useRef<HTMLButtonElement | null>(null)
+  const previousActive = useRef(active)
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -57,6 +60,10 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, onClose }: PanelP
   // Baseline focus management: entering the dialog lands on the close button.
   const closeButton = useRef<HTMLButtonElement | null>(null)
   useEffect(() => { closeButton.current?.focus() }, [])
+  useEffect(() => {
+    if (previousActive.current !== active) activeNav.current?.focus()
+    previousActive.current = active
+  }, [active])
 
   return (
     <div className={css.overlay} role="presentation">
@@ -68,6 +75,7 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, onClose }: PanelP
             {rows.map(row => (
               <button
                 key={row.id}
+                ref={row.id === active ? activeNav : undefined}
                 type="button"
                 className={clsx(css.navCell, row.id === active && css.active)}
                 aria-current={row.id === active ? 'true' : undefined}
@@ -88,7 +96,10 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, onClose }: PanelP
             </button>
           </div>
           <div className={css.options}>
-            {active !== undefined && renderSlot('settings.section', { close: onClose }, { only: active })}
+            {active !== undefined && renderSlot('settings.section', {
+              close: onClose,
+              openSection,
+            }, { only: active })}
           </div>
         </div>
       </div>
@@ -156,6 +167,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
           renderSlot={renderSlot}
           activeId={activeId}
           onSelect={setActiveId}
+          openSection={openSection}
           onClose={close}
         />
       )}

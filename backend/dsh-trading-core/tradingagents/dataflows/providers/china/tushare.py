@@ -10,9 +10,15 @@ import logging
 import os
 from pathlib import Path
 
+from adapter.config import settings as investment_settings
+
 # 首先设置环境变量，在导入 tushare 之前，避免权限问题
 project_root = Path(__file__).resolve().parents[4]  # 从 tradingagents/dataflows/providers/china 往上4层
-tushare_cache_dir = project_root / "data" / "tushare"
+tushare_cache_dir = (
+    investment_settings.cache_dir / "tushare"
+    if investment_settings.state_root is not None
+    else project_root / "data" / "tushare"
+)
 tushare_cache_dir.mkdir(parents=True, exist_ok=True)
 os.environ["TS_CACHE_DIR"] = str(tushare_cache_dir)
 os.environ["TS_DATA_DIR"] = str(tushare_cache_dir)

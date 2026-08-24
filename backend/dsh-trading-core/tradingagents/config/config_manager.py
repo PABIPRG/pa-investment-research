@@ -20,6 +20,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from dotenv import load_dotenv
 
+from adapter.config import settings as investment_settings
+
 # 发出废弃警告
 warnings.warn(
     "ConfigManager is deprecated and will be removed in version 2.0 (2026-03-31). "
@@ -66,8 +68,12 @@ class ConfigManager:
     """配置管理器"""
 
     def __init__(self, config_dir: str = "config"):
-        self.config_dir = Path(config_dir)
-        self.config_dir.mkdir(exist_ok=True)
+        self.config_dir = (
+            investment_settings.user_config_dir
+            if investment_settings.state_root is not None
+            else Path(config_dir)
+        )
+        self.config_dir.mkdir(parents=True, exist_ok=True)
 
         self.models_file = self.config_dir / "models.json"
         self.pricing_file = self.config_dir / "pricing.json"
@@ -335,7 +341,11 @@ class ConfigManager:
         if not self.settings_file.exists():
             # 导入默认数据目录配置
             import os
-            default_data_dir = os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "data")
+            default_data_dir = (
+                str(investment_settings.data_dir)
+                if investment_settings.state_root is not None
+                else os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "data")
+            )
             
             default_settings = {
                 "default_provider": "dashscope",
@@ -346,8 +356,16 @@ class ConfigManager:
                 "auto_save_usage": True,
                 "max_usage_records": 10000,
                 "data_dir": default_data_dir,  # 数据目录配置
-                "cache_dir": os.path.join(default_data_dir, "cache"),  # 缓存目录
-                "results_dir": os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "results"),  # 结果目录
+                "cache_dir": (
+                    str(investment_settings.cache_dir)
+                    if investment_settings.state_root is not None
+                    else os.path.join(default_data_dir, "cache")
+                ),  # 缓存目录
+                "results_dir": (
+                    str(investment_settings.state_dir / "results")
+                    if investment_settings.state_root is not None
+                    else os.path.join(os.path.expanduser("~"), "Documents", "TradingAgents", "results")
+                ),  # 结果目录
                 "auto_create_dirs": True,  # 自动创建目录
                 "openai_enabled": False,  # OpenAI模型是否启用
             }
@@ -571,6 +589,14 @@ class ConfigManager:
             # 对于字符串，只有非空时才覆盖
             elif value != "" and value is not None:
                 settings[key] = value
+
+        # Packaged Resources 只读；state 根的写边界高于旧路径环境变量和用户 JSON。
+        if investment_settings.state_root is not None:
+            settings.update({
+                "data_dir": str(investment_settings.data_dir),
+                "cache_dir": str(investment_settings.cache_dir),
+                "results_dir": str(investment_settings.state_dir / "results"),
+            })
 
         # ② 环境变量覆盖后再规范化一次（保证 env 中传入的相对路径也被展开）
         settings = self._absolutize_paths(settings)
@@ -823,6 +849,8 @@ class TokenTracker:
 # 全局配置管理器实例 - 使用项目根目录的配置
 def _get_project_config_dir():
     """获取项目根目录的配置目录"""
+    if investment_settings.state_root is not None:
+        return str(investment_settings.user_config_dir)
     # 从当前文件位置推断项目根目录
     current_file = Path(__file__)  # tradingagents/config/config_manager.py
     project_root = current_file.parent.parent.parent  # 向上三级到项目根目录

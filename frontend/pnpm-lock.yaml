@@ -193,6 +193,15 @@ importers:
       '@deepseek-ai/dsh-home-paths':
         specifier: workspace:^
         version: link:../../packages/util/home-paths
+      '@deepseek-ai/dsh-investment-market-watch-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-market-watch
+      '@deepseek-ai/dsh-investment-runtime-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-runtime
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-stock-analysis
       '@deepseek-ai/dsh-jobs-local':
         specifier: workspace:^
         version: link:../../packages/jobs/jobs-local
@@ -380,6 +389,15 @@ importers:
       '@deepseek-ai/dsh-host-directory-picker-native':
         specifier: workspace:^
         version: link:../../packages/host/directory-picker-native
+      '@deepseek-ai/dsh-investment-market-watch-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-market-watch
+      '@deepseek-ai/dsh-investment-runtime-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-runtime
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle':
+        specifier: workspace:^
+        version: link:../../packages/bundle/investment-stock-analysis
     devDependencies:
       '@electron-forge/cli':
         specifier: 7.8.3
@@ -1312,6 +1330,57 @@ importers:
         specifier: workspace:^
         version: link:../../core/session
 
+  packages/bundle/investment-market-watch:
+    dependencies:
+      '@deepseek-ai/dsh-investment-market-watch':
+        specifier: workspace:^
+        version: link:../../investment-research/market-watch
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/bundle/investment-runtime:
+    dependencies:
+      '@deepseek-ai/dsh-client-investment-research-runtime':
+        specifier: workspace:^
+        version: link:../../client/investment-research-runtime
+      '@deepseek-ai/dsh-client-ui-settings-investment-research':
+        specifier: workspace:^
+        version: link:../../client/ui-settings-investment-research
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
+  packages/bundle/investment-stock-analysis:
+    dependencies:
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+      '@deepseek-ai/dsh-investment-stock-analysis':
+        specifier: workspace:^
+        version: link:../../investment-research/stock-analysis
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+
   packages/bundle/web-app:
     dependencies:
       '@deepseek-ai/dsh-agent-presets':
@@ -1569,6 +1638,36 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+
+  packages/client/investment-research-runtime:
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-api-gateway':
+        specifier: workspace:^
+        version: link:../../api/gateway
+      '@deepseek-ai/dsh-api-remotes':
+        specifier: workspace:^
+        version: link:../../api/remotes
+      '@deepseek-ai/dsh-client-connection':
+        specifier: workspace:^
+        version: link:../connection
+      '@deepseek-ai/dsh-client-runtime':
+        specifier: workspace:^
+        version: link:../runtime
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../investment-research/python-runtime
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../typert/protocol
+      '@deepseek-ai/dsh-typert-registry':
+        specifier: workspace:^
+        version: link:../../typert/registry
 
   packages/client/locale:
     dependencies:
@@ -2552,6 +2651,49 @@ importers:
       react:
         specifier: ^18.2.0
         version: 18.3.1
+
+  packages/client/ui-settings-investment-research:
+    dependencies:
+      clsx:
+        specifier: ^2.0.0
+        version: 2.1.1
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-client-investment-research-runtime':
+        specifier: workspace:^
+        version: link:../investment-research-runtime
+      '@deepseek-ai/dsh-client-locale':
+        specifier: workspace:^
+        version: link:../locale
+      '@deepseek-ai/dsh-client-runtime':
+        specifier: workspace:^
+        version: link:../runtime
+      '@deepseek-ai/dsh-client-ui-settings':
+        specifier: workspace:^
+        version: link:../ui-settings
+      '@deepseek-ai/dsh-client-ui-slots':
+        specifier: workspace:^
+        version: link:../ui-slots
+      '@deepseek-ai/dsh-client-web-react':
+        specifier: workspace:^
+        version: link:../web-react
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@types/react':
+        specifier: ~18.3.1
+        version: 18.3.31
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.2.0
+        version: 18.3.1(react@18.3.1)
 
   packages/client/ui-settings-models:
     devDependencies:
@@ -5173,6 +5315,9 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../python-runtime
       '@deepseek-ai/dsh-session':
         specifier: workspace:^
         version: link:../../core/session
@@ -5182,6 +5327,40 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: workspace:^
         version: link:../../core/tools
+
+  packages/investment-research/python-runtime:
+    dependencies:
+      '@deepseek-ai/dsh-atomic-write':
+        specifier: workspace:^
+        version: link:../../util/atomic-write
+      '@deepseek-ai/dsh-home-paths':
+        specifier: workspace:^
+        version: link:../../util/home-paths
+      '@deepseek-ai/dsh-timeout':
+        specifier: workspace:^
+        version: link:../../util/timeout
+      '@deepseek-ai/schemastery':
+        specifier: link:../../../vendor/schemastery
+        version: link:../../../vendor/schemastery
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: workspace:^
+        version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-credentials':
+        specifier: workspace:^
+        version: link:../../credentials/credentials
+      '@deepseek-ai/dsh-invariants':
+        specifier: workspace:^
+        version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-subprocess':
+        specifier: workspace:^
+        version: link:../../subprocess/subprocess
+      '@deepseek-ai/dsh-typert-protocol':
+        specifier: workspace:^
+        version: link:../../typert/protocol
 
   packages/investment-research/stock-analysis:
     dependencies:
@@ -5204,6 +5383,9 @@ importers:
       '@deepseek-ai/dsh-invariants':
         specifier: workspace:^
         version: link:../../runtime-diagnostics/invariants
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../python-runtime
       '@deepseek-ai/dsh-llm':
         specifier: workspace:^
         version: link:../../llm/llm

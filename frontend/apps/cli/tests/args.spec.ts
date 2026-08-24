@@ -30,7 +30,9 @@ describe('parseDshArgs', () => {
     expect(parse(['web'])).toEqual({ mode: 'profile', profile: 'web', patches: [], args: [] })
     expect(parse(['web', '--patch', 'web.yml']))
       .toEqual({ mode: 'profile', profile: 'web', patches: ['web.yml'], args: [] })
-    expect(parse(['electron'])).toEqual({ mode: 'electron' })
+    expect(parse(['electron'])).toEqual({ mode: 'electron', profile: 'web' })
+    expect(parse(['electron', '--profile', 'investment-research']))
+      .toEqual({ mode: 'electron', profile: 'investment-research' })
   })
 
   it('ends the launcher flags at the first token it does not own', () => {
@@ -99,6 +101,10 @@ describe('parseDshArgs', () => {
     expect(exitCode(['plugin', '--profile', 'tui'])).toBe(1) // nothing to forward
     expect(exitCode(['plugin', '--profile', ''])).toBe(1)
     expect(exitCode(['--profile', 'x', 'plugin', 'add', 'y'])).toBe(1)
+    expect(exitCode(['electron', '--profile'])).toBe(1)
+    expect(exitCode(['electron', '--profile='])).toBe(1)
+    expect(exitCode(['electron', '--profile', 'web', '--profile', 'investment-research'])).toBe(1)
+    expect(exitCode(['--profile', 'investment-research', 'electron'])).toBe(1)
   })
 
   it('keeps its own help for an invocation with no app to hand it to', () => {

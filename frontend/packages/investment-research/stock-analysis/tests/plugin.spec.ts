@@ -58,16 +58,39 @@ const STOCK_CONTRACTS = [
 
 afterEach(() => vi.unstubAllGlobals())
 
-function install(config: Plugin.Config = {
-  adapterBaseUrl: 'http://adapter.test', streamTimeoutMs: 1_000,
+async function install(config: Plugin.Config = {
+  backendMode: 'external', backendBaseUrl: 'http://adapter.test', streamTimeoutMs: 1_000,
   enableInChatPush: false, pushPollMs: 30_000, pushSessions: [],
-}): RegisteredTool[] {
+}): Promise<RegisteredTool[]> {
   const tools: RegisteredTool[] = []
-  Plugin.apply({
-    effect(callback: () => () => void) { callback() },
+  let baseUrl = config.backendBaseUrl ?? 'http://127.0.0.1:8000'
+  await Plugin.apply({
+    async effect(callback: () => Promise<() => void>) { return callback() },
+    investmentPythonRuntime: {
+      register(definition: { baseUrl: string }) { baseUrl = definition.baseUrl; return () => {} },
+      async acquire() { return { id: 'trading-core', baseUrl, ownership: 'external', async release() {} } },
+      registerCapability() { return () => {} },
+      assertCapability() {},
+    },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
     agents: { roots: () => [] },
   } as never, config)
+  return tools
+}
+
+async function installWithPreflight(assertCapability: (backendId: string, use: string) => void): Promise<RegisteredTool[]> {
+  const tools: RegisteredTool[] = []
+  await Plugin.apply({
+    async effect(callback: () => Promise<() => void>) { return callback() },
+    investmentPythonRuntime: {
+      register() { return () => {} },
+      async acquire() { return { id: 'trading-core', baseUrl: 'http://adapter.test', ownership: 'external', async release() {} } },
+      registerCapability() { return () => {} },
+      assertCapability,
+    },
+    tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
+    agents: { roots: () => [] },
+  } as never, { backendMode: 'external', backendBaseUrl: 'http://adapter.test', enableInChatPush: false })
   return tools
 }
 
@@ -75,7 +98,7 @@ describe('stock-analysis function plugin', () => {
   it('has only the preserved named function-plugin API', () => {
     const config: Plugin.Config = {}
     expect(Plugin.name).toBe('investment-stock-analysis')
-    expect(Plugin.inject).toEqual(['tools', 'agents'])
+    expect(Plugin.inject).toEqual(['tools', 'agents', 'investmentPythonRuntime'])
     expect(Plugin.apply).toBeTypeOf('function')
     expect(config).toEqual({})
   })
@@ -92,7 +115,7 @@ describe('stock-analysis function plugin', () => {
       }
       return new Response('{"saved":1,"tickers":[],"risk_profile":"balanced","label":"稳健","id":"b1"}')
     }))
-    const tools = install()
+    const tools = await install()
     const byName = new Map(tools.map(tool => [tool.name, tool]))
     expect(
       tools.map(({ name, description, parameters, output: { schema } }) => ({ name, description, parameters, schema })),
@@ -189,7 +212,7 @@ describe('stock-analysis function plugin', () => {
     await byName.get('get_risk_profile')!.execute({}, exec)
     await byName.get('get_latest_brief')!.execute({}, exec)
 
-    const defaults = new Map(install({}).map(tool => [tool.name, tool]))
+    const defaults = new Map((await install({})).map(tool => [tool.name, tool]))
     await defaults.get('analyze_stock')!.execute({ ticker: '600519' }, exec)
     await defaults.get('analyze_holdings')!.execute({}, exec)
     await defaults.get('market_brief')!.execute({}, exec)
@@ -218,11 +241,52 @@ describe('stock-analysis function plugin', () => {
     ])
   })
 
-  it('renders successful and empty adapter values without exposing transport errors as schemas', () => {
-    const byName = new Map(install().map(tool => [tool.name, tool]))
+  it('renders successful and empty adapter values without exposing transport errors as schemas', async () => {
+    const byName = new Map((await install()).map(tool => [tool.name, tool]))
     expect(byName.get('set_watchlist')!.output.render?.({}, { saved: 2 })).toEqual([{ type: 'text', text: '已保存 2 只自选股。' }])
     expect(byName.get('get_watchlist')!.output.render?.({}, { tickers: [] })[0]!.text).toContain('（空）')
     expect(byName.get('get_latest_brief')!.output.render?.({}, {})[0]!.text).toBe('暂无简报')
+  })
+
+  it('preflights every operation before its adapter HTTP or SSE side effect', async () => {
+    const assertCapability = vi.fn()
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/stream')) return new Response('event: result\ndata: {"signal":{},"reports":{},"performance_metrics":{}}\n\nevent: done\ndata: {}\n\n')
+      if (init?.method === 'POST' && (url.endsWith('/analyze') || url.endsWith('/holdings/analyze') || url.endsWith('/brief'))) return new Response('{"task_id":"t1"}')
+      return new Response('{"saved":1,"tickers":[],"risk_profile":"balanced","label":"稳健"}')
+    })
+    vi.stubGlobal('fetch', fetch)
+    const byName = new Map((await installWithPreflight(assertCapability)).map(tool => [tool.name, tool]))
+    const exec = { signal: new AbortController().signal }
+    await byName.get('analyze_stock')!.execute({ ticker: '600519' }, exec)
+    await byName.get('analyze_holdings')!.execute({}, exec)
+    await byName.get('market_brief')!.execute({}, exec)
+    await byName.get('set_watchlist')!.execute({ tickers: [] }, exec)
+    await byName.get('set_holdings')!.execute({ holdings: [] }, exec)
+    await byName.get('get_watchlist')!.execute({}, exec)
+    await byName.get('set_risk_profile')!.execute({ risk_profile: 'balanced' }, exec)
+    await byName.get('get_risk_profile')!.execute({}, exec)
+    await byName.get('get_latest_brief')!.execute({}, exec)
+    expect(assertCapability.mock.calls).toEqual([
+      ['trading-core', 'llm-required'], ['trading-core', 'llm-required'], ['trading-core', 'llm-required'],
+      ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
+      ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
+    ])
+
+    const blocked = vi.fn(() => { throw new Error('credential missing') })
+    const blockedTools = new Map((await installWithPreflight(blocked)).map(tool => [tool.name, tool]))
+    const agent = { inject: vi.fn() }
+    for (const [name, args] of [
+      ['analyze_stock', { ticker: '600519' }],
+      ['analyze_holdings', {}],
+      ['market_brief', {}],
+    ] as const) {
+      fetch.mockClear()
+      agent.inject.mockClear()
+      await expect(blockedTools.get(name)!.execute(args, { signal: new AbortController().signal, agent })).rejects.toThrow('credential missing')
+      expect(fetch).not.toHaveBeenCalled()
+      expect(agent.inject).not.toHaveBeenCalled()
+    }
   })
 
   it('retains presenter and saved-holdings fallbacks behind the validated public tool wrapper', async () => {
@@ -238,8 +302,14 @@ describe('stock-analysis function plugin', () => {
       requests.push([url, init?.method ?? 'GET', init?.body as string | undefined])
       return new Response('{"saved":0}')
     }))
-    rawPlugin.apply({
-      effect(callback: () => () => void) { callback() },
+    await rawPlugin.apply({
+      async effect(callback: () => Promise<() => void>) { return callback() },
+      investmentPythonRuntime: {
+        register() { return () => {} },
+        async acquire() { return { id: 'trading-core', baseUrl: 'http://127.0.0.1:8000', ownership: 'external', async release() {} } },
+        registerCapability() { return () => {} },
+        assertCapability() {},
+      },
       tools: { register(tool: Record<string, unknown>) { rawTools.push(tool); return () => {} } },
       agents: { roots: () => [] },
     } as never, {})

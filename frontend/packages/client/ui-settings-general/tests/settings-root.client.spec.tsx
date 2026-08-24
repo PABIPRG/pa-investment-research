@@ -9,6 +9,7 @@ afterEach(cleanup)
 
 type Row = { id: string; order: number; label: string }
 type Step = { id: string; order: number }
+type SectionOwner = { close: () => void; openSection: (id: string) => void }
 
 /** Slot-content stand-ins: the shell renders whatever the seats contribute. */
 const SEAT_CONTENT: Record<string, string> = {
@@ -35,9 +36,24 @@ function mount({
   // plays a ledger change through the same observable contract.
   let current = rows
   const listeners = new Set<() => void>()
+  const sectionOwners: SectionOwner[] = []
   const renderSlot = vi.fn(
-    ((key: string, _owner: unknown, opts?: { only?: string }) => {
-      if (key === 'settings.section') return <div data-testid={`section-${opts?.only ?? 'all'}`} />
+    ((key: string, owner: unknown, opts?: { only?: string }) => {
+      if (key === 'settings.section') {
+        sectionOwners.push(owner as SectionOwner)
+        return (
+          <div data-testid={`section-${opts?.only ?? 'all'}`}>
+            {opts?.only === 'investment-research' ? (
+              <button
+                type="button"
+                onClick={() => { (owner as SectionOwner).openSection('models') }}
+              >
+                Open Models
+              </button>
+            ) : null}
+          </div>
+        )
+      }
       return SEAT_CONTENT[key]
     }) as SettingsRootComponentProps['renderSlot'],
   )
@@ -72,7 +88,7 @@ function mount({
       for (const fn of [...listeners]) fn()
     })
   }
-  return { view, renderSlot, bump, listeners }
+  return { view, renderSlot, bump, listeners, sectionOwners }
 }
 
 function openPanel() {
@@ -199,6 +215,26 @@ describe('SettingsPanel navigation', () => {
     expect(screen.getByRole('button', { name: 'Models' }).getAttribute('aria-current')).toBe('true')
     expect(screen.getByTestId('section-models')).toBeTruthy()
     expect(screen.queryByTestId('section-general')).toBeNull()
+  })
+
+  it('lets an active section open Models without closing the panel', () => {
+    const { sectionOwners } = mount({
+      rows: [
+        { id: 'models', order: 10, label: 'Models' },
+        { id: 'investment-research', order: 20, label: 'Investment research' },
+      ],
+    })
+    openPanel()
+    fireEvent.click(screen.getByRole('button', { name: 'Investment research' }))
+    const ownerBeforeNavigation = sectionOwners.at(-1)!
+    fireEvent.click(screen.getByRole('button', { name: 'Open Models' }))
+
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    const modelsNav = screen.getByRole('button', { name: 'Models' })
+    expect(modelsNav.getAttribute('aria-current')).toBe('true')
+    expect(document.activeElement).toBe(modelsNav)
+    expect(screen.getByTestId('section-models')).toBeTruthy()
+    expect(sectionOwners.at(-1)?.openSection).toBe(ownerBeforeNavigation.openSection)
   })
 
   it('mounts onboarding steps in order and transfers ownership only on completion', () => {

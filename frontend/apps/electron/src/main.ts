@@ -11,6 +11,7 @@ import type {
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
 import { ElectronConnectionService } from './index.ts'
+import { resolveElectronProfile } from './args.ts'
 import { APP_INDEX_URL, APP_SCHEME, createAppProtocolHandler } from './protocol.ts'
 import {
   STREAM_CLOSE_CHANNEL,
@@ -22,6 +23,7 @@ const APP_MANIFEST = fileURLToPath(new URL('../package.json', import.meta.url))
 const ELECTRON_PATCH = fileURLToPath(new URL('../electron.patch.yml', import.meta.url))
 const RENDERER_DIR = fileURLToPath(new URL('../renderer/', import.meta.url))
 const PRELOAD = fileURLToPath(new URL('./preload.cjs', import.meta.url))
+const PROFILE = resolveElectronProfile()
 
 interface StreamOpenRequest {
   kind: ElectronStreamKind
@@ -49,66 +51,114 @@ if (!singleInstance) {
 }
 
 async function runApplication(): Promise<void> {
-  await app.whenReady()
-  const { ctx, shutdown } = await runProfile({
-    environment: loadLayeredEnv('dsh'),
-    profile: 'web',
-    patchFiles: [ELECTRON_PATCH],
-    args: [],
-    installAnchor: APP_MANIFEST,
-    watchPatches: false,
-  })
-  const connection = ctx.get('connection')
-  if (!(connection instanceof ElectronConnectionService)) {
-    throw new Error('dsh-electron: Electron connection provider did not activate')
+  const lifecycleReady = Promise.withResolvers<void>()
+  void lifecycleReady.promise.catch(() => {})
+  let ipc: IpcBinding | undefined
+  let profileShutdown: { shutdown(code: number): Promise<void> } | undefined
+  let disposePromise: Promise<void> | undefined
+  let restartPromise: Promise<void> | undefined
+  let normalQuitPromise: Promise<void> | undefined
+  let quitCommitted = false
+  let failureReported = false
+  const failLoud = (): void => {
+    if (failureReported) return
+    failureReported = true
+    app.exit(1)
   }
-  protocol.handle(APP_SCHEME, createAppProtocolHandler({
-    rendererDir: RENDERER_DIR,
-    connection,
-    modules: ctx.clientModules,
-    fetchFile: fileUrl => net.fetch(fileUrl),
-  }))
-  const window = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 900,
-    minHeight: 640,
-    show: false,
-    backgroundColor: '#111827',
-    webPreferences: {
-      preload: PRELOAD,
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-      webSecurity: true,
-    },
-  })
-  const ipc = bindIpc(window.webContents, connection)
-  hardenNavigation(window)
-  window.once('ready-to-show', () => { window.show() })
-  await window.loadURL(APP_INDEX_URL)
-
-  app.on('second-instance', () => {
-    if (window.isMinimized()) window.restore()
-    window.show()
-    window.focus()
-  })
-
-  let quitting = false
-  let disposed = false
-  const dispose = async (): Promise<void> => {
-    if (disposed) return
-    disposed = true
-    await ipc.dispose()
-    await shutdown.shutdown(0)
+  const consume = (pending: Promise<void>): void => {
+    void pending.catch(failLoud)
   }
+  const disposeOnce = (): Promise<void> => {
+    if (disposePromise !== undefined) return disposePromise
+    disposePromise = (async () => {
+      await lifecycleReady.promise
+      if (ipc === undefined || profileShutdown === undefined) {
+        throw new Error('dsh-electron: restart lifecycle did not initialize')
+      }
+      await ipc.dispose()
+      await profileShutdown.shutdown(0)
+    })()
+    return disposePromise
+  }
+  const quitOnce = (): Promise<void> => {
+    if (normalQuitPromise !== undefined) return normalQuitPromise
+    normalQuitPromise = (async () => {
+      await disposeOnce()
+      if (restartPromise !== undefined || quitCommitted) return
+      quitCommitted = true
+      app.quit()
+    })()
+    return normalQuitPromise
+  }
+  function restartOnce(): Promise<void> {
+    if (restartPromise !== undefined) return restartPromise
+    restartPromise = (async () => {
+      await disposeOnce()
+      app.relaunch({ args: process.argv.slice(1) })
+      quitCommitted = true
+      app.quit()
+    })()
+    return restartPromise
+  }
+  const requestRestart = (): void => { consume(restartOnce()) }
   app.on('before-quit', (event) => {
-    if (quitting) return
+    if (quitCommitted) return
     event.preventDefault()
-    quitting = true
-    void dispose().then(() => { app.quit() })
+    consume(quitOnce())
   })
-  app.on('window-all-closed', () => { app.quit() })
+  app.on('window-all-closed', () => { consume(quitOnce()) })
+  try {
+    await app.whenReady()
+    const { ctx, shutdown } = await runProfile({
+      environment: loadLayeredEnv('dsh'),
+      profile: PROFILE,
+      patchFiles: [ELECTRON_PATCH],
+      args: [],
+      installAnchor: APP_MANIFEST,
+      restart: requestRestart,
+      watchPatches: false,
+    })
+    profileShutdown = shutdown
+    const connection = ctx.get('connection')
+    if (!(connection instanceof ElectronConnectionService)) {
+      throw new Error('dsh-electron: Electron connection provider did not activate')
+    }
+    protocol.handle(APP_SCHEME, createAppProtocolHandler({
+      rendererDir: RENDERER_DIR,
+      connection,
+      modules: ctx.clientModules,
+      fetchFile: fileUrl => net.fetch(fileUrl),
+    }))
+    const window = new BrowserWindow({
+      width: 1280,
+      height: 840,
+      minWidth: 900,
+      minHeight: 640,
+      show: false,
+      backgroundColor: '#111827',
+      webPreferences: {
+        preload: PRELOAD,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+      },
+    })
+    ipc = bindIpc(window.webContents, connection)
+    hardenNavigation(window)
+    window.once('ready-to-show', () => { window.show() })
+    await window.loadURL(APP_INDEX_URL)
+
+    app.on('second-instance', () => {
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    })
+    lifecycleReady.resolve()
+  } catch (error) {
+    lifecycleReady.reject(error)
+    throw error
+  }
 }
 
 function hardenNavigation(window: BrowserWindow): void {

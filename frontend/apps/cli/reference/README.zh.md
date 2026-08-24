@@ -8,9 +8,9 @@
 
 `dsh --profile <name>` 启动位于 `$DSH_HOME/profiles/<name>` 的 profile。生效配置树以空根节点为起点，依次叠加 profile manifest（元数据清单）的 `dsh.profile.bundles` 列表中指定的各组合包 patch、profile 自身的 `cordis.patch.yml`、home 级的 `$DSH_HOME/cordis.patch.yml`（这是各 profile 共享的机器本地偏好，因此优先于逐 profile 配置层），以及按 argv 顺序指定的各个 `--patch <path>` 覆盖层。对同一配置行，后应用的层优先。patch 会替换目标行的整个 `config` 值，而不是深度合并其中的键；patch 也可以插入新行。配置解析、schema 校验、模块解析或插件启动失败时，系统会报告错误并以非零状态退出。收到 SIGINT 或 SIGTERM 时，挂载的根节点会先 dispose（资源释放）再退出。
 
-组合包名称先从 dsh 安装目录解析，再从 profile 目录解析。因此，内置组合包（`@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@deepseek-ai/dsh-headless`）始终来自当前运行的 `dsh` 所属的安装；树外组合包则来自 profile 中由 pnpm 管理的 `node_modules`。patch 行中的裸插件 `name` 会从 profile 目录开始，按照 Node 的模块解析规则逐级向父目录查找，直至由 dsh 维护的安装后备目录 `$DSH_HOME/profiles/node_modules`。该目录为 dsh 安装中的应用和组合包所依赖的每个包各维护一个符号链接，并在每次启动时修复这些链接。
+组合包名称先从 dsh 安装目录解析，再从 profile 目录解析。因此，内置组合包（`@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@deepseek-ai/dsh-headless` 与三个 `@deepseek-ai/dsh-investment-*-bundle` 包）始终来自当前运行的 `dsh` 所属的安装；树外组合包则来自 profile 中由 pnpm 管理的 `node_modules`。patch 行中的裸插件 `name` 会从 profile 目录开始，按照 Node 的模块解析规则逐级向父目录查找，直至由 dsh 维护的安装后备目录 `$DSH_HOME/profiles/node_modules`。该目录为 dsh 安装中的应用和组合包所依赖的每个包各维护一个符号链接，并在每次启动时修复这些链接。
 
-`web` 和 `headless` profile 首次使用时会从随附模板自动初始化（`web`：base + web-app；`headless`：base + headless）。其他缺失的 profile 会显式报错，并提示运行 `dsh plugin --profile <name> add <package>`。Electron 是应用进程，不是随附 profile；因此 `dsh --profile electron` 会遵循普通的 profile 缺失行为。
+`web`、`headless` 与 `investment-research` profile 首次使用时会从随附模板自动初始化。投研模板固定包含五层组合包：base、web-app、investment-runtime、investment-stock-analysis、investment-market-watch。其他缺失的 profile 会显式报错，并提示运行 `dsh plugin --profile <name> add <package>`。Electron 是应用进程，不是随附 profile；因此 `dsh --profile electron` 会遵循普通的 profile 缺失行为。
 
 ### 应用参数
 
@@ -26,6 +26,7 @@
 |---|---|
 | `web` | `--host`、`--port`、可重复的 `--trusted-host` |
 | `headless` | 任务文本，作为位置参数 |
+| `investment-research` | 直接诊断启动时接受 Web 应用参数；产品通过 Electron 启动它 |
 
 一次性任务（`dsh --profile headless "run the tests"`）通过核心注册表创建一个全新的持久化 Agent（智能体），提交任务、等待完全停稳并对会话执行 flush，再从其持久化事件区间中推导最后一个非空 assistant 文本与最终 `turn/end` 原因。它在 stdout 打印文本，并在原因为 `completed` 时以 0 退出，否则以 1 退出。没有任务的调用是该应用的用法错误。随附 headless profile 不挂载 ApiProxy、Host、HTTP 服务器、Web 运行时或浏览器客户端；成功运行不会向 stderr 写入任何内容，也不会打开监听端口。
 
@@ -34,6 +35,7 @@
 ```sh
 dsh --profile web --dump-default-config
 dsh --profile web --patch ./extra.yml --dump-config
+dsh --profile investment-research --dump-default-config
 ```
 
 `--dump-default-config` 只打印组合包各层；`--dump-config` 额外加上 profile 的 `cordis.patch.yml`、home 级的 `$DSH_HOME/cordis.patch.yml` 和 `--patch` overlay。两者都会打印注释，标明每行由哪个文件提供，以及哪些 overlay 修改过它；`!!js` 表达式保持未求值，找不到目标的 patch 会报告到 stderr。dump 操作不会运行应用的命令行参数提供方，因此展示的是解析任何应用参数之前的组合配置树；如果调用中包含应用参数，dump 会拒绝该调用。
@@ -63,7 +65,7 @@ dsh web --dump-config
 dsh web --help
 ```
 
-`dsh electron` 通过该应用安装的 Electron executable 启动同级 `apps/electron` 应用。启动器会先检查已构建的 main、preload 与 renderer 产物。Electron 主进程使用 `electron.patch.yml` 启动 `web` profile；该选择器不会创建或加载 `electron` profile。
+`dsh electron` 通过该应用安装的 Electron executable 启动同级 `apps/electron` 应用。启动器会先检查已构建的 main、preload 与 renderer 产物，转发唯一的 `--profile <name>` 选择，并默认使用 `web`。投研产品命令是 `dsh electron --profile investment-research`：Electron 主进程先启动该 profile 的五层组合包，再且只再应用现有 `electron.patch.yml`；该 patch 禁用 Web server、静态 Web runtime、Web connection、自适应 directory picker 与 client HMR，然后插入原生 connection 与 directory-picker 行。该选择器不会创建或加载 `electron` profile。
 
 生产 Web 运行器需要已构建的包和前端产物（`pnpm run build`）。默认服务地址是 `http://127.0.0.1:3080`。CLI 目前有意不支持 `--host 0.0.0.0`，并会以用法错误退出；`--trusted-host` 可添加 `/api` 浏览器信任围栏接受的具名 authority。
 

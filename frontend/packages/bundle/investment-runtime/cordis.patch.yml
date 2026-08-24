@@ -1,0 +1,7 @@
+- insert:
+    - id: investment-python-runtime
+      name: '@deepseek-ai/dsh-investment-python-runtime'
+    - id: client-investment-research-runtime
+      name: '@deepseek-ai/dsh-client-investment-research-runtime'
+    - id: client-ui-settings-investment-research
+      name: '@deepseek-ai/dsh-client-ui-settings-investment-research'

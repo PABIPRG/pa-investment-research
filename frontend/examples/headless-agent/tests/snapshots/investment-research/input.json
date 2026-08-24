@@ -1,0 +1,10 @@
+{
+  "steps": [
+    { "op": "initialize" },
+    { "op": "newSession" },
+    {
+      "op": "prompt",
+      "text": "先调用 analyze_stock 分析 600519，再调用 watch_list，最后只回复 INVESTMENT_RESEARCH_OK。"
+    }
+  ]
+}

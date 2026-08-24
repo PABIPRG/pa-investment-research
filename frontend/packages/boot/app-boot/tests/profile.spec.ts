@@ -7,8 +7,12 @@
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
+import * as StockAnalysis from '../../../investment-research/stock-analysis/src/index.ts'
 import {
+  assertEntriesActivated,
   composeEntries,
   healProfilesModuleFallback,
   initProfile,
@@ -51,6 +55,33 @@ describe('resolveProfileDir', () => {
     expect(resolveProfileDir('tui', home)).toBe(join(home, 'profiles', 'tui'))
     for (const bad of ['', '.', '..', 'a/b', 'a\\b']) {
       expect(() => resolveProfileDir(bad, home)).toThrow('invalid profile name')
+    }
+  })
+
+  it('reports the runtime injection explicitly when a business bundle is mounted without runtime', async () => {
+    const ctx = new Context()
+    ctx.provide('tools', {} as never)
+    ctx.provide('agents', {} as never)
+    await ctx.plugin(Loader)
+    ctx.loader.internal = {
+      version: 'v2',
+      async import() { return StockAnalysis },
+    } as unknown as NonNullable<typeof ctx.loader.internal>
+    const starting = ctx.loader.create({
+      name: '@deepseek-ai/dsh-investment-stock-analysis',
+      config: { backendMode: 'external', backendBaseUrl: 'http://127.0.0.1:8000' },
+    })
+    try {
+      await vi.waitFor(() => {
+        expect([...ctx.loader.entries()][0]?.fiber).toBeDefined()
+      })
+      await expect(assertEntriesActivated(ctx, 'dsh')).rejects.toThrow([
+        'dsh: 1 entry did not activate',
+        '@deepseek-ai/dsh-investment-stock-analysis: pending (waiting for service: investmentPythonRuntime)',
+      ].join('\n'))
+    } finally {
+      await ctx.fiber.dispose()
+      await starting.catch(() => {})
     }
   })
 })
@@ -152,6 +183,13 @@ describe('loadProfile', () => {
     // cannot be asserted to fail here: the source-plane test runner resolves
     // @deepseek-ai/* through tsconfig paths regardless of the staged anchor.
     expect(PROFILE_TEMPLATES.web).toContain('@deepseek-ai/dsh-base')
+    expect(PROFILE_TEMPLATES['investment-research']).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-investment-runtime-bundle',
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle',
+      '@deepseek-ai/dsh-investment-market-watch-bundle',
+    ])
     try {
       loadProfile('t', 'web', anchor, home)
     } catch {
@@ -159,6 +197,50 @@ describe('loadProfile', () => {
     }
     expect(readProfileManifest('t', resolveProfileDir('web', home)).dsh?.profile?.bundles)
       .toEqual([...PROFILE_TEMPLATES.web ?? []])
+  })
+
+  it('stages the investment layers in dependency order and keeps runtime plus market without stock', () => {
+    const anchor = stageInstallation({
+      '@deepseek-ai/dsh-base': { patch: '- insert:\n    - id: base\n      name: base\n' },
+      '@deepseek-ai/dsh-web-app': { patch: '- insert:\n    - id: web-app\n      name: web-app\n' },
+      '@deepseek-ai/dsh-investment-runtime-bundle': {
+        patch: "- insert:\n    - id: investment-python-runtime\n      name: '@deepseek-ai/dsh-investment-python-runtime'\n",
+      },
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle': {
+        patch: "- insert:\n    - id: investment-stock-analysis\n      name: '@deepseek-ai/dsh-investment-stock-analysis'\n",
+      },
+      '@deepseek-ai/dsh-investment-market-watch-bundle': {
+        patch: "- insert:\n    - id: investment-market-watch\n      name: '@deepseek-ai/dsh-investment-market-watch'\n",
+      },
+    })
+    const home = tmp()
+    const profile = loadProfile('t', 'investment-research', anchor, home)
+    expect(profile.layers.map(layer => layer.packageName)).toEqual(PROFILE_TEMPLATES['investment-research'])
+    expect(composeEntries(profile.layers.map(layer => layer.patches)).map(row => row.id)).toEqual([
+      'base',
+      'web-app',
+      'investment-python-runtime',
+      'investment-stock-analysis',
+      'investment-market-watch',
+    ])
+
+    const dir = resolveProfileDir('investment-research', home)
+    writeProfileManifest(dir, {
+      name: 'dsh-profile-investment-research',
+      dsh: {
+        profile: {
+          bundles: PROFILE_TEMPLATES['investment-research']!.filter(name =>
+            name !== '@deepseek-ai/dsh-investment-stock-analysis-bundle'),
+        },
+      },
+    })
+    const withoutStock = loadProfile('t', 'investment-research', anchor, home)
+    expect(composeEntries(withoutStock.layers.map(layer => layer.patches)).map(row => row.id)).toEqual([
+      'base',
+      'web-app',
+      'investment-python-runtime',
+      'investment-market-watch',
+    ])
   })
 
   it('normalizes only the exact installation-owned headless bundle tuple', () => {

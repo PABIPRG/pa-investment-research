@@ -735,6 +735,54 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'investmentPythonRuntime',
+    summary: 'Runtime service that verifies registered investment Python backends and leases their URLs.',
+    description: 'Runtime service that verifies registered investment Python backends and leases their URLs.',
+    methods: [
+      {
+        signature: 'register(definition: PythonBackendDefinition): () => void',
+        description: 'Register one backend definition.',
+        parameters: [{ name: 'definition', description: 'complete backend identity and launch definition.' }],
+        returns: 'a disposer that removes this definition.',
+      },
+      {
+        signature: 'async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease>',
+        description: 'Verify one registered backend and acquire a caller-owned lease.',
+        parameters: [{ name: 'id', description: 'registered backend id.' }, { name: 'signal', description: 'optional health-check cancellation.' }],
+        returns: 'a verified URL lease.',
+      },
+      {
+        signature: 'registerCapability(definition: InvestmentCapabilityDefinition): () => void',
+        description: 'Publish one backend capability after its business tools are registered.',
+        parameters: [{ name: 'definition', description: 'backend, tool count, and LLM relationship.' }],
+        returns: 'idempotent disposer for the capability contribution.',
+      },
+      {
+        signature: 'assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void',
+        description: 'Reject an operation that cannot safely use the active backend capability.',
+        parameters: [{ name: 'backendId', description: 'backend required by the operation.' }, { name: 'use', description: 'operation\'s LLM relationship.' }],
+      },
+      {
+        signature: '@Remote(\'readiness\') readiness(): InvestmentReadinessSnapshot',
+        description: 'Read the immutable, client-safe Runtime readiness projection.',
+        parameters: [],
+        returns: 'current backend, credential, and capability facts.',
+      },
+      {
+        signature: '@Remote(\'request-restart\') requestRestart(): InvestmentRestartResult',
+        description: 'Request the launcher to restart the complete application after the Remote acknowledgement is sent.',
+        parameters: [],
+        returns: 'an accepted result, or an actionable unavailable result when this launcher cannot restart.',
+      },
+      {
+        signature: 'invariantSnapshot(): ReturnType<InvestmentBackendManager[\'invariantSnapshot\']>',
+        description: 'Read the mutable lifecycle relations consumed by the invariant companion.',
+        parameters: [],
+        returns: 'active backend entries and backend ids with in-flight acquisition.',
+      },
+    ],
+  },
+  {
     key: 'jobs',
     summary: 'Abstract background job registry.',
     description: 'Abstract background job registry. Subclass, implement the abstract methods, and load the subclass as a plugin — it registers as `ctx.jobs` (one implementation per context; loading a second throws, which is cordis\' standard duplicate-service behavior).\n\nImplementations must honor these semantics:\n\n- Registrations outlive producer and controller fibers. Owner and service disposal cancel live work and await compliant producers; a throwing teardown cancel force-fails only the record. Teardown cancellation also marks the record reported, because a record its owner is being destroyed for has no reader left.\n- Owned-job access is fenced by the owner\'s session id. Ids are predictable, so authorization — not secrecy — is the boundary.\n- Settlement is first-wins: one terminal record, released waiters, and one round of contained listener notification, even against a late producer outcome. Completion is announced last, after the record is committed and every other observer of the settlement has seen it, because a reporter may open a model turn synchronously.\n- start refuses work while no attached job controller serves the spec\'s owner, so a producer cannot start work that owner cannot collect or stop. One registry serves every composition in the process, so this question — and completion-listener delivery — is owner-relative rather than process-wide: registrations made from an unscoped context serve every owner, and registrations made under an agent composition\'s scope serve exactly the agents composed under it.',
@@ -3182,6 +3230,50 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface InvariantInstaller {\n    (ctx: Context, fail: InvariantFailure): void | Promise<void>;\n    readonly inject?: Inject;\n}',
   },
   {
+    name: 'InvestmentBackendId',
+    declaration: 'export type InvestmentBackendId = \'trading-core\' | \'market-watch\';',
+  },
+  {
+    name: 'InvestmentBackendManager',
+    declaration: 'export class InvestmentBackendManager {\n    readonly internals: {\n        executableExists: (path: string) => Promise<boolean>;\n        sleep: (ms: number) => Promise<void>;\n        now: () => number;\n    };\n    constructor(options: InvestmentBackendManagerOptions);\n    register(definition: PythonBackendDefinition): () => void;\n    registerCapability(definition: InvestmentCapabilityDefinition): () => void;\n    assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): void;\n    readiness(): InvestmentReadinessSnapshot;\n    credentialUpdated(ref: CredentialRef): void;\n    async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease>;\n    async dispose(): Promise<void>;\n    invariantSnapshot(): Readonly<{\n        active: readonly ActiveEntry[];\n        flights: readonly InvestmentBackendId[];\n    }>;\n}',
+  },
+  {
+    name: 'InvestmentBackendManagerOptions',
+    declaration: 'export interface InvestmentBackendManagerOptions {\n    readonly subprocess: SubprocessRuntime;\n    readonly config?: Config;\n    readonly checkHealth?: HealthCheck;\n    readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths;\n    readonly resolveCredential?: CredentialResolver;\n    readonly describeCredential?: CredentialDescriber;\n    readonly resolveLogPaths?: LogPathResolver;\n    readonly normalizeEnvironmentKey?: EnvironmentKeyNormalizer;\n    readonly executableExists?: (path: string) => Promise<boolean>;\n    readonly sleep?: (ms: number) => Promise<void>;\n    readonly now?: () => number;\n}',
+  },
+  {
+    name: 'InvestmentBackendMode',
+    declaration: 'export type InvestmentBackendMode = \'managed\' | \'external\';',
+  },
+  {
+    name: 'InvestmentBackendReadiness',
+    declaration: 'export interface InvestmentBackendReadiness {\n    readonly backendId: InvestmentBackendId;\n    readonly ownership: PythonBackendLease[\'ownership\'] | null;\n    readonly backendStatus: \'stopped\' | \'healthy-owned\' | \'healthy-attached\' | \'external\' | \'failed\';\n    readonly credentials: readonly InvestmentCredentialReadiness[];\n    readonly capability: InvestmentCapabilityReadiness | null;\n    readonly restartRequired: boolean;\n    readonly runtimeLogPath: string;\n}',
+  },
+  {
+    name: 'InvestmentCapabilityDefinition',
+    declaration: 'export interface InvestmentCapabilityDefinition {\n    readonly backendId: InvestmentBackendId;\n    readonly toolCount: number;\n    readonly llm: \'required\' | \'enhancement\' | \'none\';\n}',
+  },
+  {
+    name: 'InvestmentCapabilityReadiness',
+    declaration: 'export interface InvestmentCapabilityReadiness {\n    readonly llm: InvestmentCapabilityDefinition[\'llm\'];\n    readonly toolCount: number;\n    readonly status: \'stock-full\' | \'market-template-only\' | \'market-full\' | \'unavailable\';\n}',
+  },
+  {
+    name: 'InvestmentCapabilityUse',
+    declaration: 'export type InvestmentCapabilityUse = \'llm-required\' | \'llm-enhancement\' | \'non-llm\';',
+  },
+  {
+    name: 'InvestmentCredentialReadiness',
+    declaration: 'export interface InvestmentCredentialReadiness {\n    readonly ref: CredentialRef;\n    readonly configured?: boolean;\n    readonly source?: string;\n    readonly writable?: boolean;\n    readonly status: \'missing\' | \'configured\' | \'read-only\' | \'restart-required\' | \'external-managed\';\n}',
+  },
+  {
+    name: 'InvestmentReadinessSnapshot',
+    declaration: 'export interface InvestmentReadinessSnapshot {\n    readonly backends: readonly InvestmentBackendReadiness[];\n}',
+  },
+  {
+    name: 'InvestmentRestartResult',
+    declaration: 'export type InvestmentRestartResult = Readonly<{\n    status: \'accepted\';\n}> | Readonly<{\n    status: \'unavailable\';\n    reason: string;\n}>;',
+  },
+  {
     name: 'InvocationDescriptor',
     declaration: 'export interface InvocationDescriptor {\n    readonly id: string;\n    readonly service: string;\n    readonly namespace: string;\n    readonly method: string;\n    readonly implementation?: string;\n    readonly invocation: {\n        readonly kind: \'direct\';\n    } | {\n        readonly kind: \'context\';\n        readonly context: string;\n        readonly wire: string;\n        readonly codec: TypertCodec;\n    };\n    readonly scope?: {\n        readonly context: string;\n        readonly wire: string;\n    };\n    readonly parameters: readonly InvocationParameterDescriptor[];\n    readonly cancellation?: {\n        readonly parameter: \'signal\';\n    };\n    readonly result: TypertCodec;\n    readonly sourceLocation?: InvocationSourceLocation;\n}',
   },
@@ -3372,6 +3464,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'LspRange',
     declaration: 'export interface LspRange {\n    readonly start: LspPosition;\n    readonly end: LspPosition;\n}',
+  },
+  {
+    name: 'ManagedCredentialEnv',
+    declaration: 'export interface ManagedCredentialEnv {\n    readonly ref: CredentialRef;\n    readonly env: string;\n    readonly role: \'required\' | \'enhancement\';\n}',
   },
   {
     name: 'ManualCompactAgentContext',
@@ -3574,6 +3670,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface PruneResult {\n    readonly pruned: readonly PrunedEntry[];\n    readonly charsRemoved: number;\n}',
   },
   {
+    name: 'PythonBackendDefinition',
+    declaration: 'export interface PythonBackendDefinition {\n    readonly id: InvestmentBackendId;\n    readonly service: InvestmentBackendId;\n    readonly mode: InvestmentBackendMode;\n    readonly baseUrl: string;\n    readonly projectDir?: string;\n    readonly repositoryPath: readonly string[];\n    readonly module: \'adapter.app:app\' | \'market_watch.app:app\';\n    readonly healthPath: \'/health\';\n    readonly healthOk: Readonly<Record<string, string | boolean>>;\n    readonly initCommand: Readonly<{\n        posix: \'./init.sh\';\n        windows: \'init.bat\';\n    }>;\n    readonly managedEnv?: Readonly<Record<string, string | undefined>>;\n    readonly credentialEnv?: readonly ManagedCredentialEnv[];\n}',
+  },
+  {
+    name: 'PythonBackendLease',
+    declaration: 'export interface PythonBackendLease {\n    readonly id: InvestmentBackendId;\n    readonly baseUrl: string;\n    readonly ownership: \'owned\' | \'attached\' | \'external\';\n    release(): Promise<void>;\n}',
+  },
+  {
     name: 'ReadFileLine',
     declaration: 'export interface ReadFileLine {\n    number: number;\n    text: string;\n}',
   },
@@ -3616,6 +3720,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ResolvedAlwaysRetryPolicy',
     declaration: 'export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {\n    readonly mode: \'always\';\n}',
+  },
+  {
+    name: 'ResolvedBackendPaths',
+    declaration: 'export interface ResolvedBackendPaths {\n    readonly projectDir: string;\n    readonly pythonExecutable: string;\n}',
   },
   {
     name: 'ResolvedCredential',
@@ -4208,6 +4316,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SubprocessOutputReader',
     declaration: 'export interface SubprocessOutputReader {\n    readFrom(fromByte: number): SubprocessOutputRead;\n}',
+  },
+  {
+    name: 'SubprocessRuntime',
+    declaration: 'export abstract class SubprocessRuntime extends Service {\n    constructor(ctx: Context);\n    abstract resolveExecutable(command: string, env?: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<string>;\n    abstract spawn(spec: SubprocessSpawnSpec): SubprocessHandle;\n    abstract spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle>;\n}',
   },
   {
     name: 'SubprocessSpawnSpec',

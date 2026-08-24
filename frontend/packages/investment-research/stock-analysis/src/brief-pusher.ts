@@ -39,26 +39,29 @@ function briefBody(label: string, tradeDate: string | undefined, summary: string
 /**
  * Start effect-owned brief polling when in-chat delivery is enabled.
  * The effect polls immediately and then at the clamped interval, skips overlap, marks only delivered briefs,
- * contains per-session and polling failures, and clears its timer during disposal.
+ * contains per-session and polling failures, and aborts then awaits in-flight delivery during disposal.
  * @param ctx - Plugin context supplying agents, logging, and effect disposal.
  * @param config - Resolved adapter, interval, enablement, and audience settings.
+ * @returns asynchronous quiescent disposer when enabled, otherwise undefined.
  */
-export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void {
-  if (!config.enableInChatPush) return
+export function createBriefPusher(ctx: Context, config: BriefPusherConfig): (() => Promise<void>) | undefined {
+  if (!config.enableInChatPush) return undefined
   if (ctx.get('agents') === undefined) {
     ctx.logger.warn('[stock-analysis] 对话内播报已开启但 agents 服务不可用，忽略')
-    return
+    return undefined
   }
 
   const pollMs = Math.max(config.pushPollMs, 30_000)
+  const controller = new AbortController()
   let delivering = false
+  let disposed = false
+  let inFlight: Promise<void> | undefined
 
   const deliver = async (): Promise<void> => {
-    if (delivering) return
     delivering = true
     try {
-      const brief = (await getLatestBrief(config.adapterBaseUrl)) as LatestBrief
-      if (!brief.id || brief.dsh_pushed) return
+      const brief = (await getLatestBrief(config.adapterBaseUrl, controller.signal)) as LatestBrief
+      if (disposed || !brief.id || brief.dsh_pushed) return
 
       const label = PERIOD_LABEL[brief.period ?? ''] ?? '盘中'
       const body = briefBody(label, brief.trade_date, brief.summary)
@@ -76,6 +79,8 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
           : roots
       let sent = 0
       for (const agent of targets) {
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- followup can synchronously initiate effect disposal.
+        if (disposed) return
         try {
           agent.followup(msg)
           sent++
@@ -83,12 +88,14 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
           /* 单个会话播报失败不影响其它会话 */
         }
       }
-      if (sent > 0) {
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- followup can synchronously initiate effect disposal.
+      if (sent > 0 && !disposed) {
         await httpJson(
           config.adapterBaseUrl,
           `/brief/${encodeURIComponent(brief.id)}/dsh-pushed`,
           'POST',
           undefined,
+          controller.signal,
         )
         ctx.logger.info(`[stock-analysis] 已向 ${sent} 个会话播报简报 ${brief.id}`)
       }
@@ -99,14 +106,33 @@ export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void 
     }
   }
 
-  // 绑定到上下文生命周期：dispose 时自动清掉定时器
-  ctx.effect(() => {
-    const timer = setInterval(() => {
-      void deliver()
-    }, pollMs)
-    void deliver() // 启动立即试一次：dsh 打开时若有未播报的盘前简报则补播
-    return () => {
-      clearInterval(timer)
-    }
-  })
+  const trigger = (): void => {
+    if (disposed || delivering) return
+    const current = deliver()
+    inFlight = current
+    void current.finally(() => {
+      inFlight = undefined
+    })
+  }
+  const timer = setInterval(() => {
+    trigger()
+  }, pollMs)
+  trigger()
+  return async () => {
+    if (disposed) return
+    disposed = true
+    clearInterval(timer)
+    controller.abort(new Error('stock-analysis brief pusher disposed'))
+    await inFlight
+  }
+}
+
+/**
+ * Start effect-owned polling for callers that do not compose a larger ordered lifecycle.
+ * @param ctx - Plugin context supplying agents and effect disposal.
+ * @param config - Resolved adapter, interval, enablement, and audience settings.
+ */
+export function setupBriefPusher(ctx: Context, config: BriefPusherConfig): void {
+  const dispose = createBriefPusher(ctx, config)
+  if (dispose !== undefined) ctx.effect(() => dispose)
 }

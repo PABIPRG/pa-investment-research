@@ -1,0 +1,3 @@
+- insert:
+    - id: investment-market-watch
+      name: '@deepseek-ai/dsh-investment-market-watch'

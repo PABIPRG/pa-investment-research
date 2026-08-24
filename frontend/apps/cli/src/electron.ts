@@ -13,13 +13,21 @@ const ELECTRON_APP_DIR = fileURLToPath(new URL('../../electron/', import.meta.ur
 /** Files the Electron application must build before source launch. */
 const REQUIRED_ARTIFACTS = ['lib/main.js', 'lib/preload.cjs', 'renderer/index.html'] as const
 
+/** Options for launching the sibling Electron application. */
+export interface ElectronLaunchOptions {
+  profile?: string
+  appDir?: string
+}
+
 /**
  * Launch an Electron application directory through its installed runtime and
  * inherit the current terminal until that process exits.
- * @param appDir - Electron application directory containing its manifest and built artifacts.
+ * @param options - selected profile and optional application directory override.
  * @returns the child exit code, or the conventional `128 + signal` code when signalled.
  */
-export async function runElectronApplication(appDir: string = ELECTRON_APP_DIR): Promise<number> {
+export async function runElectronApplication(options: ElectronLaunchOptions = {}): Promise<number> {
+  const appDir = options.appDir ?? ELECTRON_APP_DIR
+  const profile = options.profile ?? 'web'
   const manifest = join(appDir, 'package.json')
   const missing = [manifest, ...REQUIRED_ARTIFACTS.map(path => join(appDir, path))]
     .filter(path => !existsSync(path))
@@ -38,7 +46,7 @@ export async function runElectronApplication(appDir: string = ELECTRON_APP_DIR):
   }
 
   return await new Promise<number>((resolve, reject) => {
-    const child = spawn(executable, [appDir], { stdio: 'inherit' })
+    const child = spawn(executable, [appDir, '--profile', profile], { stdio: 'inherit' })
     child.once('error', reject)
     child.once('exit', (code, signal) => {
       if (code !== null) {

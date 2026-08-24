@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
+import type { Options as PackagerOptions } from '@electron/packager'
 
 const APP_NAME = 'DeepSeek Harness'
 const appDir = dirname(dirname(fileURLToPath(import.meta.url)))
@@ -15,11 +16,123 @@ const workspaceDir = resolve(appDir, '../..')
 const require = createRequire(import.meta.url)
 const electronPackagePath = require.resolve('electron/package.json')
 
+interface CommandSpec {
+  args: string[]
+  command: string
+  cwd: string
+}
+
+interface PackagingPlan {
+  deploy: CommandSpec
+  rootDir: string
+  sidecar: CommandSpec
+  sidecarCacheDir: string
+  sidecarDir: string
+  stagingDir: string
+}
+
+interface PackagerOptionsInput {
+  arch: NonNullable<PackagerOptions['arch']>
+  electronVersion: string
+  electronZipDir: string
+  outDir: string
+  platform: NonNullable<PackagerOptions['platform']>
+  sidecarDir: string
+  stagingDir: string
+}
+
+/**
+ * Report whether Node must invoke a command through the Windows command shell.
+ * @param command - Executable or command-script path.
+ * @param platform - Host platform running the packaging command.
+ * @returns Whether the command is a Windows batch script.
+ */
+export function commandRequiresShell(command: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' && /\.(?:bat|cmd)$/iu.test(command)
+}
+
+/**
+ * Describe the isolated deploy and sidecar build performed for one package invocation.
+ * @param rootDir - Temporary root removed after packaging succeeds or fails.
+ * @param platform - Electron target platform.
+ * @param arch - Electron target architecture.
+ * @returns Ordered command inputs and sibling staging paths.
+ */
+export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, arch: string): PackagingPlan {
+  const stagingDir = join(rootDir, 'app')
+  const sidecarDir = join(rootDir, 'investment-python')
+  const sidecarCacheDir = join(rootDir, 'sidecar-cache')
+  const pnpmCommand = platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+  return {
+    deploy: {
+      args: [
+        '--filter',
+        '@deepseek-ai/dsh-electron',
+        'deploy',
+        '--prod',
+        '--legacy',
+        stagingDir,
+      ],
+      command: pnpmCommand,
+      cwd: workspaceDir,
+    },
+    rootDir,
+    sidecar: {
+      args: [
+        '--workspace-root',
+        'run',
+        'investment:sidecar:build',
+        '--target',
+        `${platform}-${arch}`,
+        '--output',
+        sidecarDir,
+        '--cache',
+        sidecarCacheDir,
+      ],
+      command: pnpmCommand,
+      cwd: workspaceDir,
+    },
+    sidecarCacheDir,
+    sidecarDir,
+    stagingDir,
+  }
+}
+
+/**
+ * Create packager options that install the sidecar directory under Electron Resources.
+ * @param input - Resolved Electron artifact and temporary package paths.
+ * @returns Options for the existing Electron packager and signing pipeline.
+ */
+export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
+  return {
+    appBundleId: 'com.deepseek.harness',
+    arch: input.arch,
+    asar: false,
+    dir: input.stagingDir,
+    electronVersion: input.electronVersion,
+    electronZipDir: input.electronZipDir,
+    executableName: 'deepseek-harness',
+    extraResource: [input.sidecarDir],
+    name: APP_NAME,
+    out: input.outDir,
+    overwrite: true,
+    ...(input.platform === 'darwin' ? {
+      osxSign: {
+        identity: '-',
+        identityValidation: false,
+      },
+    } : {}),
+    platform: input.platform,
+    prune: false,
+  }
+}
+
 async function run(command: string, args: string[], cwd: string): Promise<void> {
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd,
       env: process.env,
+      shell: commandRequiresShell(command),
       stdio: 'inherit',
     })
     child.once('error', reject)
@@ -34,16 +147,11 @@ async function run(command: string, args: string[], cwd: string): Promise<void> 
 }
 
 async function packageApplication(): Promise<void> {
-  const stagingDir = await mkdtemp(join(tmpdir(), 'dsh-electron-'))
+  const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-'))
+  const plan = createPackagingPlan(rootDir, process.platform, process.arch)
   try {
-    await run('pnpm', [
-      '--filter',
-      '@deepseek-ai/dsh-electron',
-      'deploy',
-      '--prod',
-      '--legacy',
-      stagingDir,
-    ], workspaceDir)
+    await run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd)
+    await run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd)
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
     if (typeof electronPackage !== 'object' || electronPackage === null
       || typeof (electronPackage as { version?: unknown }).version !== 'string') {
@@ -58,22 +166,17 @@ async function packageApplication(): Promise<void> {
       platform: process.platform,
       version: electronVersion,
     })
-    await packager({
-      appBundleId: 'com.deepseek.harness',
+    await packager(createPackagerOptions({
       arch: process.arch,
-      asar: false,
-      dir: stagingDir,
       electronVersion,
       electronZipDir: dirname(electronZip),
-      executableName: 'deepseek-harness',
-      name: APP_NAME,
-      out: join(appDir, 'out'),
-      overwrite: true,
       platform: process.platform,
-      prune: false,
-    })
+      sidecarDir: plan.sidecarDir,
+      stagingDir: plan.stagingDir,
+      outDir: join(appDir, 'out'),
+    }))
   } finally {
-    await rm(stagingDir, { force: true, recursive: true })
+    await rm(plan.rootDir, { force: true, recursive: true })
   }
 }
 
@@ -89,4 +192,7 @@ async function main(): Promise<void> {
   }
 }
 
-await main()
+const entryPath = process.argv[1]
+if (entryPath !== undefined && resolve(entryPath) === fileURLToPath(import.meta.url)) {
+  await main()
+}

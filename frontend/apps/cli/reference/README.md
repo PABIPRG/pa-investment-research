@@ -8,9 +8,9 @@ This reference defines the shipped application selectors, profile boot, plugin m
 
 `dsh --profile <name>` boots the profile at `$DSH_HOME/profiles/<name>`. The effective tree is composed over an empty root by applying, in order: each bundle patch named in the profile manifest's `dsh.profile.bundles` list, the profile's own `cordis.patch.yml`, the home-level `$DSH_HOME/cordis.patch.yml` (machine-local preferences shared by every profile, so it outranks the per-profile layer), and each `--patch <path>` overlay in argv order. Later layers win per row; a patch replaces the targeted row's complete `config` value rather than deep-merging keys, and may insert new rows. A parse, schema, resolution, or plugin boot failure is reported and exits nonzero. SIGINT and SIGTERM dispose the mounted root before exit.
 
-Bundle names resolve from the dsh installation first, then from the profile directory. In-box bundles (`@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app`, `@deepseek-ai/dsh-headless`) therefore always come from the same installation as the running `dsh`; out-of-tree bundles come from the profile's pnpm-managed `node_modules`. A bare plugin `name` in any patch row resolves through the profile directory's Node parent-walk, which reaches the maintained installation fallback `$DSH_HOME/profiles/node_modules` (one symlink per package the installation's app and bundles depend on, healed on every launch).
+Bundle names resolve from the dsh installation first, then from the profile directory. In-box bundles (`@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app`, `@deepseek-ai/dsh-headless`, and the three `@deepseek-ai/dsh-investment-*-bundle` packages) therefore always come from the same installation as the running `dsh`; out-of-tree bundles come from the profile's pnpm-managed `node_modules`. A bare plugin `name` in any patch row resolves through the profile directory's Node parent-walk, which reaches the maintained installation fallback `$DSH_HOME/profiles/node_modules` (one symlink per package the installation's app and bundles depend on, healed on every launch).
 
-The `web` and `headless` profiles auto-initialize from shipped templates on first use (`web`: base + web-app; `headless`: base + headless). Any other missing profile fails loud with a hint to run `dsh plugin --profile <name> add <package>`. Electron is an application process, not a shipped profile; `dsh --profile electron` therefore follows the ordinary missing-profile behavior.
+The `web`, `headless`, and `investment-research` profiles auto-initialize from shipped templates on first use. The investment template has five fixed bundle layers: base, web-app, investment-runtime, investment-stock-analysis, and investment-market-watch. Any other missing profile fails loud with a hint to run `dsh plugin --profile <name> add <package>`. Electron is an application process, not a shipped profile; `dsh --profile electron` therefore follows the ordinary missing-profile behavior.
 
 ### App arguments
 
@@ -26,6 +26,7 @@ The shipped apps own these command lines:
 |---|---|
 | `web` | `--host`, `--port`, repeatable `--trusted-host` |
 | `headless` | the task text, as the positional argument |
+| `investment-research` | the Web app arguments when booted directly for diagnostics; the product starts it through Electron |
 
 A one-shot task (`dsh --profile headless "run the tests"`) creates one fresh persisted Agent through the core registry, submits the task, waits for quiescence, and flushes the Session before deriving the last non-empty assistant text and final `turn/end` reason from its durable interval. It prints the text on stdout and exits 0 for `completed`, else 1. An invocation with no task is a usage error from that app. The shipped headless profile mounts no ApiProxy, Host, HTTP server, Web runtime, or browser client; a successful run writes nothing to stderr and opens no listening port.
 
@@ -34,6 +35,7 @@ Inspect the composed tree without booting it:
 ```sh
 dsh --profile web --dump-default-config
 dsh --profile web --patch ./extra.yml --dump-config
+dsh --profile investment-research --dump-default-config
 ```
 
 `--dump-default-config` prints only the bundle layers; `--dump-config` adds the profile's `cordis.patch.yml`, the home-level `$DSH_HOME/cordis.patch.yml`, and `--patch` overlays. Both print comments naming the file that supplied each row and every overlay that changed it; `!!js` expressions remain unevaluated, and unmatched patch targets are reported on stderr. A dump never runs app command-line providers, so it shows the composed tree before any app argument is resolved and rejects an invocation that carries app arguments.
@@ -63,7 +65,7 @@ dsh web --dump-config
 dsh web --help
 ```
 
-`dsh electron` launches the sibling `apps/electron` application through the Electron executable installed for that application. It checks the built main, preload, and renderer artifacts before spawning. The Electron main process boots the `web` profile with `electron.patch.yml`; the selector itself never creates or loads an `electron` profile.
+`dsh electron` launches the sibling `apps/electron` application through the Electron executable installed for that application. It checks the built main, preload, and renderer artifacts before spawning, forwards its unique `--profile <name>` selection, and defaults to `web`. The investment product command is `dsh electron --profile investment-research`: the Electron main process boots that profile's five bundle layers, then applies only the existing `electron.patch.yml`, which disables the Web server, static Web runtime, Web connection, adaptive directory picker, and client HMR before inserting the native connection and directory-picker rows. The selector never creates or loads an `electron` profile.
 
 The production Web runner needs built package and frontend artifacts (`pnpm run build`). It serves `http://127.0.0.1:3080` by default. The CLI intentionally does not support `--host 0.0.0.0` yet and exits with a usage error; `--trusted-host` adds named authorities accepted by the `/api` browser-trust fence.
 

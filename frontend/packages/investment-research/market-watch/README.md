@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-This function plugin registers synchronous market-watch tools over an externally running Python HTTP endpoint. It owns Cordis registration, request forwarding, and result rendering; the endpoint owns watchlist and alert state, market data, alert scheduling, and external delivery.
+This function plugin registers synchronous market-watch tools over a Python HTTP endpoint leased from [`ctx.investmentPythonRuntime`](../python-runtime/README.md). It owns the backend definition, Cordis registration, request forwarding, and result rendering; the Runtime owns lifecycle verification, and the endpoint owns watchlist and alert state, market data, alert scheduling, and external delivery.
 
 ## Tools
 
@@ -12,13 +12,15 @@ The plugin registers `watch_add`, `watch_remove`, and `watch_list` for its indep
 
 | Key | Default | Meaning |
 |---|---|---|
-| `adapterBaseUrl` | `http://127.0.0.1:8100` | Base URL of the externally running market-watch endpoint. |
+| `backendMode` | `managed` | `managed` starts only a connection-refused local backend; `external` only verifies it. |
+| `backendBaseUrl` | `http://127.0.0.1:8100` | Backend URL registered with the Runtime and supplied to this plugin through its lease. |
+| `backendProjectDir` | — | Explicit absolute `backend/market-watch` directory when source-checkout discovery is unavailable. |
 
 ## Backend behavior and lifecycle
 
 Every tool forwards a synchronous JSON request to the configured endpoint and renders the returned JSON. The plugin does not consume SSE, create timers, or retain endpoint state. Its independent watchlist does not share stock-analysis watchlists or holdings.
 
-Tool registrations live in Cordis effects, so disposing the plugin removes them. The plugin does not start, stop, supervise, or otherwise manage the Python endpoint or its scheduler.
+On activation the plugin registers `market-watch` and acquires a verified lease before registering tools. Tool registrations live in Cordis effects. Disposal removes them first, releases the lease, and unregisters the backend definition. Process creation and termination remain Runtime-owned; the Python scheduler remains endpoint-owned.
 
 ## Failures and model-visible behavior
 
@@ -48,6 +50,6 @@ Tool schemas are prefix-stable while registration is unchanged. Tool results app
 
 ## Known Limitations and Deferred Work
 
-- **External endpoint lifecycle** — the package requires a separately running Python endpoint at `adapterBaseUrl`; it neither launches nor supervises that process, so an unavailable endpoint makes its tools fail.
+- **Project discovery outside the repository** — managed deployments without the source checkout layout must configure an absolute `backendProjectDir`; a missing virtual environment fails with the platform-specific init command and is never installed automatically.
 - **Endpoint-owned alert delivery** — alert scheduling, optional LLM interpretation, and external delivery remain endpoint-owned; this plugin only creates, reads, removes, and presents endpoint records.
 - **Generated tool catalog scope** — the generated tool catalog enumerates `packages/*/tool-*` packages, so these schemas remain documented by this package rather than a catalog entry.

@@ -30,6 +30,15 @@
       "path": "../../packages/bundle/headless"
     },
     {
+      "path": "../../packages/bundle/investment-runtime"
+    },
+    {
+      "path": "../../packages/bundle/investment-stock-analysis"
+    },
+    {
+      "path": "../../packages/bundle/investment-market-watch"
+    },
+    {
       "path": "../../packages/bundle/web-app"
     },
     {

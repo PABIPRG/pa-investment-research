@@ -721,6 +721,30 @@ describe.skipIf(!existsSync(dshBin))('dsh BUILT bin (node lib/bin.js, no tsx)', 
       expect(stdout).not.toMatch(/name: '@deepseek-ai\/dsh-client-/)
     }, 30_000)
 
+    it('prints the investment-research layers in dependency order without machine-specific URLs', async () => {
+      const { stdout, code, stderr } = await runBuiltBin(
+        ['--profile', 'investment-research', '--dump-default-config'],
+        { DSH_HOME: home },
+      )
+      expect(code).toBe(0)
+      expect(stderr).toBe('')
+      const layers = [
+        '@deepseek-ai/dsh-base',
+        '@deepseek-ai/dsh-web-app',
+        '@deepseek-ai/dsh-investment-runtime-bundle',
+        '@deepseek-ai/dsh-investment-stock-analysis-bundle',
+        '@deepseek-ai/dsh-investment-market-watch-bundle',
+      ]
+      const offsets = layers.map(layer => stdout.indexOf(`# == ${layer}`))
+      expect(offsets.every(offset => offset >= 0)).toBe(true)
+      expect(offsets).toEqual([...offsets].sort((left, right) => left - right))
+      expect(stdout.indexOf('id: investment-python-runtime'))
+        .toBeLessThan(stdout.indexOf('id: investment-stock-analysis'))
+      expect(stdout.indexOf('id: investment-python-runtime'))
+        .toBeLessThan(stdout.indexOf('id: investment-market-watch'))
+      expect(stdout).not.toMatch(/file:\/\//u)
+    }, 30_000)
+
     it('composes the profile user layer and a --patch overlay in order', async () => {
       // Auto-init the web profile first, then write its user layer.
       const init = await runBuiltBin(['--profile', 'web', '--dump-default-config'], { DSH_HOME: home })

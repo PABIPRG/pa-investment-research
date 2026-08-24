@@ -6,7 +6,7 @@ const config: ForgeConfig = {
     appBundleId: 'com.deepseek.harness',
     executableName: 'deepseek-harness',
     ignore: [
-      /^\/(?:src|tests|out|lib\/types)(?:\/|$)/,
+      /^\/(?:src|tests|out|lib\/types|\.cache|investment-python)(?:\/|$)/,
     ],
   },
   makers: [
