@@ -207,6 +207,8 @@ def tech_signal(req: TechSignalRequest):
         df = quotes.get_kline(code, lookback=req.lookback)
     except quotes.KlineDeadlineExceeded as exc:
         raise HTTPException(504, f"{exc}，后台刷新仍在继续，请稍后重试")
+    except quotes.KlineRefreshBusy as exc:
+        raise HTTPException(503, f"{exc}，请稍后重试")
     if df is None or df.empty:
         raise HTTPException(404, f"{code} 无 K 线数据")
     ind = compute_indicators(df)
@@ -300,3 +302,5 @@ def _startup():
 @app.on_event("shutdown")
 def _shutdown():
     scheduler.stop_scheduler()
+    news.shutdown_background_workers()
+    quotes.shutdown_background_workers()

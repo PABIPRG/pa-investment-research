@@ -15,7 +15,9 @@ import os
 import threading
 import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout, wait
+from urllib.parse import urlencode
 
 import requests
 from datetime import datetime
@@ -39,19 +41,16 @@ def _pick(df, *names):
 
 def fetch_global_news(top: int = 8) -> list[dict]:
     """财联社要闻，返回 [{title, source, time}]。失败返回空。"""
-    import akshare as ak
-
     items = []
     try:
-        df = ak.stock_info_global_cls(symbol="全部")
-        for r in df.to_dict("records"):
-            title = str(r.get("标题") or "").strip() or str(r.get("内容") or "").strip()
+        for row in _cls_flash(top):
+            title = str(row.get("title") or "").strip() or str(row.get("content") or "").strip()
             if not title:
                 continue
             items.append({
                 "title": title,
                 "source": "财联社",
-                "time": f"{r.get('发布日期')} {r.get('发布时间')}".strip(),
+                "time": str(row.get("time") or ""),
             })
     except Exception as exc:
         logger.warning("财联社要闻拉取失败: %s", exc)
@@ -171,9 +170,20 @@ _FLASH_HEADERS = {
     "Referer": "https://finance.sina.com.cn/7x24/",
 }
 _FLASH_CACHE: dict[str, tuple[float, dict]] = {}
-_FLASH_FLIGHTS: dict[str, Future] = {}
+
+
+@dataclass
+class _FlashFlight:
+    response: Future
+    done: Future | None = None
+
+
+_FLASH_FLIGHTS: dict[str, _FlashFlight] = {}
 _FLASH_LOCK = threading.RLock()
 _FLASH_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="flash-refresh")
+_FLASH_SOURCE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, settings.flash_source_workers), thread_name_prefix="flash-source"
+)
 _FLASH_CLOCK = time.monotonic
 
 # Google News 源需访问境外，走本机代理（clash）；其余国内源显式 proxies={} 直连
@@ -245,21 +255,44 @@ def _sina_flash(limit: int) -> list[dict]:
 
 
 def _cls_flash(limit: int) -> list[dict]:
-    """财联社要闻（akshare，含全文、无链接）。"""
-    import akshare as ak
-
-    df = ak.stock_info_global_cls(symbol="全部")
+    """财联社电报直连（真实 requests timeout，避免 akshare 的无界重试）。"""
+    url = "https://www.cls.cn/v1/roll/get_roll_list"
+    params = {
+        "app": "CailianpressWeb",
+        "category": "",
+        "last_time": int(time.time()),
+        "os": "web",
+        "refresh_type": "1",
+        "rn": str(max(20, limit)),
+        "sv": "8.4.6",
+    }
+    params["sign"] = hashlib.md5(
+        hashlib.sha1(urlencode(params).encode("utf-8")).hexdigest().encode("utf-8")
+    ).hexdigest()
+    response = requests.get(
+        url,
+        params=params,
+        timeout=settings.flash_source_timeout,
+        proxies={},
+        headers={**_FLASH_HEADERS, "Referer": "https://www.cls.cn/telegraph"},
+    )
+    response.raise_for_status()
+    rows = ((response.json() or {}).get("data") or {}).get("roll_data") or []
     out = []
-    for r in df.to_dict("records"):
-        content = _strip_html(str(r.get("内容") or "")).strip()
-        title = str(r.get("标题") or "").strip()
+    for row in rows:
+        content = _strip_html(str(row.get("content") or "")).strip()
+        title = str(row.get("title") or "").strip()
         if not content and not title:
             continue
         if not title:
             title = _flash_title(content)
+        try:
+            published = _t8(datetime.fromtimestamp(int(row.get("ctime")), tz=ZoneInfo(settings.timezone)))
+        except (TypeError, ValueError, OSError):
+            published = ""
         out.append({
-            "id": "cls-" + hashlib.md5(content.encode()).hexdigest()[:10],
-            "time": f"{r.get('发布日期')} {r.get('发布时间')}".strip(),
+            "id": "cls-" + str(row.get("id") or hashlib.md5((content or title).encode()).hexdigest()[:10]),
+            "time": published,
             "tag": "财联社",
             "title": title,
             "content": content,
@@ -384,67 +417,101 @@ def _norm_key(s: str) -> str:
     return re.sub(r"[\s【】\.,，。!！?？:：;；\"'“”‘’()（）]", "", s or "")[:24]
 
 
-def _aggregate_flash(sources: list[dict], limit: int, deadline: float, tier: str) -> dict:
-    """在总体 deadline 内合并已完成来源，未完成来源不会阻塞响应。"""
+def _flash_result(
+    futures: dict[Future, str],
+    selected: set[Future],
+    limit: int,
+    tier: str,
+    logged_failures: set[Future],
+) -> dict:
+    """合并指定的已完成来源；调用方决定这是 deadline 快照还是最终结果。"""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    used: list[str] = []
+    failed = False
+    for future in selected:
+        name = futures[future]
+        try:
+            rows = future.result()
+        except Exception as exc:
+            if future not in logged_failures:
+                logger.warning("快讯源 %s 拉取失败: %s", name, exc)
+                logged_failures.add(future)
+            failed = True
+            continue
+        if rows:
+            used.append(name)
+        for item in rows:
+            key = _norm_key(item["title"]) or item["id"]
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+    merged.sort(key=lambda item: item["time"], reverse=True)
+    return {
+        "as_of": datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S"),
+        "sources": sorted(set(used)),
+        "items": merged[:limit],
+        "tier": tier,
+        "complete": len(selected) == len(futures) and not failed,
+    }
+
+
+def _run_flash_refresh(
+    sources: list[dict], limit: int, deadline: float, tier: str, response: Future
+) -> dict:
+    """先发布 deadline 快照，再等待有界 provider 完成以维持真实 single-flight。"""
     per_source = max(4, limit // max(1, len(sources)))
-    executor = ThreadPoolExecutor(max_workers=len(sources), thread_name_prefix=f"flash-{tier}")
-    futures = {executor.submit(src["fetch"], per_source): src["name"] for src in sources}
+    futures = {
+        _FLASH_SOURCE_EXECUTOR.submit(source["fetch"], per_source): source["name"]
+        for source in sources
+    }
+    logged_failures: set[Future] = set()
     try:
         done, pending = wait(futures, timeout=max(0.0, deadline))
-        merged: list[dict] = []
-        seen: set[str] = set()
-        used: list[str] = []
-        failed = False
-        for future in done:
-            name = futures[future]
-            try:
-                rows = future.result()
-            except Exception as exc:
-                logger.warning("快讯源 %s 拉取失败: %s", name, exc)
-                failed = True
-                continue
-            if rows:
-                used.append(name)
-            for item in rows:
-                key = _norm_key(item["title"]) or item["id"]
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(item)
-        for future in pending:
-            future.cancel()
-        merged.sort(key=lambda item: item["time"], reverse=True)
-        return {
-            "as_of": datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S"),
-            "sources": sorted(set(used)),
-            "items": merged[:limit],
-            "tier": tier,
-            "complete": not pending and not failed,
-        }
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        first = _flash_result(futures, done, limit, tier, logged_failures)
+        if not response.done():
+            response.set_result(first)
+        if pending:
+            wait(pending)
+        return _flash_result(futures, set(futures), limit, tier, logged_failures)
+    except BaseException as exc:
+        if not response.done():
+            response.set_exception(exc)
+        raise
 
 
-def _finish_flash_refresh(key: str, future: Future) -> None:
+def _finish_flash_refresh(key: str, flight: _FlashFlight, future: Future) -> None:
     try:
         result = future.result()
     except Exception as exc:
         logger.warning("快讯刷新失败: %s", exc)
         result = None
     with _FLASH_LOCK:
-        if result and result.get("items"):
-            _FLASH_CACHE[key] = (_FLASH_CLOCK(), result)
-        if _FLASH_FLIGHTS.get(key) is future:
+        now = _FLASH_CLOCK()
+        cached = _FLASH_CACHE.get(key)
+        cached_usable = bool(
+            cached is not None and (now - cached[0]) <= settings.flash_stale_ttl
+        )
+        # incomplete refresh 只作为本次降级响应；不能覆盖仍可用的更完整旧值。
+        # 若旧值已超出 stale 窗口，则保存当前降级结果，避免每次请求都立即重启 refresh。
+        if result and result.get("items") and (result.get("complete") or not cached_usable):
+            _FLASH_CACHE[key] = (now, result)
+        if _FLASH_FLIGHTS.get(key) is flight:
             _FLASH_FLIGHTS.pop(key, None)
 
 
-def _start_flash_refresh(key: str, sources: list[dict], limit: int, deadline: float, tier: str) -> Future:
-    future = _FLASH_FLIGHTS.get(key)
-    if future is None:
-        future = _FLASH_REFRESH_EXECUTOR.submit(_aggregate_flash, sources, limit, deadline, tier)
-        _FLASH_FLIGHTS[key] = future
-        future.add_done_callback(lambda done: _finish_flash_refresh(key, done))
-    return future
+def _start_flash_refresh(key: str, sources: list[dict], limit: int, deadline: float, tier: str) -> _FlashFlight:
+    flight = _FLASH_FLIGHTS.get(key)
+    if flight is None:
+        flight = _FlashFlight(response=Future())
+        done = _FLASH_REFRESH_EXECUTOR.submit(
+            _run_flash_refresh, sources, limit, deadline, tier, flight.response
+        )
+        flight.done = done
+        _FLASH_FLIGHTS[key] = flight
+        done.add_done_callback(lambda future: _finish_flash_refresh(key, flight, future))
+    return flight
 
 
 def _response(data: dict, *, stale: bool, limit: int) -> dict:
@@ -471,12 +538,12 @@ def fetch_flash(limit: int = 30, *, include_slow: bool = False) -> dict:
         age = (now - cached[0]) if cached else None
         if cached and age is not None and age <= settings.flash_cache_ttl:
             return _response(cached[1], stale=False, limit=limit)
-        future = _start_flash_refresh(key, sources, refresh_limit, deadline, tier)
+        flight = _start_flash_refresh(key, sources, refresh_limit, deadline, tier)
         if cached and age is not None and age <= settings.flash_stale_ttl:
             return _response(cached[1], stale=True, limit=limit)
 
     try:
-        result = future.result(timeout=max(0.0, deadline) + 0.25)
+        result = flight.response.result(timeout=max(0.0, deadline) + 0.25)
     except FutureTimeout:
         result = None
     except Exception as exc:
@@ -492,3 +559,9 @@ def fetch_flash(limit: int = 30, *, include_slow: bool = False) -> dict:
         "as_of": datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S"),
         "sources": [], "items": [], "tier": tier, "complete": False, "stale": False,
     }
+
+
+def shutdown_background_workers() -> None:
+    """应用退出时停止接收 refresh，并等待真实 provider 线程收敛。"""
+    _FLASH_REFRESH_EXECUTOR.shutdown(wait=True, cancel_futures=True)
+    _FLASH_SOURCE_EXECUTOR.shutdown(wait=True, cancel_futures=True)

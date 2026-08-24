@@ -46,6 +46,7 @@
 | 404 | 记录不存在（暂无新闻速递 / 简报 / 某代码无 K 线） |
 | 422 | 请求体校验失败（非法代码、非法 kind、非法运算符等） |
 | 503 | 行情/数据源暂不可用（部分端点降级为 422 提示"请稍后再试"） |
+| 504 | K 线冷请求超过前台等待预算；已准入的后台刷新继续 |
 
 ### 1.4 数据源与降级策略
 
@@ -53,7 +54,7 @@
 |---|---|---|
 | 实时快照 | 东财 push2（含量比/换手） | 新浪 hq（无量比/换手） |
 | 异动榜单 | 东财 clist 服务端排序 | 新浪 Market_Center 排序 |
-| 日 K | 新浪 | 东财 push2his → baostock（带锁）；TTL/stale cache + single-flight |
+| 日 K | 新浪 | 东财 push2his → baostock 隔离子进程；TTL/stale cache + 有界 single-flight |
 | 新闻速递 | 财联社 + 东财个股 | LLM 摘要失败 → 纯标题模板 |
 | 结构化事件 | LLM 抽取 | 规则抽取（价格异动/涨停跌停关键词） |
 | 触发解读 / 简报 | LLM | 确定性模板（正文末尾注明） |
@@ -283,7 +284,7 @@ POST /tech-signal
 
 > 各指标子对象字段不足数据时自动置 `null` / 默认文案（`trend: "数据不足"` 等），`signals` 数组为人类可读信号行（供直接渲染 / LLM 上下文）。
 >
-> K 线按 `code+lookback` 使用 60 秒 fresh cache、30 分钟 stale cache 和 single-flight。stale 命中会立即返回并后台刷新；无缓存冷请求最多前台等待 2.5 秒，超时返回 `504`，唯一后台刷新仍会继续，稍后重试可命中缓存。技术信号名称补全最多另等 0.3 秒，超时仅使 `name` 为空，不阻塞指标返回。
+> K 线按 `code+lookback` 使用 60 秒 fresh cache、30 分钟 stale cache 和 single-flight。stale 命中会立即返回并后台刷新；无缓存冷请求最多前台等待 2.5 秒，超时返回 `504`，唯一后台刷新仍会继续，稍后重试可命中缓存。后台最多准入 4 个不同 key，容量已满且没有 stale 时返回 `503`，不会进入无界队列。baostock fallback 在独立子进程运行，超过 2 秒会被父进程终止。技术信号名称补全最多另等 0.3 秒，超时仅使 `name` 为空，不阻塞指标返回。
 
 ---
 
@@ -325,7 +326,7 @@ POST /news/express
 - `enrich=1`：显式完整档，访问全部配置来源，每项附加 `event`（结构化事件，如已抽取）与 `matched`（命中自选/持仓时为 `"hit"`，否则 `""`），可能等待可选 LLM
 - `personal=1`：命中项置顶（个性化排序），须配合 `enrich=1` 才有意义
 
-基础档使用 15 秒 fresh cache 与 5 分钟 stale cache；过期但仍可用的缓存会立即返回，同时只启动一个后台 refresh。完整档同样使用独立 cache 和 single-flight，其外部来源总体 deadline 为 10 秒。来源失败时响应保留已完成来源或 stale cache，不把部分数据伪装成完整结果。
+基础档使用 15 秒 fresh cache 与 5 分钟 stale cache；过期但仍可用的缓存会立即返回，同时只启动一个后台 refresh。refresh 在首屏 deadline 发布部分快照后仍保持 single-flight，直到固定来源池中的有时限 provider 全部结束；完整档同样使用独立 cache 和 10 秒首个快照 deadline。只有完整刷新能替换已有 stale cache，部分刷新不会删除旧缓存中的来源，也不会伪装成完整结果。应用关闭时会停止准入并等待这些有界 worker 收敛。
 
 ```jsonc
 GET /news/flash?limit=30

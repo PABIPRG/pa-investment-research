@@ -64,6 +64,15 @@ class SequencedSource:
         return [_item("refreshed", "刷新快讯")]
 
 
+class FailingSource:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, _limit: int) -> list[dict]:
+        self.calls += 1
+        raise RuntimeError("fake source failure")
+
+
 class FakeResponse:
     def raise_for_status(self) -> None:
         return None
@@ -72,13 +81,24 @@ class FakeResponse:
         return {"result": {"data": {"feed": {"list": []}}}}
 
 
+class FakeClsResponse(FakeResponse):
+    def json(self) -> dict:
+        return {"data": {"roll_data": [{
+            "id": 123,
+            "ctime": 1787600000,
+            "title": "财联社有界直连",
+            "content": "财联社有界直连正文",
+        }]}}
+
+
 class FakeSession:
-    def __init__(self):
+    def __init__(self, response=None):
         self.timeouts: list[float] = []
+        self.response = response or FakeResponse()
 
     def get(self, _url, **kwargs):
         self.timeouts.append(kwargs["timeout"])
-        return FakeResponse()
+        return self.response
 
 
 class OpportunityNewsLatencyTests(unittest.TestCase):
@@ -133,13 +153,86 @@ class OpportunityNewsLatencyTests(unittest.TestCase):
                 patch.object(news.settings, "flash_first_paint_deadline", 0.05),
             ):
                 result = news.fetch_flash(limit=12)
+                self.assertIn("base", news._FLASH_FLIGHTS)
+                repeated = news.fetch_flash(limit=12)
+                self.assertEqual(slow.calls, 1)
         finally:
             release_slow.set()
+        deadline = time.monotonic() + 1
+        while news._FLASH_FLIGHTS and time.monotonic() < deadline:
+            time.sleep(0.01)
 
         self.assertLess(time.monotonic() - started, 0.3)
         self.assertEqual([item["id"] for item in result["items"]], ["fast"])
+        self.assertEqual([item["id"] for item in repeated["items"]], ["fast"])
         self.assertFalse(result["complete"])
         self.assertEqual(result["tier"], "base")
+        self.assertEqual(
+            {item["id"] for item in news._FLASH_CACHE["base"][1]["items"]},
+            {"fast", "slow"},
+        )
+
+    def test_incomplete_refresh_does_not_replace_more_complete_stale_cache(self):
+        clock = FakeClock(11)
+        old = {
+            "as_of": "2026-08-24 10:00:00",
+            "sources": ["新浪财经", "财联社"],
+            "items": [_item("old", "完整旧缓存")],
+            "tier": "base",
+            "complete": True,
+        }
+        news._FLASH_CACHE["base"] = (0, old)
+        fast = FakeSource([_item("new", "部分新数据")])
+        failed = FailingSource()
+        with (
+            patch.object(news, "_FLASH_SOURCES", [
+                {"name": "新浪财经", "fetch": fast},
+                {"name": "财联社", "fetch": failed},
+            ]),
+            patch.object(news, "_FLASH_CLOCK", clock),
+            patch.object(news.settings, "flash_cache_ttl", 10),
+            patch.object(news.settings, "flash_stale_ttl", 100),
+        ):
+            result = news.fetch_flash(limit=12)
+            deadline = time.monotonic() + 1
+            while news._FLASH_FLIGHTS and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["items"][0]["id"], "old")
+        self.assertEqual(news._FLASH_CACHE["base"][1]["items"][0]["id"], "old")
+        self.assertTrue(news._FLASH_CACHE["base"][1]["complete"])
+
+    def test_incomplete_refresh_replaces_cache_after_stale_window_expires(self):
+        clock = FakeClock(101)
+        old = {
+            "as_of": "2026-08-24 10:00:00",
+            "sources": ["新浪财经", "财联社"],
+            "items": [_item("old", "已过期的完整缓存")],
+            "tier": "base",
+            "complete": True,
+        }
+        news._FLASH_CACHE["base"] = (0, old)
+        fast = FakeSource([_item("new", "当前降级数据")])
+        failed = FailingSource()
+        with (
+            patch.object(news, "_FLASH_SOURCES", [
+                {"name": "新浪财经", "fetch": fast},
+                {"name": "财联社", "fetch": failed},
+            ]),
+            patch.object(news, "_FLASH_CLOCK", clock),
+            patch.object(news.settings, "flash_cache_ttl", 10),
+            patch.object(news.settings, "flash_stale_ttl", 100),
+        ):
+            result = news.fetch_flash(limit=12)
+            deadline = time.monotonic() + 1
+            while news._FLASH_FLIGHTS and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.assertFalse(result["stale"])
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["items"][0]["id"], "new")
+        self.assertEqual(news._FLASH_CACHE["base"][1]["items"][0]["id"], "new")
 
     def test_stale_cache_returns_immediately_and_refresh_is_single_flight(self):
         clock = FakeClock()
@@ -179,6 +272,18 @@ class OpportunityNewsLatencyTests(unittest.TestCase):
             self.assertEqual(news._sina_flash(5), [])
 
         self.assertEqual(session.timeouts, [0.25])
+
+    def test_cls_uses_direct_http_with_the_configured_timeout(self):
+        session = FakeSession(FakeClsResponse())
+        with (
+            patch.object(news.requests, "get", session.get),
+            patch.object(news.settings, "flash_source_timeout", 0.25),
+        ):
+            rows = news._cls_flash(5)
+
+        self.assertEqual(session.timeouts, [0.25])
+        self.assertEqual(rows[0]["id"], "cls-123")
+        self.assertEqual(rows[0]["title"], "财联社有界直连")
 
 
 if __name__ == "__main__":
