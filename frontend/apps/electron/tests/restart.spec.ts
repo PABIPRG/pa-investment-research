@@ -27,7 +27,7 @@ interface RestartHarness {
   events: string[]
   forceExit: ReturnType<typeof vi.fn>
   ready: Deferred
-  restart?: () => void
+  restart: (() => void) | undefined
   shutdown: { shutdown: ReturnType<typeof vi.fn> }
   streamOpened: Deferred
   teardown: Deferred
@@ -78,7 +78,7 @@ async function start(): Promise<RestartHarness> {
     openStream: vi.fn(async function *(_kind: string, signal: AbortSignal) {
       events.push('stream-open')
       streamOpened.resolve()
-      await new Promise<void>(resolve => { signal.addEventListener('abort', resolve, { once: true }) })
+      await new Promise<void>(resolve => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
       events.push('stream-aborted-and-drained')
     }),
   }
