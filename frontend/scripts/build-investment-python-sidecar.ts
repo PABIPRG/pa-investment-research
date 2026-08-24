@@ -3,7 +3,6 @@ import { createReadStream, createWriteStream } from 'node:fs'
 import {
   cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile,
 } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
