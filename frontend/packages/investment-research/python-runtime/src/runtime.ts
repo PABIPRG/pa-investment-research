@@ -151,6 +151,35 @@ function normalizeDefinition(
   })
 }
 
+class CredentialOutputRedactor {
+  private pending = ''
+  private readonly values: readonly string[]
+
+  constructor(private readonly env: Readonly<Record<string, string>> | undefined) {
+    this.values = [...new Set(Object.values(env ?? {}).filter(value => value.length > 0))]
+  }
+
+  redact(text: string): string {
+    const input = this.pending + text
+    this.pending = this.trailingPrefix(input)
+    return safeErrorMessage(input.slice(0, input.length - this.pending.length), this.env)
+  }
+
+  flush(): string {
+    const pending = this.pending
+    this.pending = ''
+    return safeErrorMessage(pending, this.env)
+  }
+
+  private trailingPrefix(text: string): string {
+    for (let index = 0; index < text.length; index += 1) {
+      const candidate = text.slice(index)
+      if (this.values.some(value => value.startsWith(candidate))) return candidate
+    }
+    return ''
+  }
+}
+
 async function executableExists(path: string): Promise<boolean> {
   try {
     await access(path)
@@ -392,6 +421,10 @@ export class InvestmentBackendManager {
     const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined
       ? undefined
       : { ...definition.managedEnv, ...credentialEnv }
+    const redactors = {
+      stdout: new CredentialOutputRedactor(credentialEnv),
+      stderr: new CredentialOutputRedactor(credentialEnv),
+    }
     let handle: SubprocessHandle
     try {
       handle = this.subprocess.spawn({
@@ -413,13 +446,17 @@ export class InvestmentBackendManager {
     let outcome: Awaited<SubprocessHandle['done']> | undefined
     let spawnFailure: unknown
     void handle.done.then((value) => { outcome = value }, (error: unknown) => { spawnFailure = error })
-    const drain = async (): Promise<void> => {
+    const drain = async (final = false): Promise<void> => {
       for (const source of ['stdout', 'stderr'] as const) {
         const read = handle.collected[source]?.readFrom(offsets[source])
         if (read !== undefined) {
           offsets[source] = read.nextOffset
-          await log.append(source, safeErrorMessage(read.text, credentialEnv))
+          const redacted = redactors[source].redact(read.text)
+          if (redacted.length > 0) await log.append(source, redacted)
         }
+        if (!final) continue
+        const remaining = redactors[source].flush()
+        if (remaining.length > 0) await log.append(source, remaining)
       }
     }
     const state: OwnedBackendState = {
@@ -443,12 +480,14 @@ export class InvestmentBackendManager {
           throw new Error(`investment Python backend "${definition.id}" health is ${next.status}`)
         }
         if (spawnFailure !== undefined || outcome !== undefined) {
+          await drain(true)
           const fact = spawnFailure === undefined
             ? `exit ${String(outcome?.exitCode)}`
             : safeErrorMessage(spawnFailure, spawnEnv)
           throw new Error(`investment Python backend "${definition.id}" exited before healthy (${fact})\n${log.tail()}`)
         }
         if (this.internals.now() >= deadlineAt) {
+          await drain(true)
           throw new Error(`investment Python backend "${definition.id}" startup timed out after ${this.config.startupTimeoutMs}ms\n${log.tail()}`)
         }
         await this.internals.sleep(this.config.healthPollMs)
@@ -475,10 +514,10 @@ export class InvestmentBackendManager {
     }
   }
 
-  private async failOwned(handle: SubprocessHandle, drain: () => Promise<void>): Promise<void> {
+  private async failOwned(handle: SubprocessHandle, drain: (final?: boolean) => Promise<void>): Promise<void> {
     handle.terminate()
     const exit = await Promise.allSettled([handle.waitForExit()])
-    await Promise.allSettled([drain()])
+    await Promise.allSettled([drain(true)])
     const failure = exit[0]
     if (failure.status === 'rejected') throw failure.reason
   }

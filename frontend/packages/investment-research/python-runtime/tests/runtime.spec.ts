@@ -34,6 +34,10 @@ function credentialRef(value: string): CredentialRef {
   return value as CredentialRef
 }
 
+function withoutLogPrefixes(text: string): string {
+  return text.replaceAll('[stdout] ', '').replaceAll('[stderr] ', '')
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -413,6 +417,100 @@ describe('InvestmentBackendManager', () => {
     const cleanupLog = await readFile(join(cleanup.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(cleanupLog).toContain('cleanup diagnostic')
     expect(cleanupLog).not.toContain(secret)
+  })
+
+  it('redacts a credential split across drains before an owned child exits early', async () => {
+    const secret = 'credential-value-split-between-drains'
+    const splitAt = 19
+    const current = await harness()
+    current.handle.stdoutChunks.push(`early diagnostic ${secret.slice(0, splitAt)}`)
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => refused,
+      resolveCredential: async () => secret,
+      sleep: async () => {
+        current.handle.stdoutChunks.push(`${secret.slice(splitAt)} preserved detail\n`)
+        current.handle.exit({ exitCode: 2, signal: null })
+      },
+    })
+    manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const error = await manager.acquire('trading-core').catch(reason => reason)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('early diagnostic')
+    expect((error as Error).message).toContain('preserved detail')
+    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
+    expect(log).toContain('early diagnostic')
+    expect(log).toContain('preserved detail')
+    expect(withoutLogPrefixes(log)).not.toContain(secret)
+  })
+
+  it('redacts a credential split across drains before an owned child times out', async () => {
+    const secret = 'credential-value-split-between-drains'
+    const splitAt = 19
+    const current = await harness()
+    current.handle.stderrChunks.push(`timeout diagnostic ${secret.slice(0, splitAt)}`)
+    current.handle.autoExitOnTerminate = true
+    const nowValues = [0, 0, 1]
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, startupTimeoutMs: 1 },
+      checkHealth: async () => refused,
+      resolveCredential: async () => secret,
+      sleep: async () => {
+        current.handle.stderrChunks.push(`${secret.slice(splitAt)} preserved timeout detail\n`)
+      },
+      now: () => nowValues.shift() ?? 1,
+    })
+    manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const error = await manager.acquire('trading-core').catch(reason => reason)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain('timed out')
+    expect((error as Error).message).toContain('timeout diagnostic')
+    expect((error as Error).message).toContain('preserved timeout detail')
+    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
+    expect(log).toContain('timeout diagnostic')
+    expect(log).toContain('preserved timeout detail')
+    expect(withoutLogPrefixes(log)).not.toContain(secret)
+  })
+
+  it('redacts a credential split across drains before cleanup reports an AggregateError', async () => {
+    const secret = 'credential-value-split-between-drains'
+    const splitAt = 19
+    const current = await harness()
+    current.handle.stdoutChunks.push(`cleanup diagnostic ${secret.slice(0, splitAt)}`)
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => refused,
+      resolveCredential: async () => secret,
+      sleep: async () => {
+        current.handle.stdoutChunks.push(`${secret.slice(splitAt)} preserved cleanup detail\n`)
+        void current.handle.done.catch(() => {})
+        current.handle.fail(new Error(`cleanup wait failed ${secret}`))
+      },
+    })
+    manager.register({
+      ...definition,
+      credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
+    })
+    const error = await manager.acquire('trading-core').catch(reason => reason)
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as Error).message).toContain('cleanup diagnostic')
+    expect((error as Error).message).toContain('preserved cleanup detail')
+    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
+    expect(log).toContain('cleanup diagnostic')
+    expect(log).toContain('preserved cleanup detail')
+    expect(withoutLogPrefixes(log)).not.toContain(secret)
   })
 
   it('omits unresolved credentials from the owned child environment and redacts resolver values from spawn errors', async () => {
