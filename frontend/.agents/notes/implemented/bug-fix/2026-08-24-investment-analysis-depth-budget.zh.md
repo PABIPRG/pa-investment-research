@@ -14,6 +14,8 @@ adapter 在合并基础配置与请求覆盖后固定设置 `memory_enabled=fals
 
 研究深度现在选择明确的分析师集合。`quick` 运行市场分析师，`basic` 运行市场和基本面分析师，`standard`、`deep` 和 `full` 保留市场、社媒、新闻和基本面分析师。`quick`、`basic` 和 `standard` 的辩论与风险讨论均保持 1 轮，`deep` 保持 2 轮，`full` 保持 3 轮。pipeline manifest 读取传给 `TradingAgentsGraph` 的同一份分析师配置，因此它声明的节点预算与实际构图一致。
 
+持仓工具的 `deep` 模式明确把每只持仓交给引擎的 `standard` 档位。这样既保留原有的四分析师持仓覆盖，也不用承担引擎 `deep` 档位增加的辩论轮次。面向模型的 schema 会说明个股分析的所有档位以及持仓到 `standard` 的映射。
+
 ## Alternatives considered
 
 **并行执行所有相互独立的分析师。** 并行 graph 状态合并会改变执行与进度语义，需要更广的 provider 和 state reducer 覆盖。本次修复使用 graph 现有的 `selected_analysts` 扩展点。
@@ -27,4 +29,5 @@ adapter 在合并基础配置与请求覆盖后固定设置 `memory_enabled=fals
 - 无网络节点预算为：`quick` 9、`basic` 10、`standard` 12、`deep` 17、`full` 22。与原先 12 节点的浅层 graph 相比，`quick` 减少 25% 的 agent 节点，`basic` 减少约 17%。
 - `deep` 和 `full` 保留原有分析师覆盖与辩论语义。
 - `quick` 不产生社媒、新闻和基本面报告；`basic` 不产生社媒和新闻报告。需要这些视角的调用方使用 `standard` 或更深档位。
+- 持仓 `deep` 分析通过传入 `research_depth=standard` 保留四分析师覆盖；mocked runner 测试会锁定该委派契约。
 - adapter 构图不再初始化 Chroma memory，也不发起 memory embedding 请求。mocked graph 测试在无网络条件下锁定 memory 不变量、分析师选择、manifest 内容、未知深度回退与节点预算。

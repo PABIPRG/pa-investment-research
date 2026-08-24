@@ -693,6 +693,8 @@ describe('headless stream-json snapshots', () => {
         const actual = logs[0]
         if (actual === undefined) throw new Error('investment snapshot did not persist its session')
         expect(actual.content).toContain('"name":"analyze_stock"')
+        expect(actual.content).toContain('quick=仅市场、最低延迟；basic=市场+基本面')
+        expect(actual.content).toContain('deep 模式对每只股票并行跑引擎 standard 深度（四分析师')
         expect(actual.content).toContain('"name":"watch_list"')
         expect(actual.content).toContain('正在分析 600519')
         expect(actual.content).toContain('市场阶段 Markdown')

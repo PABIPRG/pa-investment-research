@@ -14,6 +14,8 @@ The adapter enforces `memory_enabled=false` after applying base configuration an
 
 Research depth now selects an explicit analyst set. `quick` runs the market analyst, `basic` runs market and fundamentals, and `standard`, `deep`, and `full` retain market, social, news, and fundamentals. Debate and risk-discussion rounds remain one for `quick`, `basic`, and `standard`, two for `deep`, and three for `full`. The pipeline manifest reads the same selected-analyst configuration passed to `TradingAgentsGraph`, so its declared node budget matches the graph construction.
 
+The holdings tool's `deep` mode explicitly delegates each holding to the `standard` engine tier. This preserves the original four-analyst holdings coverage without paying for the extra debate rounds of the engine's `deep` tier. Model-visible schemas describe every stock-analysis tier and identify this holdings-to-standard mapping.
+
 ## Alternatives considered
 
 **Parallelize all independent analysts.** Parallel graph state merging changes execution and progress semantics and needs broader provider and state-reducer coverage. This fix uses the graph's existing `selected_analysts` extension point instead.
@@ -27,4 +29,5 @@ Research depth now selects an explicit analyst set. `quick` runs the market anal
 - The keyless node budget is 9 for `quick`, 10 for `basic`, 12 for `standard`, 17 for `deep`, and 22 for `full`. Compared with the previous 12-node shallow graph, this removes 25% of `quick` agent nodes and about 17% of `basic` agent nodes.
 - `deep` and `full` preserve their analyst coverage and debate semantics.
 - `quick` omits social, news, and fundamentals reports; `basic` omits social and news reports. Callers requiring those perspectives use `standard` or deeper.
+- Holdings `deep` analysis keeps four-analyst coverage by passing `research_depth=standard`; a mocked runner test enforces that delegation contract.
 - Adapter graph construction no longer initializes Chroma memory or issues memory embedding requests. Mocked graph tests enforce the memory invariant, analyst selection, manifest contents, fallback depth, and node budgets without network access.

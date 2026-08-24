@@ -183,14 +183,14 @@ curl -X POST http://127.0.0.1:8000/analyze \
 
 **两级分析：**
 - **L1 定量（always）**：逐股 baostock 前复权日线 → 年化波动率 / 最大回撤 / β(vs 沪深300)；组合市值 / 成本 / 浮盈 / 权重 / 组合波动率 wᵀΣw / HHI 集中度 / 行业暴露。
-- **L2 深度（`deep`）**：`ThreadPoolExecutor(3)` 并行逐股跑引擎 `quick` 深度 → 每股 `risk_score` / `action` / `confidence`。
+- **L2 深度（`deep`）**：`ThreadPoolExecutor(3)` 并行逐股跑引擎 `standard` 深度，保留市场、社媒、新闻和基本面四分析师、各 1 轮多空与风险辩论 → 每股 `risk_score` / `action` / `confidence`。
 
 **请求体** `HoldingsRequest`
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `holdings` | `HoldingItem[]` | | `null` | 持仓列表；为空时回退已保存持仓 |
-| `mode` | string | | `"deep"` | `quick`=仅定量风险(秒级) / `deep`=逐股引擎分析(慢) |
+| `mode` | string | | `"deep"` | `quick`=仅定量风险(秒级) / `deep`=逐股 `standard` 四分析师引擎分析(慢) |
 | `use_saved` | bool | | `true` | `holdings` 为空时是否回退到已保存持仓 |
 | `risk_profile` | string | | `null` | `conservative`/`balanced`/`aggressive` |
 

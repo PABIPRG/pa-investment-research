@@ -16,7 +16,10 @@ class AnalyzeRequest(BaseModel):
     market: str = Field(default="a_shares", description="市场，可选，默认按代码自动识别")
     research_depth: str = Field(
         default="standard",
-        description="研究深度: quick/basic/standard/deep/full，可选",
+        description=(
+            "研究深度: quick=市场，basic=市场+基本面，standard=四分析师单轮，"
+            "deep=四分析师双轮，full=四分析师三轮+在线新闻"
+        ),
     )
     config_overrides: dict = Field(
         default_factory=dict, description="会话级参数覆盖（辩论轮数等）"
@@ -41,7 +44,8 @@ class HoldingsRequest(BaseModel):
         default=None, description="持仓列表；为空时使用已保存持仓"
     )
     mode: Literal["quick", "deep"] = Field(
-        default="deep", description="deep=逐股引擎分析(慢), quick=仅定量风险(秒级)"
+        default="deep",
+        description="deep=逐股 standard 四分析师引擎分析(慢), quick=仅定量风险(秒级)",
     )
     use_saved: bool = Field(
         default=True, description="holdings 为空时是否回退到已保存持仓"

@@ -8,6 +8,18 @@ This function plugin registers stock-analysis tools over a Python HTTP endpoint 
 
 The plugin registers `analyze_stock`, `analyze_holdings`, and `market_brief` for streaming analysis or brief generation, plus `set_watchlist`, `set_holdings`, `get_watchlist`, `set_risk_profile`, `get_risk_profile`, and `get_latest_brief` for endpoint-backed saved state. The package plugin declares their model-facing schemas.
 
+`analyze_stock` exposes these latency and coverage tiers:
+
+| Depth | Analyst coverage | Debate and risk rounds | Relative latency |
+|---|---|---:|---|
+| `quick` | Market | 1 | Lowest |
+| `basic` | Market and fundamentals | 1 | Low |
+| `standard` | Market, social, news, and fundamentals | 1 | Default |
+| `deep` | Market, social, news, and fundamentals | 2 | High |
+| `full` | Market, social, news, and fundamentals, with online news enabled | 3 | Highest |
+
+`analyze_holdings` keeps its two-mode contract: `quick` performs quantitative risk only, while `deep` runs the `standard` four-analyst tier for each holding in parallel.
+
 ## Configuration
 
 | Key | Default | Meaning |

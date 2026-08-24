@@ -32,14 +32,14 @@ function output(properties: Record<string, unknown>) {
 const STOCK_CONTRACTS = [
   {
     name: 'analyze_stock',
-    description: '对 A 股股票进行多智能体 AI 分析（市场/基本面/新闻/情绪分析师 → 多空辩论 → 交易员 → 风险辩论 → 风险经理），返回买入/持有/卖出决策、目标价、置信度与完整分步报告。输入可以是股票代码（如 600519）或名称（如 贵州茅台）；date 留空表示最近交易日。',
-    parameters: input({ ticker: { type: 'string', description: '股票代码（如 600519）或名称（如 贵州茅台）' }, date: { type: 'string', description: '分析日期 YYYY-MM-DD，可选，默认最近交易日' }, research_depth: { type: 'string', description: '研究深度，可选，默认 standard', enum: ['quick', 'basic', 'standard', 'deep', 'full'] }, config_overrides: { description: '可选，会话级引擎参数覆盖（如 max_debate_rounds）' }, risk_profile: riskProfile }, ['ticker']),
+    description: '对 A 股股票进行多智能体 AI 分析，返回买入/持有/卖出决策、目标价、置信度与分步报告。研究档位按延迟从低到高扩展分析覆盖：quick 仅市场，basic 增加基本面，standard 覆盖市场/基本面/新闻/情绪，deep/full 保持四分析师并增加多空与风险辩论轮次。输入可以是股票代码（如 600519）或名称（如 贵州茅台）；date 留空表示最近交易日。',
+    parameters: input({ ticker: { type: 'string', description: '股票代码（如 600519）或名称（如 贵州茅台）' }, date: { type: 'string', description: '分析日期 YYYY-MM-DD，可选，默认最近交易日' }, research_depth: { type: 'string', description: '研究深度：quick=仅市场、最低延迟；basic=市场+基本面；standard=四分析师+1 轮多空/风险辩论（默认）；deep=四分析师+2 轮；full=四分析师+3 轮并启用在线新闻，延迟依次增加', enum: ['quick', 'basic', 'standard', 'deep', 'full'] }, config_overrides: { description: '可选，会话级引擎参数覆盖（如 max_debate_rounds）' }, risk_profile: riskProfile }, ['ticker']),
     schema: output({ signal: { description: '统一决策信号（action/target_price/confidence/risk_score/reasoning）' }, reports: { description: '各分析阶段的分步 Markdown 报告' }, performance_metrics: { description: '各节点耗时统计' } }),
   },
   {
     name: 'analyze_holdings',
-    description: '分析当前持仓的风险：市值/浮盈/权重/集中度 HHI/行业暴露 + 逐股年化波动率/最大回撤/β。deep 模式对每只股票并行跑引擎 quick 深度（约 3-5 分钟），输出每股风险分与买卖信号；quick 模式仅定量风险（秒级）。holdings 传持仓列表（代码+股数+成本价）；不传则用已保存持仓。',
-    parameters: input({ holdings: { description: '持仓列表 [{ticker:"600519", quantity:200, cost_price:1480}, ...]；缺省用已保存持仓' }, mode: { type: 'string', description: 'deep=逐股引擎分析(慢,约3-5分钟), quick=仅定量风险(秒级)，默认 deep', enum: ['quick', 'deep'] }, use_saved: { type: 'boolean', description: 'holdings 为空时是否回退到已保存持仓，默认 true' }, risk_profile: riskProfile }),
+    description: '分析当前持仓的风险：市值/浮盈/权重/集中度 HHI/行业暴露 + 逐股年化波动率/最大回撤/β。deep 模式对每只股票并行跑引擎 standard 深度（四分析师，约 3-5 分钟），输出每股风险分与买卖信号；quick 模式仅定量风险（秒级）。holdings 传持仓列表（代码+股数+成本价）；不传则用已保存持仓。',
+    parameters: input({ holdings: { description: '持仓列表 [{ticker:"600519", quantity:200, cost_price:1480}, ...]；缺省用已保存持仓' }, mode: { type: 'string', description: 'deep=逐股 standard 四分析师引擎分析(慢,约3-5分钟), quick=仅定量风险(秒级)，默认 deep', enum: ['quick', 'deep'] }, use_saved: { type: 'boolean', description: 'holdings 为空时是否回退到已保存持仓，默认 true' }, risk_profile: riskProfile }),
     schema: output({ signal: { description: '组合信号（市值/浮盈/风险/逐股明细）' }, reports: { description: 'Markdown 报告' }, performance_metrics: { description: '耗时统计' } }),
   },
   {

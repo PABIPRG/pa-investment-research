@@ -206,7 +206,7 @@ adapter 分析固定关闭 TradingAgentsGraph memory，跨次记忆仍由 dsh �
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `holdings` | array | | `[{ticker, quantity, cost_price}]`，为空时回退已保存持仓 |
-| `mode` | enum | | `quick`（仅定量，秒级）/ `deep`（逐股引擎，3–5 分钟），默认 `deep` |
+| `mode` | enum | | `quick`（仅定量，秒级）/ `deep`（逐股 `standard` 四分析师引擎，3–5 分钟），默认 `deep` |
 | `use_saved` | boolean | | `holdings` 为空时是否用已保存持仓，默认 `true` |
 | `risk_profile` | enum | | 同上 |
 

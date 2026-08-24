@@ -8,6 +8,18 @@
 
 插件注册 `analyze_stock`、`analyze_holdings` 和 `market_brief`，用于流式分析或简报生成；还注册 `set_watchlist`、`set_holdings`、`get_watchlist`、`set_risk_profile`、`get_risk_profile` 和 `get_latest_brief`，用于由 endpoint 支持的已保存状态。包插件声明其面向模型的 schema。
 
+`analyze_stock` 暴露以下延迟与覆盖档位：
+
+| 深度 | 分析师覆盖 | 多空与风险辩论轮次 | 相对延迟 |
+|---|---|---:|---|
+| `quick` | 市场 | 1 | 最低 |
+| `basic` | 市场、基本面 | 1 | 较低 |
+| `standard` | 市场、社媒、新闻、基本面 | 1 | 默认 |
+| `deep` | 市场、社媒、新闻、基本面 | 2 | 较高 |
+| `full` | 市场、社媒、新闻、基本面，并启用在线新闻 | 3 | 最高 |
+
+`analyze_holdings` 保持两档契约：`quick` 只做定量风险，`deep` 则为每只持仓并行运行 `standard` 四分析师档位。
+
 ## 配置
 
 | 配置键 | 默认值 | 含义 |
