@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { ComponentProps } from 'react'
+import { StrictMode, type ComponentProps } from 'react'
 import { OpportunityPage, PortfolioPage } from '../src/client/InvestmentShell.tsx'
 
 type RequestData = ComponentProps<typeof OpportunityPage>['requestData']
@@ -58,7 +58,7 @@ describe('投研数据页慢请求状态', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('实时资讯暂不可用')
     expect(screen.getByText('贵州茅台')).toBeTruthy()
-    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试实时资讯暂不可用' }))
     await waitFor(() => {
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(2)
     })
@@ -153,5 +153,87 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.getByText('新筛选结果')).toBeTruthy()
     expect(screen.queryByText('晚到旧结果')).toBeNull()
     expect(screen.getByRole('button', { name: '量比异动' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('StrictMode effect 重放复用初始请求并由最新 generation 接收结果', async () => {
+    const holdings = deferred<unknown>()
+    const risk = deferred<unknown>()
+    const alerts = deferred<unknown>()
+    const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'trading-core.holdings') return holdings.promise
+      if (request.operation === 'trading-core.risk-portfolio') return risk.promise
+      if (request.operation === 'trading-core.risk-alerts') return alerts.promise
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(
+      <StrictMode>
+        <PortfolioPage requestData={requestData} onAnalyze={() => {}} />
+      </StrictMode>,
+    )
+
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-portfolio')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-alerts')).toHaveLength(1)
+
+    await act(async () => {
+      holdings.resolve({ items: [{ ticker: '600036', name: '招商银行', quantity: 100, cost_price: 40 }] })
+      risk.resolve({ profile_label: '平衡', summary: { n_positions: 1 }, breaches: [] })
+      alerts.resolve({ items: [] })
+    })
+
+    await screen.findByText('招商银行')
+    expect(screen.getByText('平衡')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain('共 3/3 项可用')
+  })
+
+  it('A-B-A 筛选复用仍未完成的 A flight，并由最后一次 A 选择接收结果', async () => {
+    const gainers = deferred<unknown>()
+    const volumeRatio = deferred<unknown>()
+    const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.news-flash') return Promise.resolve([])
+      if (request.operation === 'market-watch.tech-signal') return Promise.resolve({ signals: [] })
+      if (request.operation === 'market-watch.scan') {
+        return request.input?.kind === 'gainers' ? gainers.promise : volumeRatio.promise
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} />)
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+
+    fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
+    await waitFor(() => {
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.scan')).toHaveLength(2)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '涨幅榜' }))
+    await act(async () => {})
+
+    const scanCalls = requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.scan')
+    expect(scanCalls).toHaveLength(2)
+    expect(scanCalls.filter(([request]) => request.input?.kind === 'gainers')).toHaveLength(1)
+
+    await act(async () => {
+      gainers.resolve({ items: [{ code: '600000', name: '最终 A 结果' }] })
+    })
+    await screen.findByText('最终 A 结果')
+    await act(async () => {
+      volumeRatio.resolve({ items: [{ code: '000001', name: '晚到 B 结果' }] })
+    })
+    expect(screen.getByText('最终 A 结果')).toBeTruthy()
+    expect(screen.queryByText('晚到 B 结果')).toBeNull()
+    expect(screen.getByRole('button', { name: '涨幅榜' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('多个局部错误的重试按钮包含对应区域名称', async () => {
+    const requestData = vi.fn<RequestData>(request => Promise.reject(new Error(`${request.operation} unavailable`)))
+
+    render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+
+    await waitFor(() => { expect(screen.getAllByRole('alert')).toHaveLength(3) })
+    expect(screen.getByRole('button', { name: '重试组合风险暂不可用' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '重试持仓暂不可用' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '重试风险预警暂不可用' })).toBeTruthy()
   })
 })

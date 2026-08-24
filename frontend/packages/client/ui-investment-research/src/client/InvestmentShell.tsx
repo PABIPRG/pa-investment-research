@@ -41,22 +41,21 @@ function errorText(reason: unknown): string {
 }
 
 /**
- * Own one browser request flight and ignore superseded settlements. A same-key
- * refresh retains its prior value; a different request key clears mismatched data.
+ * Own browser request flights by serialized key and ignore superseded settlements.
+ * A same-key refresh retains its prior value; a different request key clears
+ * mismatched data. Effect replay and A-B-A selection reuse an unsettled flight.
  */
 function useRequestResource(requestData: RequestData): RequestResource {
   const [state, setState] = useState<ResourceState>(EMPTY_RESOURCE)
   const generationRef = useRef(0)
-  const activeKeyRef = useRef<string>()
+  const flightsRef = useRef(new Map<string, Promise<unknown>>())
   const settledKeyRef = useRef<string>()
 
   useEffect(() => () => { generationRef.current += 1 }, [])
 
   const run = useCallback((request: InvestmentDataRequest): void => {
     const key = JSON.stringify(request)
-    if (activeKeyRef.current === key) return
     const generation = ++generationRef.current
-    activeKeyRef.current = key
     setState((current) => {
       const retain = current.loaded && settledKeyRef.current === key
       return {
@@ -66,8 +65,16 @@ function useRequestResource(requestData: RequestData): RequestResource {
         error: '',
       }
     })
-    void Promise.resolve()
-      .then(() => requestData(request))
+    let flight = flightsRef.current.get(key)
+    if (flight === undefined) {
+      flight = Promise.resolve().then(() => requestData(request))
+      flightsRef.current.set(key, flight)
+      const release = (): void => {
+        if (flightsRef.current.get(key) === flight) flightsRef.current.delete(key)
+      }
+      void flight.then(release, release)
+    }
+    void flight
       .then((value) => {
         if (generation !== generationRef.current) return
         settledKeyRef.current = key
@@ -76,14 +83,10 @@ function useRequestResource(requestData: RequestData): RequestResource {
         if (generation !== generationRef.current) return
         setState(current => ({ ...current, phase: 'error', error: errorText(reason) }))
       })
-      .finally(() => {
-        if (generation === generationRef.current) activeKeyRef.current = undefined
-      })
   }, [requestData])
 
   const reset = useCallback((): void => {
     generationRef.current += 1
-    activeKeyRef.current = undefined
     settledKeyRef.current = undefined
     setState(EMPTY_RESOURCE)
   }, [])
@@ -1029,7 +1032,7 @@ function ErrorCard({
   return (
     <div className={css.errorCard} role="alert" data-retained={retained || undefined}>
       <div><strong>{title}</strong><p>{message}</p></div>
-      <button type="button" onClick={retry}>重试</button>
+      <button type="button" aria-label={`重试${title}`} onClick={retry}>重试</button>
     </div>
   )
 }
