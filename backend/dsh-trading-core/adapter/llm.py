@@ -50,3 +50,16 @@ def summarize(
         kwargs["response_format"] = {"type": response_format}
     resp = get_client().chat.completions.create(**kwargs)
     return (resp.choices[0].message.content or "").strip()
+
+
+def chat_json(system: str, user: str, max_tokens: int = 2500) -> dict:
+    """system/user → 结构化 JSON。DeepSeek json_object 模式 + 剥 ```json 围栏。
+    失败抛异常（上层负责降级）。"""
+    import json
+    import re
+
+    text = summarize(system, user, max_tokens=max_tokens, response_format="json_object")
+    if not text:
+        raise LLMUnavailable("LLM 返回空 JSON")
+    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.IGNORECASE).strip()
+    return json.loads(text)

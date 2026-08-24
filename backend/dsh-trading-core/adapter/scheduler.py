@@ -59,23 +59,57 @@ def _parse_hhmm(s: str) -> tuple[int, int]:
     return int(h), int(m)
 
 
+def _run_shadow_job() -> None:
+    """每日影子验证：判交易日 → 记账（幂等，已运行自动跳过）。"""
+    from .brief_engine import _is_trading_day  # lazy
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if not _is_trading_day(today):
+        logger.info("非交易日 %s，跳过影子验证", today)
+        return
+
+    logger.info("⏰ 定时影子验证（%s）…", today)
+    try:
+        from .shadow import ShadowRunner
+        res = ShadowRunner().run({"force": False}, lambda m: None)
+        if res.get("skipped"):
+            logger.info("影子验证跳过: %s", res.get("reason"))
+        else:
+            logger.info("影子验证完成: overall_nav=%s, strategies=%d",
+                        res.get("overall_nav"), len(res.get("strategies") or {}))
+    except Exception as exc:  # noqa: BLE001 — 定时任务异常不拖垮服务
+        logger.error("影子验证失败: %s", exc)
+
+
 def setup_scheduler() -> BackgroundScheduler | None:
-    """按 BRIEF_SCHEDULE_ENABLED 决定是否挂载；关闭时返回 None。"""
-    if not settings.schedule_enabled:
-        logger.info("BRIEF_SCHEDULE_ENABLED=false，跳过定时调度（可用 POST /brief 手动触发）")
+    """按 BRIEF_SCHEDULE_ENABLED / SHADOW_SCHEDULE_ENABLED 决定是否挂载；全关返回 None。"""
+    if not settings.schedule_enabled and not settings.shadow_schedule_enabled:
+        logger.info("BRIEF_SCHEDULE_ENABLED=false 且 SHADOW_SCHEDULE_ENABLED=false，跳过定时调度")
         return None
 
-    pre_h, pre_m = _parse_hhmm(settings.pre_market_time)
-    post_h, post_m = _parse_hhmm(settings.post_market_time)
     sched = BackgroundScheduler(timezone=_TIMEZONE)
-    sched.add_job(
-        _run_brief_job, CronTrigger(hour=pre_h, minute=pre_m),
-        args=["pre_market"], id="brief_pre_market", replace_existing=True,
-    )
-    sched.add_job(
-        _run_brief_job, CronTrigger(hour=post_h, minute=post_m),
-        args=["post_market"], id="brief_post_market", replace_existing=True,
-    )
-    sched.start()
-    logger.info("🕗 定时简报已启动: %s:%02d 盘前 / %s:%02d 盘后", pre_h, pre_m, post_h, post_m)
+
+    if settings.schedule_enabled:
+        pre_h, pre_m = _parse_hhmm(settings.pre_market_time)
+        post_h, post_m = _parse_hhmm(settings.post_market_time)
+        sched.add_job(
+            _run_brief_job, CronTrigger(hour=pre_h, minute=pre_m),
+            args=["pre_market"], id="brief_pre_market", replace_existing=True,
+        )
+        sched.add_job(
+            _run_brief_job, CronTrigger(hour=post_h, minute=post_m),
+            args=["post_market"], id="brief_post_market", replace_existing=True,
+        )
+        logger.info("🕗 定时简报已启动: %s:%02d 盘前 / %s:%02d 盘后", pre_h, pre_m, post_h, post_m)
+
+    if settings.shadow_schedule_enabled:
+        s_h, s_m = _parse_hhmm(settings.shadow_run_time)
+        sched.add_job(
+            _run_shadow_job, CronTrigger(hour=s_h, minute=s_m),
+            id="shadow_daily", replace_existing=True,
+        )
+        logger.info("👤 定时影子验证已启动: %s:%02d", s_h, s_m)
+
+    if sched.get_jobs():
+        sched.start()
     return sched

@@ -100,6 +100,42 @@ class BacktestRunRequest(BaseModel):
     )
 
 
+class HypothesizeRequest(BaseModel):
+    """POST /strategies/hypothesize 请求体：事件 → 投资假设 → 候选入库。"""
+
+    limit: int = Field(default=20, ge=1, le=100, description="事件条数上限")
+    dry_run: bool = Field(
+        default=False, description="true=只生成候选不落库（返回假设供预览）"
+    )
+
+
+class StrategyRunRequest(BaseModel):
+    """POST /strategies/run 请求体：候选策略历史+样本外回测。"""
+
+    strategy_id: str = Field(description="策略 id（strategies 集合键）")
+    lookback_years: float = Field(
+        default=2.0, ge=0.5, le=10, description="历史回看年数"
+    )
+    oos_frac: float = Field(
+        default=0.3, gt=0.0, lt=0.5, description="样本外比例（0~0.5，默认 0.3）"
+    )
+    initial_capital: float = Field(
+        default=0.0, ge=0.0, description="回测初始资金（0=用 SHADOW_INITIAL_CAPITAL）"
+    )
+    min_oos_trades: int = Field(
+        default=4, ge=1, le=100, description="样本外最低成交数（不足保持 candidate）"
+    )
+
+
+class ShadowRunRequest(BaseModel):
+    """POST /shadow/run 请求体：实时影子策略验证。"""
+
+    force: bool = Field(default=False, description="true=强制重跑当日（忽略幂等）")
+    strategy_id: Optional[str] = Field(
+        default=None, description="只验证该策略；空=全部 active 策略"
+    )
+
+
 class WatchlistRequest(BaseModel):
     """POST /watchlist 请求体：整体替换自选列表"""
 

@@ -13,7 +13,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,10 +30,13 @@ from .schemas import (
     BacktestRunRequest,
     BriefRequest,
     HoldingsRequest,
+    HypothesizeRequest,
     KycAdjustRequest,
     KycParseRequest,
     KycQuestionnaireRequest,
     RiskProfileRequest,
+    ShadowRunRequest,
+    StrategyRunRequest,
     WatchlistRequest,
 )
 from .scheduler import setup_scheduler
@@ -67,11 +70,15 @@ def _build_registry() -> dict:
     # 回测无 LLM（纯逻辑 + baostock），fake 模式也走真逻辑，便于链路自测；
     # lazy import 保持 fake 模式不加载引擎重依赖（langgraph/chromadb 等）
     from .backtest_runner import BacktestRunner
+    from .shadow import ShadowRunner
+    from .strategies import StrategyBacktestRunner
     return {
         "stock": stock_runner,
         "holdings": holdings_runner,
         "brief": brief_runner,
         "backtest": BacktestRunner(),
+        "strategy": StrategyBacktestRunner(),
+        "shadow": ShadowRunner(),
     }
 
 
@@ -133,6 +140,21 @@ def create_app() -> FastAPI:
             )
         # 只回显插件声明过的 saved 字段（set_holdings schema additionalProperties:false）
         return {"saved": len(req.holdings or [])}
+
+    @app.get("/holdings", response_model=dict)
+    async def holdings_get():
+        """读取持仓列表，供盯盘/事件模块做命中预警。name 留空，消费方自行补（避免逐票打外部接口）。"""
+        store = JsonStore()
+        items = [
+            {
+                "ticker": h.get("ticker", ""),
+                "name": "",
+                "quantity": h.get("quantity"),
+                "cost_price": h.get("cost_price"),
+            }
+            for h in (store.get("holdings", "default", []) or [])
+        ]
+        return {"items": items}
 
     @app.get("/watchlist", response_model=dict)
     async def watchlist_get():
@@ -306,6 +328,102 @@ def create_app() -> FastAPI:
     async def backtest_performance_code(code: str):
         """别名：单只股票的整体表现。"""
         return _performance_summary(code)
+
+    # ---- 策略研究：事件→假设→回测→候选池（架构图 E→G→H） -------------
+
+    @app.post("/strategies/hypothesize", response_model=dict)
+    def strategies_hypothesize(req: HypothesizeRequest):
+        """事件 → 投资假设 → 候选入库。LLM 阻塞 10-30s，用普通 def 走线程池避免卡事件循环。"""
+        from .strategies import create_candidates, fetch_events, generate_hypotheses
+
+        events = fetch_events(limit=req.limit)
+        if not events:
+            return {"candidates": [], "hypotheses": [],
+                    "note": "事件源暂无事件（market-watch 未开 / 无新事件）"}
+        hypotheses = generate_hypotheses(events)
+        ids = create_candidates(events, hypotheses) if not req.dry_run else []
+        return {"n_events": len(events), "hypotheses": hypotheses, "candidates": ids}
+
+    @app.post("/strategies/run", response_model=dict)
+    async def strategies_run(req: StrategyRunRequest):
+        """启动候选策略历史+样本外回测任务，返回 task_id（SSE 复用 /analyze/{id}/*）。"""
+        payload = req.model_dump()
+        if not payload.get("initial_capital"):
+            payload.pop("initial_capital", None)  # 0 → runner 用 SHADOW_INITIAL_CAPITAL 默认
+        task_id = manager.start(payload, task_type="strategy")
+        return {"task_id": task_id}
+
+    @app.get("/strategies", response_model=dict)
+    async def strategies_list(limit: int = 50):
+        """策略池列表（created_at 倒序）。"""
+        store = JsonStore()
+        rows = list((store.all("strategies") or {}).values())
+        rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        return {"count": len(rows), "items": rows[: max(1, min(limit, 200))]}
+
+    @app.get("/strategies/{sid}", response_model=dict)
+    async def strategies_get(sid: str):
+        """单条策略详情（含 backtest）。"""
+        store = JsonStore()
+        s = store.get("strategies", sid)
+        if not s:
+            raise HTTPException(status_code=404, detail="策略不存在")
+        return s
+
+    @app.post("/strategies/{sid}/{action}", response_model=dict)
+    async def strategies_transition(sid: str, action: Literal["activate", "reject", "retire"]):
+        """手动状态迁移：activate→active / reject→rejected / retire→retired。"""
+        store = JsonStore()
+        s = store.get("strategies", sid)
+        if not s:
+            raise HTTPException(status_code=404, detail="策略不存在")
+        status = {"activate": "active", "reject": "rejected", "retire": "retired"}[action]
+        store.update("strategies", sid, status=status,
+                     updated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        return {"id": sid, "status": status}
+
+    # ---- 实时影子策略验证（架构图 I） ----------------------------------
+
+    @app.post("/shadow/run", response_model=dict)
+    async def shadow_run(req: ShadowRunRequest):
+        """启动影子策略验证任务（paper trading 记账），返回 task_id。"""
+        task_id = manager.start(req.model_dump(), task_type="shadow")
+        return {"task_id": task_id}
+
+    @app.get("/shadow/status", response_model=dict)
+    async def shadow_status():
+        """最近一次影子运行汇总。"""
+        return JsonStore().get("shadows", "latest") or {"note": "尚未运行影子验证"}
+
+    @app.get("/shadow/positions", response_model=dict)
+    async def shadow_positions(strategy_id: Optional[str] = None):
+        """影子账户当前持仓（shadows/pos:*，按策略+代码排序）。"""
+        store = JsonStore()
+        rows = []
+        for key, val in (store.all("shadows") or {}).items():
+            if not key.startswith("pos:"):
+                continue
+            if strategy_id and val.get("strategy_id") != strategy_id:
+                continue
+            rows.append(val)
+        rows.sort(key=lambda r: (r.get("strategy_id", ""), r.get("symbol", "")))
+        return {"count": len(rows), "items": rows}
+
+    @app.get("/shadow/equity", response_model=dict)
+    async def shadow_equity(strategy_id: Optional[str] = None, limit: int = 30):
+        """影子净值历史（shadow_equity/{date}，日期倒序）。"""
+        store = JsonStore()
+        keys = sorted((store.all("shadow_equity") or {}).keys(), reverse=True)
+        recs = []
+        for k in keys[: max(1, min(limit, 100))]:
+            snap = store.get("shadow_equity", k) or {}
+            if strategy_id:
+                s = (snap.get("strategies") or {}).get(strategy_id)
+                recs.append({"date": k, "strategy": s, "overall_nav": snap.get("overall_nav")})
+            else:
+                recs.append({"date": k, "overall_nav": snap.get("overall_nav"),
+                             "strategy_count": len(snap.get("strategies") or {})})
+        return {"count": len(recs), "items": recs}
 
     @app.get("/analyze/{task_id}/stream")
     async def stream(task_id: str):

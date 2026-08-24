@@ -37,6 +37,12 @@ class Settings:
         self.llm_model = os.getenv("BRIEF_LLM_MODEL", "deepseek-chat")
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
         self.deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        # 二期：事件→策略（事件源 + 影子验证）
+        self.mw_url = os.getenv("MW_URL", "http://127.0.0.1:8100")
+        self.event_cache_ttl = float(os.getenv("EVENT_CACHE_TTL", "60"))
+        self.shadow_schedule_enabled = os.getenv("SHADOW_SCHEDULE_ENABLED", "false").lower() == "true"
+        self.shadow_run_time = os.getenv("SHADOW_RUN_TIME", "15:30")
+        self.shadow_initial_capital = float(os.getenv("SHADOW_INITIAL_CAPITAL", "100000"))
 
     def llm_available(self) -> bool:
         return bool(self.deepseek_api_key)
