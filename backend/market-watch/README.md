@@ -23,6 +23,7 @@ On Windows, use `init.bat`, `start_all.bat`, and `verify.bat`. These wrappers st
 - `GET /health` and `GET /scheduler/status` report service state.
 - Watchlists: `POST /watchlist/add`, `POST /watchlist/remove`, `GET /watchlist`.
 - Alerts: `POST /alerts`, `GET /alerts`, `DELETE /alerts/{id}`.
+- Security research: `GET /securities/search`, `POST /securities/detail`.
 - Market data: `POST /scan`, `GET /overview`, `POST /tech-signal`, `GET /news/flash`, `POST /news/express`.
 - Briefs: `POST /brief/generate`, `GET /brief/latest`.
 

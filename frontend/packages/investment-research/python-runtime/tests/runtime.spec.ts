@@ -210,6 +210,42 @@ describe('InvestmentBackendManager', () => {
     }
   })
 
+  it('refuses to silently attach a healthy managed backend recorded by a previous runtime', async () => {
+    const current = await harness([healthy])
+    await writeOwnedBackendState(ownedBackendStatePath(current.home, 'trading-core'), {
+      version: 1,
+      id: 'trading-core',
+      service: 'trading-core',
+      pid: 54735,
+      baseUrl: definition.baseUrl,
+      projectDir: current.projectDir,
+      startedAt: '2026-08-24T12:58:23.707Z',
+    })
+    current.manager.register(definition)
+
+    await expect(current.manager.acquire('trading-core')).rejects.toThrow(
+      /healthy process left by a previous managed runtime \(pid 54735\)/,
+    )
+    expect(current.specs).toHaveLength(0)
+  })
+
+  it('keeps explicit external backends attachable even when managed diagnostics remain', async () => {
+    const current = await harness([healthy])
+    await writeOwnedBackendState(ownedBackendStatePath(current.home, 'trading-core'), {
+      version: 1,
+      id: 'trading-core',
+      service: 'trading-core',
+      pid: 54735,
+      baseUrl: definition.baseUrl,
+      projectDir: current.projectDir,
+      startedAt: '2026-08-24T12:58:23.707Z',
+    })
+    current.manager.register({ ...definition, mode: 'external' })
+
+    await expect(current.manager.acquire('trading-core')).resolves.toMatchObject({ ownership: 'external' })
+    expect(current.specs).toHaveLength(0)
+  })
+
   it('re-verifies reused attached and external entries before adding a lease', async () => {
     for (const mode of ['managed', 'external'] as const) {
       const occupied: BackendHealthResult = { status: 'occupied', healthUrl: 'x', httpStatus: 200 }

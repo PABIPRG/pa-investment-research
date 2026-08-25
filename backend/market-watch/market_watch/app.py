@@ -18,7 +18,7 @@ from . import briefs, events, news, quotes, rules, scanner, scheduler
 from .config import settings
 from .indicators import compute_indicators, summarize
 from .schemas import (
-    AlertRule, BriefRequest, ScanRequest, TechSignalRequest,
+    AlertRule, BriefRequest, ScanRequest, SecurityDetailRequest, TechSignalRequest,
     WatchAddRequest, WatchRemoveRequest,
 )
 from .store import JsonStore
@@ -159,6 +159,64 @@ def alerts_remove(rule_id: str):
 # ---- 盯盘面板 / 扫描 / 技术信号 ---------------------------------------------
 
 
+@app.get("/securities/search")
+def securities_search(q: str, limit: int = 8):
+    query = q.strip()
+    if not query:
+        raise HTTPException(422, "搜索关键词不能为空")
+    if limit < 1 or limit > 20:
+        raise HTTPException(422, "limit 必须在 1 到 20 之间")
+    items = quotes.search_securities(query, limit)
+    return {"query": query, "items": items, "count": len(items)}
+
+
+def _technical_snapshot(code: str, lookback: int) -> dict:
+    try:
+        df = quotes.get_kline(code, lookback=lookback)
+    except quotes.KlineDeadlineExceeded as exc:
+        raise HTTPException(504, f"{exc}，后台刷新仍在继续，请稍后重试")
+    except quotes.KlineRefreshBusy as exc:
+        raise HTTPException(503, f"{exc}，请稍后重试")
+    if df is None or df.empty:
+        raise HTTPException(404, f"{code} 无 K 线数据")
+    indicators = compute_indicators(df)
+    return {
+        "bars": len(df),
+        "last": df.iloc[-1].to_dict(),
+        "indicators": indicators,
+        "signals": summarize(indicators),
+    }
+
+
+@app.post("/securities/detail")
+def security_detail(req: SecurityDetailRequest):
+    try:
+        code = quotes.normalize_code(req.code)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    quote = quotes.cache().get_quote(code) or {}
+    warnings = []
+    try:
+        technical = _technical_snapshot(code, req.lookback)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        technical = {}
+        warnings.append(str(exc.detail))
+    if not quote and not technical:
+        raise HTTPException(404, f"{code} 无可用行情或 K 线数据")
+    return {
+        "code": code,
+        "name": quote.get("name") or code,
+        "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "quote": quote,
+        "fund_flow_yi": quotes.get_fund_flow(code),
+        "technical": technical,
+        "news": news.fetch_stock_news(code, top=8),
+        "warnings": warnings,
+    }
+
+
 @app.get("/overview")
 def overview():
     items = _list("watchlist")
@@ -203,21 +261,12 @@ def tech_signal(req: TechSignalRequest):
         code = quotes.normalize_code(req.code)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    try:
-        df = quotes.get_kline(code, lookback=req.lookback)
-    except quotes.KlineDeadlineExceeded as exc:
-        raise HTTPException(504, f"{exc}，后台刷新仍在继续，请稍后重试")
-    except quotes.KlineRefreshBusy as exc:
-        raise HTTPException(503, f"{exc}，请稍后重试")
-    if df is None or df.empty:
-        raise HTTPException(404, f"{code} 无 K 线数据")
-    ind = compute_indicators(df)
+    technical = _technical_snapshot(code, req.lookback)
     q = quotes.get_quote_bounded(code)
     return {
         "code": code, "name": (q or {}).get("name") or "",
         "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "bars": len(df), "last": df.iloc[-1].to_dict(),
-        "indicators": ind, "signals": summarize(ind),
+        **technical,
     }
 
 

@@ -86,6 +86,26 @@ function noInput(path: string, backendId: InvestmentBackendId): RequestSpec {
 
 const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
   'market-watch.overview': noInput('/overview', 'market-watch'),
+  'market-watch.security-search': {
+    backendId: 'market-watch',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['query', 'limit'])
+      return query('/securities/search', {
+        q: stringValue(input, 'query'),
+        limit: integer(input, 'limit', 8, 1, 20),
+      })
+    },
+  },
+  'market-watch.security-detail': {
+    backendId: 'market-watch',
+    method: 'POST',
+    path: () => '/securities/detail',
+    body: (input) => {
+      knownKeys(input, ['code', 'lookback'])
+      return { code: stringValue(input, 'code'), lookback: integer(input, 'lookback', 120, 30, 500) }
+    },
+  },
   'market-watch.scan': {
     backendId: 'market-watch',
     method: 'POST',

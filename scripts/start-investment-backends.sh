@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
-# Start the two Python APIs used by the investment-research profile.
+# Manually start the two Python APIs as persistent services for independent debugging.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TRADING_WAS_HEALTHY=0
+if curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+  TRADING_WAS_HEALTHY=1
+fi
 
 echo "[1/2] 启动 trading-core (:8000)"
 bash "$ROOT/backend/dsh-trading-core/start.sh" "$@"
 
 echo "[2/2] 启动 market-watch (:8100)"
-bash "$ROOT/backend/market-watch/start.sh"
+if bash "$ROOT/backend/market-watch/start.sh"; then
+  :
+else
+  STATUS=$?
+  if [[ "$TRADING_WAS_HEALTHY" == 0 ]]; then
+    echo "[回滚] market-watch 启动失败，停止本次启动的 trading-core" >&2
+    bash "$ROOT/backend/dsh-trading-core/stop_all.sh"
+  fi
+  exit "$STATUS"
+fi
 
-echo "[完成] 投研后台服务已就绪"
+echo "[完成] 手动常驻投研后台已就绪；使用 ./start.sh backend-stop 停止"

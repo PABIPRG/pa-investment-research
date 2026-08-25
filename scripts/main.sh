@@ -9,11 +9,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# --- 只保留日常运行投研产品需要的入口："name|description|script path"
+# --- 投研产品入口优先，手动常驻后台仅用于独立调试："name|description|script path"
 SCRIPTS=(
-  "backend-start|启动投研后台服务（trading-core :8000 + market-watch :8100）|scripts/start-investment-backends.sh"
-  "investment-web|构建并启动 Web 版投研|scripts/run-investment-web.sh"
-  "investment-electron|构建并启动 Electron 版投研|scripts/run-investment-electron.sh"
+  "investment-web|构建并启动 Web 版投研（自动托管并清理后台）|scripts/run-investment-web.sh"
+  "investment-electron|构建并启动 Electron 版投研（自动托管并清理后台）|scripts/run-investment-electron.sh"
+  "backend-start|手动启动常驻投研后台（独立调试）|scripts/start-investment-backends.sh"
+  "backend-stop|停止手动常驻投研后台|scripts/stop-investment-backends.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
 )
 
