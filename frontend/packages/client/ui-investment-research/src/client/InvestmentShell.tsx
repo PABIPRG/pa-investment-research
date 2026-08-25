@@ -46,9 +46,9 @@ export type InvestmentNewSessionProps = PropsRuntime<'sidebar.newSession'>
 export type InvestmentWelcomeProps = PropsRuntime<'conversation.hero.welcome'> & HeroWelcomeOwnerProps
 
 const ROUTES: readonly { id: InvestmentRoute; label: string; note?: string; disabled?: boolean }[] = [
+  { id: 'portfolio', label: '持仓分析', note: '风控' },
   { id: 'assistant', label: '智能助手', note: 'AI' },
   { id: 'opportunity', label: '机会发现', note: '实时' },
-  { id: 'portfolio', label: '持仓分析', note: '风控' },
   { id: 'framework', label: '投研框架', note: '规划', disabled: true },
   { id: 'projects', label: '项目组合', note: '规划', disabled: true },
   { id: 'tasks', label: '投研任务', note: '规划', disabled: true },

@@ -71,6 +71,26 @@ async function bench() {
 }
 
 describe('ui-investment-research apply', () => {
+  it('presents portfolio analysis as the primary navigation entry', () => {
+    const navigate = vi.fn()
+    const view = render(InvestmentSidebar({
+      wide: true,
+      useInvestmentUi: (selector: (snapshot: unknown) => unknown) => selector({
+        route: 'portfolio', historyOpen: false, stockQuery: '',
+      }),
+      useSessions: (selector: (snapshot: unknown) => unknown) => selector({ current: undefined }),
+      useWorkspaces: (selector: (snapshot: unknown) => unknown) => selector({ items: [] }),
+      navigate,
+      selectWorkspace: vi.fn(),
+    } as never))
+
+    const routes = view.getAllByRole('button')
+    expect(routes[0]?.getAttribute('aria-label')).toBe('持仓分析')
+    expect(routes[0]?.getAttribute('aria-current')).toBe('page')
+    fireEvent.click(routes[1]!)
+    expect(navigate).toHaveBeenCalledWith('assistant')
+  })
+
   it('renders an investment welcome without shared DeepSeek branding and prefills a reviewed prompt', () => {
     const onPrompt = vi.fn()
     const view = render(InvestmentWelcome({ disabled: false, onPrompt } as never))
