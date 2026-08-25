@@ -35,7 +35,7 @@ describe('投研数据页慢请求状态', () => {
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
-    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} />)
+    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
 
     await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
     expect(requestData).toHaveBeenCalledWith({
@@ -140,7 +140,7 @@ describe('投研数据页慢请求状态', () => {
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
-    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} />)
+    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
     await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
     fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
     await waitFor(() => {
@@ -205,7 +205,7 @@ describe('投研数据页慢请求状态', () => {
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
-    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} />)
+    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
     await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
 
     fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
