@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { apply, inject } from '../src/client/index.ts'
 import {
@@ -13,6 +14,8 @@ import {
   type InvestmentShellInjected,
   type InvestmentSidebarInjected,
 } from '../src/client/InvestmentShell.tsx'
+
+afterEach(() => { cleanup() })
 
 async function bench() {
   const ctx = new Context()
@@ -71,6 +74,85 @@ async function bench() {
 }
 
 describe('ui-investment-research apply', () => {
+  it('searches real securities by name and opens the selected stock detail route', async () => {
+    const navigate = vi.fn()
+    const requestData = vi.fn(async () => ({
+      items: [{ code: '600519', name: '贵州茅台', market: '沪市' }],
+    }))
+    const view = render(createElement(InvestmentShell, {
+      useInvestmentUi: (selector: (snapshot: unknown) => unknown) => selector({
+        route: 'assistant', historyOpen: false, stockQuery: '',
+      }),
+      requestData,
+      navigate,
+      setHistory: vi.fn(),
+      startSession: vi.fn(),
+      openSession: vi.fn(),
+      searchSessions: vi.fn(),
+      renameSession: vi.fn(),
+      archiveSession: vi.fn(),
+      prepareAssistant: vi.fn(),
+    } as never))
+
+    const input = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '茅台' } })
+
+    const option = await view.findByRole('option', { name: /贵州茅台/ })
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'market-watch.security-search', input: { query: '茅台', limit: 8 },
+    })
+    fireEvent.click(option)
+    expect(navigate).toHaveBeenCalledWith('stock-detail', '600519')
+  })
+
+  it('loads an independent stock detail page and hands the resolved security to the assistant', async () => {
+    const prepareAssistant = vi.fn()
+    const requestData = vi.fn(async () => ({
+      code: '600519',
+      name: '贵州茅台',
+      as_of: '2026-08-25 09:30:00',
+      quote: { price: 1450, pct_change: 1.2, turnover: 0.5, volume_ratio: 1.1, amount_yi: 12.3 },
+      fund_flow_yi: 1.25,
+      technical: {
+        bars: 120,
+        last: { open: 1430, high: 1460, low: 1420, close: 1450 },
+        indicators: {
+          ma: { ma20: 1410, ma60: 1390 },
+          support_resistance: { support: 1380, resistance: 1480 },
+        },
+        signals: ['MA 多头排列'],
+      },
+      news: [{ title: '公司发布经营数据', source: '东财', time: '10:00' }],
+    }))
+    const view = render(createElement(InvestmentShell, {
+      useInvestmentUi: (selector: (snapshot: unknown) => unknown) => selector({
+        route: 'stock-detail', historyOpen: false, stockQuery: '600519',
+      }),
+      requestData,
+      navigate: vi.fn(),
+      setHistory: vi.fn(),
+      startSession: vi.fn(),
+      openSession: vi.fn(),
+      searchSessions: vi.fn(),
+      renameSession: vi.fn(),
+      archiveSession: vi.fn(),
+      prepareAssistant,
+    } as never))
+
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'market-watch.security-detail', input: { code: '600519', lookback: 120 },
+      })
+    })
+    expect(await view.findByRole('heading', { name: '贵州茅台 · 600519' })).toBeTruthy()
+    expect(view.getByText('MA 多头排列')).toBeTruthy()
+    expect(view.getByText('公司发布经营数据')).toBeTruthy()
+
+    fireEvent.click(view.getByRole('button', { name: '在智能助手中分析' }))
+    expect(prepareAssistant).toHaveBeenCalledWith(expect.stringContaining('贵州茅台（600519）'))
+  })
+
   it('renders an investment welcome without shared DeepSeek branding and prefills a reviewed prompt', () => {
     const onPrompt = vi.fn()
     const view = render(InvestmentWelcome({ disabled: false, onPrompt } as never))

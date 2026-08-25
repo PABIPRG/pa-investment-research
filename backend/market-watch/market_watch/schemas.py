@@ -57,6 +57,11 @@ class TechSignalRequest(BaseModel):
     lookback: int = Field(default=120, ge=30, le=500, description="K线根数")
 
 
+class SecurityDetailRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+    lookback: int = Field(default=120, ge=30, le=500, description="K线根数")
+
+
 class BriefRequest(BaseModel):
     period: str = Field(default="pre", description="pre=盘前 / post=盘后")
     manual: bool = Field(default=False, description="true 绕交易日守卫（仅测试）")
