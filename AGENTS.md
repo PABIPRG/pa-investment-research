@@ -8,25 +8,23 @@
 
 ### 仓库和分支角色
 
-- `private` 指向个人私仓 `jiahim/pa-investment-research`，是所有开发分支和变更首次推送的唯一远端。
-- `public` 指向公共仓库 `PABIPRG/pa-investment-research`，只接收来自私仓的 PR，禁止直接向其任何分支推送。
-- `private/master` 是私仓集成分支，用于汇总已经在私仓完成评审和验证的特性。
-- `public/master` 是公仓目标分支，也是每轮开发开始时的最终基线。
+- `private` 指向个人私仓 `jiahim/pa-investment-research`，用于保存与推送特性分支。
+- `public` 指向公共仓库 `PABIPRG/pa-investment-research`，是 PR 的目标仓库；禁止直接向其任何分支推送。
+- `private/master` 只作为 `public/master` 的同步镜像，不接收特性分支合并。
+- `public/master` 是公仓目标分支，也是每轮开发的最终基线。
 - 特性分支用于实际开发。人工创建时建议命名为 `feature/<topic>`、`fix/<topic>` 等；Codex 创建时必须使用 `codex/<topic>` 前缀。
 
-### 强制流转路径
+### 标准流转路径
 
-所有功能、修复、重构和文档变更必须按照以下顺序流转，不得跳过私仓直接进入公仓：
+所有功能、修复、重构和文档变更采用单 PR 流程：
 
 ```text
 public/master
     ↓ 同步到 private/master
-特性分支（在本地开发）
+从 private/master 创建特性分支（在本地开发）
     ↓ push 到 private
-私仓 PR：特性分支 → private/master
-    ↓ 私仓 PR 合并
-公仓 PR：private/master → public/master
-    ↓ 公仓 PR 评审并合并
+跨仓 PR：private/<特性分支> → public/master
+    ↓ 公仓评审并合并
 public/master
     ↓ 回同步 private/master
 ```
@@ -39,21 +37,16 @@ public/master
 - 同步基线时优先采用可保持线性历史的 fast-forward；发生分叉或冲突时停止自动同步，先查明差异并解决冲突，不得强制推送或改写共享分支历史。
 - 每项工作都从最新的 `private/master` 创建独立特性分支。不得直接在本地 `master` 上开发或提交，也不得复用已经合并的旧特性分支承载新任务。
 
-### 开发、提交与私仓集成
+### 开发、提交与公仓 PR
 
 - 日常开发和本地提交只能发生在特性分支。
 - Codex 创建的所有 commit message 必须以 `[AI] ` 开头，例如 `[AI] 自动补全接口文档`。提醒用户：人工创建的 commit message 应以 `[Human] ` 开头，例如 `[Human] 修复登录页样式问题`。
 - 保持提交粒度合理、主题单一，避免在一个提交中混入无关变更。
 - 开发期间需要同步基线时，先获取最新的 `public/master`，再将其 rebase 到特性分支；如必须保留合并语义才使用 merge。禁止对已经由多人共享的分支进行未经确认的历史改写。
 - 首次推送及后续更新只能推送到私仓对应特性分支，例如 `git push -u private codex/<topic>`；禁止将特性分支直接推送到 `public`。
-- 功能完成并通过与改动范围匹配的检查或测试后，创建私仓 PR，以特性分支为 head、`private/master` 为 base。
-- 私仓 PR 必须完成评审、解决全部冲突并通过必要检查后才能合并。禁止绕过 PR 直接向 `private/master` 推送业务变更。
-
-### 提交公仓
-
-- 私仓 PR 合并后，以私仓 `master` 为 head、公仓 `master` 为 base 创建跨仓 PR，即 `private/master → public/master`。
-- 创建公仓 PR 前，再次确认 `private/master` 已包含最新 `public/master`、两个分支不存在未解决冲突，并完成合并前所需的测试和检查。
-- 公仓 PR 是代码进入公仓的唯一方式。禁止直接 push 到 `public/master`，也禁止从本地特性分支绕过 `private/master` 直接向公仓发起 PR。
+- 功能完成并通过与改动范围匹配的检查或测试后，直接创建跨仓 PR，以私仓特性分支为 head、`public/master` 为 base，例如 `private/codex/<topic> → public/master`。
+- 创建公仓 PR 前，确认特性分支包含最新 `public/master`、不存在未解决冲突，并完成合并前所需的测试和检查。
+- 公仓 PR 是代码进入公仓的唯一方式。禁止先把特性分支合并到 `private/master`，也禁止绕过 PR 直接向公仓推送代码。
 - 只有代码评审通过、自动检查通过且冲突完全解决后，方可合并公仓 PR。
 - 公仓 PR 合并后，及时把最新 `public/master` 以 fast-forward 方式回同步到 `private/master`，为下一项工作建立一致基线；随后可删除已经合并的私仓特性分支。
 
