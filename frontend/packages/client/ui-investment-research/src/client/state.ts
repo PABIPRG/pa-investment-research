@@ -17,7 +17,7 @@ export interface InvestmentUiSnapshot {
 }
 
 const INITIAL: InvestmentUiSnapshot = Object.freeze({
-  route: 'assistant',
+  route: 'portfolio',
   historyOpen: false,
   stockQuery: '',
 })
