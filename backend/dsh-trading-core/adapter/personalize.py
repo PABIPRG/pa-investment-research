@@ -572,10 +572,14 @@ def record_interaction(store, card_id: str, action: str, ts: str | None = None,
     """R：写 view/click 记录，插头部 + 截断 cap。"""
     rec = {"card_id": card_id, "action": action, "ts": ts or _now(),
            "meta": meta or {}, "server_ts": _now()}
-    rows = list(store.get("behavior", "default") or [])
-    rows.insert(0, rec)
-    rows = rows[: settings.personalized_behavior_cap]
-    store.set("behavior", "default", rows)
+    store.mutate(
+        "behavior",
+        "default",
+        lambda current: ([rec] + list(current or []))[
+            : settings.personalized_behavior_cap
+        ],
+        [],
+    )
     return {"ok": True, "stored": True, "action": action, "card_id": card_id}
 
 
@@ -588,10 +592,14 @@ def record_feedback(store, card_id: str, sentiment: str, ts: str | None = None,
     """
     rec = {"card_id": card_id, "action": "feedback", "sentiment": sentiment,
            "ts": ts or _now(), "meta": meta or {}, "server_ts": _now()}
-    rows = list(store.get("behavior", "default") or [])
-    rows.insert(0, rec)
-    rows = rows[: settings.personalized_behavior_cap]
-    store.set("behavior", "default", rows)
+    store.mutate(
+        "behavior",
+        "default",
+        lambda current: ([rec] + list(current or []))[
+            : settings.personalized_behavior_cap
+        ],
+        [],
+    )
     return {"ok": True, "stored": True, "sentiment": sentiment, "card_id": card_id}
 
 

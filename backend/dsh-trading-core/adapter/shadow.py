@@ -137,6 +137,7 @@ class ShadowRunner:
                     "reason": "无 active 策略（先回测过阈值激活，或指定 strategy_id）"}
 
         meta = dict(self.store.get("shadows", "meta") or {})
+        initial_meta_keys = set(meta)
         history_start = (date.today() - timedelta(days=_HIST_LOOKBACK_DAYS)).isoformat()
         strategy_results: dict[str, dict] = {}
         strategy_errors: dict[str, str] = {}
@@ -165,7 +166,14 @@ class ShadowRunner:
             "overall_nav": overall,
             "strategy_count": len(strategy_results),
         })
-        self.store.set("shadows", "meta", meta)
+        new_meta = {sid: rec for sid, rec in meta.items() if sid not in initial_meta_keys}
+        if new_meta:
+            self.store.mutate(
+                "shadows",
+                "meta",
+                lambda current: {**dict(current or {}), **new_meta},
+                {},
+            )
         progress_cb("🏁 影子记账完成")
         return {"skipped": False, "trade_date": trade_date,
                 "strategies": {sid: _snapshot(r) for sid, r in strategy_results.items()},
@@ -236,8 +244,12 @@ class ShadowRunner:
                 "last_price": st["last_price"], "last_update": _now(),
             })
         if closed_log:
-            old = list(self.store.get("shadows", f"trades:{sid}") or [])
-            self.store.set("shadows", f"trades:{sid}", (closed_log + old)[:200])
+            self.store.mutate(
+                "shadows",
+                f"trades:{sid}",
+                lambda current: (closed_log + list(current or []))[:200],
+                [],
+            )
 
         equity_sum = sum(r["equity"] for r in symbol_results.values())
         nav = equity_sum / float(rec["initial_capital"]) if rec["initial_capital"] else None

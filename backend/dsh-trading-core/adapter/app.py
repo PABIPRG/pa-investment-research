@@ -136,7 +136,7 @@ def create_app() -> FastAPI:
     async def holdings_save(req: HoldingsRequest):
         """保存持仓到本地 store（ManualProvider 数据源）。"""
         store = JsonStore()
-        if req.holdings:
+        if req.holdings is not None:
             store.set(
                 "holdings", "default",
                 [h.model_dump() for h in req.holdings],
@@ -237,18 +237,24 @@ def create_app() -> FastAPI:
     async def kyc_adjust(req: KycAdjustRequest):
         """滑块微调已推断画像：更新 risk_profile，保留 kyc.inferred_profile。"""
         store = JsonStore()
-        kyc = store.get("preferences", "kyc") or {}
-        if not kyc.get("inferred_profile"):
-            raise HTTPException(
-                status_code=409,
-                detail="尚未完成风险问卷，请先提交问卷再微调",
-            )
         adjust = req.model_dump()
-        profile_key = kyc_mod.apply_manual_adjust(kyc, adjust)
+        profile_key = ""
+
+        def apply_adjust(current):
+            nonlocal profile_key
+            kyc = dict(current or {})
+            if not kyc.get("inferred_profile"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="尚未完成风险问卷，请先提交问卷再微调",
+                )
+            profile_key = kyc_mod.apply_manual_adjust(kyc, adjust)
+            kyc["manual_adjust"] = adjust
+            kyc["status"] = "adjusted"
+            return kyc
+
+        store.mutate("preferences", "kyc", apply_adjust)
         old_profile = store.get("preferences", "risk_profile")
-        kyc["manual_adjust"] = adjust
-        kyc["status"] = "adjusted"
-        store.set("preferences", "kyc", kyc)
         if old_profile:
             store.set("preferences", "last_profile", old_profile)
         store.set("preferences", "risk_profile", profile_key)
@@ -298,10 +304,13 @@ def create_app() -> FastAPI:
     async def brief_dsh_pushed(brief_id: str):
         """标记某份简报已在 dsh 对话内播报过（幂等，用于 brief-pusher 去重）。"""
         store = JsonStore()
-        rec = store.get("briefs", brief_id)
-        if not rec:
-            raise HTTPException(status_code=404, detail="简报不存在")
-        store.update("briefs", brief_id, dsh_pushed=True)
+
+        def mark_pushed(current):
+            if not current:
+                raise HTTPException(status_code=404, detail="简报不存在")
+            return {**dict(current), "dsh_pushed": True}
+
+        store.mutate("briefs", brief_id, mark_pushed)
         return {"id": brief_id, "dsh_pushed": True}
 
     # ---- 策略回测（基于历史决策的前瞻评估） ----------------------------
@@ -377,12 +386,18 @@ def create_app() -> FastAPI:
     async def strategies_transition(sid: str, action: Literal["activate", "reject", "retire"]):
         """手动状态迁移：activate→active / reject→rejected / retire→retired。"""
         store = JsonStore()
-        s = store.get("strategies", sid)
-        if not s:
-            raise HTTPException(status_code=404, detail="策略不存在")
         status = {"activate": "active", "reject": "rejected", "retire": "retired"}[action]
-        store.update("strategies", sid, status=status,
-                     updated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        def transition(current):
+            if not current:
+                raise HTTPException(status_code=404, detail="策略不存在")
+            return {
+                **dict(current),
+                "status": status,
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+        store.mutate("strategies", sid, transition)
         return {"id": sid, "status": status}
 
     # ---- 实时影子策略验证（架构图 I） ----------------------------------

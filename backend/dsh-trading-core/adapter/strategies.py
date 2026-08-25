@@ -483,10 +483,8 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
             kind = "rsi_reversal"  # 系统只做多
         params = _clamp_params(kind, h.get("params") or {})
         sid = "strat-" + _str2md5(ev.get("id", "") + kind + "".join(sorted(symbols)))
-        if store.get("strategies", sid):
-            continue  # 去重
         name = f"{direction}·{kind}·{symbols[0]}{('+' + str(len(symbols) - 1)) if len(symbols) > 1 else ''}"
-        store.set("strategies", sid, {
+        candidate = {
             "id": sid, "name": name, "kind": kind, "params": params,
             "symbols": symbols, "direction": direction,
             "hypothesis": h.get("rationale") or ev.get("summary") or "",
@@ -496,7 +494,19 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
             "status": "candidate",
             "backtest": None,
             "created_at": _now(), "updated_at": _now(),
-        })
+        }
+        created = False
+
+        def insert_if_absent(current):
+            nonlocal created
+            if current:
+                return current
+            created = True
+            return candidate
+
+        store.mutate("strategies", sid, insert_if_absent)
+        if not created:
+            continue  # 去重
         ids.append(sid)
     return ids
 
@@ -616,7 +626,18 @@ class StrategyBacktestRunner:
             "per_symbol": per_symbol,
             "symbol_errors": symbol_errors,
         }
-        self.store.update("strategies", sid, status=status, backtest=backtest, updated_at=_now())
+        saved_status = status
+
+        def persist_result(current):
+            nonlocal saved_status
+            rec = dict(current or strategy)
+            if rec.get("status") == "retired" and saved_status != "retired":
+                saved_status = "retired"
+            rec.update(status=saved_status, backtest=backtest, updated_at=_now())
+            return rec
+
+        self.store.mutate("strategies", sid, persist_result)
+        status = saved_status
         progress_cb(f"🏁 状态 → {status}（{reason}）")
         return {"strategy_id": sid, "status": status, "backtest": backtest,
                 "symbol_errors": symbol_errors}

@@ -377,23 +377,34 @@ def _apply_action(store: JsonStore, a: dict) -> None:
     ts = _now()
     if a["type"] in ("promote", "demote", "retire"):
         sid = a["sid"]
-        rec = dict(store.get("strategies", sid) or {})
-        ev = dict(rec.get("evolve") or {})
-        if a["type"] == "promote":
-            ev.update({"tier": 2, "state": "active", "updated_at": ts, "note": a["reason"]})
-        elif a["type"] == "demote":
-            ev.update({"state": "watch", "updated_at": ts, "note": a["reason"]})
-        else:  # retire
-            ev.update({"state": "retired", "updated_at": ts, "note": a["reason"]})
-            rec["status"] = "retired"
-            rec["retire_reason"] = a["reason"]
-        rec["evolve"] = ev
-        store.set("strategies", sid, rec)
+        def apply_transition(current):
+            rec = dict(current or {})
+            ev = dict(rec.get("evolve") or {})
+            if a["type"] == "promote":
+                ev.update({"tier": 2, "state": "active", "updated_at": ts, "note": a["reason"]})
+            elif a["type"] == "demote":
+                ev.update({"state": "watch", "updated_at": ts, "note": a["reason"]})
+            else:  # retire
+                ev.update({"state": "retired", "updated_at": ts, "note": a["reason"]})
+                rec["status"] = "retired"
+                rec["retire_reason"] = a["reason"]
+            rec["evolve"] = ev
+            return rec
+
+        store.mutate("strategies", sid, apply_transition)
     elif a["type"] == "mutate":
-        parent = store.get("strategies", a["parent"]) or {}
-        pev = dict(parent.get("evolve") or {})
-        pev["mutated_at"] = ts
-        store.set("strategies", a["parent"], {**parent, "evolve": pev})
+        generation = 1
+
+        def mark_parent(current):
+            nonlocal generation
+            parent = dict(current or {})
+            generation = int(parent.get("generation") or 0) + 1
+            pev = dict(parent.get("evolve") or {})
+            pev["mutated_at"] = ts
+            parent["evolve"] = pev
+            return parent
+
+        store.mutate("strategies", a["parent"], mark_parent)
         rec = {
             "id": a["sid"],
             "name": a["name"],
@@ -404,7 +415,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             "status": "candidate",
             "source": "evolution",
             "mutated_from": a["parent"],
-            "generation": int(parent.get("generation") or 0) + 1,
+            "generation": generation,
             "backtest": {},
             "evolve": {
                 "state": "active",
