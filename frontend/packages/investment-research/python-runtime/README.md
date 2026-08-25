@@ -11,6 +11,8 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 | `dshHome` | `$DSH_HOME`, else `~/.dsh` | Root for owner-only logs and runtime state. |
 | `startupTimeoutMs` | `30000` | Maximum managed startup duration. |
 | `healthPollMs` | `250` | Delay between startup health probes. |
+| `healthFreshnessMs` | `5000` | Reuse window for a successful active-backend health probe; `0` disables reuse. |
+| `healthTimeoutMs` | `2000` | Maximum duration of one backend health request. |
 | `shutdownGraceMs` | `5000` | Grace passed to the subprocess tree termination ladder. |
 | `logTailBytes` | `65536` | Maximum retained diagnostic tail included in startup errors. |
 | `logMaxBytes` | `4194304` | Active backend log size that triggers one-file rotation on the next start. |
@@ -21,7 +23,7 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 
 `external` accepts HTTP or HTTPS, verifies the configured health identity, and returns an `external` lease. It never starts, signals, or stops the service. Releasing the last lease stops only an in-memory `owned` handle; attached and external services survive. Runtime disposal rejects new work, waits for in-flight acquisitions, and then joins every owned process tree. State files are diagnostic records and never authorize PID or port takeover.
 
-Concurrent acquisitions for one backend id share one startup. Identical registrations are reference-counted; conflicting command, URL, mode, identity, or path definitions fail. Business tools are registered only after acquisition succeeds and are removed before their lease is released.
+Concurrent acquisitions for one backend id share one startup. Active acquisitions reuse a recent successful health result, while requests arriving after it expires share one health probe. Each probe has a bounded deadline; owned-process exit, restart-required credential updates, teardown, and non-healthy readiness invalidate the reusable result. Identical registrations are reference-counted; conflicting command, URL, mode, identity, or path definitions fail. Business tools are registered only after acquisition succeeds and are removed before their lease is released.
 
 ## Credentials and readiness
 

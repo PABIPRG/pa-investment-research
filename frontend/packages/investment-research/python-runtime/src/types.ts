@@ -174,6 +174,10 @@ export interface Config {
   startupTimeoutMs?: number
   /** Delay between managed health probes in milliseconds. */
   healthPollMs?: number
+  /** Duration that one successful active-backend health probe remains reusable. */
+  healthFreshnessMs?: number
+  /** Maximum duration of one backend health request in milliseconds. */
+  healthTimeoutMs?: number
   /** Grace period before process-tree termination escalates. */
   shutdownGraceMs?: number
   /** Maximum in-memory diagnostic log tail in bytes. */
