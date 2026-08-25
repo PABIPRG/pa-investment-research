@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, money, number, percent, records, text } from './data.ts'
+import { parseHoldingsImport } from './holdings-import.ts'
 import type { InvestmentRoute, InvestmentUiSnapshot } from './state.ts'
 import css from './InvestmentShell.module.css'
 
@@ -85,6 +86,15 @@ function HistoryIcon() {
     <svg className={css.actionIcon} viewBox="0 0 16 16" aria-hidden="true">
       <path d="M3.35 4.2A5.5 5.5 0 1 1 2.5 8" />
       <path d="M2.25 3.15v2.7h2.7M8 4.85V8l2.15 1.3" />
+    </svg>
+  )
+}
+
+function ImportIcon() {
+  return (
+    <svg className={css.actionIcon} viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 2.5v7M5.25 7l2.75 2.75L10.75 7" />
+      <path d="M3 11v2.5h10V11" />
     </svg>
   )
 }
@@ -677,6 +687,117 @@ function OpportunityPage({
   )
 }
 
+function HoldingsImportDialog({
+  requestData, onClose, onImported,
+}: { requestData: RequestData; onClose: () => void; onImported: (count: number) => void }) {
+  const [source, setSource] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const result = useMemo(() => parseHoldingsImport(source), [source])
+  const canSubmit = result.items.length > 0 && result.errors.length === 0 && !saving
+
+  const save = async () => {
+    if (!canSubmit) return
+    setSaving(true)
+    setError('')
+    try {
+      await requestData({
+        operation: 'trading-core.holdings-save',
+        input: { holdings: result.items },
+      })
+      onImported(result.items.length)
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      className={`${css.drawerBackdrop} ${css.importBackdrop}`}
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose() }}
+      onKeyDown={(event) => { if (event.key === 'Escape' && !saving) onClose() }}
+    >
+      <section className={css.importDialog} role="dialog" aria-modal="true" aria-labelledby="holdings-import-title">
+        <div className={css.importHead}>
+          <div>
+            <strong id="holdings-import-title">导入持仓</strong>
+            <span>支持 CSV、TSV 和从表格复制的文本</span>
+          </div>
+          <button type="button" aria-label="关闭导入持仓" disabled={saving} onClick={onClose}>×</button>
+        </div>
+        <div className={css.importBody}>
+          <div className={css.importGuide}>
+            <strong>导入会整体替换当前持仓</strong>
+            <span>至少需要“股票代码、数量、成本价”三列，导入成功后会重新计算组合风险。</span>
+          </div>
+          <label className={css.fileButton}>
+            <ImportIcon />选择 CSV / TSV 文件
+            <input
+              type="file"
+              accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+              disabled={saving}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0]
+                if (file === undefined) return
+                setError('')
+                void file.text().then(setSource).catch(() => { setError('文件读取失败，请重试或直接粘贴表格内容。') })
+                event.currentTarget.value = ''
+              }}
+            />
+          </label>
+          <label className={css.importField}>
+            <span>或粘贴表格内容</span>
+            <textarea
+              autoFocus
+              aria-label="持仓导入内容"
+              value={source}
+              disabled={saving}
+              placeholder={'股票代码,数量,成本价\n600519,100,1500\n000858,200,135'}
+              onChange={(event) => { setSource(event.target.value); setError('') }}
+            />
+          </label>
+          {result.errors.length > 0 && (
+            <div className={css.importErrors} role="alert">
+              <strong>请先修正以下问题</strong>
+              {result.errors.slice(0, 8).map(message => <span key={message}>{message}</span>)}
+              {result.errors.length > 8 && <span>另有 {result.errors.length - 8} 个问题未展示。</span>}
+            </div>
+          )}
+          {error !== '' && <div className={css.importErrors} role="alert"><strong>导入失败</strong><span>{error}</span></div>}
+          {result.items.length > 0 && (
+            <div className={css.importPreview}>
+              <div className={css.sectionHeading}><strong>导入预览</strong><span>{result.items.length} 项</span></div>
+              <div className={css.tableWrap}>
+                <table>
+                  <thead><tr><th>股票代码</th><th>数量</th><th>持仓成本</th></tr></thead>
+                  <tbody>
+                    {result.items.slice(0, 20).map(item => (
+                      <tr key={item.ticker}>
+                        <td>{item.ticker}</td>
+                        <td>{item.quantity.toLocaleString('zh-CN')}</td>
+                        <td>{money(item.cost_price)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {result.items.length > 20 && <p>仅预览前 20 项，保存时会导入全部数据。</p>}
+            </div>
+          )}
+        </div>
+        <div className={css.importActions}>
+          <button type="button" className={css.secondaryButton} disabled={saving} onClick={onClose}>取消</button>
+          <button type="button" className={css.primaryButton} disabled={!canSubmit} onClick={() => { void save() }}>
+            {saving ? '正在导入…' : `替换并导入 ${result.items.length} 条`}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function PortfolioPage({ requestData, onAnalyze }: { requestData: RequestData; onAnalyze: (prompt: string) => void }) {
   const [nonce, setNonce] = useState(0)
   const [holdings, setHoldings] = useState<unknown>()
@@ -684,6 +805,8 @@ function PortfolioPage({ requestData, onAnalyze }: { requestData: RequestData; o
   const [alerts, setAlerts] = useState<unknown>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [importOpen, setImportOpen] = useState(false)
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -712,6 +835,9 @@ function PortfolioPage({ requestData, onAnalyze }: { requestData: RequestData; o
   return (
     <div className={css.pageScroll}>
       <PageHeader title="持仓分析" description="只展示后端已保存的持仓、风险预算与真实预警结果">
+        <button type="button" className={css.secondaryButton} onClick={() => { setNotice(''); setImportOpen(true) }}>
+          <ImportIcon /><span className={css.actionLabel}>导入持仓</span>
+        </button>
         <button type="button" className={css.secondaryButton} onClick={() => { setNonce(value => value + 1) }}>刷新</button>
         <button
           type="button"
@@ -721,6 +847,7 @@ function PortfolioPage({ requestData, onAnalyze }: { requestData: RequestData; o
           }}
         >发起持仓深度分析</button>
       </PageHeader>
+      {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       {error !== '' && <ErrorCard message={error} retry={() => { setNonce(value => value + 1) }} />}
       {loading && <div className={css.loadingCard}>正在读取持仓和风险模型…</div>}
       {!loading && error === '' && (
@@ -757,7 +884,7 @@ function PortfolioPage({ requestData, onAnalyze }: { requestData: RequestData; o
                   </tbody>
                 </table>
               </div>
-              {positions.length === 0 && <div className={css.emptyState}>尚未保存持仓，可在智能助手中使用持仓工具录入。</div>}
+              {positions.length === 0 && <div className={css.emptyState}>尚未保存持仓，可使用页面上方的“导入持仓”录入 CSV 或表格数据。</div>}
             </section>
             <section className={css.riskColumn}>
               <div className={css.panelCard}>
@@ -773,6 +900,17 @@ function PortfolioPage({ requestData, onAnalyze }: { requestData: RequestData; o
             </section>
           </div>
         </>
+      )}
+      {importOpen && (
+        <HoldingsImportDialog
+          requestData={requestData}
+          onClose={() => { setImportOpen(false) }}
+          onImported={(count) => {
+            setImportOpen(false)
+            setNotice(`已导入 ${count} 条持仓，持仓与风险数据已刷新。`)
+            setNonce(value => value + 1)
+          }}
+        />
       )}
     </div>
   )
