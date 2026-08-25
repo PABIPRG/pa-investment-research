@@ -9,23 +9,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# --- Register scripts here: "name|description|script path (relative to root)"
+# --- 只保留日常运行投研产品需要的入口："name|description|script path"
 SCRIPTS=(
-  "init|初始化项目（前端安装依赖并构建）|scripts/init.sh"
+  "backend-start|启动投研后台服务（trading-core :8000 + market-watch :8100）|scripts/start-investment-backends.sh"
+  "investment-web|构建并启动 Web 版投研|scripts/run-investment-web.sh"
+  "investment-electron|构建并启动 Electron 版投研|scripts/run-investment-electron.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
-  "market-watch-init|market-watch 初始化(venv+依赖+.env)|backend/market-watch/init.sh"
-  "market-watch-start|market-watch 启动(:8100 adapter + :3081 dsh)|backend/market-watch/start.sh"
-  "market-watch-stop|market-watch 停止(:8100/:3081)|backend/market-watch/stop_all.sh"
-  "market-watch-verify|market-watch 验证(health+插件冒烟)|backend/market-watch/verify.sh"
-  "industry-chain-init|industry-chain 初始化(venv+依赖+.env+种子数据)|backend/industry-chain/init.sh"
-  "industry-chain-start|industry-chain 启动(:8200 adapter + :3082 dsh)|backend/industry-chain/start.sh"
-  "industry-chain-stop|industry-chain 停止(:8200/:3082)|backend/industry-chain/stop_all.sh"
-  "industry-chain-verify|industry-chain 验证(health+插件冒烟)|backend/industry-chain/verify.sh"
-  "dev-web|启动前端 Web 开发服务|cd frontend && pnpm run dev:web"
-  "start-electron|构建并启动 Electron 桌面端|scripts/run-electron.sh build"
-  "start-electron-dev|直接启动 Electron 桌面端（不构建，需先初始化）|scripts/run-electron.sh dev"
-  "investment-research-start|构建并启动投研产品(profile 托管 :8000/:8100 + Electron UI)|scripts/run-electron.sh build --profile investment-research"
-  "investment-research-start-dev|直接启动投研产品（不构建，需先初始化）|scripts/run-electron.sh dev --profile investment-research"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)
