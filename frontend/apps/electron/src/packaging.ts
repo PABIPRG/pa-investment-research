@@ -1,7 +1,7 @@
 /** Assemble a production deployment into a native Electron application and optional Forge artifacts. */
 
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -22,8 +22,14 @@ interface CommandSpec {
   cwd: string
 }
 
+interface PackagingLinkTarget {
+  sourceDir: string
+  targetDir: string
+}
+
 interface PackagingPlan {
   deploy: CommandSpec
+  linkTargets: PackagingLinkTarget[]
   rootDir: string
   sidecar: CommandSpec
   sidecarCacheDir: string
@@ -39,6 +45,10 @@ interface PackagerOptionsInput {
   platform: NonNullable<PackagerOptions['platform']>
   sidecarDir: string
   stagingDir: string
+}
+
+type PackagerOsxSignOptions = Exclude<PackagerOptions['osxSign'], true | undefined> & {
+  continueOnError: boolean
 }
 
 /**
@@ -76,6 +86,11 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
       command: pnpmCommand,
       cwd: workspaceDir,
     },
+    // Legacy pnpm deploy preserves this override link but omits its relative target.
+    linkTargets: platform === 'darwin' ? [{
+      sourceDir: join(workspaceDir, 'vendor/cosmokit'),
+      targetDir: join(stagingDir, 'vendor/cosmokit'),
+    }] : [],
     rootDir,
     sidecar: {
       args: [
@@ -98,12 +113,23 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
   }
 }
 
+/** Copy targets required by relative workspace links preserved by legacy pnpm deploy. */
+export async function materializePackagingLinkTargets(linkTargets: PackagingLinkTarget[]): Promise<void> {
+  await Promise.all(linkTargets.map(({ sourceDir, targetDir }) => cp(sourceDir, targetDir, { recursive: true })))
+}
+
 /**
  * Create packager options that install the sidecar directory under Electron Resources.
  * @param input - Resolved Electron artifact and temporary package paths.
  * @returns Options for the existing Electron packager and signing pipeline.
  */
 export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
+  const osxSign = {
+    continueOnError: false,
+    identity: '-',
+    identityValidation: false,
+  } satisfies PackagerOsxSignOptions
+
   return {
     appBundleId: 'com.deepseek.harness',
     arch: input.arch,
@@ -117,10 +143,7 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     out: input.outDir,
     overwrite: true,
     ...(input.platform === 'darwin' ? {
-      osxSign: {
-        identity: '-',
-        identityValidation: false,
-      },
+      osxSign,
     } : {}),
     platform: input.platform,
     prune: false,
@@ -151,6 +174,7 @@ async function packageApplication(): Promise<void> {
   const plan = createPackagingPlan(rootDir, process.platform, process.arch)
   try {
     await run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd)
+    await materializePackagingLinkTargets(plan.linkTargets)
     await run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd)
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
     if (typeof electronPackage !== 'object' || electronPackage === null
