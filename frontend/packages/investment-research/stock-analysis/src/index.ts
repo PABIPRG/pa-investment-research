@@ -151,8 +151,9 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
       defineTool({
         name: 'analyze_stock',
         description:
-        '对 A 股股票进行多智能体 AI 分析（市场/基本面/新闻/情绪分析师 → 多空辩论 → 交易员 → 风险辩论 → 风险经理），' +
-        '返回买入/持有/卖出决策、目标价、置信度与完整分步报告。' +
+        '对 A 股股票进行多智能体 AI 分析，返回买入/持有/卖出决策、目标价、置信度与分步报告。' +
+        '研究档位按延迟从低到高扩展分析覆盖：quick 仅市场，basic 增加基本面，standard 覆盖市场/基本面/新闻/情绪，' +
+        'deep/full 保持四分析师并增加多空与风险辩论轮次。' +
         '输入可以是股票代码（如 600519）或名称（如 贵州茅台）；date 留空表示最近交易日。',
         parameters: {
           ticker: {
@@ -166,7 +167,9 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           },
           research_depth: {
             type: 'string',
-            description: '研究深度，可选，默认 standard',
+            description:
+            '研究深度：quick=仅市场、最低延迟；basic=市场+基本面；standard=四分析师+1 轮多空/风险辩论（默认）；' +
+            'deep=四分析师+2 轮；full=四分析师+3 轮并启用在线新闻，延迟依次增加',
             enum: ['quick', 'basic', 'standard', 'deep', 'full'] as const,
           },
           config_overrides: {
@@ -243,7 +246,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
         name: 'analyze_holdings',
         description:
         '分析当前持仓的风险：市值/浮盈/权重/集中度 HHI/行业暴露 + 逐股年化波动率/最大回撤/β。' +
-        'deep 模式对每只股票并行跑引擎 quick 深度（约 3-5 分钟），输出每股风险分与买卖信号；' +
+        'deep 模式对每只股票并行跑引擎 standard 深度（四分析师，约 3-5 分钟），输出每股风险分与买卖信号；' +
         'quick 模式仅定量风险（秒级）。holdings 传持仓列表（代码+股数+成本价）；不传则用已保存持仓。',
         parameters: {
           holdings: {
@@ -253,7 +256,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           mode: {
             type: 'string',
             enum: ['quick', 'deep'],
-            description: 'deep=逐股引擎分析(慢,约3-5分钟), quick=仅定量风险(秒级)，默认 deep',
+            description: 'deep=逐股 standard 四分析师引擎分析(慢,约3-5分钟), quick=仅定量风险(秒级)，默认 deep',
           },
           use_saved: {
             type: 'boolean',

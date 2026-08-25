@@ -160,11 +160,15 @@ POST /analyze
 
 **深度映射到引擎参数**（`engine_bridge.RESEARCH_DEPTH_MAP`）：
 
-| depth | max_debate_rounds | max_risk_discuss_rounds | online_news |
-|---|---|---|---|
-| quick / basic / standard | 1 | 1 | false |
-| deep | 2 | 2 | false |
-| full | 3 | 3 | true |
+| depth | 分析师 | max_debate_rounds | max_risk_discuss_rounds | online_news | agent 节点预算 |
+|---|---|---|---|---|---|
+| quick | 市场 | 1 | 1 | false | 9 |
+| basic | 市场、基本面 | 1 | 1 | false | 10 |
+| standard | 市场、社媒、新闻、基本面 | 1 | 1 | false | 12 |
+| deep | 市场、社媒、新闻、基本面 | 2 | 2 | false | 17 |
+| full | 市场、社媒、新闻、基本面 | 3 | 3 | true | 22 |
+
+adapter 分析固定关闭 TradingAgentsGraph memory，跨次记忆仍由 dsh 会话层持有；该路径不初始化 Chroma memory，不发起 memory embedding 请求。
 
 **最终结果结构**（SSE `result` 事件 或 `GET /analyze/{id}/result`）：
 
@@ -202,7 +206,7 @@ POST /analyze
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `holdings` | array | | `[{ticker, quantity, cost_price}]`，为空时回退已保存持仓 |
-| `mode` | enum | | `quick`（仅定量，秒级）/ `deep`（逐股引擎，3–5 分钟），默认 `deep` |
+| `mode` | enum | | `quick`（仅定量，秒级）/ `deep`（逐股 `standard` 四分析师引擎，3–5 分钟），默认 `deep` |
 | `use_saved` | boolean | | `holdings` 为空时是否用已保存持仓，默认 `true` |
 | `risk_profile` | enum | | 同上 |
 

@@ -4,7 +4,7 @@
 两级分析：
   L1 定量（always）  逐股 akshare 历史价 → 年化波动率 / 最大回撤 / beta(vs 沪深300)；
                      组合市值 / 成本 / 浮盈 / 权重 / 组合波动率 wᵀΣw / HHI 集中度 / 行业暴露
-  L2 深度（deep）    ThreadPoolExecutor(3) 并行跑引擎 quick 深度 → 每股 risk_score / action / confidence
+  L2 深度（deep）    ThreadPoolExecutor(3) 并行跑引擎 standard 深度 → 每股 risk_score / action / confidence
 
 数据源健壮性（本机实测）：
   - push2his.eastmoney.com 直连可用：stock_zh_a_hist（个股前复权）、stock_zh_index_daily_em（沪深300）
@@ -35,6 +35,9 @@ TRADING_DAYS = 252
 _industry_ok = True
 # baostock 全局 socket 非线程安全：本模块内部串行访问
 _bs_lock = threading.Lock()
+
+# 持仓 deep 要保留市场、社媒、新闻、基本面四分析师覆盖，但不额外增加辩论轮次。
+HOLDINGS_ENGINE_DEPTH = "standard"
 
 
 class HoldingDataError(RuntimeError):
@@ -339,7 +342,7 @@ class HoldingsRunner:
             "performance_metrics": {},
         }
 
-    # ---- L2 深度：逐股引擎并行（quick）────────────────────────────────
+    # ---- L2 深度：逐股引擎并行（standard）─────────────────────────────
 
     def _l2_deep(self, holdings, params, progress_cb) -> dict:
         from .engine_bridge import EngineRunner  # lazy: fake 模式不需要
@@ -348,7 +351,7 @@ class HoldingsRunner:
         def analyze(h: HoldingItem) -> tuple[str, dict]:
             sub = {
                 "ticker": h.ticker,
-                "research_depth": "quick",
+                "research_depth": HOLDINGS_ENGINE_DEPTH,
                 "task_id": f"{params.get('task_id', '')}:{h.ticker}",
                 "risk_profile": get_risk_profile(params),  # 逐股引擎沿用同一风险偏好
             }
@@ -370,7 +373,7 @@ class HoldingsRunner:
                 logger.warning("引擎深度分析 %s 失败: %s", ticker, e)
                 return ticker, {"error": str(e)}
 
-        progress_cb("🔬 深度模式：逐股跑引擎 quick 分析（并行 3）…")
+        progress_cb("🔬 深度模式：逐股跑引擎 standard 分析（四分析师，并行 3）…")
         results = {}
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(holdings))) as ex:
             futs = {ex.submit(analyze, h): h for h in holdings}

@@ -134,7 +134,9 @@ total = 分析师数 + (max_debate_rounds × 2 + 1) + 1 + (max_risk_discuss_roun
 
 | 深度模式 | max_debate | max_risk | 分析师 | 研究 | 交易 | 风险 | total |
 |---|---|---|---|---|---|---|---|
-| quick/basic/standard | 1 | 1 | 4 | 3 | 1 | 4 | **12** |
+| quick | 1 | 1 | 1（市场） | 3 | 1 | 4 | **9** |
+| basic | 1 | 1 | 2（市场、基本面） | 3 | 1 | 4 | **10** |
+| standard | 1 | 1 | 4 | 3 | 1 | 4 | **12** |
 | deep | 2 | 2 | 4 | 5 | 1 | 7 | **17** |
 | full | 3 | 3 | 4 | 7 | 1 | 10 | **22** |
 

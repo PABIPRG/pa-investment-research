@@ -121,11 +121,15 @@ curl http://127.0.0.1:8000/health
 
 `research_depth` → 引擎配置映射：
 
-| depth | max_debate_rounds | max_risk_discuss_rounds | online_news |
-|---|---|---|---|
-| quick / basic / standard | 1 | 1 | false |
-| deep | 2 | 2 | false |
-| full | 3 | 3 | true |
+| depth | 分析师 | max_debate_rounds | max_risk_discuss_rounds | online_news | agent 节点预算 |
+|---|---|---|---|---|---|
+| quick | 市场 | 1 | 1 | false | 9 |
+| basic | 市场、基本面 | 1 | 1 | false | 10 |
+| standard | 市场、社媒、新闻、基本面 | 1 | 1 | false | 12 |
+| deep | 市场、社媒、新闻、基本面 | 2 | 2 | false | 17 |
+| full | 市场、社媒、新闻、基本面 | 3 | 3 | true | 22 |
+
+adapter 分析的跨次记忆由 dsh 会话层持有，因此构图时固定 `memory_enabled=false`，不初始化 Chroma memory，也不发起 memory embedding 请求。
 
 **测试入参**
 
@@ -179,14 +183,14 @@ curl -X POST http://127.0.0.1:8000/analyze \
 
 **两级分析：**
 - **L1 定量（always）**：逐股 baostock 前复权日线 → 年化波动率 / 最大回撤 / β(vs 沪深300)；组合市值 / 成本 / 浮盈 / 权重 / 组合波动率 wᵀΣw / HHI 集中度 / 行业暴露。
-- **L2 深度（`deep`）**：`ThreadPoolExecutor(3)` 并行逐股跑引擎 `quick` 深度 → 每股 `risk_score` / `action` / `confidence`。
+- **L2 深度（`deep`）**：`ThreadPoolExecutor(3)` 并行逐股跑引擎 `standard` 深度，保留市场、社媒、新闻和基本面四分析师、各 1 轮多空与风险辩论 → 每股 `risk_score` / `action` / `confidence`。
 
 **请求体** `HoldingsRequest`
 
 | 字段 | 类型 | 必填 | 默认 | 说明 |
 |---|---|---|---|---|
 | `holdings` | `HoldingItem[]` | | `null` | 持仓列表；为空时回退已保存持仓 |
-| `mode` | string | | `"deep"` | `quick`=仅定量风险(秒级) / `deep`=逐股引擎分析(慢) |
+| `mode` | string | | `"deep"` | `quick`=仅定量风险(秒级) / `deep`=逐股 `standard` 四分析师引擎分析(慢) |
 | `use_saved` | bool | | `true` | `holdings` 为空时是否回退到已保存持仓 |
 | `risk_profile` | string | | `null` | `conservative`/`balanced`/`aggressive` |
 
