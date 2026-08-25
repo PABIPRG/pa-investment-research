@@ -50,3 +50,7 @@
 ```
 
 第三段以 `.sh` 结尾按脚本文件执行，否则按 shell 命令执行（如 `cd frontend && pnpm run xxx`）。注册后菜单和 `./start.sh foo` 直达命令自动生效。
+
+## 开发文档
+
+- [投研新后端模块与前端 UI 接入 SOP](docs/sop/investment-research-backend-ui-integration-sop.md)：面向贡献者的后端模块、Host operation、投研页面和测试接入流程。
