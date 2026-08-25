@@ -11,7 +11,10 @@ _shadow_snapshot/_classify/_risk_level），breach 形状与 holdings_runner 的
 _risk_budget_check 保持一致：{indicator, label, value, limit, excess}，额外加 severity。
 """
 
+import copy
+import threading
 import time
+from dataclasses import dataclass, field
 
 from .personalize import (
     _active_strategies,
@@ -31,6 +34,20 @@ _BREACH_LABELS = {
 }
 # V→Q：用户反馈校准只作用于事件源（软信号），组合/影子/画像永不抑制
 _DOWNGRADE = {"高": "中", "中": "低", "低": "低"}
+_PORTFOLIO_CACHE: dict[tuple, tuple[float, dict]] = {}
+
+
+@dataclass
+class _PortfolioFlight:
+    """一次组合计算的共享终态，等待者读取同一结果或同一异常。"""
+
+    event: threading.Event = field(default_factory=threading.Event)
+    result: dict | None = None
+    error: Exception | None = None
+
+
+_PORTFOLIO_FLIGHTS: dict[tuple, _PortfolioFlight] = {}
+_PORTFOLIO_CACHE_LOCK = threading.Lock()
 
 
 def _feedback_counts(store) -> dict:
@@ -80,26 +97,97 @@ def _excess_ratio(value, limit) -> float | None:
         return None
 
 
+def _collection_revision(store, collection: str) -> tuple[int, int, int, int, int]:
+    """用文件身份、ctime、mtime 与尺寸识别原子替换及原地改写。"""
+    try:
+        stat = store._path(collection).stat()
+    except FileNotFoundError:
+        return (0, 0, 0, 0, 0)
+    return (
+        int(getattr(stat, "st_dev", 0)),
+        int(getattr(stat, "st_ino", 0)),
+        int(getattr(stat, "st_ctime_ns", 0)),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+    )
+
+
+def _portfolio_revision(store, profile_key: str) -> tuple:
+    return (
+        str(store.base_dir.resolve()),
+        profile_key,
+        _collection_revision(store, "holdings"),
+        _collection_revision(store, "shadow_equity"),
+    )
+
+
 def portfolio_risk(store=None) -> dict:
-    """N 组合风险模型：等权确定性估算（无实时行情）。
+    """短 TTL + revision + single-flight 的组合风险读取。"""
+    from .config import settings
+    from .risk_profiles import get_risk_profile
+    from .store import JsonStore
+
+    store = store or JsonStore()
+    profile_key = get_risk_profile()
+    revision = _portfolio_revision(store, profile_key)
+    ttl = max(0.0, float(settings.risk_portfolio_cache_ttl))
+
+    now = time.monotonic()
+    with _PORTFOLIO_CACHE_LOCK:
+        cached = _PORTFOLIO_CACHE.get(revision)
+        if cached is not None and (now - cached[0]) <= ttl:
+            return copy.deepcopy(cached[1])
+        flight = _PORTFOLIO_FLIGHTS.get(revision)
+        if flight is None:
+            flight = _PortfolioFlight()
+            _PORTFOLIO_FLIGHTS[revision] = flight
+            owner = True
+        else:
+            owner = False
+
+    if not owner:
+        flight.event.wait()
+        if flight.error is not None:
+            raise flight.error
+        if flight.result is None:
+            raise RuntimeError("组合风险 single-flight 未发布终态")
+        return copy.deepcopy(flight.result)
+
+    try:
+        result = _compute_portfolio_risk(store, profile_key)
+    except Exception as exc:
+        with _PORTFOLIO_CACHE_LOCK:
+            _PORTFOLIO_FLIGHTS.pop(revision, None)
+            flight.error = exc
+            flight.event.set()
+        raise
+    with _PORTFOLIO_CACHE_LOCK:
+        if len(_PORTFOLIO_CACHE) >= 32:
+            _PORTFOLIO_CACHE.clear()
+        _PORTFOLIO_CACHE[revision] = (time.monotonic(), result)
+        _PORTFOLIO_FLIGHTS.pop(revision, None)
+        flight.result = result
+        flight.event.set()
+    return copy.deepcopy(result)
+
+
+def _compute_portfolio_risk(store, profile_key: str) -> dict:
+    """N 组合风险模型的无缓存确定性计算。
 
     - 持仓 N → 等权 w = 1/N，HHI = 1/N（无价格时等权是唯一诚实假设）；
     - 对比 profile(profile_key)["risk_budget"]：single_stock_weight_max / hhi_max /
       portfolio_vol_max，breach 形状 {indicator,label,value,limit,excess,severity}；
     - 影子回撤/波动：shadow_equity/{date}.overall_nav ≥2 日才评估，否则 null + 数据不足。
     """
-    from .store import JsonStore
-
-    store = store or JsonStore()
     holdings = _holdings_codes(store)
     n = len(holdings)
     w = 1.0 / n if n else 0.0
     hhi = 1.0 / n if n else 0.0
 
-    from .risk_profiles import get_risk_profile, profile as _profile
+    from .risk_profiles import profile as _profile
 
-    key = get_risk_profile()
-    p = _profile(key)
+    key = profile_key
+    p = _profile(profile_key)
     budget = p["risk_budget"]
     as_of = _now()
 
@@ -196,16 +284,17 @@ def risk_alerts(store=None) -> dict:
     from .store import JsonStore
 
     store = store or JsonStore()
-    from .risk_profiles import get_risk_profile, profile as _profile
+    from .risk_profiles import profile as _profile
 
-    key = get_risk_profile()
+    pr = portfolio_risk(store)
+    key = pr["profile"]
     p = _profile(key)
     budget = p["risk_budget"]
     items: list[dict] = []
     fb_counts = _feedback_counts(store)  # V→Q 效果归因：每预警的 有用/没用 反馈
 
     # 1) 组合（N）--------------------------------------------------------------
-    pr = portfolio_risk(store)
+    holdings_codes = list(_holdings_codes(store))
     for b in pr["breaches"]:
         label = b["label"]
         if b["indicator"] == "single_stock_weight":
@@ -220,7 +309,7 @@ def risk_alerts(store=None) -> dict:
             "severity": b["severity"],
             "title": label + "超预算",
             "detail": detail,
-            "codes": list(_holdings_codes(store)),
+            "codes": holdings_codes,
             "strategy_id": None,
             "ts": pr["as_of"],
         })
@@ -288,12 +377,19 @@ def risk_alerts(store=None) -> dict:
             })
 
     # 3) 事件（F）--------------------------------------------------------------
-    from .strategies import _str2md5, fetch_events
+    from .config import settings
+    from .strategies import _str2md5, fetch_events_with_status
 
-    holdings_set = set(_holdings_codes(store))
+    holdings_set = set(holdings_codes)
     watchlist_set = set(_watchlist_codes(store))
     actives = _active_strategies(store)
-    events = fetch_events(limit=30, timeout=10.0)
+    events, event_status = fetch_events_with_status(
+        limit=30,
+        timeout=settings.risk_event_deadline,
+        allow_stale=True,
+        failure_backoff=True,
+        cached_impact=True,
+    )
     for ev in events or []:
         if str(ev.get("direction") or "") != "利空":
             continue
@@ -350,7 +446,19 @@ def risk_alerts(store=None) -> dict:
         "count": len(items),
         "items": items,
         "effect": behavior_funnel(store),
+        "degraded": bool(event_status["degraded"]),
+        "upstreams": {"market_watch_events": event_status},
     }
+
+
+def _reset_risk_cache_for_tests() -> None:
+    """测试隔离：生产调用不使用。"""
+    with _PORTFOLIO_CACHE_LOCK:
+        _PORTFOLIO_CACHE.clear()
+        for flight in _PORTFOLIO_FLIGHTS.values():
+            flight.error = RuntimeError("测试重置终止了组合风险 single-flight")
+            flight.event.set()
+        _PORTFOLIO_FLIGHTS.clear()
 
 
 def _md5(text: str) -> str:

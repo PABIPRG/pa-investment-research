@@ -156,3 +156,26 @@ def expand_events(events: list[dict] | None) -> list[dict]:
             logger.warning("事件影响图谱扩展失败（保持原样）: %s", exc)
             out.append(e)
     return out
+
+
+def expand_events_cached(events: list[dict] | None) -> list[dict]:
+    """只复用未过期的影响图谱缓存，不在持仓读取链路发起额外 HTTP。"""
+    if not events:
+        return events or []
+    now = time.time()
+    out: list[dict] = []
+    for event in events:
+        if not isinstance(event, dict):
+            out.append(event)
+            continue
+        memo = _IMPACT_CACHE.get(str(event.get("id") or ""))
+        if memo is None or (now - memo[0]) >= _CACHE_TTL:
+            out.append(event)
+            continue
+        out.append({
+            **event,
+            "impact_codes": memo[1],
+            "impact_industries": memo[2],
+            "impact_by": memo[3],
+        })
+    return out
