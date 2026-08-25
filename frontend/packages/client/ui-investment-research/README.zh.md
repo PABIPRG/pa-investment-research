@@ -1,6 +1,6 @@
 # @deepseek-ai/dsh-client-ui-investment-research
 
-English | [中文](README.zh.md)
+[English](README.md) | 中文
 
 `investment-research` Profile 专用的投研工作台 UI。该包保留正式产品壳的会话、消息、输入、附件、工具、审批和工作区能力，只替换侧栏中的业务导航，并通过 `shell.overlay` 增加顶部搜索、业务页面和历史对话抽屉。
 

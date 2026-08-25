@@ -1,0 +1,5 @@
+# 双语文档一致性记录（docs/i18n/README.md）：记录两侧最后确认一致时的完整 git blob hash。
+# 修改任一侧后，须同步另一侧并重新记录：
+#   pnpm run verify-translation-pairing --write packages/client/ui-investment-research/README.md
+README.md: 5eda52bbee00b6ce7fdb6483c1139eea7c875e71
+README.zh.md: 3d38c3ee4461ee27ab5904872c2d6969d63c8cd4
