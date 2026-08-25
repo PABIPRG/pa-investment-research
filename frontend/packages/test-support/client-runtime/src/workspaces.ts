@@ -71,6 +71,18 @@ export class TestWorkspaces implements IWorkspaces {
   }
 
   /**
+   * Fresh-session flow (recorded; never aliases the reusable-session action).
+   * @param workspaceId - optional explicit workspace target.
+   * @returns the created session id, or undefined when the stub models no target.
+   */
+  async startFreshSession(workspaceId?: WorkspaceId): Promise<SessionId | undefined> {
+    this.calls.push({ method: 'startFreshSession', args: [workspaceId] })
+    const stub = this.stubs.get('startFreshSession')
+    if (stub !== undefined) return await (stub(workspaceId) as Promise<SessionId | undefined>)
+    return workspaceId === undefined ? undefined : `fresh-session-of-${workspaceId}` as SessionId
+  }
+
+  /**
    * Create a Workspace (recorded). The default echoes a view derived from
    * the input; stub for failure or list-coupled flows.
    * @param input - the Host create payload.

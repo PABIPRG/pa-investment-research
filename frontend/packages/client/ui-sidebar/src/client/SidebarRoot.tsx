@@ -23,6 +23,7 @@ import {
   Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRootComponentProps } from './contract/slots.ts'
+import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './SidebarRoot.module.css'
 
 /** Wide-content unmount delay; matches the 150ms wide-content fade-out. */
@@ -35,6 +36,38 @@ const COLLAPSE_SETTLE_MS = 150
  * edge — on the way to the conversation, or around a portalled menu.
  */
 const SCROLLBAR_LINGER_MS = 2000
+
+/** Default brand occupant used by ordinary profiles. */
+export function SidebarBrand({ compact, startSession, label }: PropsRuntime<'sidebar.brand'>) {
+  if (compact) return <FishLogo className={css.railFish} size={24} />
+  return (
+    <button
+      type="button"
+      className={css.brandButton}
+      aria-label={label}
+      onClick={() => { startSession() }}
+    >
+      <BrandWordmark />
+    </button>
+  )
+}
+
+/** Default new-session occupant used by ordinary profiles. */
+export function SidebarNewSession({ wide, startSession, label, text }: PropsRuntime<'sidebar.newSession'>) {
+  return (
+    <Tooltip label={label} delayMs={500} disabled={wide}>
+      <button
+        type="button"
+        className={css.newSession}
+        aria-label={label}
+        onClick={() => { startSession() }}
+      >
+        <IconNewChatOutline16 size={wide ? 14 : 18} />
+        {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{text}</span>}
+      </button>
+    </Tooltip>
+  )
+}
 
 /**
  * Render the sidebar column shell.
@@ -131,14 +164,13 @@ export function SidebarRoot({
         {/* Expanded, the wordmark doubles as a New Session shortcut; the
             collapsed rail's logo is the expand toggle below instead. */}
         {wide && (
-          <button
-            type="button"
-            className={clsx(css.brand, css.wide)}
-            aria-label={t('session.new.label')}
-            onClick={() => { startSession() }}
-          >
-            <BrandWordmark />
-          </button>
+          <div className={clsx(css.brand, css.wide)}>
+            {renderSlot('sidebar.brand', {
+              compact: false,
+              startSession: () => { startSession() },
+              label: t('session.new.label'),
+            })}
+          </div>
         )}
         {/* Rail resting state is the whale mark; hovering swaps in the panel
             icon (the expand affordance, figma sidebar-hover flow). */}
@@ -149,25 +181,27 @@ export function SidebarRoot({
             aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
             onClick={() => { toggleSidebar() }}
           >
-            {!wide && <FishLogo className={css.railFish} size={24} />}
+            {!wide && (
+              <span className={css.compactBrand}>
+                {renderSlot('sidebar.brand', {
+                  compact: true,
+                  startSession: () => { startSession() },
+                  label: t('session.new.label'),
+                })}
+              </span>
+            )}
             {/* Rail icons render at 18 (figma rail spec); expanded keeps the glyph-native sizes. */}
             <IconPanelLeftOutline16 className={css.panelIcon} size={wide ? 16 : 18} />
           </button>
         </Tooltip>
       </div>
 
-      {/* Expanded, the button carries its own label — tooltip only on the rail. */}
-      <Tooltip label={t('session.new.label')} delayMs={500} disabled={wide}>
-        <button
-          type="button"
-          className={css.newSession}
-          aria-label={t('session.new.label')}
-          onClick={() => { startSession() }}
-        >
-          <IconNewChatOutline16 size={wide ? 14 : 18} />
-          {wide && <span className={clsx(css.newSessionLabel, css.wide)}>{t('session.new')}</span>}
-        </button>
-      </Tooltip>
+      {renderSlot('sidebar.newSession', {
+        wide,
+        startSession: () => { startSession() },
+        label: t('session.new.label'),
+        text: t('session.new'),
+      })}
 
       {/* The browsing region fills the column between the controls and the
           foot in both states; its rail icon column rides the same slot. */}

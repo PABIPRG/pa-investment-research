@@ -5,12 +5,15 @@ import z from '@deepseek-ai/schemastery'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { bindTypertRemote, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import { InvestmentBackendManager } from './runtime.ts'
+import { requestInvestmentData } from './data.ts'
 import type {
   Config,
   InvestmentBackendId,
   InvestmentCapabilityDefinition,
   InvestmentCapabilityUse,
   InvestmentReadinessSnapshot,
+  InvestmentDataRequest,
+  InvestmentJsonValue,
   InvestmentRestartResult,
   PythonBackendDefinition,
   PythonBackendLease,
@@ -44,6 +47,9 @@ export type {
   InvestmentCapabilityUse,
   InvestmentCredentialReadiness,
   InvestmentReadinessSnapshot,
+  InvestmentDataOperation,
+  InvestmentDataRequest,
+  InvestmentJsonValue,
   InvestmentRuntimeAssetReadiness,
   InvestmentRestartResult,
   ManagedCredentialEnv,
@@ -138,6 +144,17 @@ export class InvestmentPythonRuntime extends Service {
   @Remote('readiness')
   readiness(): InvestmentReadinessSnapshot {
     return this.manager.readiness()
+  }
+
+  /**
+   * Execute one browser-safe, allow-listed investment data operation.
+   * Backend origins and arbitrary paths never cross the Remote boundary.
+   * @param request - Stable operation name and validated JSON input.
+   * @returns The backend's lossless JSON response.
+   */
+  @Remote('request-data')
+  requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue> {
+    return requestInvestmentData(request, id => this.manager.acquire(id))
   }
 
   /**

@@ -50,6 +50,7 @@ const CHANGED: InvestmentReadinessSnapshot = {
 interface Bench {
   readonly ctx: Context
   readonly readiness: ReturnType<typeof vi.fn>
+  readonly data: ReturnType<typeof vi.fn>
   readonly restart: ReturnType<typeof vi.fn>
   mount(): Promise<Fiber>
 }
@@ -117,6 +118,7 @@ async function bench(): Promise<Bench> {
     .mockReturnValue(FIRST)
   const restart = vi.fn<() => InvestmentRestartResult>()
     .mockReturnValue({ status: 'accepted' })
+  const data = vi.fn().mockReturnValue({ items: [{ code: '600519' }] })
   const call = vi.fn<ConnectionHandle['rpc']['call']>(async (_path, method) => {
     if (method === 'investmentPythonRuntime/readiness') {
       return { ok: true, value: structuredClone(readiness()) }
@@ -124,12 +126,16 @@ async function bench(): Promise<Bench> {
     if (method === 'investmentPythonRuntime/request-restart') {
       return { ok: true, value: structuredClone(restart()) }
     }
+    if (method === 'investmentPythonRuntime/request-data') {
+      return { ok: true, value: structuredClone(data()) }
+    }
     throw new Error(`unexpected Remote method: ${method}`)
   })
   const runtime = await runtimeBench(call)
   return {
     ...runtime,
     readiness,
+    data,
     restart,
   }
 }
@@ -143,10 +149,10 @@ describe('investment research Runtime Client facade', () => {
     const b = await bench()
     const mount = b.ctx.remote.$mount.bind(b.ctx.remote)
     let release!: () => void
-    const gate = new Promise<void>(resolve => { release = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
     let entered!: () => void
-    const mounting = new Promise<void>(resolve => { entered = resolve })
-    vi.spyOn(b.ctx.remote, '$mount').mockImplementation(async contribution => {
+    const mounting = new Promise<void>((resolve) => { entered = resolve })
+    vi.spyOn(b.ctx.remote, '$mount').mockImplementation(async (contribution) => {
       entered()
       await gate
       return mount(contribution)
@@ -161,6 +167,7 @@ describe('investment research Runtime Client facade', () => {
     expect(b.ctx.get('investmentResearchRuntimeClient')).toBeDefined()
     expect(b.ctx.typert.remotes.list().map(entry => entry.id)).toEqual([
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/readiness',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/request-data',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/request-restart',
     ])
   })
@@ -173,12 +180,16 @@ describe('investment research Runtime Client facade', () => {
     expect(Object.keys(facade).sort()).toEqual([
       'getSnapshot',
       'refresh',
+      'requestData',
       'requestRestart',
       'subscribe',
     ])
     expect(JSON.stringify(facade)).not.toContain('credentialValue')
     await expect(facade.requestRestart()).resolves.toEqual({ status: 'accepted' })
+    await expect(facade.requestData({ operation: 'market-watch.overview' }))
+      .resolves.toEqual({ items: [{ code: '600519' }] })
     expect(b.restart).toHaveBeenCalledOnce()
+    expect(b.data).toHaveBeenCalledOnce()
   })
 
   it('loads on first subscription and refreshes only for the DeepSeek credential and reconnects', async () => {

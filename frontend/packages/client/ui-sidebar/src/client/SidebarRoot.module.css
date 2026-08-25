@@ -117,6 +117,12 @@
   display: inline-flex;
   align-items: center;
   overflow: hidden;
+}
+
+.brandButton {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
   padding: 0;
   border: none;
   background: transparent;
@@ -143,9 +149,18 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+.iconButton:focus {
+  outline: none;
+}
+
+.iconButton:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-alias-state-business-tertiary, #dbeaff);
+}
+
 .collapsed .iconButton {
   width: 36px;
   height: 36px;
+  border-radius: 10px;
 }
 
 /* Rail logo swap: collapsed, the toggle rests as the whale mark (brand ink,
@@ -159,8 +174,14 @@
   display: inline;
 }
 
-.collapsed .toggle:hover .railFish {
+.collapsed .toggle:hover .compactBrand {
   display: none;
+}
+
+.compactBrand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Rail icons ride the primary ink (figma rail spec); expanded keeps the

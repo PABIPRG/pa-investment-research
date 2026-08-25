@@ -1,7 +1,7 @@
 /**
  * Sidebar slot contract: the registrant-side props composition for the
  * layout-owned `sidebar` slot, plus the holes this shell declares. The shell
- * owns column geometry (fold state machine, brand row, New Session);
+ * owns column geometry (fold state machine and control seats);
  * everything between the section header and the list bottom is the
  * `sidebar.workspaces` registrant's (ui-workspace), and the foot is the
  * `sidebar.settings` registrant's (ui-settings), followed by optional footer
@@ -15,6 +15,18 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
+    /**
+     * Product identity rendered in the expanded brand row. The generic shell
+     * supplies the Harness wordmark; profile UI packages may shadow it without
+     * replacing the sidebar geometry or its shared controls.
+     */
+    'sidebar.brand': { kind: 'single'; scope: 'root'; owner: SidebarBrandOwnerProps }
+    /**
+     * New-session control below the brand. The default occupant preserves the
+     * shared Harness control; profile shells may shadow it when creation lives
+     * in their own top-level action area.
+     */
+    'sidebar.newSession': { kind: 'single'; scope: 'root'; owner: SidebarNewSessionOwnerProps }
     /**
      * The workspace/session browsing region: section header, search, the
      * grouped/flat session list, and every workspace dialog. Declared by this
@@ -34,6 +46,28 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      */
     'sidebar.footer.action': { kind: 'list'; scope: 'root'; owner: SidebarFooterActionOwnerProps }
   }
+}
+
+/** Owner share of the expanded product-brand seat. */
+export interface SidebarBrandOwnerProps {
+  /** True when the seat is rendered inside the compact rail's expand control. */
+  compact: boolean
+  /** Preserve the shared wordmark behavior: clicking the product identity starts a session. */
+  startSession: () => void
+  /** Localized accessible name for the shared brand action. */
+  label: string
+}
+
+/** Owner share of the optional new-session control. */
+export interface SidebarNewSessionOwnerProps {
+  /** True while the sidebar is in its expanded presentation. */
+  wide: boolean
+  /** Start a session using the shared workspace-aware runtime action. */
+  startSession: () => void
+  /** Localized accessible name. */
+  label: string
+  /** Localized visible label used by the expanded control. */
+  text: string
 }
 
 /**
@@ -85,5 +119,5 @@ export type SidebarRootInjected = {
  */
 export type SidebarRootComponentProps =
   PropsRuntime<'sidebar'>
-  & PropsRenderSlots<'sidebar.workspaces' | 'sidebar.settings' | 'sidebar.footer.action'>
+  & PropsRenderSlots<'sidebar.brand' | 'sidebar.newSession' | 'sidebar.workspaces' | 'sidebar.settings' | 'sidebar.footer.action'>
   & SidebarRootInjected & PropsLocale<'sidebar'>
