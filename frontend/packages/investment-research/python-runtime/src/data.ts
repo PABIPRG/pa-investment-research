@@ -141,8 +141,8 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       knownKeys(input, ['limit', 'enrich', 'personal'])
       return query('/news/flash', {
         limit: integer(input, 'limit', 20, 5, 100),
-        enrich: optionalBoolean(input, 'enrich') ?? true,
-        personal: optionalBoolean(input, 'personal') ?? true,
+        enrich: optionalBoolean(input, 'enrich') ?? false,
+        personal: optionalBoolean(input, 'personal') ?? false,
       })
     },
   },

@@ -7,12 +7,38 @@ from fastapi import HTTPException
 
 os.environ["MW_SCHEDULE_ENABLED"] = "false"
 
-from market_watch.app import securities_search, security_detail
+from market_watch import quotes
+from market_watch.app import _technical_snapshot, securities_search, security_detail, tech_signal
 from market_watch.quotes import search_securities
-from market_watch.schemas import SecurityDetailRequest
+from market_watch.schemas import SecurityDetailRequest, TechSignalRequest
 
 
 class SecurityApiTests(unittest.TestCase):
+    @patch(
+        "market_watch.app.quotes.get_kline",
+        side_effect=quotes.KlineDeadlineExceeded("K 线冷请求超时"),
+    )
+    def test_shared_technical_snapshot_maps_cold_deadline_to_retryable_http_error(self, _get_kline):
+        with self.assertRaises(HTTPException) as raised:
+            _technical_snapshot("600519", 120)
+
+        self.assertEqual(raised.exception.status_code, 504)
+        self.assertIn("后台刷新仍在继续", str(raised.exception.detail))
+
+    @patch("market_watch.app.quotes.get_quote_bounded")
+    @patch("market_watch.app._technical_snapshot")
+    def test_tech_signal_reuses_shared_snapshot_and_bounded_name_lookup(
+        self, technical_snapshot, get_quote_bounded,
+    ):
+        technical_snapshot.return_value = {"bars": 120, "signals": ["价格位于均线上方"]}
+        get_quote_bounded.return_value = {"name": "贵州茅台"}
+
+        payload = tech_signal(TechSignalRequest(code="600519", lookback=120))
+
+        self.assertEqual(payload["name"], "贵州茅台")
+        technical_snapshot.assert_called_once_with("600519", 120)
+        get_quote_bounded.assert_called_once_with("600519")
+
     @patch("market_watch.quotes._security_catalog")
     def test_search_ranks_exact_name_before_code_and_contains_matches(self, catalog):
         catalog.return_value = [

@@ -38,6 +38,9 @@ describe('投研数据页慢请求状态', () => {
     render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} />)
 
     await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false },
+    })
     const scanRegion = screen.getByRole('region', { name: '市场扫描' })
     expect(scanRegion.getAttribute('aria-busy')).toBe('true')
     expect(screen.getByRole('status').textContent).toContain('已完成 0/2 项')
@@ -65,10 +68,11 @@ describe('投研数据页慢请求状态', () => {
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.scan')).toHaveLength(1)
 
     await act(async () => {
-      retriedNews.resolve([{ id: 'news-1', title: '白酒行业需求回暖' }])
+      retriedNews.resolve({ items: [{ id: 'news-1', title: '白酒行业需求回暖' }], stale: true, complete: false })
       signal.resolve({ code: '600519', name: '贵州茅台', bars: 120, signals: ['趋势向上'] })
     })
     await screen.findByText('白酒行业需求回暖')
+    expect(screen.getByText('缓存资讯')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -152,6 +156,7 @@ describe('投研数据页慢请求状态', () => {
     })
     expect(screen.getByText('新筛选结果')).toBeTruthy()
     expect(screen.queryByText('晚到旧结果')).toBeNull()
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(1)
     expect(screen.getByRole('button', { name: '量比异动' }).getAttribute('aria-pressed')).toBe('true')
   })
 
