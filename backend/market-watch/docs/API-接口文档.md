@@ -219,7 +219,50 @@ DELETE /alerts/ab12cd34ef56
 
 > 单条件缺失行情字段时（`results` 里该项为 `null`）该条件本轮跳过，不影响 `combine` 判定其他可用条件。
 
-### 5.2 POST /scan —— 盘中异动扫描
+### 5.2 GET /securities/search —— 证券搜索
+
+按 6 位代码前缀或证券名称搜索 A 股。精确代码、精确名称、代码前缀、名称前缀和名称包含匹配依次排序。
+
+**Query**：`q`（必填，代码或名称）、`limit`（1–20，默认 8）。
+
+```jsonc
+GET /securities/search?q=茅台&limit=8
+// 200
+{
+  "query": "茅台",
+  "count": 1,
+  "items": [
+    { "code": "600519", "name": "贵州茅台", "market": "沪市" }
+  ]
+}
+```
+
+### 5.3 POST /securities/detail —— 个股详情
+
+按唯一股票代码聚合实时行情、近期 K 线技术指标、主力净流入与个股资讯，供独立详情页一次读取。
+
+```jsonc
+POST /securities/detail
+{ "code": "600519", "lookback": 120 }
+// 200
+{
+  "code": "600519", "name": "贵州茅台", "as_of": "2026-08-25 09:30:00",
+  "quote": { "price": 1450.0, "pct_change": 1.2, "turnover": 0.5, "volume_ratio": 1.1, "amount_yi": 12.3 },
+  "fund_flow_yi": 1.25,
+  "technical": {
+    "bars": 120,
+    "last": { "date": "2026-08-25", "open": 1430.0, "high": 1460.0, "low": 1420.0, "close": 1450.0 },
+    "indicators": { "ma": {}, "support_resistance": {} },
+    "signals": ["MA 多头排列"]
+  },
+  "news": [{ "title": "公司发布经营数据", "source": "东财", "time": "10:00" }],
+  "warnings": []
+}
+```
+
+实时行情或技术数据单侧暂不可用时，接口保留另一侧真实数据，并在 `warnings` 中说明缺失项；两侧都不可用时返回 404。
+
+### 5.4 POST /scan —— 盘中异动扫描
 
 **请求体（ScanRequest）**
 
@@ -249,7 +292,7 @@ POST /scan
 { "detail": "kind 必须是 ('gainers', 'volume_ratio', 'limit', 'turnover', 'amount') 之一，收到 'xxx'" }
 ```
 
-### 5.3 POST /tech-signal —— 个股技术信号
+### 5.5 POST /tech-signal —— 个股技术信号
 
 **请求体（TechSignalRequest）**
 

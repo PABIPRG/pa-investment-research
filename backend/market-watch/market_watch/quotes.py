@@ -458,30 +458,75 @@ def cache() -> QuoteCache:
     return _cache
 
 
-# ---- 名称→code 反查（事件抽取用）----
+# ---- 证券目录与名称反查 ----
+_SECURITY_CATALOG: list[dict[str, str]] | None = None
 _NAME_INDEX: dict[str, list[str]] | None = None
 _NAME_INDEX_TS = 0.0
 _NAME_INDEX_TTL = 3600.0  # 名称映射几乎不变，1 小时足够；用轻量名称表而非全市场快照
 
 
-def _name_to_code_index() -> dict[str, list[str]]:
-    """全市场 name→code 索引（TTL 缓存，失败返回空）。
-    用 akshare 名称表（一次请求返回全 A code+name），比全市场行情快照（55+ 请求）轻得多。"""
-    global _NAME_INDEX, _NAME_INDEX_TS
+def _load_security_catalog() -> tuple[list[dict[str, str]], dict[str, list[str]]]:
+    """加载全 A 证券目录及 name→code 索引，失败时返回空结果。"""
+    catalog: list[dict[str, str]] = []
+    index: dict[str, list[str]] = {}
+    try:
+        import akshare as ak
+        for r in ak.stock_info_a_code_name().to_dict("records"):
+            name = str(r.get("name") or "").strip()
+            code = str(r.get("code") or "").strip()
+            if not name or len(code) != 6 or not code.isdigit():
+                continue
+            market = "沪市" if code.startswith(("6", "9")) else "深市" if code.startswith(("0", "2", "3")) else "北交所"
+            catalog.append({"code": code, "name": name, "market": market})
+            index.setdefault(name, []).append(code)
+    except Exception as exc:
+        logger.warning("证券目录构建失败: %s", exc)
+    return catalog, index
+
+
+def _security_catalog() -> list[dict[str, str]]:
+    """全 A 证券目录（TTL 缓存）。"""
+    global _SECURITY_CATALOG, _NAME_INDEX, _NAME_INDEX_TS
     now = time.time()
-    if _NAME_INDEX is None or (now - _NAME_INDEX_TS) > _NAME_INDEX_TTL:
-        idx: dict[str, list[str]] = {}
-        try:
-            import akshare as ak
-            for r in ak.stock_info_a_code_name().to_dict("records"):
-                nm = str(r.get("name") or "").strip()
-                cd = str(r.get("code") or "").strip()
-                if nm and cd:
-                    idx.setdefault(nm, []).append(cd)
-        except Exception as exc:
-            logger.warning("名称→code 索引构建失败: %s", exc)
-        _NAME_INDEX, _NAME_INDEX_TS = idx, now
-    return _NAME_INDEX
+    if _SECURITY_CATALOG is None or (now - _NAME_INDEX_TS) > _NAME_INDEX_TTL:
+        _SECURITY_CATALOG, _NAME_INDEX = _load_security_catalog()
+        _NAME_INDEX_TS = now
+    return _SECURITY_CATALOG
+
+
+def _name_to_code_index() -> dict[str, list[str]]:
+    """全市场 name→code 索引（TTL 缓存，失败返回空）。"""
+    _security_catalog()
+    return _NAME_INDEX or {}
+
+
+def search_securities(query: str, limit: int = 8) -> list[dict[str, str]]:
+    """按代码前缀或名称搜索 A 股，精确匹配优先。"""
+    keyword = str(query).strip().casefold()
+    if not keyword:
+        return []
+
+    ranked: list[tuple[int, str, dict[str, str]]] = []
+    for item in _security_catalog():
+        code = item["code"]
+        name = item["name"]
+        folded_name = name.casefold()
+        if code == keyword:
+            rank = 0
+        elif folded_name == keyword:
+            rank = 1
+        elif code.startswith(keyword):
+            rank = 2
+        elif folded_name.startswith(keyword):
+            rank = 3
+        elif keyword in folded_name:
+            rank = 4
+        else:
+            continue
+        ranked.append((rank, code, item))
+
+    ranked.sort(key=lambda candidate: (candidate[0], candidate[1]))
+    return [item for _, _, item in ranked[:limit]]
 
 
 def resolve_company_codes(name: str, limit: int = 3) -> list[str]:

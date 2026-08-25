@@ -85,6 +85,8 @@ export type InvestmentRestartResult =
 /** Browser-safe, allow-listed investment backend operations. */
 export type InvestmentDataOperation =
   | 'market-watch.overview'
+  | 'market-watch.security-search'
+  | 'market-watch.security-detail'
   | 'market-watch.scan'
   | 'market-watch.tech-signal'
   | 'market-watch.news-flash'

@@ -24,10 +24,13 @@ cd frontend && pnpm run investment:python:init
 
 | 命令 | 说明 |
 |------|------|
-| `backend-start` | 启动投研后台服务：`trading-core(:8000)` 和 `market-watch(:8100)` |
-| `investment-web` | 构建并启动 Web 版投研；可继续传入 `--host`、`--port` 等 Web 参数 |
-| `investment-electron` | 构建并启动 Electron 版投研 |
+| `investment-web` | 构建并启动 Web 版投研；自动托管并清理 Python 后台，可继续传入 `--host`、`--port` 等 Web 参数 |
+| `investment-electron` | 构建并启动 Electron 版投研；Electron 退出时自动清理其托管的 Python 后台 |
+| `backend-start` | 手动启动常驻后台：`trading-core(:8000)` 和 `market-watch(:8100)`，仅用于独立调试 |
+| `backend-stop` | 停止通过手动常驻模式运行的两个投研后台 |
 | `sync-upstream` | 同步上游 deepseek-harness 到 `frontend/`（git subtree + squash） |
+
+正常使用 Web 或 Electron 时不需要先执行 `backend-start`。产品入口会自行启动后台，并且只清理本次运行所拥有的进程。手动执行 `backend-start` 后，后台会跨越 Web/Electron 生命周期持续运行，需使用 `./start.sh backend-stop` 明确停止。
 
 ### 同步上游
 

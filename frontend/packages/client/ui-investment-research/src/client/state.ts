@@ -3,6 +3,7 @@ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 export type InvestmentRoute =
   | 'assistant'
   | 'opportunity'
+  | 'stock-detail'
   | 'portfolio'
   | 'framework'
   | 'projects'

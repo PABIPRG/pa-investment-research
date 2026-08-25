@@ -645,6 +645,16 @@ export class InvestmentBackendManager {
     const health = await this.probeHealth(definition, signal)
     signal.throwIfAborted()
     if (health.status === 'healthy') {
+      if (definition.mode === 'managed') {
+        const previous = await readOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id))
+        signal.throwIfAborted()
+        if (previous.kind === 'current') {
+          throw new Error(
+            `investment Python backend "${definition.id}" has a healthy process left by a previous managed runtime `
+            + `(pid ${previous.state.pid}); stop that process before restarting so updated backend code is loaded`,
+          )
+        }
+      }
       return {
         definition,
         ownership: definition.mode === 'external' ? 'external' : 'attached',

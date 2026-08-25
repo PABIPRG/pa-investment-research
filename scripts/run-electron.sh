@@ -27,8 +27,12 @@ fi
 # Keep this immediately before launch: a build or dependency refresh may restore
 # quarantine attributes propagated by GUI checkout tools such as Sourcetree.
 bash "$ROOT/scripts/prepare-macos-native-modules.sh"
-if [[ $# -gt 0 ]]; then
-  pnpm --filter @deepseek-ai/dsh-electron run start -- "$@"
-else
-  pnpm --filter @deepseek-ai/dsh-electron run start
-fi
+
+# Replace this launcher with the actual Electron process. Keeping pnpm and its
+# script shell between the terminal and Electron makes a signal sent to the
+# launcher's PID stop the wrapper without necessarily reaching Electron, which
+# can strand Electron-owned sidecars. Electron itself owns graceful profile
+# teardown and stops only the Python processes created by that profile.
+cd "$ROOT/frontend/apps/electron"
+ELECTRON_BINARY="$(node -p "require('electron')")"
+exec "$ELECTRON_BINARY" . "$@"
