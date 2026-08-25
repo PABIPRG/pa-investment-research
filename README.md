@@ -8,26 +8,26 @@
 
 ```bash
 ./start.sh          # 交互式菜单（↑↓ 选择，回车运行）
-./start.sh <命令>   # 直接执行，如 ./start.sh init
+./start.sh <命令>   # 直接执行，如 ./start.sh investment-web --port 8090
 ```
 
 ### 首次使用
 
 ```bash
-./start.sh init
+bash scripts/init.sh
+cd frontend && pnpm run investment:python:init
 ```
 
-安装前端依赖并构建（macOS 下会自动移除 native 模块的 quarantine 标记，避免 Gatekeeper 拦截）。后端初始化步骤后续会加入此命令。
+先安装并构建前端，再初始化投研所需的两个 Python 后台环境。macOS 下会自动移除 native 模块的 quarantine 标记，避免 Gatekeeper 拦截。
 
 ### 可用命令
 
 | 命令 | 说明 |
 |------|------|
-| `init` | 初始化项目：前端安装依赖并构建（后端待加入） |
+| `backend-start` | 启动投研后台服务：`trading-core(:8000)` 和 `market-watch(:8100)` |
+| `investment-web` | 构建并启动 Web 版投研；可继续传入 `--host`、`--port` 等 Web 参数 |
+| `investment-electron` | 构建并启动 Electron 版投研 |
 | `sync-upstream` | 同步上游 deepseek-harness 到 `frontend/`（git subtree + squash） |
-| `dev-web` | 启动前端 Web 开发服务 |
-| `start-electron` | 构建并启动 Electron 桌面端；macOS 启动前会清理 native 模块的 quarantine 标记 |
-| `start-electron-dev` | 直接启动 Electron 桌面端，跳过构建；macOS 同样会先清理 quarantine 标记（需先 `init`） |
 
 ### 同步上游
 
