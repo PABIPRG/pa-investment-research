@@ -59,6 +59,23 @@ function optionalStringArray(input: Readonly<Record<string, unknown>>, key: stri
   return value.map(item => item as string)
 }
 
+function oneOf<const T extends string>(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  allowed: readonly T[],
+  required = false,
+): T | undefined {
+  const value = optionalString(input, key)
+  if (value === undefined) {
+    if (required) throw new TypeError(`investment data: ${key} is required`)
+    return undefined
+  }
+  if (!(allowed as readonly string[]).includes(value)) {
+    throw new TypeError(`investment data: unsupported ${key} ${JSON.stringify(value)}`)
+  }
+  return value as T
+}
+
 function stringValue(input: Readonly<Record<string, unknown>>, key: string): string {
   const value = optionalString(input, key)
   if (value === undefined) throw new TypeError(`investment data: ${key} is required`)
@@ -86,6 +103,33 @@ function boundedNumber(
 function pathValue(input: Readonly<Record<string, unknown>>, key: string): string {
   const value = stringValue(input, key).trim()
   if (value.length > 128) throw new TypeError(`investment data: ${key} must be at most 128 characters`)
+  return encodeURIComponent(value)
+}
+
+const PATH_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const REPORT_IDENTIFIER = /^[a-f0-9]{32}$/
+
+function pathIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (!PATH_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be a safe identifier`)
+  }
+  return encodeURIComponent(value)
+}
+
+function reportIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (!REPORT_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be a 32-character lowercase hexadecimal identifier`)
+  }
+  return encodeURIComponent(value)
+}
+
+function taskIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (!REPORT_IDENTIFIER.test(value) && !PATH_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be a 32-character lowercase hexadecimal identifier or safe task identifier`)
+  }
   return encodeURIComponent(value)
 }
 
@@ -292,6 +336,14 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     },
   },
   'trading-core.personalized-matches': noInput('/personalized/matches', 'trading-core'),
+  'trading-core.personalized-impact': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['limit'])
+      return query('/personalized/impact', { limit: integer(input, 'limit', 5, 1, 50) })
+    },
+  },
   'trading-core.personalized-profile': noInput('/personalized/profile', 'trading-core'),
   'trading-core.risk-profile': noInput('/risk_profile', 'trading-core'),
   'trading-core.kyc-profile': noInput('/kyc/profile', 'trading-core'),
@@ -347,6 +399,25 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     body: (input) => {
       knownKeys(input, ['text'])
       return { text: stringValue(input, 'text') }
+    },
+  },
+  'trading-core.reports': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['limit', 'task_type'])
+      return query('/reports', {
+        limit: integer(input, 'limit', 20, 1, 200),
+        task_type: oneOf(input, 'task_type', ['stock', 'holdings', 'brief', 'backtest', 'strategy', 'shadow']),
+      })
+    },
+  },
+  'trading-core.report': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['report_id'])
+      return `/reports/${reportIdentifier(input, 'report_id')}`
     },
   },
   'trading-core.strategies': {
@@ -407,6 +478,32 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       return `/strategies/${pathValue(input, 'strategy_id')}/${action}`
     },
   },
+  'trading-core.strategy-transition': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'action'])
+      const strategyId = pathIdentifier(input, 'strategy_id')
+      const action = oneOf(input, 'action', ['activate', 'reject', 'retire'], true)!
+      return `/strategies/${strategyId}/${action}`
+    },
+  },
+  'trading-core.brief-start': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/brief',
+    body: (input) => {
+      knownKeys(input, ['period', 'scope', 'tickers', 'risk_profile'])
+      const tickers = optionalStringArray(input, 'tickers')
+      const riskProfile = oneOf(input, 'risk_profile', ['conservative', 'balanced', 'aggressive'])
+      return {
+        period: oneOf(input, 'period', ['pre_market', 'post_market', 'now']) ?? 'pre_market',
+        scope: oneOf(input, 'scope', ['market', 'industry', 'concept', 'news', 'watchlist', 'all']) ?? 'all',
+        ...(tickers === undefined ? {} : { tickers }),
+        ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
+      }
+    },
+  },
   'trading-core.brief-run': {
     backendId: 'trading-core',
     method: 'POST',
@@ -456,7 +553,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['task_id'])
-      return `/analyze/${pathValue(input, 'task_id')}`
+      return `/analyze/${taskIdentifier(input, 'task_id')}`
     },
   },
   'trading-core.task-result': {
@@ -464,7 +561,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['task_id'])
-      return `/analyze/${pathValue(input, 'task_id')}/result`
+      return `/analyze/${taskIdentifier(input, 'task_id')}/result`
     },
   },
   'trading-core.shadow-run': {
@@ -581,6 +678,9 @@ export async function requestInvestmentData(
   acquire: (id: InvestmentBackendId) => Promise<{ baseUrl: string; release(): Promise<void> }>,
 ): Promise<InvestmentJsonValue> {
   const spec = SPECS[request.operation]
+  if (spec === undefined) {
+    throw new TypeError(`investment data: unsupported operation ${JSON.stringify(request.operation)}`)
+  }
   const input = record(request.input, 'input')
   const path = spec.path(input)
   const body = spec.body?.(input)

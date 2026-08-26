@@ -94,7 +94,7 @@ class KeylessCredentials extends Service {
 }
 
 describe('Electron investment Profile composition', () => {
-  it('replaces every browser carrier and keeps the runtime plus twenty investment tools without opening a window', async () => {
+  it('replaces every browser carrier and keeps the runtime plus twenty-one investment tools without opening a window', async () => {
     const effective = shippedRows()
     const byId = new Map(effective.map(row => [row.id, row]))
     for (const id of ['web-startup', 'webserver', 'web-runtime', 'directory-picker', 'connection']) {
@@ -160,7 +160,7 @@ describe('Electron investment Profile composition', () => {
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await ctx.loader.await()
 
-    expect(ctx.tools.schemas()).toHaveLength(20)
+    expect(ctx.tools.schemas()).toHaveLength(21)
     expect((ctx.credentials as unknown as KeylessCredentials).resolveCalls).toEqual([])
     expect((ctx.credentials as unknown as KeylessCredentials).describeCalls).toEqual([])
     expect(imported).toEqual(expect.arrayContaining([

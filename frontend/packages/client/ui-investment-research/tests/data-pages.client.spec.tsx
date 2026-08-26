@@ -49,43 +49,6 @@ describe('投研数据页慢请求状态', () => {
     expect(safeExternalNewsUrl('/relative')).toBeUndefined()
   })
 
-  it('实时盯盘首屏展示自选行情与条件预警', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
-      if (request.operation === 'market-watch.overview') {
-        return Promise.resolve({
-          items: [{
-            code: '600519', name: '贵州茅台', price: 1688, pct_change: 1.2,
-            volume_ratio: 1.8, fund_flow_yi: 2.6, hit: [{ name: '放量' }],
-          }],
-        })
-      }
-      if (request.operation === 'market-watch.alerts') {
-        return Promise.resolve({ items: [{ id: 'a1', name: '放量上行', ticker: '600519', enabled: true }] })
-      }
-      if (request.operation === 'market-watch.scan') return Promise.resolve({ items: [] })
-      if (request.operation === 'market-watch.news-flash') return Promise.resolve({ items: [] })
-      return Promise.resolve({})
-    })
-
-    render(
-      <OpportunityPage
-        requestData={requestData}
-        initialQuery=""
-        showOverview
-        onAnalyze={() => {}}
-        onView={() => {}}
-      />,
-    )
-
-    expect(await screen.findByText('自选实时行情')).toBeTruthy()
-    expect(await screen.findByText('贵州茅台')).toBeTruthy()
-    expect(screen.getByText('命中 1')).toBeTruthy()
-    expect(screen.getByText('放量上行')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '创建预警' })).toBeTruthy()
-    expect(requestData).toHaveBeenCalledWith({ operation: 'market-watch.overview' })
-    expect(requestData).toHaveBeenCalledWith({ operation: 'market-watch.alerts' })
-  })
-
   it('逐项展示机会数据，并只重试失败的资讯请求', async () => {
     const scan = deferred<unknown>()
     const firstNews = deferred<unknown>()

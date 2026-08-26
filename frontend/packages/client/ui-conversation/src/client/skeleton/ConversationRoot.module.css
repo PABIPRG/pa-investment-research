@@ -351,6 +351,19 @@
   padding-left: 20px;
 }
 
+.heroWorkspaceContext {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Profiles may move storage/workspace selection into Settings without coupling
+ * the shared conversation package to a profile name or visual theme. */
+:global(body[data-workspace-context-placement='settings']) .heroWorkspaceContext {
+  display: none;
+}
+
 /* Hero: the composer sits inside the session scroll body; center there so
    the tree seat matches active (sticky footer) without a Root remount. */
 .root[data-phase='hero'] .scrollBody {

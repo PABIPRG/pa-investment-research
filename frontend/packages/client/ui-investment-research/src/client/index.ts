@@ -1,4 +1,4 @@
-import type { ClientContext, SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
@@ -12,11 +12,13 @@ import {
   type InvestmentShellInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
+import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import {
-  formatInvestmentAssistantDraft,
-  type InvestmentAssistantRequest,
-} from './assistant-context.ts'
-import { InvestmentUiState, type InvestmentRoute } from './state.ts'
+  InvestmentUiState,
+  type InvestmentDraftKey,
+  type InvestmentNavigationContext,
+  type InvestmentRoute,
+} from './state.ts'
 
 export { InvestmentBrand, InvestmentNewSession, InvestmentShell, InvestmentSidebar, InvestmentWelcome } from './InvestmentShell.tsx'
 export type {
@@ -28,14 +30,12 @@ export type {
   InvestmentSidebarInjected,
   InvestmentSidebarProps,
 } from './InvestmentShell.tsx'
-export type {
-  InvestmentAssistantActionInput,
-  InvestmentAssistantContext,
-  InvestmentAssistantModule,
-  InvestmentAssistantRequest,
-} from './assistant-context.ts'
 export { InvestmentUiState } from './state.ts'
-export type { InvestmentRoute, InvestmentUiSnapshot } from './state.ts'
+export { assistantPrompt } from './assistant-intent.ts'
+export type { AssistantIntent } from './assistant-intent.ts'
+export type {
+  InvestmentDraftKey, InvestmentNavigationContext, InvestmentRoute, InvestmentUiSnapshot,
+} from './state.ts'
 
 /** Services required by the profile-scoped investment shell. */
 export const inject = [
@@ -49,18 +49,49 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => {
     const previousTitle = document.title
+    const previousWorkspacePlacement = document.body.dataset.workspaceContextPlacement
     document.body.dataset.investmentResearchUi = ''
+    document.body.dataset.workspaceContextPlacement = 'settings'
     document.title = '投研智能体'
     return () => {
       cancelPendingDraft?.()
       cancelPendingDraft = undefined
       delete document.body.dataset.investmentResearchUi
+      if (previousWorkspacePlacement === undefined) delete document.body.dataset.workspaceContextPlacement
+      else document.body.dataset.workspaceContextPlacement = previousWorkspacePlacement
       document.title = previousTitle
     }
   }, 'ui-investment-research: profile marker')
 
-  const navigate = (route: InvestmentRoute, stockQuery = ''): void => {
-    state.navigate(route, stockQuery)
+  // The investment product treats Workspace as an optional storage setting,
+  // not an onboarding gate. On a truly empty first run, create one ordinary
+  // Session at the Host cwd so the assistant is immediately usable without
+  // surfacing project-directory mechanics in the conversation UI.
+  ctx.effect(() => {
+    let requested = false
+    const ensureFirstSession = (): void => {
+      if (requested) return
+      const workspace = ctx.workspaces.list.getSnapshot()
+      const sessions = ctx.sessions.list.getSnapshot()
+      if (!workspace.baselinesReady || workspace.items.length > 0
+        || sessions.current !== undefined || sessions.ids.length > 0) return
+      requested = true
+      void ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
+        .catch((reason: unknown) => {
+          console.warn('investment initial session failed:', reason)
+        })
+    }
+    const stopWorkspaces = ctx.workspaces.list.subscribe(ensureFirstSession)
+    const stopSessions = ctx.sessions.list.subscribe(ensureFirstSession)
+    ensureFirstSession()
+    return () => {
+      stopWorkspaces()
+      stopSessions()
+    }
+  }, 'ui-investment-research: implicit first session')
+
+  const navigate = (route: InvestmentRoute, context: InvestmentNavigationContext = {}): void => {
+    state.navigate(route, context)
     if (route !== 'assistant') ctx.layout.closeDetails()
   }
 
@@ -71,37 +102,38 @@ export function apply(ctx: ClientContext): void {
     return true
   }
 
-  const prepareAssistant = async (request: InvestmentAssistantRequest): Promise<void> => {
+  const prepareAssistant = (intent: AssistantIntent): void => {
+    const prompt = assistantPrompt(intent)
+    navigate('assistant')
     ctx.layout.closeDetails()
-    cancelPendingDraft?.()
-    const sessionId = await ctx.workspaces.startFreshSession()
-    if (sessionId === undefined) throw new Error('请先选择一个工作区，再使用投研助理。')
-    const prompt = formatInvestmentAssistantDraft(request)
-    if (setDraft(sessionId, prompt)) return
+    const current = ctx.sessions.list.getSnapshot().current
+    if (current !== undefined && setDraft(current, prompt)) return
 
-    await new Promise<void>((resolve, reject) => {
-      let settled = false
-      let timer = 0
-      let unsubscribe = (): void => {}
-      const finish = (error?: Error): void => {
-        if (settled) return
-        settled = true
-        window.clearTimeout(timer)
-        unsubscribe()
-        cancelPendingDraft = undefined
-        if (error === undefined) resolve()
-        else reject(error)
-      }
-      const tryApply = (): void => {
-        if (setDraft(sessionId, prompt)) finish()
-      }
-      unsubscribe = ctx.sessions.list.subscribe(tryApply)
-      timer = window.setTimeout(() => {
-        finish(new Error('新对话输入区载入超时，请重试。'))
-      }, 8_000)
-      cancelPendingDraft = finish
-      tryApply()
-    })
+    cancelPendingDraft?.()
+    let settled = false
+    let timer = 0
+    let unsubscribe = (): void => {}
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      unsubscribe()
+      cancelPendingDraft = undefined
+    }
+    const tryApply = (): void => {
+      const next = ctx.sessions.list.getSnapshot().current
+      if (next !== undefined && setDraft(next, prompt)) finish()
+    }
+    unsubscribe = ctx.sessions.list.subscribe(tryApply)
+    timer = window.setTimeout(finish, 8_000)
+    cancelPendingDraft = finish
+    void ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
+      .then(tryApply)
+      .catch((reason: unknown) => {
+        console.warn('investment assistant session failed:', reason)
+        finish()
+      })
+    tryApply()
   }
 
   const shared = {
@@ -109,20 +141,21 @@ export function apply(ctx: ClientContext): void {
     navigate,
   }
 
-  const sidebarInjected = (): InvestmentSidebarInjected => ({
-    ...shared,
-    selectWorkspace: async (workspaceId: WorkspaceId) => {
-      const sessionId = await ctx.workspaces.connectWorkspace(workspaceId)
-      ctx.sessions.open(sessionId)
-    },
-  })
+  const sidebarInjected = (): InvestmentSidebarInjected => shared
 
   const shellInjected = (): InvestmentShellInjected => ({
     ...shared,
     requestData: request => ctx.investmentResearchRuntimeClient.requestData(request),
     setHistory: (open) => { state.setHistory(open) },
+    setReports: (open) => { state.setReports(open) },
+    setModuleDraft: (key: InvestmentDraftKey, value: string) => { state.setDraft(key, value) },
+    selectStrategy: (strategyId) => { state.selectStrategy(strategyId) },
     startSession: async () => {
-      await ctx.workspaces.startFreshSession()
+      cancelPendingDraft?.()
+      cancelPendingDraft = undefined
+      navigate('assistant')
+      const fresh = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
+      if (fresh !== undefined) setDraft(fresh, '')
     },
     openSession: async (sessionId) => {
       ctx.sessions.open(sessionId)

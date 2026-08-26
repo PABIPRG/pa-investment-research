@@ -46,6 +46,7 @@ class ResizeObserverStub {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  delete document.body.dataset.workspaceContextPlacement
 })
 beforeEach(() => {
   localStorage.clear()
@@ -488,6 +489,17 @@ describe('ConversationRoot resident composer', () => {
     // choices are only open before the first message.
     expect(b.slotCalls).toContain('conversation.hero.agentPreset')
     expect(b.slotCalls).toContain('conversation.hero.welcome')
+  })
+
+  it('settings-owned workspace context keeps an unaccounted blank Session usable', () => {
+    document.body.dataset.workspaceContextPlacement = 'settings'
+    const b = mount(conversationSnapshot({ composerPhase: 'blank', blank: true }), [])
+    const box = b.view.getByRole('textbox') as HTMLTextAreaElement
+
+    expect(box.disabled).toBe(false)
+    expect(box.readOnly).toBe(false)
+    expect(box.getAttribute('aria-label')).not.toBe('选择工作区')
+    expect(box.placeholder).not.toContain('工作区')
   })
 
   it('prompt failure renders the promptError strip (ordinary failure, no transaction UI)', () => {

@@ -6,7 +6,7 @@
 
 ## 工具
 
-插件注册 `analyze_stock`、`analyze_holdings` 和 `market_brief`，用于流式分析或简报生成；还注册 `set_watchlist`、`set_holdings`、`get_watchlist`、`set_risk_profile`、`get_risk_profile` 和 `get_latest_brief`，用于由 endpoint 支持的已保存状态。包插件声明其面向模型的 schema。
+插件注册 `analyze_stock`、`analyze_holdings` 和 `market_brief`，用于流式分析或简报生成；还注册 `set_watchlist`、`set_holdings`、`get_watchlist`、`set_risk_profile`、`get_risk_profile` 和 `get_latest_brief`，用于由 endpoint 支持的已保存状态。只读工具 `investment_context` 让模型以 `portfolio`、`strategy`、`shadow`、`evolution`、`reports` 或 `industry` 领域枚举按需读取最新持久化上下文，不接收上下文 JSON、URL 或路径，也不读取浏览器本地状态。包插件声明其面向模型的 schema。
 
 `analyze_stock` 暴露以下延迟与覆盖档位：
 
@@ -34,7 +34,7 @@
 
 ## 后端行为与生命周期
 
-`analyze_stock` 发起 `POST /analyze`；`analyze_holdings` 发起 `POST /holdings/analyze`；`market_brief` 发起 `POST /brief`。每个任务随后以 SSE 读取 `GET /analyze/<taskId>/stream`。插件通过 `exec.agent.inject()` 将 `stage` 消息映射为带插件来源的用户消息，且不唤醒 agent；它将 `result` 载荷保留为无损 JSON，并从该载荷渲染结果卡和 Markdown 报告。轻量状态工具通过 endpoint 的 JSON 路由访问自选列表、持仓、风险偏好和最新简报。
+`analyze_stock` 发起 `POST /analyze`；`analyze_holdings` 发起 `POST /holdings/analyze`；`market_brief` 发起 `POST /brief`。每个任务随后以 SSE 读取 `GET /analyze/<taskId>/stream`。插件通过 `exec.agent.inject()` 将 `stage` 消息映射为带插件来源的用户消息，且不唤醒 agent；它将 `result` 载荷保留为无损 JSON，并从该载荷渲染结果卡和 Markdown 报告。轻量状态工具通过 endpoint 的 JSON 路由访问自选列表、持仓、风险偏好和最新简报。`investment_context` 只访问代码内固定的 trading-core 路由，并以稳定资源名聚合后端返回值：组合域读取持仓与风险，策略域读取策略池，影子域读取状态、持仓和净值，自进化域读取状态与归因，报告域读取统一报告摘要，产业域读取事件影响。
 
 插件激活时注册 `trading-core`，只把显式设置的 `ADAPTER_RUNNER` 转发给 owned managed 子进程，并在注册工具前获取经过验证的 lease。所有工具注册和可选的简报轮询定时器均位于 Cordis effect 中。dispose 时先移除它们，再释放 lease 并注销 backend 定义。进程创建与终止仍归 Runtime 持有。
 
@@ -54,7 +54,7 @@ HTTP 响应失败时，工具调用会以 endpoint 状态和响应体拒绝。�
 
 #### 模型可见内容
 
-插件注册期间，模型会看到该包注册的 9 个 schema。流式调用还会追加 endpoint 提供的 `stage` 消息，每次完成的调用都会追加从 endpoint JSON 派生的渲染结果。[工具目录的包映射](../../../docs/tool-catalog.md#tool-package-map)记录生成目录的 `tool-*` 范围，该范围不包含本包。
+插件注册期间，模型会看到该包注册的 10 个 schema。流式调用还会追加 endpoint 提供的 `stage` 消息，每次完成的调用都会追加从 endpoint JSON 派生的渲染结果。`investment_context` 的 schema 只暴露领域枚举；调用结果才追加所选领域的最新后端上下文。[工具目录的包映射](../../../docs/tool-catalog.md#tool-package-map)记录生成目录的 `tool-*` 范围，该范围不包含本包。
 
 #### Token 影响
 

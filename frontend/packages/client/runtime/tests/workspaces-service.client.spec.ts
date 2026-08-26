@@ -464,6 +464,28 @@ describe('WorkspaceRuntime', () => {
     expect(open).toHaveBeenLastCalledWith(sid('s-fresh'))
   })
 
+  it('creates an unaccounted Host-cwd Session only when a profile opts into the fallback', async () => {
+    const ctx = new Context()
+    const api = new FakeApiClient()
+    const sessions = new SessionRuntime(ctx, api, fakeRemote())
+    const workspaces = new WorkspaceRuntime(ctx, api, sessions)
+    api.onWorkspaceList = () => Promise.resolve(ok({ items: [] as never[] }))
+    api.onList = () => Promise.resolve(ok({ items: [] as never[] }))
+    await Promise.all([workspaces.refresh(), sessions.refresh()])
+    api.onCreate = () => Promise.resolve(ok({ sessionId: sid('s-host-cwd') }))
+    const clear = vi.spyOn(sessions, 'clear')
+    const open = vi.spyOn(sessions, 'open')
+
+    await expect(workspaces.startFreshSession()).resolves.toBeUndefined()
+    expect(clear).toHaveBeenCalledOnce()
+    expect(api.callsOf('session.create')).toEqual([])
+
+    await expect(workspaces.startFreshSession(undefined, { fallbackToHostCwd: true }))
+      .resolves.toBe('s-host-cwd')
+    expect(api.callsOf('session.create')).toEqual([{}])
+    expect(open).toHaveBeenLastCalledWith(sid('s-host-cwd'))
+  })
+
   it('archives a session, projects the set from the response, list, and frame, and clears only the current one', async () => {
     const ctx = new Context()
     const api = new FakeApiClient()

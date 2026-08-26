@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Investment research readiness page for the `investment-research` Profile. The browser plugin registers the localized `investment-research` entry in `settings.section` and projects only the secret-free snapshot supplied by `ctx.investmentResearchRuntimeClient`. It shows each backend's ownership, health, declared tool count, credential state, capability level, and Host-provided Runtime log hint. In the source delivery increment, the asset row explicitly identifies the source Python environment; packaged asset state becomes a Host readiness fact with the bundled resolver rather than being inferred in the browser.
+Investment research readiness page for the `investment-research` Profile. The localized `settings.section` entry projects only the secret-free snapshot supplied by `ctx.investmentResearchRuntimeClient`, including backend ownership, health, declared tool count, credential state, capability level, and the Host-provided Runtime log hint. Workspace and conversation-storage implementation details are deliberately absent from this page; the existing Runtime persistence mechanism continues to manage local data automatically.
 
 The page never reads, receives, or stores a credential value. A missing `DEEPSEEK_API_KEY` presents only one credential action: `openSection('models')`, which keeps the Settings panel open and navigates to the existing Models page. A changed key presents an explicit application restart action through the facade. Its root-scoped interaction store reports pending, accepted, unavailable, and failed acknowledgements; readiness rechecks are single-flight and report failures independently. The UI never calls Electron directly.
 

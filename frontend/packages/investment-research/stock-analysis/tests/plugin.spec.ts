@@ -54,6 +54,12 @@ const STOCK_CONTRACTS = [
   { name: 'set_risk_profile', description: '保存全局风险偏好画像：conservative(保守，保本控回撤)/balanced(稳健，默认)/aggressive(进取，求高收益)。后续所有个股分析/持仓分析/市场简报均按此偏好展开分析框架；单次调用仍可传 risk_profile 覆盖。', parameters: input({ risk_profile: { type: 'string', description: '风险偏好画像：conservative/balanced/aggressive', enum: ['conservative', 'balanced', 'aggressive'] } }, ['risk_profile']), schema: output({ risk_profile: { type: 'string', description: '已保存的画像键名' }, label: { type: 'string', description: '画像中文名' } }) },
   { name: 'get_risk_profile', description: '读取当前保存的风险偏好画像（conservative/balanced/aggressive）及中文名。', parameters: input({}), schema: output({ risk_profile: { type: 'string', description: '画像键名' }, label: { type: 'string', description: '画像中文名' } }) },
   { name: 'get_latest_brief', description: '读取最近一次生成的市场简报（含是否已在 dsh 对话内播报的标记）。', parameters: input({}), schema: output({ id: { type: 'string' }, period: { type: 'string' }, trade_date: { type: 'string' }, summary: { type: 'string' }, dsh_pushed: { type: 'boolean' } }) },
+  {
+    name: 'investment_context',
+    description: '按需读取交易后端已持久化的最新投研上下文。只接受领域枚举，不接受 JSON 字符串、URL 或路径，也不会读取浏览器本地状态。可读取组合、策略、影子验证、自进化、报告或产业影响上下文。',
+    parameters: input({ domain: { type: 'string', description: '要读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] } }, ['domain']),
+    schema: output({ domain: { type: 'string', description: '实际读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] }, resources: { description: '按稳定资源名分组的后端无损 JSON' } }),
+  },
 ] as const
 
 afterEach(() => vi.unstubAllGlobals())
@@ -132,6 +138,7 @@ describe('stock-analysis function plugin', () => {
       set_risk_profile: { risk_profile: 'balanced' },
       get_risk_profile: {},
       get_latest_brief: {},
+      investment_context: { domain: 'reports' },
     }
     const callViews = {
       analyze_stock: { card: 'generic', title: '📈 分析 600519', kind: 'other', rawInput: presentationArgs.analyze_stock },
@@ -143,16 +150,19 @@ describe('stock-analysis function plugin', () => {
       set_risk_profile: { card: 'generic', title: '🎯 设置风险偏好', kind: 'other' },
       get_risk_profile: { card: 'generic', title: '🎯 读取风险偏好', kind: 'other' },
       get_latest_brief: { card: 'generic', title: '📥 读取最近简报', kind: 'other' },
+      investment_context: { card: 'generic', title: '🧭 读取报告上下文', kind: 'other', rawInput: presentationArgs.investment_context },
     }
     const resultTitles = {
       analyze_stock: 'AI 多智能体分析完成', analyze_holdings: '持仓风险分析完成', market_brief: '市场简报已生成',
       set_watchlist: '自选列表已更新', set_holdings: '持仓已保存', get_watchlist: '自选列表',
       set_risk_profile: '风险偏好已更新', get_risk_profile: '风险偏好', get_latest_brief: '最近简报',
+      investment_context: '投研上下文已读取',
     }
     const resultText = {
       analyze_stock: '分析完成。查看模型回复中的完整决策与分步报告。', analyze_holdings: '组合市值/浮盈/集中度/逐股风险已生成。',
       market_brief: '查看模型回复中的完整简报与机会点。', set_watchlist: '已保存 0 只自选股。', set_holdings: '已保存 0 条持仓。',
       get_watchlist: '[]', set_risk_profile: '', get_risk_profile: '', get_latest_brief: '暂无简报',
+      investment_context: '已按需读取报告上下文。',
     }
     for (const tool of tools) {
       const args = presentationArgs[tool.name]!
@@ -181,12 +191,14 @@ describe('stock-analysis function plugin', () => {
       set_risk_profile: {},
       get_risk_profile: {},
       get_latest_brief: { id: 'b1', period: 'post_market', dsh_pushed: true },
+      investment_context: { domain: 'reports', resources: { reports: { count: 1 } } },
     }
     const renderedText = {
       analyze_stock: '## — · 600519\n\n| 目标价 | 置信度 | 风险分 |\n|---|---|---|\n| ¥— | — | — |',
       analyze_holdings: '适配器持仓报告', market_brief: '适配器市场简报', set_watchlist: '已保存 0 只自选股。',
       set_holdings: '已保存 0 条持仓。', get_watchlist: '自选股：（空）', set_risk_profile: '已切换风险偏好：—（）',
       get_risk_profile: '当前风险偏好：未知（）', get_latest_brief: '最近简报：盘后 · （dsh 已播报：是）',
+      investment_context: '已读取报告上下文：\n{\n  "reports": {\n    "count": 1\n  }\n}',
     }
     for (const [toolName, value] of Object.entries(outputValues)) {
       const tool = byName.get(toolName)!
@@ -211,6 +223,7 @@ describe('stock-analysis function plugin', () => {
     await byName.get('set_risk_profile')!.execute({ risk_profile: 'aggressive' }, exec)
     await byName.get('get_risk_profile')!.execute({}, exec)
     await byName.get('get_latest_brief')!.execute({}, exec)
+    await byName.get('investment_context')!.execute({ domain: 'reports' }, exec)
 
     const defaults = new Map((await install({})).map(tool => [tool.name, tool]))
     await defaults.get('analyze_stock')!.execute({ ticker: '600519' }, exec)
@@ -231,6 +244,7 @@ describe('stock-analysis function plugin', () => {
       ['http://adapter.test/risk_profile', 'POST', '{"risk_profile":"aggressive"}'],
       ['http://adapter.test/risk_profile', 'GET', undefined],
       ['http://adapter.test/brief/latest', 'GET', undefined],
+      ['http://adapter.test/reports?limit=20', 'GET', undefined],
       ['http://127.0.0.1:8000/analyze', 'POST', '{"ticker":"600519"}'],
       ['http://127.0.0.1:8000/analyze/t1/stream', 'GET', undefined],
       ['http://127.0.0.1:8000/holdings/analyze', 'POST', '{"mode":"deep"}'],
@@ -267,9 +281,11 @@ describe('stock-analysis function plugin', () => {
     await byName.get('set_risk_profile')!.execute({ risk_profile: 'balanced' }, exec)
     await byName.get('get_risk_profile')!.execute({}, exec)
     await byName.get('get_latest_brief')!.execute({}, exec)
+    await byName.get('investment_context')!.execute({ domain: 'reports' }, exec)
     expect(assertCapability.mock.calls).toEqual([
       ['trading-core', 'llm-required'], ['trading-core', 'llm-required'], ['trading-core', 'llm-required'],
       ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
+      ['trading-core', 'non-llm'],
       ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
     ])
 

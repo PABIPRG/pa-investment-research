@@ -2,10 +2,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type {
-  SidebarFooterActionOwnerProps, SidebarRootComponentProps, SidebarSectionOwnerProps,
-  SidebarSettingsOwnerProps,
+  SidebarBrandOwnerProps, SidebarFooterActionOwnerProps, SidebarNewSessionOwnerProps,
+  SidebarRootComponentProps, SidebarSectionOwnerProps, SidebarSettingsOwnerProps,
 } from '../src/client/contract/slots.ts'
-import { SidebarRoot } from '../src/client/SidebarRoot.tsx'
+import { SidebarBrand, SidebarNewSession, SidebarRoot } from '../src/client/SidebarRoot.tsx'
 import { en } from '../src/client/locales.ts'
 
 // English-dictionary translate stub: the shell renders the same copy the
@@ -35,18 +35,33 @@ function mountShell({ collapsed = false, width = 300 }: { collapsed?: boolean; w
       startSession={startSession} toggleSidebar={toggleSidebar} t={t}
       renderSlot={((
         key: string,
-        owner: SidebarFooterActionOwnerProps | SidebarSectionOwnerProps | SidebarSettingsOwnerProps,
+        owner: SidebarBrandOwnerProps | SidebarFooterActionOwnerProps | SidebarNewSessionOwnerProps
+          | SidebarSectionOwnerProps | SidebarSettingsOwnerProps,
       ) => {
+        if (key === 'sidebar.brand') {
+          return <SidebarBrand
+            {...owner as SidebarBrandOwnerProps}
+            useSessions={neverHook}
+            useWorkspaces={neverHook}
+          />
+        }
+        if (key === 'sidebar.newSession') {
+          return <SidebarNewSession
+            {...owner as SidebarNewSessionOwnerProps}
+            useSessions={neverHook}
+            useWorkspaces={neverHook}
+          />
+        }
         if (key === 'sidebar.settings') {
-          settingsOwner = owner
-          return <div data-testid="settings-seat" data-wide={owner.wide} />
+          settingsOwner = owner as SidebarSettingsOwnerProps
+          return <div data-testid="settings-seat" data-wide={settingsOwner.wide} />
         }
         if (key === 'sidebar.footer.action') {
-          footerActionOwner = owner
-          return <div data-testid="footer-action-seat" data-wide={owner.wide} />
+          footerActionOwner = owner as SidebarFooterActionOwnerProps
+          return <div data-testid="footer-action-seat" data-wide={footerActionOwner.wide} />
         }
         regionOwner = owner as SidebarSectionOwnerProps
-        return <div data-testid="region" data-wide={owner.wide} />
+        return <div data-testid="region" data-wide={regionOwner.wide} />
       }) as SidebarRootComponentProps['renderSlot']}
     />
   )

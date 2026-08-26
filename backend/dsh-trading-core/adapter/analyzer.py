@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from .decision_recorder import DecisionRecorder
+from .report_store import ReportStore
 from .runner import FakeRunner
 
 
@@ -30,8 +31,14 @@ class TaskManager:
       - brief    （POST /brief，market_brief 工具）
     """
 
-    def __init__(self, registry: dict | None = None, max_workers: int = 6):
+    def __init__(
+        self,
+        registry: dict | None = None,
+        max_workers: int = 6,
+        report_store: ReportStore | None = None,
+    ):
         self.registry = registry or {"stock": FakeRunner()}
+        self.report_store = report_store if report_store is not None else ReportStore()
         self.executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="analysis"
         )
@@ -77,6 +84,14 @@ class TaskManager:
             DecisionRecorder().maybe_record(
                 self._task_types.get(task_id), params, result,
                 source="fake" if getattr(runner, "name", "") == "fake" else "engine",
+            )
+            # 报告正文必须先稳定落盘，任务才可对外进入 done；没有非空正文的
+            # 回测/策略类结果会由 ReportStore 明确 no-op。
+            self.report_store.save_task_result(
+                task_id,
+                self._task_types[task_id],
+                params,
+                result,
             )
             self._results[task_id] = result
             self._status[task_id] = "done"

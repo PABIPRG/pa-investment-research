@@ -120,6 +120,12 @@ describe.skipIf(MODE === 'record')('web e2e: background job list', () => {
     // which is also the proof that settlement reached the browser unprompted.
     const idle = page.getByRole('button', { name: '1 background job' })
     await idle.waitFor({ timeout: 20_000 })
+    const settledRow = page.getByRole('list', { name: 'Background jobs' }).getByRole('listitem').first()
+    // The count and the open row are separate React consumers of the same
+    // streamed registry frame. Under a loaded full-suite runner, the button
+    // can settle one paint before the row. Wait for the user-visible terminal
+    // state instead of snapshotting that transient frame.
+    await expect.poll(() => settledRow.textContent(), { timeout: 20_000 }).toContain('SIGTERM')
 
     const snapshot = await captureStableAria(page, '[class*="menu"]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(SETTLED_EXPECTED, snapshot, MODE)

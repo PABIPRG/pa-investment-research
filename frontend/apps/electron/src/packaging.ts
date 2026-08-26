@@ -1,10 +1,10 @@
 /** Assemble a production deployment into a native Electron application and optional Forge artifacts. */
 
 import { spawn } from 'node:child_process'
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, opendir, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
@@ -86,10 +86,11 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
       command: pnpmCommand,
       cwd: workspaceDir,
     },
-    // Legacy pnpm deploy preserves this override link but omits its relative target.
+    // Legacy pnpm deploy preserves this override as a workspace-relative link.
+    // Electron Packager cannot safely copy that link after relocating the app tree.
     linkTargets: platform === 'darwin' ? [{
       sourceDir: join(workspaceDir, 'vendor/cosmokit'),
-      targetDir: join(stagingDir, 'vendor/cosmokit'),
+      targetDir: join(stagingDir, 'node_modules/.pnpm/node_modules/@deepseek-ai/cosmokit'),
     }] : [],
     rootDir,
     sidecar: {
@@ -113,9 +114,44 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
   }
 }
 
-/** Copy targets required by relative workspace links preserved by legacy pnpm deploy. */
+/** Replace workspace-relative deploy links with self-contained package directories. */
 export async function materializePackagingLinkTargets(linkTargets: PackagingLinkTarget[]): Promise<void> {
-  await Promise.all(linkTargets.map(({ sourceDir, targetDir }) => cp(sourceDir, targetDir, { recursive: true })))
+  await Promise.all(linkTargets.map(async ({ sourceDir, targetDir }) => {
+    await rm(targetDir, { force: true, recursive: true })
+    await cp(sourceDir, targetDir, { recursive: true })
+  }))
+}
+
+/** Remove the temporary package tree with Node's built-in descriptor exhaustion retries. */
+export async function removePackagingRoot(
+  rootDir: string,
+  remove: typeof rm = rm,
+): Promise<void> {
+  await remove(rootDir, {
+    force: true,
+    maxRetries: 50,
+    recursive: true,
+    retryDelay: 50,
+  })
+}
+
+/** Copy one immutable sidecar tree sequentially so large Python runtimes cannot exhaust file descriptors. */
+async function copySidecarTree(source: string, destination: string): Promise<void> {
+  const sourceStat = await lstat(source)
+  if (sourceStat.isFile()) {
+    await copyFile(source, destination)
+    await chmod(destination, sourceStat.mode)
+    return
+  }
+  if (!sourceStat.isDirectory()) {
+    throw new TypeError(`investment sidecar contains an unsupported entry: ${source}`)
+  }
+  await mkdir(destination, { mode: sourceStat.mode, recursive: true })
+  const directory = await opendir(source)
+  for await (const entry of directory) {
+    await copySidecarTree(join(source, entry.name), join(destination, entry.name))
+  }
+  await chmod(destination, sourceStat.mode)
 }
 
 /**
@@ -138,7 +174,13 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
     executableName: 'deepseek-harness',
-    extraResource: [input.sidecarDir],
+    afterCopy: [((buildPath, _electronVersion, _platform, _arch, callback) => {
+      const destination = join(dirname(buildPath), basename(input.sidecarDir))
+      copySidecarTree(input.sidecarDir, destination).then(
+        () => { callback() },
+        (reason: unknown) => { callback(reason instanceof Error ? reason : new Error(String(reason))) },
+      )
+    })],
     name: APP_NAME,
     out: input.outDir,
     overwrite: true,
@@ -200,7 +242,7 @@ async function packageApplication(): Promise<void> {
       outDir: join(appDir, 'out'),
     }))
   } finally {
-    await rm(plan.rootDir, { force: true, recursive: true })
+    await removePackagingRoot(plan.rootDir)
   }
 }
 
