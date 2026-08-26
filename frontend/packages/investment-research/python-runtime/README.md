@@ -51,6 +51,12 @@ Each backend writes `$DSH_HOME/investment-research/<id>/backend.log`, rotating a
 
 Bundled application resources are read-only. For an owned bundled child, the Host sets `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>` and derives backend data, cache, logs, state, and user configuration from that writable directory. Source mode keeps the existing repository-local defaults when that variable is absent.
 
+## Browser-safe data operations
+
+The Host's `request-data` Remote accepts only compile-time-enumerated operations and each operation's known input keys. The browser cannot supply a backend origin, arbitrary URL, or arbitrary path. Dynamic report, strategy, and task ids must match a restricted identifier format and pass through `encodeURIComponent` before joining a fixed route; unknown keys, invalid enums, out-of-range numbers, and unsafe ids are rejected before a backend lease is acquired.
+
+Fixed trading-core mappings cover unified report list/detail, strategy list/hypothesis/transition/run, shadow status/positions/equity/run, evolution status/attribution/run, personalized matches/industry impact, and background-task status/result. The Host constructs write-operation JSON bodies from known keys, while reports and read-only state use fixed GET routes.
+
 ## Model Experience
 
 None, as this Host lifecycle service registers no prompt, tool schema, session event, or result.

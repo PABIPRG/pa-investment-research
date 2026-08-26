@@ -198,9 +198,16 @@ export class WorkspaceRuntime implements IWorkspaces {
    * action keeps its reuse semantics while opt-in profile actions use this
    * explicit fresh path.
    * @param workspaceId - explicit target Workspace, when already chosen.
+   * @param options - profile policy for creating an unaccounted Session at
+   *   the Host cwd when no Workspace exists. Generic workspace-first
+   *   surfaces keep the default disabled; products that move storage setup
+   *   into Settings opt in explicitly.
    * @returns the new Session id, or undefined when there is no Workspace.
    */
-  async startFreshSession(workspaceId?: WorkspaceId): Promise<SessionId | undefined> {
+  async startFreshSession(
+    workspaceId?: WorkspaceId,
+    options: { fallbackToHostCwd?: boolean } = {},
+  ): Promise<SessionId | undefined> {
     const workspace = this.list.getSnapshot()
     const current = this.sessions.list.getSnapshot().current
     const currentWorkspaceId = current === undefined
@@ -208,6 +215,11 @@ export class WorkspaceRuntime implements IWorkspaces {
       : workspace.items.find(item => item.sessionIds.includes(current))?.workspaceId
     const target = workspaceId ?? currentWorkspaceId ?? workspace.recentWorkspaceId
     if (target === undefined) {
+      if (options.fallbackToHostCwd === true) {
+        const sessionId = await this.sessions.create()
+        this.sessions.open(sessionId)
+        return sessionId
+      }
       this.sessions.clear()
       return undefined
     }

@@ -20,6 +20,7 @@ import type { PythonBackendDefinition, PythonBackendLease } from '@deepseek-ai/d
 import {
   consumeSse,
   getLatestBrief,
+  getInvestmentContext,
   getRiskProfile,
   getWatchlist,
   saveHoldings,
@@ -28,6 +29,7 @@ import {
   startAnalysis,
   startTask,
   type HoldingInput,
+  type InvestmentContextDomain,
 } from './client.ts'
 import { createBriefPusher } from './brief-pusher.ts'
 import {
@@ -99,6 +101,15 @@ const RISK_PROFILE_PARAM = {
   description: '风险偏好：conservative(保守)/balanced(稳健)/aggressive(进取)；缺省用已保存偏好',
   enum: ['conservative', 'balanced', 'aggressive'] as const,
 } as const
+
+const INVESTMENT_CONTEXT_LABELS: Readonly<Record<InvestmentContextDomain, string>> = {
+  portfolio: '组合与风险',
+  strategy: '策略研究',
+  shadow: '影子验证',
+  evolution: '自进化',
+  reports: '报告',
+  industry: '产业影响',
+}
 
 /** 通用流式任务：POST 启动 → SSE 消费 → 返回 lossless 结果。 */
 async function runStreamingTask(
@@ -604,6 +615,63 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
         },
       }),
     )
+
+    register(
+      defineTool({
+        name: 'investment_context',
+        description:
+          '按需读取交易后端已持久化的最新投研上下文。只接受领域枚举，不接受 JSON 字符串、URL 或路径，' +
+          '也不会读取浏览器本地状态。可读取组合、策略、影子验证、自进化、报告或产业影响上下文。',
+        parameters: {
+          domain: {
+            type: 'string',
+            required: true,
+            description: '要读取的投研领域',
+            enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] as const,
+          },
+        },
+        output: {
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              domain: {
+                type: 'string',
+                description: '实际读取的投研领域',
+                enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] as const,
+              },
+              resources: { type: 'json', description: '按稳定资源名分组的后端无损 JSON' },
+            },
+          },
+          render: (_args, value) => [{
+            type: 'text',
+            text: `已读取${INVESTMENT_CONTEXT_LABELS[value.domain as InvestmentContextDomain] ?? '投研'}上下文：\n${JSON.stringify(value.resources ?? {}, null, 2)}`,
+          }],
+        },
+        presentCall: args => ({
+          card: 'generic',
+          title: `🧭 读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain] ?? '投研'}上下文`,
+          kind: 'other',
+          rawInput: args,
+        }),
+        presentResult: args => ({
+          card: 'generic',
+          title: '投研上下文已读取',
+          content: [{
+            type: 'text',
+            text: `已按需读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain] ?? '投研'}上下文。`,
+          }],
+        }),
+        async execute(args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
+          return getInvestmentContext(
+            resolvedConfig.adapterBaseUrl,
+            stringValue(args.domain) as InvestmentContextDomain,
+            exec.signal,
+          )
+        },
+      }),
+    )
     return disposeFeatures
   } catch (error) {
     await disposeFeatures()
@@ -664,7 +732,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       }
       disposeFeatures = await setupFeatures(ctx, resolvedConfig)
       disposeCapability = ctx.investmentPythonRuntime.registerCapability({
-        backendId: 'trading-core', toolCount: 9, llm: 'required',
+        backendId: 'trading-core', toolCount: 10, llm: 'required',
       })
       return disposeResources
     } catch (error) {

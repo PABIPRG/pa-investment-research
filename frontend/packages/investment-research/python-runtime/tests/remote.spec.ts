@@ -75,6 +75,56 @@ describe('InvestmentPythonRuntime Remote', () => {
     await lease.release()
   })
 
+  it('round-trips a fixed data operation without exposing a browser-controlled path', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url)
+      if (url.endsWith('/health')) {
+        return new Response(JSON.stringify({ service: 'trading-core', status: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({
+        id: '11111111111111111111111111111111',
+        title: '个股分析报告 · 贵州茅台（600519）',
+        kind: 'stock',
+        created_at: '2026-08-26T03:00:00+00:00',
+        summary: '贵州茅台（600519）',
+        task_id: '11111111111111111111111111111111',
+        sections: [{ key: 'market', title: '市场分析', content: '# 市场分析' }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+    const runtime = runtimeWith()
+    runtime.register(externalBackend)
+
+    await expect(runtime.requestData({
+      operation: 'trading-core.report',
+      input: { report_id: '11111111111111111111111111111111' },
+    })).resolves.toEqual({
+      id: '11111111111111111111111111111111',
+      title: '个股分析报告 · 贵州茅台（600519）',
+      kind: 'stock',
+      created_at: '2026-08-26T03:00:00+00:00',
+      summary: '贵州茅台（600519）',
+      task_id: '11111111111111111111111111111111',
+      sections: [{ key: 'market', title: '市场分析', content: '# 市场分析' }],
+    })
+
+    expect(calls).toEqual([
+      'https://research.example/health',
+      'https://research.example/reports/11111111111111111111111111111111',
+    ])
+    await expect(runtime.requestData({
+      operation: 'trading-core.report',
+      input: { report_id: '../unsafe' },
+    })).rejects.toThrow('32-character lowercase hexadecimal identifier')
+    expect(calls).toHaveLength(2)
+  })
+
   it('reports an actionable secret-free unavailable result when the launcher has no restart callback', () => {
     const result = runtimeWith().requestRestart()
     const serialized = JSON.stringify(result)

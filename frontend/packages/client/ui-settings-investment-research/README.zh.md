@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-`investment-research` Profile 的投研就绪页面。浏览器插件在 `settings.section` 注册本地化的 `investment-research` 条目，只投影 `ctx.investmentResearchRuntimeClient` 提供的不含机密快照。页面展示每个 backend 的所有权、健康状态、已声明工具数、凭据状态、能力等级以及 Host 提供的 Runtime 日志提示。源码交付增量明确把资源行标为源码 Python 环境；打包资源状态会随 bundled resolver 成为 Host readiness 事实，不由浏览器推断。
+`investment-research` Profile 的投研就绪页面。浏览器插件在 `settings.section` 注册本地化的 `investment-research` 条目，只投影 `ctx.investmentResearchRuntimeClient` 提供的不含机密快照，展示每个 backend 的所有权、健康状态、已声明工具数、凭据状态、能力等级以及 Host 提供的 Runtime 日志提示。页面不向普通用户暴露工作区或对话存储等实现概念；现有 Runtime 持久化机制仍会自动管理本机数据。
 
 页面从不读取、接收或暂存凭据值。缺少 `DEEPSEEK_API_KEY` 时只提供一个凭据操作：调用 `openSection('models')`，让设置面板保持打开并导航到现有 Models 页面。Key 变更后，页面通过 facade 提供显式的全应用重启操作。root-scoped 交互 store 呈现请求中、已接受、不可用和失败反馈；readiness 重新检查采用 single-flight，并独立呈现失败反馈。UI 不直接调用 Electron。
 

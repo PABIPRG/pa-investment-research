@@ -6,6 +6,10 @@ const styles = readFileSync(
   fileURLToPath(new URL('../src/client/InvestmentShell.module.css', import.meta.url)),
   'utf8',
 )
+const conversationStyles = readFileSync(
+  fileURLToPath(new URL('../../ui-conversation/src/client/skeleton/ConversationRoot.module.css', import.meta.url)),
+  'utf8',
+)
 
 describe('投研工作台主题样式', () => {
   it('只通过语义 token 映射投研专用颜色', () => {
@@ -25,5 +29,12 @@ describe('投研工作台主题样式', () => {
 
   it('让持仓浮窗在应用模态层覆盖完整视口', () => {
     expect(styles).toContain('.drawerBackdrop.importBackdrop { position: fixed; z-index: 1000;')
+  })
+
+  it('消费 profile 的设置态标记并隐藏新对话中的工作区上下文', () => {
+    expect(conversationStyles).toContain(":global(body[data-workspace-context-placement='settings']) .heroWorkspaceContext")
+    expect(conversationStyles).toMatch(
+      /:global\(body\[data-workspace-context-placement='settings'\]\) \.heroWorkspaceContext\s*\{\s*display:\s*none;/,
+    )
   })
 })

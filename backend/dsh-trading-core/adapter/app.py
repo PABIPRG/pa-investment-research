@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Path as ApiPath, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
@@ -23,6 +23,7 @@ from . import kyc as kyc_mod
 from .analyzer import TaskManager
 from .backtest_engine import compute_summary
 from .decision_recorder import load_evaluated_results
+from .report_store import ReportStore, ReportValidationError
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .schemas import (
@@ -46,6 +47,47 @@ from .scheduler import setup_scheduler
 from .store import JsonStore
 
 logger = logging.getLogger("adapter.app")
+
+_REPORT_SECTION_TITLES = {
+    "market": "市场分析",
+    "fundamentals": "基本面分析",
+    "news": "新闻分析",
+    "sentiment": "市场情绪",
+    "debate": "多空研究",
+    "trader": "交易决策",
+    "risk": "风险判断",
+    "portfolio": "持仓风险",
+    "brief": "市场简报",
+    "backtest": "历史决策回测",
+    "strategy": "策略样本外回测",
+    "shadow": "影子验证证据",
+}
+
+
+def _report_list_projection(report: dict) -> dict:
+    """磁盘报告记录 → 前端稳定列表 DTO。"""
+    return {
+        "id": report["id"],
+        "title": report["title"],
+        "kind": report["task_type"],
+        "created_at": report["created_at"],
+        "summary": report["subject"],
+        "task_id": report["id"],
+    }
+
+
+def _report_detail_projection(report: dict) -> dict:
+    """磁盘报告记录 → 前端稳定详情 DTO，正文只经 sections 暴露。"""
+    projected = _report_list_projection(report)
+    projected["sections"] = [
+        {
+            "key": key,
+            "title": _REPORT_SECTION_TITLES.get(key, key),
+            "content": report["reports"][key],
+        }
+        for key in report["section_keys"]
+    ]
+    return projected
 
 
 def _build_registry() -> dict:
@@ -96,8 +138,8 @@ async def lifespan(app: FastAPI):
         sched.shutdown(wait=False)
 
 
-def create_app() -> FastAPI:
-    manager = TaskManager(registry=_build_registry())
+def create_app(report_store: ReportStore | None = None) -> FastAPI:
+    manager = TaskManager(registry=_build_registry(), report_store=report_store)
 
     app = FastAPI(title="TradingAgents Adapter", version="0.1.0", lifespan=lifespan)
     app.state.manager = manager
@@ -117,6 +159,42 @@ def create_app() -> FastAPI:
             "status": "ok",
             "runners": {k: v.name for k, v in manager.registry.items()},
         }
+
+    # ---- 统一报告库 ------------------------------------------------------
+
+    @app.get("/reports", response_model=dict)
+    async def reports_list(
+        limit: int = Query(default=20, ge=1, le=200),
+        task_type: Optional[
+            Literal["stock", "holdings", "brief", "backtest", "strategy", "shadow"]
+        ] = Query(default=None),
+    ):
+        """持久化报告摘要，按创建时间倒序并投影为前端稳定 DTO。"""
+        try:
+            reports = manager.report_store.list_reports(
+                limit=limit, task_type=task_type
+            )
+        except ReportValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        items = [_report_list_projection(report) for report in reports]
+        return {"count": len(items), "items": items}
+
+    @app.get("/reports/{report_id}", response_model=dict)
+    async def report_detail(
+        report_id: str = ApiPath(
+            min_length=32,
+            max_length=32,
+            pattern=r"^[0-9a-f]{32}$",
+        ),
+    ):
+        """读取投影为有序 Markdown 分节的完整持久化报告。"""
+        try:
+            report = manager.report_store.get_report(report_id)
+        except ReportValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if report is None:
+            raise HTTPException(status_code=404, detail="报告不存在")
+        return _report_detail_projection(report)
 
     @app.post("/analyze", response_model=dict)
     async def analyze(req: AnalyzeRequest):

@@ -21,6 +21,23 @@ function spec(command: string, overrides: Partial<SubprocessSpawnSpec> = {}): Su
 }
 
 describe('LocalSubprocessRuntime', () => {
+  it('does not load the optional PTY addon for ordinary managed processes', async () => {
+    vi.resetModules()
+    vi.doMock('node-pty', () => { throw new Error('node-pty must stay lazy') })
+    try {
+      const { default: IsolatedLocalSubprocessRuntime } = await import('../src/index.ts')
+      const ctx = new Context()
+      const fiber = await ctx.plugin(IsolatedLocalSubprocessRuntime)
+      const handle = ctx.subprocess.spawn(spec('echo managed-without-pty'))
+      await expect(handle.done).resolves.toMatchObject({ exitCode: 0 })
+      expect(handle.collected.stdout?.readFrom(0).text).toBe('managed-without-pty\n')
+      await fiber.dispose()
+    } finally {
+      vi.doUnmock('node-pty')
+      vi.resetModules()
+    }
+  })
+
   it('places the host-exit finalizer before listeners that predate the service', async () => {
     const baseline = new Set(process.listeners('exit'))
     const prior = vi.fn()

@@ -216,12 +216,12 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
     })
     const ctx = await mount(config)
 
-    expect(ctx.tools.schemas()).toHaveLength(20)
+    expect(ctx.tools.schemas()).toHaveLength(21)
     expect(ctx.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
       expect.objectContaining({
         backendId: 'trading-core',
         backendStatus: 'healthy-owned',
-        capability: expect.objectContaining({ toolCount: 9, status: 'unavailable' }),
+        capability: expect.objectContaining({ toolCount: 10, status: 'unavailable' }),
         restartRequired: false,
       }),
       expect.objectContaining({
@@ -266,11 +266,11 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
     contexts.splice(contexts.indexOf(ctx), 1)
     await ctx.fiber.dispose()
     const restarted = await mount(config, CANARY)
-    expect(restarted.tools.schemas()).toHaveLength(20)
+    expect(restarted.tools.schemas()).toHaveLength(21)
     expect(restarted.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
       expect.objectContaining({
         backendId: 'trading-core',
-        capability: expect.objectContaining({ toolCount: 9, status: 'stock-full' }),
+        capability: expect.objectContaining({ toolCount: 10, status: 'stock-full' }),
         restartRequired: false,
       }),
       expect.objectContaining({
@@ -302,7 +302,7 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
       marketUrl,
       mode: 'external',
     }))
-    expect(ctx.tools.schemas()).toHaveLength(20)
+    expect(ctx.tools.schemas()).toHaveLength(21)
     expect((ctx.credentials as TestCredentials).resolveCalls).toEqual([])
     expect((ctx.credentials as TestCredentials).describeCalls).toEqual([])
     expect(ctx.investmentPythonRuntime.readiness().backends.map(backend => backend.backendStatus).sort())

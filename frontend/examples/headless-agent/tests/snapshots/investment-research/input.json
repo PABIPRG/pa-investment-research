@@ -4,7 +4,7 @@
     { "op": "newSession" },
     {
       "op": "prompt",
-      "text": "先调用 analyze_stock 分析 600519，再调用 watch_list，最后只回复 INVESTMENT_RESEARCH_OK。"
+      "text": "先调用 investment_context 读取 portfolio 上下文，再调用 analyze_stock 分析 600519，再调用 watch_list，最后只回复 INVESTMENT_RESEARCH_OK。"
     }
   ]
 }

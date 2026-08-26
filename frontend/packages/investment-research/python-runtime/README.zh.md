@@ -51,6 +51,12 @@ Runtime 同时是浏览器发起投研数据读取的信任边界。客户端只
 
 打包应用资源只读。Host 为 owned bundled child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，backend 的 data、cache、logs、state 和用户配置均从该可写目录派生；源码模式未设置该变量时保留既有仓库内默认值。
 
+## 浏览器安全数据操作
+
+Host 的 `request-data` Remote 只接受编译期列举的 operation（操作）与各 operation 已知输入键，浏览器不能传入 backend origin、任意 URL 或任意 path。动态报告、策略和任务 id 必须符合受限标识符格式，并在拼接固定路由前经过 `encodeURIComponent`；未知键、非法枚举、越界数值和不安全 id 都会在获取 backend lease 前被拒绝。
+
+trading-core 的固定映射覆盖统一报告列表／详情、策略池／假设生成／状态迁移／回测、影子状态／持仓／净值／运行、自进化状态／归因／运行、个性化匹配／产业影响，以及后台任务状态／结果。写操作的 JSON body 只由 Host 根据已知键构造；报告列表与所有只读状态通过固定 GET 路由读取。
+
 ## 模型体验
 
 无，因为该 Host 生命周期服务不注册 prompt（提示词）、工具 schema、会话事件或结果。

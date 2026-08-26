@@ -26,6 +26,7 @@ from .backtest_engine import (
 from .config import settings
 from .decision_recorder import DecisionRecorder
 from .store import JsonStore
+from .task_report_render import render_backtest_report
 
 ENGINE_VERSION = "v1"
 
@@ -117,6 +118,7 @@ class BacktestRunner:
                 "n_results": len(results),
             })
 
+        report = render_backtest_report(summary, results, params)
         return {
             "summary": summary,
             "results": results,
@@ -126,6 +128,12 @@ class BacktestRunner:
                 "stop_loss_pct", "take_profit_pct", "neutral_band_pct",
             )},
             "meta": {"engine_version": ENGINE_VERSION, "created_at": _now_iso()},
+            "signal": {
+                "signal_type": "backtest",
+                "ticker": params.get("code") or None,
+                "n_evaluated": summary.get("n_evaluated"),
+            },
+            "reports": {"backtest": report},
         }
 
     # ---- 候选收集 -------------------------------------------------------

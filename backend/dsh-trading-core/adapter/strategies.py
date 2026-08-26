@@ -24,6 +24,7 @@ import requests
 
 from .config import settings
 from .store import JsonStore
+from .task_report_render import render_strategy_report
 
 logger = logging.getLogger("adapter.strategies")
 
@@ -771,5 +772,17 @@ class StrategyBacktestRunner:
         self.store.mutate("strategies", sid, persist_result)
         status = saved_status
         progress_cb(f"🏁 状态 → {status}（{reason}）")
-        return {"strategy_id": sid, "status": status, "backtest": backtest,
-                "symbol_errors": symbol_errors}
+        return {
+            "strategy_id": sid,
+            "status": status,
+            "backtest": backtest,
+            "symbol_errors": symbol_errors,
+            "signal": {
+                "signal_type": "strategy_backtest",
+                "strategy_id": sid,
+                "strategy_name": strategy.get("name"),
+                "status": status,
+                "thresholds_pass": passed,
+            },
+            "reports": {"strategy": render_strategy_report(strategy, status, backtest)},
+        }

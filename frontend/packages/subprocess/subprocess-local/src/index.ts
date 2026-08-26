@@ -12,7 +12,6 @@ import { constants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
 import { delimiter, extname, isAbsolute, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import * as nodePty from 'node-pty'
 import type { IPtyForkOptions } from 'node-pty'
 import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type {
@@ -156,13 +155,17 @@ export class LocalSubprocessRuntime extends SubprocessRuntime {
     return handle
   }
 
-  // Local PTY allocation is synchronous, but the provider contract permits remote asynchronous allocation.
-  // oxlint-disable-next-line typescript/require-await -- Preserve promise rejection semantics at the async provider contract.
+  // Keep the native PTY addon outside ordinary process-only startup. Web and
+  // investment profiles use spawn() for managed sidecars but do not need a
+  // terminal; eagerly loading node-pty would make that unrelated capability a
+  // hard startup dependency (and can block behind macOS native-code checks).
   async spawnTerminal(spec: SubprocessTerminalSpawnSpec): Promise<SubprocessTerminalHandle> {
     const file = spec.argv[0]
     if (file === undefined || file.length === 0) {
       throw new Error('subprocess-local: terminal argv must contain a program')
     }
+    spec.signal?.throwIfAborted()
+    const nodePty = await import('node-pty')
     spec.signal?.throwIfAborted()
     const options: IPtyForkOptions = {
       name: 'dumb',

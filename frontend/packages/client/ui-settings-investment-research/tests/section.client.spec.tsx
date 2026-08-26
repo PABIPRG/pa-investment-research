@@ -97,6 +97,14 @@ function mount(
 }
 
 describe('InvestmentReadinessSection', () => {
+  it('keeps workspace and storage implementation details out of investment Settings', () => {
+    mount(CONFIGURED)
+
+    expect(screen.queryByText('对话存储位置')).toBeNull()
+    expect(screen.queryByText(/工作区/)).toBeNull()
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+
   it('shows source-owned keyless readiness and routes the only credential action to Models', () => {
     const { container, openSection, requestRestart, refresh } = mount(MISSING)
 

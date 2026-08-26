@@ -31,12 +31,18 @@ export interface IWorkspaces {
   /**
    * Create and open a brand-new blank Session in the explicit, current, or
    * recent Workspace. Unlike {@link startSession}, this never reuses an
-   * existing blank Session.
+   * existing blank Session. A profile that deliberately moves Workspace
+   * selection into Settings may opt into the Host-cwd fallback; ordinary
+   * workspace-first surfaces remain unchanged.
    * @param workspaceId - explicit target; omitted follows the shared target
    * resolution policy.
+   * @param options - optional profile policy for the no-Workspace case.
    * @returns the new Session id, or undefined when no Workspace exists.
    */
-  startFreshSession(workspaceId?: WorkspaceId): Promise<SessionId | undefined>
+  startFreshSession(
+    workspaceId?: WorkspaceId,
+    options?: { fallbackToHostCwd?: boolean },
+  ): Promise<SessionId | undefined>
   /**
    * Register an existing path as a Workspace.
    * @param input - the Host create payload.

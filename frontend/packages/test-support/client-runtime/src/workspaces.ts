@@ -75,10 +75,14 @@ export class TestWorkspaces implements IWorkspaces {
    * @param workspaceId - optional explicit workspace target.
    * @returns the created session id, or undefined when the stub models no target.
    */
-  async startFreshSession(workspaceId?: WorkspaceId): Promise<SessionId | undefined> {
-    this.calls.push({ method: 'startFreshSession', args: [workspaceId] })
+  async startFreshSession(
+    workspaceId?: WorkspaceId,
+    options: { fallbackToHostCwd?: boolean } = {},
+  ): Promise<SessionId | undefined> {
+    this.calls.push({ method: 'startFreshSession', args: [workspaceId, options] })
     const stub = this.stubs.get('startFreshSession')
-    if (stub !== undefined) return await (stub(workspaceId) as Promise<SessionId | undefined>)
+    if (stub !== undefined) return await (stub(workspaceId, options) as Promise<SessionId | undefined>)
+    if (options.fallbackToHostCwd === true) return 'fresh-session-at-host-cwd' as SessionId
     return workspaceId === undefined ? undefined : `fresh-session-of-${workspaceId}` as SessionId
   }
 

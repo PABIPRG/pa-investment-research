@@ -111,6 +111,10 @@
 }
 
 .backend {
+  /* Runtime log paths can scroll inside this elevated card. Keep the thumb on
+     the same elevation rung in both light and dark palettes. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--dsw-alias-border-l2);
