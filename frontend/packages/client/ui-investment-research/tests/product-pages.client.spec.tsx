@@ -9,7 +9,7 @@ import {
   ShadowValidationPage,
   StrategyResearchPage,
 } from '../src/client/ProductPages.tsx'
-import { InvestmentShell, InvestmentWelcome } from '../src/client/InvestmentShell.tsx'
+import { InvestmentShell, InvestmentSidebar } from '../src/client/InvestmentShell.tsx'
 import type { AssistantIntent } from '../src/client/assistant-intent.ts'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
@@ -438,7 +438,7 @@ describe('投研产品闭环', () => {
     expect(screen.queryByText(/Traceback|\/Users\/private/)).toBeNull()
   })
 
-  it('产业链筛选、全局证券搜索和智能分析代码拥有三份独立输入状态', async () => {
+  it('产业链、全局搜索、个股分析和历史回测拥有四份独立输入状态', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'industry-chain.data-status') {
         return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
@@ -451,22 +451,34 @@ describe('投研产品闭环', () => {
     })
     const base: InvestmentUiSnapshot = {
       route: 'knowledge', historyOpen: false, reportsOpen: false,
-      analysisQuery: '', watchQuery: '', chainQuery: '',
+      assistantMode: 'closed', assistantModule: 'general',
+      analysisQuery: '', backtestQuery: '', watchQuery: '', chainQuery: '',
       selectedStockCode: '', selectedStrategyId: '',
     }
 
     function Harness() {
       const [snapshot, setSnapshot] = useState(base)
       const useInvestmentUi = <T,>(selector: (value: InvestmentUiSnapshot) => T): T => selector(snapshot)
+      const navigate = (route: InvestmentUiSnapshot['route']) => { setSnapshot(current => ({ ...current, route })) }
       return <>
+        <InvestmentSidebar
+          wide
+          expandSidebar={() => {}}
+          useSessions={neverGlobalHook}
+          useWorkspaces={neverGlobalHook}
+          useInvestmentUi={useInvestmentUi}
+          navigate={navigate}
+        />
         <InvestmentShell
           useInvestmentUi={useInvestmentUi}
           useSessions={neverGlobalHook}
           useWorkspaces={neverGlobalHook}
           requestData={requestData}
-          navigate={() => {}}
+          navigate={navigate}
           setHistory={() => {}}
           setReports={() => {}}
+          setAssistantMode={(mode) => { setSnapshot(current => ({ ...current, assistantMode: mode })) }}
+          setAssistantModule={(module) => { setSnapshot(current => ({ ...current, assistantModule: module })) }}
           setModuleDraft={(key, value) => { setSnapshot(current => ({ ...current, [key]: value })) }}
           selectStrategy={() => {}}
           startSession={() => Promise.resolve()}
@@ -477,12 +489,6 @@ describe('投研产品闭环', () => {
           prepareAssistant={() => {}}
           toggleTheme={() => {}}
         />
-        <InvestmentWelcome
-          useSessions={neverGlobalHook}
-          useWorkspaces={neverGlobalHook}
-          disabled={false}
-          onPrompt={() => {}}
-        />
       </>
     }
 
@@ -492,17 +498,22 @@ describe('投研产品闭环', () => {
     })
     const globalSearch = screen.getByRole<HTMLInputElement>('combobox', { name: '搜索 A 股代码或名称' })
     const chainFilter = screen.getByRole<HTMLInputElement>('textbox', { name: '搜索公司、行业或股票代码' })
-    const analysisCode = screen.getByRole<HTMLInputElement>('textbox', { name: '智能分析股票代码' })
 
     fireEvent.change(globalSearch, { target: { value: '贵州茅台' } })
     expect(chainFilter.value).toBe('')
-    expect(analysisCode.value).toBe('')
     fireEvent.change(chainFilter, { target: { value: '半导体' } })
     expect(globalSearch.value).toBe('贵州茅台')
-    expect(analysisCode.value).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: '智能分析' }))
+    const analysisCode = screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' })
+    const backtestCode = screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' })
     fireEvent.change(analysisCode, { target: { value: '600519' } })
+    fireEvent.change(backtestCode, { target: { value: '000001' } })
     expect(globalSearch.value).toBe('贵州茅台')
-    expect(chainFilter.value).toBe('半导体')
+    expect(analysisCode.value).toBe('600519')
+    expect(backtestCode.value).toBe('000001')
+    fireEvent.click(screen.getByRole('button', { name: '产业链' }))
+    const restoredChainFilter = await screen.findByRole<HTMLInputElement>('textbox', { name: '搜索公司、行业或股票代码' })
+    expect(restoredChainFilter.value).toBe('半导体')
     fireEvent.click(screen.getByRole('button', { name: '搜索' }))
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
@@ -510,7 +521,9 @@ describe('投研产品闭环', () => {
       })
     })
     expect(globalSearch.value).toBe('贵州茅台')
-    expect(analysisCode.value).toBe('600519')
+    fireEvent.click(screen.getByRole('button', { name: '智能分析' }))
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' }).value).toBe('600519')
+    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' }).value).toBe('000001')
   })
 
   it('按真实 DTO 检索公司、逐层展示上下游并只向 AI 传短意图', async () => {

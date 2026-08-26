@@ -18,13 +18,17 @@ import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 afterEach(() => {
   cleanup()
   delete document.body.dataset.investmentWorkbenchActive
+  delete document.body.dataset.investmentAssistantMode
 })
 
 const UI_SNAPSHOT: InvestmentUiSnapshot = {
   route: 'portfolio',
   historyOpen: false,
   reportsOpen: false,
+  assistantMode: 'closed',
+  assistantModule: 'general',
   analysisQuery: '',
+  backtestQuery: '',
   watchQuery: '',
   chainQuery: '',
   selectedStockCode: '',
@@ -108,7 +112,7 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
 }
 
 describe('ui-investment-research apply', () => {
-  it('removes the covered conversation surface from interaction while a workbench is active', () => {
+  it('keeps the business workbench mounted while the global assistant changes display mode', () => {
     const props = {
       requestData: vi.fn(async () => ({ items: [] })),
       navigate: vi.fn(), setHistory: vi.fn(), setReports: vi.fn(), setModuleDraft: vi.fn(), selectStrategy: vi.fn(),
@@ -123,9 +127,11 @@ describe('ui-investment-research apply', () => {
 
     view.rerender(createElement(InvestmentShell, {
       ...props,
-      useInvestmentUi: useUi({ route: 'assistant' }),
+      useInvestmentUi: useUi({ route: 'analysis', assistantMode: 'docked' }),
     } as never))
     expect(document.body.dataset.investmentWorkbenchActive).toBeUndefined()
+    expect(view.getByTestId('analysis-workbench')).toBeTruthy()
+    expect(view.getByTestId('assistant-panel').getAttribute('data-mode')).toBe('docked')
   })
 
   it('searches real securities by name and opens the selected stock detail route', async () => {
@@ -208,7 +214,7 @@ describe('ui-investment-research apply', () => {
     expect(prepareAssistant).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' })
   })
 
-  it('presents the research workbench and seven-module product chain without a workspace selector', () => {
+  it('presents six first-level business entries and keeps shadow validation inside strategy research', () => {
     const navigate = vi.fn()
     const view = render(InvestmentSidebar({
       wide: true,
@@ -218,9 +224,9 @@ describe('ui-investment-research apply', () => {
 
     const routes = view.getAllByRole('button')
     expect(routes.map(route => route.getAttribute('aria-label'))).toEqual([
-      '研究工作台', '智能分析', '实时盯盘', '策略研究', '影子验证', '自进化', '我的投研', '产业链',
+      '研究工作台', '智能分析', '实时盯盘', '策略研究', '自进化', '我的投研', '产业链',
     ])
-    expect(routes[6]?.getAttribute('aria-current')).toBe('page')
+    expect(routes[5]?.getAttribute('aria-current')).toBe('page')
     expect(view.queryByText('工作区')).toBeNull()
     fireEvent.click(routes[3]!)
     expect(navigate).toHaveBeenCalledWith('framework')
@@ -278,43 +284,55 @@ describe('ui-investment-research apply', () => {
     })
   })
 
-  it('keeps the analysis stock input independent from the global security search', () => {
-    const onPrompt = vi.fn()
+  it('keeps stock analysis, historical backtest and global search inputs independent', () => {
+    const setModuleDraft = vi.fn()
+    const prepareAssistant = vi.fn()
     const requestData = vi.fn(async () => ({ items: [] }))
     const view = render(createElement('div', null,
       createElement(InvestmentShell, {
-        useInvestmentUi: useUi({ route: 'assistant' }),
+        useInvestmentUi: useUi({ route: 'analysis' }),
         requestData,
         navigate: vi.fn(),
         setHistory: vi.fn(),
         setReports: vi.fn(),
-        setModuleDraft: vi.fn(),
+        setAssistantMode: vi.fn(),
+        setAssistantModule: vi.fn(),
+        setModuleDraft,
         selectStrategy: vi.fn(),
         startSession: vi.fn(),
         openSession: vi.fn(),
         searchSessions: vi.fn(),
         renameSession: vi.fn(),
         archiveSession: vi.fn(),
-        prepareAssistant: vi.fn(),
+        prepareAssistant,
         toggleTheme: vi.fn(),
       } as never),
-      createElement(InvestmentWelcome, { disabled: false, onPrompt } as never),
+      createElement(InvestmentWelcome, { disabled: false, onPrompt: vi.fn() } as never),
     ))
-    expect(view.getByText('今天想研究什么？')).toBeTruthy()
+    expect(view.getByText('AI 研究助理')).toBeTruthy()
+    expect(view.getByTestId('analysis-workbench')).toBeTruthy()
     expect(view.queryByText('探索未至之境')).toBeNull()
     expect(view.queryByText('预览版')).toBeNull()
 
     const globalSearch = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
-    const analysisInput = view.getByRole('textbox', { name: '智能分析股票代码' })
+    const analysisInput = view.getByRole('textbox', { name: '个股分析股票代码' })
+    const backtestInput = view.getByRole('textbox', { name: '历史回测股票代码' })
     fireEvent.change(globalSearch, { target: { value: '贵州茅台' } })
     expect((analysisInput as HTMLInputElement).value).toBe('')
+    expect((backtestInput as HTMLInputElement).value).toBe('')
     fireEvent.change(analysisInput, { target: { value: '600519' } })
+    fireEvent.change(backtestInput, { target: { value: '000001' } })
     expect((globalSearch as HTMLInputElement).value).toBe('贵州茅台')
-    fireEvent.click(view.getByRole('button', { name: '开始分析' }))
-    expect(onPrompt).toHaveBeenCalledWith(expect.stringContaining('调用 analyze_stock 工具'))
+    expect(setModuleDraft).toHaveBeenCalledWith('analysisQuery', '600519')
+    expect(setModuleDraft).toHaveBeenCalledWith('backtestQuery', '000001')
 
-    fireEvent.click(view.getByRole('button', { name: /个股研究/ }))
-    expect(onPrompt).toHaveBeenLastCalledWith(expect.stringContaining('调用 analyze_stock 工具'))
+    fireEvent.click(view.getAllByRole('button', { name: '查看模块详情' })[0]!)
+    expect(view.getByRole('dialog', { name: '个股多智能体分析' })).toBeTruthy()
+    fireEvent.click(view.getByRole('button', { name: '用此模块打开 AI 助理' }))
+    expect(prepareAssistant).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'prompt' }),
+      'stock',
+    )
   })
 
   it('exposes one global report entry on every module and opens the report center', async () => {

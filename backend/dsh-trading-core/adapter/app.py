@@ -446,37 +446,42 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     @app.get("/strategies", response_model=dict)
     async def strategies_list(limit: int = 50):
         """策略池列表（created_at 倒序）。"""
+        from .strategies import project_strategy_verification
+
         store = JsonStore()
-        rows = list((store.all("strategies") or {}).values())
+        rows = [
+            project_strategy_verification(item)
+            for item in (store.all("strategies") or {}).values()
+        ]
         rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         return {"count": len(rows), "items": rows[: max(1, min(limit, 200))]}
 
     @app.get("/strategies/{sid}", response_model=dict)
     async def strategies_get(sid: str):
         """单条策略详情（含 backtest）。"""
+        from .strategies import project_strategy_verification
+
         store = JsonStore()
         s = store.get("strategies", sid)
         if not s:
             raise HTTPException(status_code=404, detail="策略不存在")
-        return s
+        return project_strategy_verification(s)
 
     @app.post("/strategies/{sid}/{action}", response_model=dict)
     async def strategies_transition(sid: str, action: Literal["activate", "reject", "retire"]):
-        """手动状态迁移：activate→active / reject→rejected / retire→retired。"""
+        """手动迁移生命周期；验证分类由最新回测证据独立维护。"""
+        from .strategies import transition_strategy
+
         store = JsonStore()
-        status = {"activate": "active", "reject": "rejected", "retire": "retired"}[action]
-
-        def transition(current):
-            if not current:
-                raise HTTPException(status_code=404, detail="策略不存在")
-            return {
-                **dict(current),
-                "status": status,
-                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-
-        store.mutate("strategies", sid, transition)
-        return {"id": sid, "status": status}
+        try:
+            updated = transition_strategy(store, sid, action)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="策略不存在") from exc
+        return {
+            "id": sid,
+            "status": updated["status"],
+            "verification_status": updated["verification_status"],
+        }
 
     # ---- 实时影子策略验证（架构图 I） ----------------------------------
 

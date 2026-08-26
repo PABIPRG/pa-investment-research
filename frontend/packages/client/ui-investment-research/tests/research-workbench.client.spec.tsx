@@ -111,7 +111,7 @@ describe('研究工作台', () => {
     expect(view.queryByText('¥0')).toBeNull()
   })
 
-  it('筛选关联事件，并把股票、风险和策略动作携带准确标识跳转', async () => {
+  it('筛选关联事件，并以可复核详情承接事件、风险和策略动作', async () => {
     const view = renderWorkbench()
     const holdingsEvent = await view.findByText('白酒板块经营数据改善')
     const holdingsArticle = holdingsEvent.closest('article')!
@@ -119,6 +119,11 @@ describe('研究工作台', () => {
     expect(view.navigate).toHaveBeenCalledWith('stock-detail', { stockCode: '600519' })
     fireEvent.click(within(holdingsArticle).getByRole('button', { name: '带入智能分析' }))
     expect(view.onAnalyze).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' })
+    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '查看事件详情' }))
+    const eventDialog = view.getByRole('dialog', { name: '白酒板块经营数据改善' })
+    expect(within(eventDialog).getByText('事件研究详情')).toBeTruthy()
+    expect(within(eventDialog).getByText(/暂未返回稳定事件标识/)).toBeTruthy()
+    fireEvent.click(within(eventDialog).getByRole('button', { name: '关闭' }))
 
     fireEvent.click(view.getByRole('button', { name: '策略', pressed: false }))
     expect(view.queryByText('白酒板块经营数据改善')).toBeNull()
@@ -130,8 +135,13 @@ describe('研究工作台', () => {
     expect(view.navigate).toHaveBeenCalledWith('framework', { strategyId: 'strategy-alpha' })
 
     const alert = view.getByText('集中度超预算').closest('article')!
-    fireEvent.click(within(alert).getByRole('button', { name: '查看' }))
-    expect(view.navigate).toHaveBeenCalledWith('stock-detail', { stockCode: '600519' })
+    fireEvent.click(within(alert).getByRole('button', { name: '查看详情' }))
+    const riskDialog = view.getByRole('dialog', { name: '集中度超预算' })
+    expect(within(riskDialog).getByText('触发原因')).toBeTruthy()
+    expect(within(riskDialog).getByText('数据来源与口径')).toBeTruthy()
+    expect(within(riskDialog).getByText('建议动作')).toBeTruthy()
+    fireEvent.click(within(riskDialog).getByRole('button', { name: '带入智能分析' }))
+    expect(view.onAnalyze).toHaveBeenCalledWith({ kind: 'stock', code: '600519' })
   })
 
   it('单个慢区失败时保留其他区域，并只重试失败资源', async () => {

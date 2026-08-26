@@ -5,6 +5,7 @@ import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-r
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
+import { DetailDialog } from './DetailDialogs.tsx'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
 import css from './InvestmentShell.module.css'
 
@@ -139,7 +140,7 @@ function reportKindLabel(value: unknown): string {
   const kind = text(value, '')
   return {
     stock: '个股分析', holdings: '持仓分析', brief: '市场简报',
-    backtest: '历史回测', strategy: '策略研究', shadow: '影子验证',
+    backtest: '历史回测', strategy: '策略研究', shadow: '策略研究 · 影子验证',
   }[kind] ?? (kind === '' ? '投研分析' : kind)
 }
 
@@ -154,6 +155,258 @@ function reportTimeLabel(value: unknown): string {
   }).format(parsed)
 }
 
+type StrategyCategory = 'verified' | 'unverified' | 'failed' | 'archived'
+type StrategyFilter = 'all' | StrategyCategory
+
+const STRATEGY_CATEGORY_LABELS: Record<StrategyFilter, string> = {
+  all: '全部',
+  verified: '已验证通过',
+  unverified: '未验证',
+  failed: '验证未通过',
+  archived: '已归档',
+}
+
+function strategyCategory(item: Record<string, unknown>): StrategyCategory {
+  const explicit = text(item.verification_status, '')
+  const backtest = asRecord(item.backtest)
+  const reason = text(backtest.reason, '')
+  if (text(item.archived_at, '') !== '' || explicit === 'archived') return 'archived'
+  if (explicit === 'passed') return 'verified'
+  if (explicit === 'failed') return 'failed'
+  if (explicit === 'pending') return 'unverified'
+  if (backtest.thresholds_pass === true) return 'verified'
+  if (Object.keys(backtest).length > 0 && backtest.thresholds_pass === false) {
+    return reason.includes('成交不足') || reason.includes('样本不足') ? 'unverified' : 'failed'
+  }
+  // Lifecycle alone is not verification evidence. An active/rejected record
+  // without a usable backtest remains unverified until the backend returns an
+  // explicit verification result or thresholds evidence.
+  return 'unverified'
+}
+
+function strategyRule(item: Record<string, unknown>): { trigger: string; exit: string; params: string[] } {
+  const kind = text(item.kind, '')
+  const params = asRecord(item.params)
+  if (kind === 'ma_cross') {
+    const fast = number(params.fast)?.toFixed(0)
+    const slow = number(params.slow)?.toFixed(0)
+    const complete = fast !== undefined && slow !== undefined
+    return {
+      trigger: complete
+        ? `${fast} 日均线高于 ${slow} 日均线后，按下一交易日开盘价进入纸面持仓。`
+        : '数据不足：后端未返回完整的快线和慢线参数，无法还原触发规则。',
+      exit: complete
+        ? `${fast} 日均线回落至 ${slow} 日均线下方后，按下一交易日开盘价退出。`
+        : '数据不足：后端未返回完整的快线和慢线参数，无法还原退出规则。',
+      params: [`快线 ${fast === undefined ? '未返回' : `${fast} 日`}`, `慢线 ${slow === undefined ? '未返回' : `${slow} 日`}`],
+    }
+  }
+  if (kind === 'rsi_reversal') {
+    const period = number(params.n)?.toFixed(0)
+    const oversold = number(params.oversold)?.toFixed(0)
+    const overbought = number(params.overbought)?.toFixed(0)
+    return {
+      trigger: period !== undefined && oversold !== undefined
+        ? `${period} 日 RSI 低于 ${oversold} 后，按下一交易日开盘价进入纸面持仓。`
+        : '数据不足：后端未返回完整的 RSI 周期和超卖阈值，无法还原触发规则。',
+      exit: overbought !== undefined
+        ? `RSI 高于 ${overbought} 后，按下一交易日开盘价退出。`
+        : '数据不足：后端未返回 RSI 超买阈值，无法还原退出规则。',
+      params: [
+        `RSI 周期 ${period === undefined ? '未返回' : `${period} 日`}`,
+        `超卖阈值 ${oversold ?? '未返回'}`,
+        `超买阈值 ${overbought ?? '未返回'}`,
+      ],
+    }
+  }
+  if (kind === 'momentum') {
+    const period = number(params.n)?.toFixed(0)
+    return {
+      trigger: period === undefined
+        ? '数据不足：后端未返回动量窗口，无法还原触发规则。'
+        : `收盘价高于 ${period} 个交易日前收盘价后，按下一交易日开盘价进入纸面持仓。`,
+      exit: period === undefined
+        ? '数据不足：后端未返回动量窗口，无法还原退出规则。'
+        : '动量条件失效后，按下一交易日开盘价退出。',
+      params: [`动量窗口 ${period === undefined ? '未返回' : `${period} 日`}`],
+    }
+  }
+  const kindReason = kind === '' ? '后端未返回策略类型' : `后端返回了暂不支持解释的策略类型“${kind}”`
+  return {
+    trigger: `数据不足：${kindReason}，无法解释触发规则。`,
+    exit: `数据不足：${kindReason}，无法解释退出规则。`,
+    params: [Object.keys(params).length === 0 ? '策略参数 未返回' : '策略参数 已返回，但因类型未知未作解释'],
+  }
+}
+
+function verificationExplanation(category: StrategyCategory): string {
+  return {
+    verified: '样本外阈值已通过，可以进入影子验证继续积累真实行情下的纸面证据。',
+    unverified: '尚未形成足够的样本外证据，需先运行回测或补足样本，不能直接视为有效策略。',
+    failed: '样本外证据未达到准入线，建议复核假设与参数后重测，或保留失败结论。',
+    archived: '策略已退出当前验证队列，仅保留历史假设、回测与生命周期记录供追溯。',
+  }[category]
+}
+
+interface StrategyHypothesisPreview {
+  readonly eventCount: number | undefined
+  readonly hypotheses: readonly Record<string, unknown>[]
+  readonly note: string
+}
+
+function HypothesisPreviewDialog({
+  preview, busy, status, onClose, onConfirm,
+}: {
+  preview: StrategyHypothesisPreview
+  busy: boolean
+  status: string
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const eventSummary = preview.eventCount === undefined
+    ? '后端未返回本次读取的事件数量'
+    : `本次读取 ${preview.eventCount} 条事件`
+  return (
+    <DetailDialog
+      title="候选假设预览"
+      description={`${eventSummary}，生成 ${preview.hypotheses.length} 条假设；确认前不会写入，确认后服务会按当前事件重新生成并加入候选池。`}
+      eyebrow="只读预览"
+      wide
+      onClose={onClose}
+      actions={<>
+        <button type="button" className={css.secondaryButton} onClick={onClose}>关闭预览</button>
+        <button type="button" className={css.primaryButton} disabled={busy || preview.hypotheses.length === 0} onClick={onConfirm}>
+          {busy ? '正在加入…' : '确认加入候选池'}
+        </button>
+      </>}
+    >
+      {status !== '' && <div className={css.contextHint} role="status">{status}</div>}
+      {preview.hypotheses.length === 0 ? (
+        <Empty>{preview.note || '本轮没有返回可预览的策略假设，未写入策略池。'}</Empty>
+      ) : preview.hypotheses.map((hypothesis, index) => {
+        const rule = strategyRule(hypothesis)
+        const symbols = strings(hypothesis.symbols)
+        const holdingWindow = number(hypothesis.holding_window_days)?.toFixed(0)
+        return (
+          <section key={`${text(hypothesis.kind, 'unknown')}-${index}`} className={css.detailSection}>
+            <h3>假设 {index + 1} · {text(hypothesis.kind, '策略类型未返回')}</h3>
+            <p><strong>假设依据：</strong>{text(hypothesis.rationale, '后端未返回假设说明。')}</p>
+            <p><strong>触发规则：</strong>{rule.trigger}</p>
+            <p><strong>退出规则：</strong>{rule.exit}</p>
+            <div className={css.detailEvidenceRow}>
+              <span>交易方向 <strong>{text(hypothesis.direction, '未返回')}</strong></span>
+              <span>关联标的 <strong>{symbols.length === 0 ? '未返回' : symbols.join('、')}</strong></span>
+              <span>建议观察窗口 <strong>{holdingWindow === undefined ? '未返回' : `${holdingWindow} 天`}</strong></span>
+            </div>
+            <div className={css.detailTags}>{rule.params.map(param => <span key={param}>{param}</span>)}</div>
+          </section>
+        )
+      })}
+    </DetailDialog>
+  )
+}
+
+function StrategyDetailDialog({
+  item, busy, onClose, onRun, onAnalyze, onShadow,
+}: {
+  item: Record<string, unknown>
+  busy: boolean
+  onClose: () => void
+  onRun: () => void
+  onAnalyze: () => void
+  onShadow: () => void
+}) {
+  const id = text(item.id, '未返回')
+  const status = text(item.status, '')
+  const category = strategyCategory(item)
+  const backtest = asRecord(item.backtest)
+  const inSample = asRecord(backtest.in_sample)
+  const outOfSample = asRecord(backtest.out_of_sample)
+  const symbols = strings(item.symbols)
+  const symbolErrors = Object.keys(asRecord(backtest.symbol_errors))
+  const rule = strategyRule(item)
+  const sourceEventId = text(item.source_event_id, '')
+  const sourceEventSummary = text(item.source_event_summary, '')
+  const holdingWindow = number(item.holding_window_days)?.toFixed(0)
+  const metric = (value: unknown, suffix = ''): string => {
+    const formatted = compactMetric(value, suffix)
+    return formatted === '—' ? '数据不足' : formatted
+  }
+  const evidenceRows = [
+    ['交易数', number(inSample.n_evaluated)?.toFixed(0) ?? '数据不足', number(outOfSample.n_evaluated)?.toFixed(0) ?? '数据不足'],
+    ['胜率', metric(inSample.win_rate_pct, '%'), metric(outOfSample.win_rate_pct, '%')],
+    ['平均模拟收益', metric(inSample.avg_simulated_return_pct, '%'), metric(outOfSample.avg_simulated_return_pct, '%')],
+    ['年化 Sharpe', metric(inSample.sharpe_annualized), metric(outOfSample.sharpe_annualized)],
+    ['最大回撤', metric(inSample.max_drawdown_pct, '%'), metric(outOfSample.max_drawdown_pct, '%')],
+  ] as const
+  return (
+    <DetailDialog
+      title={text(item.name, id)}
+      description={text(item.hypothesis, text(item.thesis, '策略库尚未返回假设说明。'))}
+      eyebrow="策略详情"
+      wide
+      onClose={onClose}
+      actions={<>
+        <button type="button" className={css.secondaryButton} onClick={onClose}>关闭</button>
+        <button type="button" className={css.secondaryButton} onClick={onAnalyze}>AI 评审</button>
+        <button type="button" className={css.secondaryButton} disabled={busy || category === 'archived'} onClick={onRun}>{busy ? '回测中…' : '运行回测'}</button>
+        <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={onShadow}>进入影子验证</button>
+      </>}
+    >
+      <div data-testid="strategy-detail-dialog" className={css.detailTags} aria-label="策略标签">
+        <span>{STRATEGY_CATEGORY_LABELS[category]}</span>
+        <span>{status === '' ? '状态未返回' : statusLabel(status)}</span>
+        <span>{text(item.kind, '策略类型未返回')}</span>
+        {text(item.direction, '') !== '' && <span>{text(item.direction)}</span>}
+        {symbols.map(symbol => <span key={symbol}>{symbol}</span>)}
+      </div>
+      <dl className={css.detailMetaGrid}>
+        <div><dt>策略标识</dt><dd>{id}</dd></div>
+        <div><dt>验证分类</dt><dd>{STRATEGY_CATEGORY_LABELS[category]}</dd></div>
+        <div><dt>回测时间</dt><dd>{reportTimeLabel(backtest.ran_at).replace('—', '未返回')}</dd></div>
+        <div><dt>更新时间</dt><dd>{reportTimeLabel(item.updated_at).replace('—', '未返回')}</dd></div>
+      </dl>
+      <section className={css.detailSection} data-field="strategy-description">
+        <h3>策略逻辑与投资假设</h3>
+        <p><strong>投资假设：</strong>{text(item.hypothesis, text(item.thesis, '后端策略库暂未返回假设说明。'))}</p>
+        <p><strong>触发规则：</strong>{rule.trigger}</p>
+        <p><strong>退出规则：</strong>{rule.exit}</p>
+        <div className={css.detailEvidenceRow}>
+          <span>建议观察窗口 <strong>{holdingWindow === undefined ? '未返回' : `${holdingWindow} 天`}</strong></span>
+          <span>交易方向 <strong>{text(item.direction, '未返回')}</strong></span>
+        </div>
+        <div className={css.detailTags}>{rule.params.map(param => <span key={param}>{param}</span>)}</div>
+      </section>
+      <section className={css.detailSection}>
+        <h3>验证结论</h3>
+        <p>{verificationExplanation(category)}</p>
+        <p><strong>后端判定：</strong>{text(backtest.reason, Object.keys(backtest).length === 0 ? '尚未运行样本外回测。' : '未返回判定原因。')}</p>
+      </section>
+      <section className={css.detailSection} data-testid="verification-summary">
+        <h3>样本内 / 样本外证据</h3>
+        <div className={css.strategyEvidenceTable}>
+          <table>
+            <thead><tr><th>指标</th><th>样本内</th><th>样本外</th></tr></thead>
+            <tbody>{evidenceRows.map(row => <tr key={row[0]}><td>{row[0]}</td><td>{row[1]}</td><td>{row[2]}</td></tr>)}</tbody>
+          </table>
+        </div>
+        {symbolErrors.length > 0 && <p className={css.detailFootnote}>行情获取异常标的：{symbolErrors.join('、')}</p>}
+      </section>
+      <section className={css.detailSection} data-testid="strategy-sources">
+        <h3>数据来源与准入说明</h3>
+        <ul className={css.detailList}>
+          <li>策略名称、假设、规则类型和标的来自后端策略库。</li>
+          <li>来源事件：{sourceEventId === '' ? '暂未返回稳定事件标识' : sourceEventId}{sourceEventSummary === '' ? '' : ` · ${sourceEventSummary}`}</li>
+          <li>指标来自策略回测引擎返回的 in_sample / out_of_sample 结果，页面不补算或伪造。</li>
+          <li>当前运行请求的准入线为样本外交易不少于 4 笔、胜率不低于 50%、平均模拟收益大于 0；最终以 thresholds_pass 与 reason 为准。</li>
+          <li>信号只使用当时及之前的数据，统一按“当日信号 → 下一交易日开盘”模拟成交；序列末仍持仓时按最后收盘价退出。</li>
+          <li>影子验证只使用纸面账户，不会发出真实交易指令。</li>
+        </ul>
+      </section>
+    </DetailDialog>
+  )
+}
+
 interface StrategyResearchPageProps {
   readonly requestData: InvestmentRequestData
   readonly selectedStrategyId: string
@@ -161,36 +414,84 @@ interface StrategyResearchPageProps {
   readonly onOpenShadow: (strategyId: string) => void
   readonly onOpenReports: () => void
   readonly onAnalyze: (intent: AssistantIntent) => void
+  readonly initialView?: 'pool' | 'shadow'
+  readonly onOpenEvolution?: () => void
 }
 
 /** Event hypotheses, evidence and lifecycle decisions backed by the strategy store. */
 export function StrategyResearchPage({
   requestData, selectedStrategyId, onSelectStrategy, onOpenShadow, onOpenReports, onAnalyze,
+  initialView = 'pool', onOpenEvolution = () => {},
 }: StrategyResearchPageProps) {
   const strategies = useDataResource(requestData)
   const alive = useAliveRef()
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState('')
   const [reportReady, setReportReady] = useState(false)
+  const [view, setView] = useState<'pool' | 'shadow'>(initialView)
+  const [filter, setFilter] = useState<StrategyFilter>('all')
+  const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
+  const [hypothesisPreview, setHypothesisPreview] = useState<StrategyHypothesisPreview>()
+  const [hypothesisStatus, setHypothesisStatus] = useState('')
+  useEffect(() => { setView(initialView) }, [initialView])
   const load = useCallback(() => {
     strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
   }, [strategies.run])
   useEffect(load, [load])
   const items = records(asRecord(strategies.state.value).items)
+  const filteredItems = filter === 'all' ? items : items.filter(item => strategyCategory(item) === filter)
+  const categoryCounts = items.reduce<Record<StrategyCategory, number>>((counts, item) => {
+    const category = strategyCategory(item)
+    counts[category] += 1
+    return counts
+  }, { verified: 0, unverified: 0, failed: 0, archived: 0 })
 
-  const hypothesize = async (): Promise<void> => {
+  const previewHypotheses = async (): Promise<void> => {
     if (busyAction !== '') return
-    setBusyAction('hypothesize'); setNotice('正在从真实事件生成假设…')
+    setBusyAction('hypothesize-preview')
+    setNotice('正在从真实事件生成只读假设预览…')
+    setHypothesisStatus('')
+    try {
+      const result = asRecord(await requestData({
+        operation: 'trading-core.strategies-hypothesize', input: { limit: 20, dry_run: true },
+      }))
+      if (!alive.current) return
+      const hypotheses = records(result.hypotheses)
+      setHypothesisPreview({
+        eventCount: number(result.n_events),
+        hypotheses,
+        note: text(result.note, ''),
+      })
+      setNotice(hypotheses.length > 0
+        ? `已生成 ${hypotheses.length} 条只读假设预览，确认前不会写入策略池。`
+        : text(result.note, '本轮没有返回可预览的策略假设，未写入策略池。'))
+    } catch (reason) {
+      if (alive.current) setNotice(`预览生成失败：${productErrorText(reason)}`)
+    } finally {
+      if (alive.current) setBusyAction('')
+    }
+  }
+
+  const confirmHypotheses = async (): Promise<void> => {
+    if (busyAction !== '' || hypothesisPreview === undefined || hypothesisPreview.hypotheses.length === 0) return
+    setBusyAction('hypothesize-commit')
+    setHypothesisStatus('正在按你的确认把候选写入策略池…')
     try {
       const result = asRecord(await requestData({
         operation: 'trading-core.strategies-hypothesize', input: { limit: 20, dry_run: false },
       }))
       if (!alive.current) return
       const count = Array.isArray(result.candidates) ? result.candidates.length : 0
-      setNotice(count > 0 ? `已生成 ${count} 个候选策略。` : text(result.note, '本轮没有生成新候选。'))
+      setNotice(count > 0 ? `已确认加入 ${count} 个候选策略。` : text(result.note, '确认完成，但本轮没有新增候选策略。'))
+      setHypothesisStatus('')
+      setHypothesisPreview(undefined)
       load()
     } catch (reason) {
-      if (alive.current) setNotice(`生成失败：${productErrorText(reason)}`)
+      if (alive.current) {
+        const message = `加入失败：${productErrorText(reason)}。本次未写入候选池。`
+        setHypothesisStatus(message)
+        setNotice(message)
+      }
     } finally {
       if (alive.current) setBusyAction('')
     }
@@ -246,68 +547,137 @@ export function StrategyResearchPage({
 
   return (
     <div className={css.pageScroll}>
-      <PageHeading title="策略研究" description="把真实事件转成可证伪假设，用样本外回测决定是否进入影子验证">
-        <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
-        <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void hypothesize() }}>
-          {busyAction === 'hypothesize' ? '生成中…' : '从事件生成候选'}
-        </button>
+      <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
+        {view === 'pool' && <>
+          <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
+          <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
+            {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件生成候选'}
+          </button>
+        </>}
       </PageHeading>
+      <div className={css.segmented} role="group" aria-label="策略研究视图">
+        <button type="button" aria-pressed={view === 'pool'} className={view === 'pool' ? css.segmentActive : undefined} onClick={() => { setView('pool') }}>策略池</button>
+        <button type="button" aria-pressed={view === 'shadow'} className={view === 'shadow' ? css.segmentActive : undefined} onClick={() => { setView('shadow') }}>影子验证</button>
+      </div>
       <div className={css.lifecycleStrip} aria-label="策略生命周期">
         <span>事件与假设</span><b aria-hidden="true">→</b><span>样本外回测</span><b aria-hidden="true">→</b><span>影子验证</span><b aria-hidden="true">→</b><span>进化观察</span>
       </div>
-      <div className={css.contextHint}>页面只保存策略标识；AI 评审时会通过 investment_context 工具读取当前策略上下文。</div>
-      {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
-      {reportReady && (
-        <div className={css.moduleToolbar}>
-          <button type="button" className={css.secondaryButton} onClick={onOpenReports}>查看本次投研报告</button>
+      {view === 'pool' ? <>
+        <div className={css.contextHint}>页面只保存策略标识；AI 评审时会通过 investment_context 工具读取当前策略上下文。</div>
+        {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
+        {reportReady && (
+          <div className={css.moduleToolbar}>
+            <button type="button" className={css.secondaryButton} onClick={onOpenReports}>查看本次投研报告</button>
+          </div>
+        )}
+        <div className={`${css.segmented} ${css.strategyFilters}`} role="group" aria-label="策略验证分类">
+          {(['all', 'verified', 'unverified', 'failed', 'archived'] as const).map((category) => {
+            const count = category === 'all' ? items.length : categoryCounts[category]
+            return (
+              <button key={category} type="button" aria-pressed={filter === category} className={filter === category ? css.segmentActive : undefined} onClick={() => { setFilter(category) }}>
+                {STRATEGY_CATEGORY_LABELS[category]} <span>{count}</span>
+              </button>
+            )
+          })}
         </div>
-      )}
-      {strategies.state.phase === 'loading' && strategies.state.value === undefined && <BusyRows />}
-      {strategies.state.phase === 'error' && <DataError message={strategies.state.error} retry={load} />}
-      {strategies.state.phase !== 'error' && items.length === 0 && strategies.state.phase === 'success' && (
-        <Empty>策略池尚无真实候选。先从事件生成假设，生成过程可能需要几十秒。</Empty>
-      )}
-      <section className={css.moduleGrid} aria-label="策略候选池">
-        {items.map((item, index) => {
-          const id = text(item.id, `strategy-${index}`)
-          const status = text(item.status, 'candidate')
-          const backtest = asRecord(item.backtest)
-          const hasBacktest = Object.keys(backtest).length > 0
-          const outOfSample = asRecord(backtest.out_of_sample)
-          const outOfSampleTrades = number(outOfSample.trades) ?? number(outOfSample.n_evaluated)
-          const selected = selectedStrategyId === id
-          return (
-            <article key={id} className={`${css.moduleCard} ${selected ? css.reportItemActive : ''}`}>
-              <div className={css.sectionHeading}>
-                <div><strong>{text(item.name, id)}</strong><small>{text(item.kind, '未标注策略类型')}</small></div>
-                <StatusBadge value={status} />
-              </div>
-              <p>{text(item.hypothesis, text(item.thesis, '策略假设由后端策略库维护。'))}</p>
-              <dl className={css.reportMeta}>
-                <div><dt>方向</dt><dd>{text(item.direction)}</dd></div>
-                <div><dt>标的数</dt><dd>{strings(item.symbols).length || '—'}</dd></div>
-                <div><dt>样本外胜率</dt><dd>{compactMetric(outOfSample.win_rate_pct, '%')}</dd></div>
-                <div><dt>样本外交易</dt><dd>{outOfSampleTrades?.toFixed(0) ?? '—'}</dd></div>
-              </dl>
-              {hasBacktest && text(backtest.reason, '') !== '' && (
-                <p className={css.contextHint}>回测结论：{text(backtest.reason)}</p>
-              )}
-              <div className={css.moduleToolbar}>
-                <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={() => { onSelectStrategy(id); void runStrategy(id) }}>
-                  {busyAction === `run:${id}` ? '回测中…' : '运行回测'}
-                </button>
-                {status === 'candidate' && (
-                  <button type="button" className={css.secondaryButton} disabled={busyAction !== '' || !hasBacktest} title={hasBacktest ? '人工确认策略生效' : '完成回测后才能确认生效'} onClick={() => { onSelectStrategy(id); void activate(id) }}>
-                    {busyAction === `activate:${id}` ? '更新中…' : '人工确认生效'}
-                  </button>
+        {strategies.state.phase === 'loading' && strategies.state.value === undefined && <BusyRows />}
+        {strategies.state.phase === 'error' && <DataError message={strategies.state.error} retry={load} />}
+        {strategies.state.phase !== 'error' && items.length === 0 && strategies.state.phase === 'success' && (
+          <Empty>策略池尚无真实候选。先从事件生成假设，生成过程可能需要几十秒。</Empty>
+        )}
+        {strategies.state.phase === 'success' && items.length > 0 && filteredItems.length === 0 && (
+          <Empty>当前分类暂无策略，可以切换分类查看完整策略池。</Empty>
+        )}
+        <section className={css.moduleGrid} aria-label="策略候选池">
+          {filteredItems.map((item, index) => {
+            const id = text(item.id, `strategy-${index}`)
+            const status = text(item.status, '')
+            const category = strategyCategory(item)
+            const backtest = asRecord(item.backtest)
+            const hasBacktest = Object.keys(backtest).length > 0
+            const outOfSample = asRecord(backtest.out_of_sample)
+            const outOfSampleTrades = number(outOfSample.trades) ?? number(outOfSample.n_evaluated)
+            const selected = selectedStrategyId === id
+            return (
+              <article key={id} className={`${css.moduleCard} ${css.strategyCard} ${selected ? css.reportItemActive : ''}`}>
+                <div className={css.sectionHeading}>
+                  <div><strong>{text(item.name, id)}</strong><small>{text(item.kind, '未标注策略类型')}</small></div>
+                  <div className={css.strategyCardBadges}>
+                    <span>{STRATEGY_CATEGORY_LABELS[category]}</span>
+                    <StatusBadge value={status} />
+                  </div>
+                </div>
+                <p>{text(item.hypothesis, text(item.thesis, '后端未返回策略假设。'))}</p>
+                <dl className={css.reportMeta}>
+                  <div><dt>方向</dt><dd>{text(item.direction, '未返回')}</dd></div>
+                  <div><dt>标的数</dt><dd>{strings(item.symbols).length || '—'}</dd></div>
+                  <div><dt>样本外胜率</dt><dd>{compactMetric(outOfSample.win_rate_pct, '%')}</dd></div>
+                  <div><dt>样本外交易</dt><dd>{outOfSampleTrades?.toFixed(0) ?? '—'}</dd></div>
+                </dl>
+                {hasBacktest && text(backtest.reason, '') !== '' && (
+                  <p className={css.contextHint}>回测结论：{text(backtest.reason)}</p>
                 )}
-                <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
-                <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); onOpenShadow(id) }}>进入影子验证</button>
-              </div>
-            </article>
-          )
-        })}
-      </section>
+                <div className={css.moduleToolbar}>
+                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { onSelectStrategy(id); setDetailItem(item) }}>查看详情</button>
+                  <button type="button" className={css.secondaryButton} disabled={busyAction !== '' || category === 'archived'} onClick={() => { onSelectStrategy(id); void runStrategy(id) }}>
+                    {busyAction === `run:${id}` ? '回测中…' : '运行回测'}
+                  </button>
+                  {status === 'candidate' && (
+                    <button type="button" className={css.secondaryButton} disabled={busyAction !== '' || !hasBacktest} title={hasBacktest ? '人工确认策略生效' : '完成回测后才能确认生效'} onClick={() => { onSelectStrategy(id); void activate(id) }}>
+                      {busyAction === `activate:${id}` ? '更新中…' : '人工确认生效'}
+                    </button>
+                  )}
+                  <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
+                  <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>进入影子验证</button>
+                </div>
+              </article>
+            )
+          })}
+        </section>
+      </> : (
+        <ShadowValidationPage
+          embedded
+          requestData={requestData}
+          selectedStrategyId={selectedStrategyId}
+          onOpenEvolution={onOpenEvolution}
+          onOpenReports={onOpenReports}
+          onAnalyze={onAnalyze}
+        />
+      )}
+      {detailItem !== undefined && (
+        <StrategyDetailDialog
+          item={detailItem}
+          busy={busyAction === `run:${text(detailItem.id, '')}`}
+          onClose={() => { setDetailItem(undefined) }}
+          onRun={() => {
+            const id = text(detailItem.id, '')
+            setDetailItem(undefined)
+            if (id !== '') { onSelectStrategy(id); void runStrategy(id) }
+          }}
+          onAnalyze={() => {
+            const id = text(detailItem.id, '')
+            setDetailItem(undefined)
+            if (id !== '') { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }
+          }}
+          onShadow={() => {
+            const id = text(detailItem.id, '')
+            setDetailItem(undefined)
+            if (id !== '') { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }
+          }}
+        />
+      )}
+      {hypothesisPreview !== undefined && (
+        <HypothesisPreviewDialog
+          preview={hypothesisPreview}
+          busy={busyAction === 'hypothesize-commit'}
+          status={hypothesisStatus}
+          onClose={() => {
+            setHypothesisPreview(undefined)
+            setHypothesisStatus('')
+          }}
+          onConfirm={() => { void confirmHypotheses() }}
+        />
+      )}
     </div>
   )
 }
@@ -318,11 +688,12 @@ interface ShadowValidationPageProps {
   readonly onOpenEvolution: () => void
   readonly onOpenReports: () => void
   readonly onAnalyze: (intent: AssistantIntent) => void
+  readonly embedded?: boolean
 }
 
 /** Paper-account evidence; no real order is placed from this UI. */
 export function ShadowValidationPage({
-  requestData, selectedStrategyId, onOpenEvolution, onOpenReports, onAnalyze,
+  requestData, selectedStrategyId, onOpenEvolution, onOpenReports, onAnalyze, embedded = false,
 }: ShadowValidationPageProps) {
   const status = useDataResource(requestData)
   const alive = useAliveRef()
@@ -387,67 +758,76 @@ export function ShadowValidationPage({
   const initialLoading = [status.state, positions.state, equity.state]
     .some(item => item.phase === 'loading' && item.value === undefined)
 
-  return (
-    <div className={css.pageScroll}>
-      <PageHeading title="影子验证" description="用真实行情在纸面账户验证已生效策略，不触发真实交易">
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
-        <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</button>
-      </PageHeading>
-      <div className={css.lifecycleStrip} aria-label="当前验证对象">
-        <span>策略研究</span><b aria-hidden="true">→</b><span>{selectedStrategyId === '' ? '全部生效策略' : selectedStrategyId}</span><b aria-hidden="true">→</b><span>自进化</span>
+  const content = <>
+    {embedded ? (
+      <div className={css.embeddedShadowHeader}>
+        <div><h2>影子验证</h2><p>用真实行情在纸面账户验证已通过策略，不触发真实交易</p></div>
+        <div>
+          <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
+          <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</button>
+        </div>
       </div>
-      {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
-      {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
-      {initialLoading && <BusyRows />}
-      {!initialLoading && <section className={css.moduleGrid} aria-label="影子验证概览">
-        <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><strong>最近运行</strong><StatusBadge value={text(statusRecord.trade_date, '') === '' ? 'waiting_data' : 'done'} /></div>
-          <dl className={css.reportMeta}>
-            <div><dt>交易日</dt><dd>{text(statusRecord.trade_date)}</dd></div>
-            <div><dt>策略数</dt><dd>{number(statusRecord.strategy_count)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>运行时间</dt><dd>{text(statusRecord.ran_at)}</dd></div>
-            <div><dt>组合净值</dt><dd>{compactMetric(statusRecord.overall_nav)}</dd></div>
-          </dl>
-          {text(statusRecord.note, '') !== '' && <p>{text(statusRecord.note)}</p>}
-        </article>
-        <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><strong>纸面持仓</strong><span>{positionItems.length} 项</span></div>
-          <div className={css.dataList}>
-            {positionItems.slice(0, 12).map((item, index) => (
-              <div className={css.dataRow} key={`${text(item.strategy_id)}-${text(item.symbol)}-${index}`}>
-                <div><strong>{text(item.symbol, text(item.code))}</strong><small>{text(item.strategy_id)}</small></div>
-                <span>{number(item.qty ?? item.quantity)?.toLocaleString('zh-CN') ?? money(item.market_value)}</span>
-              </div>
-            ))}
-            {positionItems.length === 0 && positions.state.phase === 'success' && <Empty>当前没有纸面持仓。</Empty>}
-          </div>
-        </article>
-        <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><strong>净值证据</strong><span>{equityItems.length} 日</span></div>
-          <div className={css.dataList}>
-            {equityItems.slice(0, 12).map((item, index) => {
-              const strategy = asRecord(item.strategy)
-              const nav = selectedStrategyId === '' ? item.overall_nav : strategy.nav
-              return (
-                <div className={css.dataRow} key={`${text(item.date)}-${index}`}>
-                  <span>{text(item.date)}</span>
-                  <strong>{compactMetric(nav)}</strong>
-                </div>
-              )
-            })}
-            {equityItems.length === 0 && equity.state.phase === 'success' && <Empty>尚无净值历史，需要先运行影子验证。</Empty>}
-          </div>
-        </article>
-      </section>}
-      <div className={css.moduleToolbar}>
-        {reportReady && <button type="button" className={css.secondaryButton} onClick={onOpenReports}>查看本次投研报告</button>}
-        <button type="button" className={css.secondaryButton} onClick={() => {
-          onAnalyze(selectedStrategyId === '' ? { kind: 'shadow' } : { kind: 'shadow', strategyId: selectedStrategyId })
-        }}>AI 解读验证证据</button>
-        <button type="button" className={css.primaryButton} onClick={onOpenEvolution}>进入自进化</button>
-      </div>
+    ) : <PageHeading title="影子验证" description="用真实行情在纸面账户验证已生效策略，不触发真实交易">
+      <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
+      <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</button>
+    </PageHeading>}
+    <div className={css.lifecycleStrip} aria-label="当前验证对象">
+      <span>策略研究</span><b aria-hidden="true">→</b><span>{selectedStrategyId === '' ? '全部生效策略' : selectedStrategyId}</span><b aria-hidden="true">→</b><span>自进化</span>
     </div>
-  )
+    {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
+    {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
+    {initialLoading && <BusyRows />}
+    {!initialLoading && <section className={css.moduleGrid} aria-label="影子验证概览">
+      <article className={css.moduleCard}>
+        <div className={css.sectionHeading}><strong>最近运行</strong><StatusBadge value={text(statusRecord.trade_date, '') === '' ? 'waiting_data' : 'done'} /></div>
+        <dl className={css.reportMeta}>
+          <div><dt>交易日</dt><dd>{text(statusRecord.trade_date)}</dd></div>
+          <div><dt>策略数</dt><dd>{number(statusRecord.strategy_count)?.toFixed(0) ?? '—'}</dd></div>
+          <div><dt>运行时间</dt><dd>{text(statusRecord.ran_at)}</dd></div>
+          <div><dt>组合净值</dt><dd>{compactMetric(statusRecord.overall_nav)}</dd></div>
+        </dl>
+        {text(statusRecord.note, '') !== '' && <p>{text(statusRecord.note)}</p>}
+      </article>
+      <article className={css.moduleCard}>
+        <div className={css.sectionHeading}><strong>纸面持仓</strong><span>{positionItems.length} 项</span></div>
+        <div className={css.dataList}>
+          {positionItems.slice(0, 12).map((item, index) => (
+            <div className={css.dataRow} key={`${text(item.strategy_id)}-${text(item.symbol)}-${index}`}>
+              <div><strong>{text(item.symbol, text(item.code))}</strong><small>{text(item.strategy_id)}</small></div>
+              <span>{number(item.qty ?? item.quantity)?.toLocaleString('zh-CN') ?? money(item.market_value)}</span>
+            </div>
+          ))}
+          {positionItems.length === 0 && positions.state.phase === 'success' && <Empty>当前没有纸面持仓。</Empty>}
+        </div>
+      </article>
+      <article className={css.moduleCard}>
+        <div className={css.sectionHeading}><strong>净值证据</strong><span>{equityItems.length} 日</span></div>
+        <div className={css.dataList}>
+          {equityItems.slice(0, 12).map((item, index) => {
+            const strategy = asRecord(item.strategy)
+            const nav = selectedStrategyId === '' ? item.overall_nav : strategy.nav
+            return (
+              <div className={css.dataRow} key={`${text(item.date)}-${index}`}>
+                <span>{text(item.date)}</span>
+                <strong>{compactMetric(nav)}</strong>
+              </div>
+            )
+          })}
+          {equityItems.length === 0 && equity.state.phase === 'success' && <Empty>尚无净值历史，需要先运行影子验证。</Empty>}
+        </div>
+      </article>
+    </section>}
+    <div className={css.moduleToolbar}>
+      {reportReady && <button type="button" className={css.secondaryButton} onClick={onOpenReports}>查看本次投研报告</button>}
+      <button type="button" className={css.secondaryButton} onClick={() => {
+        onAnalyze(selectedStrategyId === '' ? { kind: 'shadow' } : { kind: 'shadow', strategyId: selectedStrategyId })
+      }}>AI 解读验证证据</button>
+      <button type="button" className={css.primaryButton} onClick={onOpenEvolution}>进入自进化</button>
+    </div>
+  </>
+  return embedded
+    ? <section className={css.embeddedShadow}>{content}</section>
+    : <div className={css.pageScroll}>{content}</div>
 }
 
 interface EvolutionPageProps {

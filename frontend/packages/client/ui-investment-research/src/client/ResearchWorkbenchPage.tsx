@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
+import {
+  EventReportDialog, RiskDetailDialog, eventPrimaryTicker, riskIntentTarget,
+} from './DetailDialogs.tsx'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
 import css from './InvestmentShell.module.css'
@@ -166,6 +169,8 @@ export function ResearchWorkbenchPage({
   const alive = useRef(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [bucket, setBucket] = useState<EventBucket>('all')
+  const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown>>()
+  const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
   const [brief, setBrief] = useState<{
     phase: 'idle' | 'running' | 'background' | 'done' | 'error'
     message: string
@@ -361,6 +366,7 @@ export function ResearchWorkbenchPage({
                   )}
                   {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
                   <div className={css.dashboardEventActions}>
+                    <button type="button" onClick={() => { setSelectedEvent(card) }}>{text(card.report_id, '') === '' ? '查看事件详情' : '查看投研报告'}</button>
                     {ticker !== undefined && <button type="button" onClick={() => { navigate('stock-detail', { stockCode: ticker.code }) }}>查看个股</button>}
                     {strategyId !== '' && <button type="button" onClick={() => { navigate('framework', { strategyId }) }}>查看策略</button>}
                     <button
@@ -392,20 +398,23 @@ export function ResearchWorkbenchPage({
             )}
             {!alerts.state.loaded && alerts.state.error === '' && <RegionSkeleton />}
             {alerts.state.loaded && alertItems.slice(0, 5).map((item, index) => {
-              const codes = stringItems(item.codes)
-              const strategyId = text(item.strategy_id, '')
               return (
                 <article className={css.dashboardAlert} key={text(item.id, String(index))}>
                   <span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span>
                   <div><strong>{text(item.title, '风险提醒')}</strong><p>{text(item.detail, '')}</p><small>{displayTime(item.ts)}</small></div>
                   <button
                     type="button"
+                    data-action="risk-detail"
+                    data-risk-id={text(item.id, text(item.indicator, text(item.title, String(index))))}
+                    aria-haspopup="dialog"
                     onClick={() => {
-                      if (strategyId !== '') navigate('projects', { strategyId })
-                      else if (codes[0] !== undefined) navigate('stock-detail', { stockCode: codes[0] })
-                      else navigate('portfolio')
+                      setSelectedRisk({
+                        ...item,
+                        degraded: alertValue.degraded === true,
+                        degraded_reason: text(alertValue.degraded_reason, '关联事件暂未更新，组合与画像预警仍可用。'),
+                      })
                     }}
-                  >查看</button>
+                  >查看详情</button>
                 </article>
               )
             })}
@@ -455,6 +464,33 @@ export function ResearchWorkbenchPage({
           </section>
         </aside>
       </div>
+      {selectedRisk !== undefined && (
+        <RiskDetailDialog
+          item={selectedRisk}
+          onClose={() => { setSelectedRisk(undefined) }}
+          onAnalyze={() => {
+            const target = riskIntentTarget(selectedRisk)
+            setSelectedRisk(undefined)
+            if (target.strategyId !== undefined) onAnalyze({ kind: 'strategy', strategyId: target.strategyId })
+            else if (target.code !== undefined) onAnalyze({ kind: 'stock', code: target.code })
+            else onAnalyze({ kind: 'portfolio' })
+          }}
+        />
+      )}
+      {selectedEvent !== undefined && (
+        <EventReportDialog
+          item={selectedEvent}
+          requestData={requestData}
+          onClose={() => { setSelectedEvent(undefined) }}
+          onAnalyze={() => {
+            const ticker = eventPrimaryTicker(selectedEvent)
+            const reference = text(selectedEvent.title, '')
+            setSelectedEvent(undefined)
+            if (ticker !== undefined) onAnalyze({ kind: 'stock', code: ticker.code, name: ticker.name })
+            else onAnalyze({ kind: 'industry', reference })
+          }}
+        />
+      )}
     </div>
   )
 }

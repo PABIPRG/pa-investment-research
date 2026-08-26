@@ -163,12 +163,14 @@ class EvolveTests(unittest.TestCase):
         bad = store.get("strategies", "strat-bad")
         self.assertEqual(good["evolve"]["tier"], 2)
         self.assertEqual(bad["status"], "retired")
+        self.assertEqual(bad["verification_status"], "archived")
         kids = [k for k, v in store.all("strategies").items()
                 if isinstance(v, dict) and v.get("source") == "evolution"]
         self.assertEqual(len(kids), 2)
         for kid in kids:
             rec = store.get("strategies", kid)
             self.assertEqual(rec["status"], "candidate")
+            self.assertEqual(rec["verification_status"], "pending")
             self.assertEqual(rec["mutated_from"], "strat-good")
 
     def test_preview_token_rejects_duplicate_apply(self):

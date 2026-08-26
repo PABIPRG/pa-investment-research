@@ -511,6 +511,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             else:  # retire
                 ev.update({"state": "retired", "updated_at": ts, "note": a["reason"]})
                 rec["status"] = "retired"
+                rec["verification_status"] = "archived"
                 rec["retire_reason"] = a["reason"]
             rec["evolve"] = ev
             return rec
@@ -537,6 +538,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             "symbols": a["symbols"],
             "params": a["params"],
             "status": "candidate",
+            "verification_status": "pending",
             "source": "evolution",
             "mutated_from": a["parent"],
             "generation": generation,
