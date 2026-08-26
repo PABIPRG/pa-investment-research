@@ -29,6 +29,7 @@ The GUI has no designer supply; styles are written by an agent and reviewed. Wit
 - **PostCSS plugins are currently zero** (vite has no postcss config; flat CSS suffices — adopting nested/custom-media requires recording it in web-styling.md first); CSS Modules type declarations use the wildcard declare in `css-modules.d.ts` (re-evaluate typed-css-modules per-file generation past 20 components).
 - **Dynamic styles go through the CSS variable bridge**: JS writes only variables (`style={{'--x': v}}`), rules stay in CSS; assembling style objects in TSX for theme/state branches is banned.
 - Transitions are always `var(--dur*) var(--ease)` and only transition opacity/transform/background-color/shadow; scroll containers uniformly use `.scrollable` (writing `::-webkit-scrollbar` inside components is banned).
+- **Strict packages are source-scanned**: `scripts/verify-client-theme-styles.ts` scans every CSS Module and TypeScript presentation source in its explicit strict-root list, rejecting inline React styles, literal colors, static palette tokens, feature-owned theme selectors, and undefined `--dsw-*` references. A root is listed only after its existing violations are removed; the gate has no baseline allowlist.
 
 ## The execution shape for agents
 

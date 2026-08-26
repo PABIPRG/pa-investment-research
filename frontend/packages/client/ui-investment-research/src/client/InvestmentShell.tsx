@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   SessionId, SessionSearchResultItem, WorkspaceId,
 } from '@deepseek-ai/dsh-client-runtime/client'
@@ -150,6 +151,7 @@ export interface InvestmentShellInjected extends UiInjected {
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
   archiveSession: (sessionId: SessionId) => Promise<void>
   prepareAssistant: (request: InvestmentAssistantRequest) => Promise<void>
+  toggleTheme: () => void
 }
 
 export type InvestmentShellProps = PropsRuntime<'shell.overlay'> & InjectFace<InvestmentShellInjected>
@@ -196,6 +198,15 @@ function HistoryIcon() {
     <svg className={css.actionIcon} viewBox="0 0 16 16" aria-hidden="true">
       <path d="M3.35 4.2A5.5 5.5 0 1 1 2.5 8" />
       <path d="M2.25 3.15v2.7h2.7M8 4.85V8l2.15 1.3" />
+    </svg>
+  )
+}
+
+function ThemeIcon() {
+  return (
+    <svg className={css.themeIcon} viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.25" />
+      <path d="M8 2.75a5.25 5.25 0 0 1 0 10.5Z" />
     </svg>
   )
 }
@@ -457,7 +468,7 @@ function GlobalStockSearch({
 
 export function InvestmentShell({
   useInvestmentUi, useSessions, useWorkspaces, requestData, navigate, setHistory, startSession,
-  openSession, searchSessions, renameSession, archiveSession, prepareAssistant,
+  openSession, searchSessions, renameSession, archiveSession, prepareAssistant, toggleTheme,
 }: InvestmentShellProps) {
   const snapshot = useInvestmentUi(s => s)
   const [startingSession, setStartingSession] = useState(false)
@@ -537,7 +548,16 @@ export function InvestmentShell({
     <>
       <header className={css.topbar}>
         <GlobalStockSearch requestData={requestData} navigate={navigate} />
-        <div className={css.topActions} role="group" aria-label="对话操作">
+        <div className={css.topActions} role="group" aria-label="页面操作">
+          <button
+            type="button"
+            className={css.themeToggle}
+            aria-label="切换深色或浅色模式"
+            title="切换深色或浅色模式"
+            onClick={toggleTheme}
+          >
+            <ThemeIcon />
+          </button>
           {snapshot.route === 'assistant' && (
             <>
               <button
@@ -1295,7 +1315,7 @@ function HoldingsImportDialog({
     }
   }
 
-  return (
+  const dialog = (
     <div
       className={`${css.drawerBackdrop} ${css.importBackdrop}`}
       role="presentation"
@@ -1379,6 +1399,8 @@ function HoldingsImportDialog({
       </section>
     </div>
   )
+
+  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body)
 }
 
 /** Portfolio workbench with independently settling holdings, risk, and alert regions. */

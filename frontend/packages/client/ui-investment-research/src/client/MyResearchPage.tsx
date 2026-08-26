@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { InvestmentAssistantActionInput } from './assistant-context.ts'
 import { asRecord, money, number, records, text } from './data.ts'
 import css from './MyResearchPage.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
+
+function DialogPortal({ children }: { readonly children: ReactNode }) {
+  return typeof document === 'undefined' ? children : createPortal(children, document.body)
+}
 
 interface MyResearchPageProps {
   readonly requestData: RequestData
@@ -231,34 +236,36 @@ function HoldingEditor({ initialItems, requestData, onCancel, onSaved }: {
   }
 
   return (
-    <div className={css.dialogBackdrop} role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onCancel()
-    }}>
-      <section className={css.dialog} role="dialog" aria-modal="true" aria-labelledby="holding-editor-title">
-        <header><div><h2 id="holding-editor-title">编辑持仓</h2><p>保存后会同步刷新持仓和组合风险。</p></div><button type="button" aria-label="关闭编辑持仓" onClick={onCancel}>×</button></header>
-        <div className={css.dialogTableWrap}>
-          <table>
-            <thead><tr><th>股票代码</th><th>数量</th><th>持仓成本</th><th><span className={css.visuallyHidden}>操作</span></th></tr></thead>
-            <tbody>
-              {drafts.map((item, index) => (
-                <tr key={index}>
-                  <td><input aria-label={`第 ${index + 1} 行股票代码`} inputMode="numeric" maxLength={6} value={item.ticker} onChange={(event) => { update(index, { ticker: event.target.value.trim() }) }} /></td>
-                  <td><input aria-label={`第 ${index + 1} 行持仓数量`} inputMode="decimal" value={item.quantity} onChange={(event) => { update(index, { quantity: event.target.value }) }} /></td>
-                  <td><input aria-label={`第 ${index + 1} 行持仓成本`} inputMode="decimal" value={item.costPrice} onChange={(event) => { update(index, { costPrice: event.target.value }) }} /></td>
-                  <td><button type="button" className={css.removeRow} aria-label={`删除第 ${index + 1} 行`} onClick={() => { setDrafts(items => items.filter((_, itemIndex) => itemIndex !== index)) }}>删除</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <button type="button" className={css.addRow} onClick={() => { setDrafts(items => [...items, { ticker: '', quantity: '', costPrice: '' }]) }}>＋ 添加一行</button>
-        {(validationError !== '' || error !== '') && <div className={css.dialogError} role="alert">{error === '' ? validationError : `保存失败：${error}`}</div>}
-        <footer>
-          <button type="button" className={css.secondaryButton} disabled={saving} onClick={onCancel}>取消</button>
-          <button type="button" className={css.primaryButton} disabled={saving || validationError !== ''} onClick={save}>{saving ? '保存中…' : '保存持仓'}</button>
-        </footer>
-      </section>
-    </div>
+    <DialogPortal>
+      <div className={css.dialogBackdrop} role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel()
+      }}>
+        <section className={css.dialog} role="dialog" aria-modal="true" aria-labelledby="holding-editor-title">
+          <header><div><h2 id="holding-editor-title">编辑持仓</h2><p>保存后会同步刷新持仓和组合风险。</p></div><button type="button" aria-label="关闭编辑持仓" onClick={onCancel}>×</button></header>
+          <div className={css.dialogTableWrap}>
+            <table>
+              <thead><tr><th>股票代码</th><th>数量</th><th>持仓成本</th><th><span className={css.visuallyHidden}>操作</span></th></tr></thead>
+              <tbody>
+                {drafts.map((item, index) => (
+                  <tr key={index}>
+                    <td><input aria-label={`第 ${index + 1} 行股票代码`} inputMode="numeric" maxLength={6} value={item.ticker} onChange={(event) => { update(index, { ticker: event.target.value.trim() }) }} /></td>
+                    <td><input aria-label={`第 ${index + 1} 行持仓数量`} inputMode="decimal" value={item.quantity} onChange={(event) => { update(index, { quantity: event.target.value }) }} /></td>
+                    <td><input aria-label={`第 ${index + 1} 行持仓成本`} inputMode="decimal" value={item.costPrice} onChange={(event) => { update(index, { costPrice: event.target.value }) }} /></td>
+                    <td><button type="button" className={css.removeRow} aria-label={`删除第 ${index + 1} 行`} onClick={() => { setDrafts(items => items.filter((_, itemIndex) => itemIndex !== index)) }}>删除</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button type="button" className={css.addRow} onClick={() => { setDrafts(items => [...items, { ticker: '', quantity: '', costPrice: '' }]) }}>＋ 添加一行</button>
+          {(validationError !== '' || error !== '') && <div className={css.dialogError} role="alert">{error === '' ? validationError : `保存失败：${error}`}</div>}
+          <footer>
+            <button type="button" className={css.secondaryButton} disabled={saving} onClick={onCancel}>取消</button>
+            <button type="button" className={css.primaryButton} disabled={saving || validationError !== ''} onClick={save}>{saving ? '保存中…' : '保存持仓'}</button>
+          </footer>
+        </section>
+      </div>
+    </DialogPortal>
   )
 }
 
@@ -326,40 +333,42 @@ function KycQuestionnaire({ profile, requestData, onCancel, onSaved }: {
   }
 
   return (
-    <div className={css.dialogBackdrop} role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onCancel()
-    }}>
-      <section className={`${css.dialog} ${css.kycDialog}`} role="dialog" aria-modal="true" aria-labelledby="kyc-questionnaire-title">
-        <header><div><h2 id="kyc-questionnaire-title">风险测评</h2><p>答案会通过 KYC 接口推断并直接更新生效画像。</p></div><button type="button" aria-label="关闭风险测评" onClick={onCancel}>×</button></header>
-        <div className={css.tierTabs} role="tablist" aria-label="测评题量">
-          <button type="button" role="tab" aria-selected={tier === 'quick'} onClick={() => { setTier('quick') }}>快速测评 · {strings(tiers.quick).length} 题</button>
-          <button type="button" role="tab" aria-selected={tier === 'full'} onClick={() => { setTier('full') }}>完整测评 · {strings(tiers.full).length} 题</button>
-        </div>
-        <div className={css.naturalAnswer}>
-          <label htmlFor="kyc-natural-answer">也可以先用一段话描述你的投资情况</label>
-          <textarea id="kyc-natural-answer" rows={3} value={naturalText} placeholder="例如：计划持有 1—3 年，可以承受约 10% 的回撤，目标是长期稳健增值。" onChange={(event) => { setNaturalText(event.target.value) }} />
-          <button type="button" className={css.secondaryButton} disabled={busy !== '' || naturalText.trim() === ''} onClick={parseAnswer}>{busy === 'parse' ? '识别中…' : '识别并填写'}</button>
-        </div>
-        <div className={css.questionList}>
-          {qids.map((qid, index) => {
-            const question = asRecord(questionBank[qid])
-            const options = records(question.options)
-            return (
-              <fieldset key={qid}>
-                <legend><span>{index + 1}</span>{text(question.title, qid)}</legend>
-                <div>{options.map((option) => {
-                  const label = text(option.label, '')
-                  const checked = text(answers[qid]?.label, '') === label
-                  return <label key={`${qid}-${label}`}><input type="radio" name={qid} checked={checked} onChange={() => { setAnswers(current => ({ ...current, [qid]: { qid, label, score: number(option.score) ?? 0 } })) }} /><span>{label}</span></label>
-                })}</div>
-              </fieldset>
-            )
-          })}
-        </div>
-        {error !== '' && <div className={css.dialogError} role="alert">{error}</div>}
-        <footer><span>{complete ? '已完成全部题目' : `还需完成 ${qids.filter(qid => answers[qid] === undefined).length} 题`}</span><div><button type="button" className={css.secondaryButton} disabled={busy !== ''} onClick={onCancel}>取消</button><button type="button" className={css.primaryButton} disabled={busy !== '' || !complete} onClick={submit}>{busy === 'submit' ? '提交中…' : '提交并应用画像'}</button></div></footer>
-      </section>
-    </div>
+    <DialogPortal>
+      <div className={css.dialogBackdrop} role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel()
+      }}>
+        <section className={`${css.dialog} ${css.kycDialog}`} role="dialog" aria-modal="true" aria-labelledby="kyc-questionnaire-title">
+          <header><div><h2 id="kyc-questionnaire-title">风险测评</h2><p>答案会通过 KYC 接口推断并直接更新生效画像。</p></div><button type="button" aria-label="关闭风险测评" onClick={onCancel}>×</button></header>
+          <div className={css.tierTabs} role="tablist" aria-label="测评题量">
+            <button type="button" role="tab" aria-selected={tier === 'quick'} onClick={() => { setTier('quick') }}>快速测评 · {strings(tiers.quick).length} 题</button>
+            <button type="button" role="tab" aria-selected={tier === 'full'} onClick={() => { setTier('full') }}>完整测评 · {strings(tiers.full).length} 题</button>
+          </div>
+          <div className={css.naturalAnswer}>
+            <label htmlFor="kyc-natural-answer">也可以先用一段话描述你的投资情况</label>
+            <textarea id="kyc-natural-answer" rows={3} value={naturalText} placeholder="例如：计划持有 1—3 年，可以承受约 10% 的回撤，目标是长期稳健增值。" onChange={(event) => { setNaturalText(event.target.value) }} />
+            <button type="button" className={css.secondaryButton} disabled={busy !== '' || naturalText.trim() === ''} onClick={parseAnswer}>{busy === 'parse' ? '识别中…' : '识别并填写'}</button>
+          </div>
+          <div className={css.questionList}>
+            {qids.map((qid, index) => {
+              const question = asRecord(questionBank[qid])
+              const options = records(question.options)
+              return (
+                <fieldset key={qid}>
+                  <legend><span>{index + 1}</span>{text(question.title, qid)}</legend>
+                  <div>{options.map((option) => {
+                    const label = text(option.label, '')
+                    const checked = text(answers[qid]?.label, '') === label
+                    return <label key={`${qid}-${label}`}><input type="radio" name={qid} checked={checked} onChange={() => { setAnswers(current => ({ ...current, [qid]: { qid, label, score: number(option.score) ?? 0 } })) }} /><span>{label}</span></label>
+                  })}</div>
+                </fieldset>
+              )
+            })}
+          </div>
+          {error !== '' && <div className={css.dialogError} role="alert">{error}</div>}
+          <footer><span>{complete ? '已完成全部题目' : `还需完成 ${qids.filter(qid => answers[qid] === undefined).length} 题`}</span><div><button type="button" className={css.secondaryButton} disabled={busy !== ''} onClick={onCancel}>取消</button><button type="button" className={css.primaryButton} disabled={busy !== '' || !complete} onClick={submit}>{busy === 'submit' ? '提交中…' : '提交并应用画像'}</button></div></footer>
+        </section>
+      </div>
+    </DialogPortal>
   )
 }
 
@@ -393,18 +402,20 @@ function KycAdjustment({ profile, requestData, onCancel, onSaved }: {
   }
 
   return (
-    <div className={css.dialogBackdrop} role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onCancel()
-    }}>
-      <section className={`${css.dialog} ${css.adjustDialog}`} role="dialog" aria-modal="true" aria-labelledby="kyc-adjust-title">
-        <header><div><h2 id="kyc-adjust-title">复核风险画像</h2><p>在问卷推断之上微调，期限约束与风险护栏由后端统一校准。</p></div><button type="button" aria-label="关闭画像复核" onClick={onCancel}>×</button></header>
-        <label className={css.rangeField}><span><strong>风险承受度</strong><b>{tolerance < 0.34 ? '偏保守' : tolerance > 0.66 ? '偏进取' : '稳健'}</b></span><input aria-label="风险承受度" type="range" min="0" max="1" step="0.05" value={tolerance} onChange={(event) => { setTolerance(Number(event.target.value)) }} /><small><span>降低波动</span><span>承受更高波动</span></small></label>
-        <label className={css.rangeField}><span><strong>计划投资期限</strong><b>{horizon} 年</b></span><input aria-label="计划投资期限" type="range" min="1" max="10" step="1" value={horizon} onChange={(event) => { setHorizon(Number(event.target.value)) }} /><small><span>1 年</span><span>10 年</span></small></label>
-        <label className={css.noteField}>调整说明（选填）<textarea rows={3} value={note} placeholder="例如：家庭现金流更稳定，可以承受更多波动。" onChange={(event) => { setNote(event.target.value) }} /></label>
-        {error !== '' && <div className={css.dialogError} role="alert">{error}</div>}
-        <footer><button type="button" className={css.secondaryButton} disabled={busy} onClick={onCancel}>取消</button><button type="button" className={css.primaryButton} disabled={busy} onClick={submit}>{busy ? '应用中…' : '确认并应用'}</button></footer>
-      </section>
-    </div>
+    <DialogPortal>
+      <div className={css.dialogBackdrop} role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel()
+      }}>
+        <section className={`${css.dialog} ${css.adjustDialog}`} role="dialog" aria-modal="true" aria-labelledby="kyc-adjust-title">
+          <header><div><h2 id="kyc-adjust-title">复核风险画像</h2><p>在问卷推断之上微调，期限约束与风险护栏由后端统一校准。</p></div><button type="button" aria-label="关闭画像复核" onClick={onCancel}>×</button></header>
+          <label className={css.rangeField}><span><strong>风险承受度</strong><b>{tolerance < 0.34 ? '偏保守' : tolerance > 0.66 ? '偏进取' : '稳健'}</b></span><input aria-label="风险承受度" type="range" min="0" max="1" step="0.05" value={tolerance} onChange={(event) => { setTolerance(Number(event.target.value)) }} /><small><span>降低波动</span><span>承受更高波动</span></small></label>
+          <label className={css.rangeField}><span><strong>计划投资期限</strong><b>{horizon} 年</b></span><input aria-label="计划投资期限" type="range" min="1" max="10" step="1" value={horizon} onChange={(event) => { setHorizon(Number(event.target.value)) }} /><small><span>1 年</span><span>10 年</span></small></label>
+          <label className={css.noteField}>调整说明（选填）<textarea rows={3} value={note} placeholder="例如：家庭现金流更稳定，可以承受更多波动。" onChange={(event) => { setNote(event.target.value) }} /></label>
+          {error !== '' && <div className={css.dialogError} role="alert">{error}</div>}
+          <footer><button type="button" className={css.secondaryButton} disabled={busy} onClick={onCancel}>取消</button><button type="button" className={css.primaryButton} disabled={busy} onClick={submit}>{busy ? '应用中…' : '确认并应用'}</button></footer>
+        </section>
+      </div>
+    </DialogPortal>
   )
 }
 
@@ -716,7 +727,12 @@ export function MyResearchPage({ requestData, onAskAssistant }: MyResearchPagePr
                 <>
                   <div className={css.aggression}>
                     <div><span>有效激进度</span><strong>{number(personalizedRecord.effective_aggression)?.toFixed(2) ?? '—'}</strong></div>
-                    <div className={css.meter} aria-label="有效激进度"><i style={{ '--meter-width': `${Math.min(100, Math.max(0, (number(personalizedRecord.effective_aggression) ?? 0) * 100))}%` } as React.CSSProperties} /></div>
+                    <progress
+                      className={css.meter}
+                      aria-label="有效激进度"
+                      max={100}
+                      value={Math.min(100, Math.max(0, (number(personalizedRecord.effective_aggression) ?? 0) * 100))}
+                    />
                   </div>
                   <div className={css.tagList}>
                     {behaviorIndustries.map(item => <span key={`industry-${text(item.industry)}`}>关注：{text(item.industry)}</span>)}

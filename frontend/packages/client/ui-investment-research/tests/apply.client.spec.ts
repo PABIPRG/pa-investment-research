@@ -71,18 +71,25 @@ async function bench() {
   const setDraft = vi.fn()
   const conversation = { input: { for: vi.fn(() => ({ setDraft })) } }
   const requestData = vi.fn(async () => ({ status: 'ok' }))
+  const setTheme = vi.fn()
+  const theme = {
+    getTheme: vi.fn(() => ({ active: { colorScheme: 'light' } })),
+    setTheme,
+  }
 
   ctx.provide('sessions', sessions as never)
   ctx.provide('workspaces', workspaces as never)
   ctx.provide('layout', layout as never)
+  ctx.provide('theme', theme as never)
   ctx.provide('conversation', conversation as never)
   ctx.provide('investmentResearchRuntimeClient', { requestData } as never)
-  return { ctx, slots, sessions, workspaces, layout, conversation, setDraft, requestData, rename }
+  return { ctx, slots, sessions, workspaces, layout, theme, conversation, setTheme, setDraft, requestData, rename }
 }
 
 describe('ui-investment-research apply', () => {
   it('searches real securities by name and opens the selected stock detail route', async () => {
     const navigate = vi.fn()
+    const toggleTheme = vi.fn()
     const requestData = vi.fn(async () => ({
       items: [{ code: '600519', name: '贵州茅台', market: '沪市' }],
     }))
@@ -99,7 +106,11 @@ describe('ui-investment-research apply', () => {
       renameSession: vi.fn(),
       archiveSession: vi.fn(),
       prepareAssistant: vi.fn(),
+      toggleTheme,
     } as never))
+
+    fireEvent.click(view.getByRole('button', { name: '切换深色或浅色模式' }))
+    expect(toggleTheme).toHaveBeenCalledOnce()
 
     const input = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
     fireEvent.focus(input)
@@ -269,6 +280,9 @@ describe('ui-investment-research apply', () => {
 
     expect(await view.findByText('还没有持仓')).toBeTruthy()
     fireEvent.click(view.getByRole('button', { name: '添加持仓' }))
+    const dialog = view.getByRole('dialog', { name: '编辑持仓' })
+    expect(dialog.parentElement?.parentElement).toBe(document.body)
+    expect(view.container.contains(dialog)).toBe(false)
     fireEvent.click(view.getByRole('button', { name: '＋ 添加一行' }))
     fireEvent.click(view.getByRole('button', { name: '＋ 添加一行' }))
     fireEvent.change(view.getByRole('textbox', { name: '第 1 行股票代码' }), { target: { value: '600519' } })
@@ -382,5 +396,11 @@ describe('ui-investment-research apply', () => {
     expect(b.rename).toHaveBeenCalledWith('renamed')
     await shell.archiveSession('session' as never)
     expect(b.workspaces.archiveSession).toHaveBeenCalledWith('session')
+
+    shell.toggleTheme()
+    expect(b.setTheme).toHaveBeenCalledWith('dark')
+    b.theme.getTheme.mockReturnValue({ active: { colorScheme: 'dark' } })
+    shell.toggleTheme()
+    expect(b.setTheme).toHaveBeenLastCalledWith('light')
   })
 })

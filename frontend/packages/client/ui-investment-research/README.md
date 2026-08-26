@@ -19,6 +19,12 @@ The browser never supplies a backend origin, port, or arbitrary path. Every read
 
 The floating assistant entry and page-level research actions open the production conversation area beside the current business route without compressing the page, navigation, or state loss. Every entry creates an independent conversation through the Workspace service and then writes structured business context into that conversation's shared composer; historical conversations are never reused. Module context combines the click-time page snapshot, a module backend snapshot, and compact overall data, and explicitly limits the task to financial research rather than code or project analysis. The user reviews and sends the message, so model selection, attachments, approvals, and send policies remain unchanged. The history drawer continues to use the production Session and Workspace services for search, open, rename, and archive actions.
 
+## Theme and overlay constraints
+
+Feature styles in this package use only `--dsw-alias-*` semantic tokens supplied by `ui-theme`. React inline styles, color literals, `--dsw-static-*` palette variables, and feature-level light/dark selectors are not allowed. Shared colors must first be defined as semantic tokens in `ui-theme`. `pnpm run verify-client-theme-styles` scans every current and future CSS Module and TypeScript rendering source in this package, and CI rejects violations or undefined tokens.
+
+Theme preference is read and changed only through `ctx.theme`. Modal overlays that must cover the whole application mount on `document.body` through a React Portal and use the application modal layer and semantic mask token, so content containers, the top bar, or sidebar stacking contexts cannot clip them.
+
 ## Model Experience
 
 ### Investment workbench

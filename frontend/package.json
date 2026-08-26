@@ -105,6 +105,7 @@
     "verify-runtime-closure": "tsx scripts/verify-runtime-closure.ts",
     "verify-vendored-links": "tsx scripts/verify-vendored-links.ts",
     "verify-cordis-config": "tsx scripts/verify-cordis-config.ts",
+    "verify-client-theme-styles": "tsx scripts/verify-client-theme-styles.ts",
     "rescope-vendor": "tsx scripts/rescope-vendor.ts",
     "rescope-vendor:check": "tsx scripts/rescope-vendor.ts --check",
     "verify-client-domain-graph": "tsx scripts/verify-client-domain-graph.ts",
