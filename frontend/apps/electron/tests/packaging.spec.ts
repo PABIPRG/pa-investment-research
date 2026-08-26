@@ -72,21 +72,27 @@ describe('Electron investment sidecar packaging', () => {
     const darwinPlan = createPackagingPlan('/tmp/dsh-electron-darwin-test', 'darwin', 'arm64')
     expect(darwinPlan.linkTargets).toEqual([{
       sourceDir: resolve(darwinPlan.deploy.cwd, 'vendor/cosmokit'),
-      targetDir: join(darwinPlan.stagingDir, 'vendor/cosmokit'),
+      targetDir: join(
+        darwinPlan.stagingDir,
+        'node_modules/.pnpm/node_modules/@deepseek-ai/cosmokit',
+      ),
     }])
   })
 
-  it('materializes the vendored target of a deployed workspace link', async () => {
+  it('replaces a deployed workspace link with its vendored package contents', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-link-test-'))
     const sourceDir = join(rootDir, 'source', 'cosmokit')
-    const targetDir = join(rootDir, 'app', 'vendor', 'cosmokit')
+    const targetDir = join(rootDir, 'app', 'node_modules', 'cosmokit')
     try {
       await mkdir(sourceDir, { recursive: true })
+      await mkdir(targetDir, { recursive: true })
       await writeFile(join(sourceDir, 'package.json'), '{"name":"@deepseek-ai/cosmokit"}')
+      await writeFile(join(targetDir, 'stale-workspace-link'), 'remove me')
 
       await materializePackagingLinkTargets([{ sourceDir, targetDir }])
 
       expect(await readFile(join(targetDir, 'package.json'), 'utf8')).toBe('{"name":"@deepseek-ai/cosmokit"}')
+      await expect(readFile(join(targetDir, 'stale-workspace-link'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }

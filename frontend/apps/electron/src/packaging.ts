@@ -86,10 +86,11 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
       command: pnpmCommand,
       cwd: workspaceDir,
     },
-    // Legacy pnpm deploy preserves this override link but omits its relative target.
+    // Legacy pnpm deploy preserves this override as a workspace-relative link.
+    // Electron Packager cannot safely copy that link after relocating the app tree.
     linkTargets: platform === 'darwin' ? [{
       sourceDir: join(workspaceDir, 'vendor/cosmokit'),
-      targetDir: join(stagingDir, 'vendor/cosmokit'),
+      targetDir: join(stagingDir, 'node_modules/.pnpm/node_modules/@deepseek-ai/cosmokit'),
     }] : [],
     rootDir,
     sidecar: {
@@ -113,9 +114,12 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
   }
 }
 
-/** Copy targets required by relative workspace links preserved by legacy pnpm deploy. */
+/** Replace workspace-relative deploy links with self-contained package directories. */
 export async function materializePackagingLinkTargets(linkTargets: PackagingLinkTarget[]): Promise<void> {
-  await Promise.all(linkTargets.map(({ sourceDir, targetDir }) => cp(sourceDir, targetDir, { recursive: true })))
+  await Promise.all(linkTargets.map(async ({ sourceDir, targetDir }) => {
+    await rm(targetDir, { force: true, recursive: true })
+    await cp(sourceDir, targetDir, { recursive: true })
+  }))
 }
 
 /** Remove the temporary package tree with Node's built-in descriptor exhaustion retries. */
