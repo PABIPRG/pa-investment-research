@@ -3,8 +3,8 @@
 
 - 事件源：market-watch `GET /news/events`（HTTP，TTL 缓存）。
 - 假设生成：LLM（chat_json）把事件转成可回测的技术规则策略；失败规则降级。
-- 策略 DSL：`{kind: ma_cross|rsi_reversal|momentum, params, symbols, direction, ...}`，
-  kind 都是只做多的规则信号（利空事件强制 rsi_reversal 超跌反弹，系统无做空）。
+- 策略 DSL：`{kind: ma_cross|rsi_reversal|momentum|breakout|bollinger|volume_breakout, params, symbols, direction, ...}`，
+  kind 都是只做多的规则信号（利空事件强制 rsi_reversal/bollinger 超跌反弹，系统无做空）。
 - 回测：baostock 前复权日线 → 内联轻量指标（ma/rsi，纯 pandas，不 import tradingagents）
   → 全序列先算信号（因果、无 look-ahead）→ 按行数切样本内(70%)/样本外(30%) →
   统一「bar t 信号 → bar t+1 开盘价成交」状态机逐笔成交 → compute_summary 聚合副口径
@@ -28,16 +28,19 @@ from .store import JsonStore
 logger = logging.getLogger("adapter.strategies")
 
 # 支持的策略 kind
-KINDS = ("ma_cross", "rsi_reversal", "momentum")
+KINDS = ("ma_cross", "rsi_reversal", "momentum", "breakout", "bollinger", "volume_breakout")
 # A 股可交易前缀：0=深主板/中小、3=创业板、6=沪主板/科创板；4/8=北交所排除，2/9=B 股排除
 _ALLOWED_PREFIXES = ("0", "3", "6")
 # 利空只允许超跌反弹（系统做多）
-_LONLY = {"rsi_reversal": "超跌反弹"}
+_LONLY = {"rsi_reversal": "超跌反弹", "bollinger": "超跌反弹"}
 
 _DEFAULT_PARAMS = {
     "ma_cross": {"fast": 5, "slow": 20},
     "rsi_reversal": {"n": 14, "oversold": 30, "overbought": 70},
     "momentum": {"n": 10},
+    "breakout": {"n": 20},
+    "bollinger": {"n": 20, "k": 2.0},
+    "volume_breakout": {"n": 20, "vol_mult": 1.5},
 }
 
 _EVENTS_CACHE: dict[str, tuple[float, list[dict]]] = {}
@@ -271,6 +274,42 @@ def signal_series(df, kind: str, params: dict):
         sig = raw.where(rsi.notna(), 0.0).ffill().fillna(0.0)
         return sig.astype(int)
 
+    if kind == "breakout":
+        n = int(params.get("n", 20))
+        up = df["high"].rolling(n).max().shift(1)  # 前 N 日（不含当日）最高，严格因果
+        dn = df["low"].rolling(n).min().shift(1)  # 前 N 日（不含当日）最低
+        raw = pd.Series(float("nan"), index=df.index, dtype=float)
+        raw[df["close"] > up] = 1.0
+        raw[df["close"] < dn] = 0.0
+        # warmup（up/dn NaN）→ fillna(0)；通道内 NaN → ffill 闩锁持多
+        return raw.ffill().fillna(0.0).astype(int)
+
+    if kind == "bollinger":
+        n = int(params.get("n", 20))
+        k = float(params.get("k", 2.0))
+        ma = _ma(df["close"], n)
+        sd = df["close"].rolling(n, min_periods=n).std()
+        lower = ma - k * sd
+        raw = pd.Series(float("nan"), index=df.index, dtype=float)
+        raw[df["close"] < lower] = 1.0  # 触及下轨 → 超跌买入
+        raw[df["close"] > ma] = 0.0  # 回到中轨 → 平仓
+        return raw.ffill().fillna(0.0).astype(int)
+
+    if kind == "volume_breakout":
+        n = int(params.get("n", 20))
+        mult = float(params.get("vol_mult", 1.5))
+        up = df["high"].rolling(n).max().shift(1)
+        dn = df["low"].rolling(n).min().shift(1)
+        # volume 列缺失 → 全 0 → 永不满足放量 → 全 0（安全降级，不抛错）
+        vol = (pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
+               if "volume" in df.columns else pd.Series(0.0, index=df.index))
+        vol_ma = vol.rolling(n, min_periods=n).mean().shift(1)  # 前 N 日均量（不含当日）
+        breakout = (df["close"] > up) & (vol > mult * vol_ma)
+        raw = pd.Series(float("nan"), index=df.index, dtype=float)
+        raw[breakout] = 1.0
+        raw[df["close"] < dn] = 0.0
+        return raw.ffill().fillna(0.0).astype(int)
+
     # momentum
     n = int(params.get("n", 10))
     return (df["close"] > df["close"].shift(n)).fillna(0).astype(int)
@@ -492,10 +531,12 @@ def split_in_out(df, sig, oos_frac: float = 0.3):
 _HYPOTHESIS_SYSTEM = (
     "你是A股事件→投资假设助手。把给定每条结构化事件转成一个可回测的技术策略假设。规则：\n"
     "1) 只有 direction∈{利好,利空} 且至少一个可交易 A 股 6 位代码（排除北交所 4/8 开头）的事件才生成；\n"
-    "2) kind 只能取 ma_cross/rsi_reversal/momentum：利好→ma_cross（趋势跟随）或 momentum（动量），"
-    "二选一给最贴合事件语义的；利空→只能 rsi_reversal（超跌反弹，因为系统只做多）；\n"
+    "2) kind 只能取 ma_cross/rsi_reversal/momentum/breakout/bollinger/volume_breakout："
+    "利好→ma_cross（趋势跟随）或 momentum（动量）或 breakout（通道突破）或 volume_breakout（放量突破），"
+    "按事件语义挑最贴合的一个；利空→只能 rsi_reversal 或 bollinger（超跌反弹，因为系统只做多）；\n"
     "3) params 按 kind 给合理默认（ma_cross:{fast:5,slow:20}，rsi_reversal:{n:14,oversold:30,"
-    "overbought:70}，momentum:{n:10}），只可微调，不得越界；\n"
+    "overbought:70}，momentum:{n:10}，breakout:{n:20}，bollinger:{n:20,k:2.0}，"
+    "volume_breakout:{n:20,vol_mult:1.5}），只可微调，不得越界；\n"
     "4) symbols 只填事件明确涉及、有 6 位代码的 A 股；\n"
     "5) rationale 一句话解释假设与事件的因果。\n"
     '只输出 JSON（不要其它文字）：{"hypotheses":[{"event_idx":整数,"symbols":["600519"],'
@@ -506,9 +547,14 @@ _HYPOTHESIS_SYSTEM = (
 
 def generate_hypotheses(events: list[dict]) -> list[dict]:
     """事件 → 假设列表。每条 {event_idx, symbols, direction, kind, params, rationale, holding_window_days}。
-    LLM 失败/不可用 → 规则降级（利好 momentum / 利空 rsi_reversal）。"""
+    LLM 失败/不可用 → 规则降级（利好 momentum / 利空 rsi_reversal）。
+
+    event_idx 语义：指向 `events` 全列表的下标（不是过滤后 usable 的下标）——这样
+    create_candidates 里 `events[ev_idx]` 才能取到假设真正对应的事件。LLM 提示标签按
+    usable 位置编号，返回时重映射回原始下标。"""
+    # (orig_index, event)：保留过滤前在 events 中的原始下标
     usable = [
-        e for e in events
+        (i, e) for i, e in enumerate(events)
         if e.get("direction") in ("利好", "利空")
         and (any(t.get("code") for t in (e.get("tickers") or []))
              or (e.get("impact_codes") or []))
@@ -519,23 +565,24 @@ def generate_hypotheses(events: list[dict]) -> list[dict]:
     if settings.llm_available():
         try:
             block = "\n".join(
-                f"[{i}] direction={e.get('direction')} type={e.get('type')} "
+                f"[{pos}] direction={e.get('direction')} type={e.get('type')} "
                 f"tickers={[t.get('name') + ':' + t.get('code') for t in (e.get('tickers') or [])]} "
                 f"industries={(e.get('industries') or [])[:3]} "
                 f"summary={(e.get('summary') or '')[:80]}"
-                for i, e in enumerate(usable)
+                for pos, (_, e) in enumerate(usable)
             )
             from . import llm
             data = llm.chat_json(_HYPOTHESIS_SYSTEM, block, max_tokens=2500)
             hyps = []
             for h in (data or {}).get("hypotheses") or []:
                 try:
-                    ev_idx = int(h.get("event_idx", -1))
+                    pos = int(h.get("event_idx", -1))
                 except (TypeError, ValueError):
-                    ev_idx = -1
-                if ev_idx < 0 or ev_idx >= len(usable):
+                    pos = -1
+                if pos < 0 or pos >= len(usable):
                     continue
-                hyps.append({**h, "event_idx": ev_idx})
+                orig_idx, _ = usable[pos]
+                hyps.append({**h, "event_idx": orig_idx})
             if hyps:
                 return hyps
         except Exception as exc:  # noqa: BLE001 — LLM 失败规则降级
@@ -543,18 +590,18 @@ def generate_hypotheses(events: list[dict]) -> list[dict]:
 
     # 规则降级
     hyps = []
-    for i, e in enumerate(usable):
+    for orig_idx, e in usable:
         codes = [t.get("code") for t in (e.get("tickers") or []) if t.get("code")]
         for c in (e.get("impact_codes") or []):  # C 间接波及标的也进候选
             if c not in codes:
                 codes.append(c)
         dirn = e.get("direction")
         if dirn == "利好":
-            hyps.append({"event_idx": i, "symbols": codes, "direction": dirn,
+            hyps.append({"event_idx": orig_idx, "symbols": codes, "direction": dirn,
                          "kind": "momentum", "params": {"n": 10},
                          "rationale": e.get("summary") or "", "holding_window_days": 20})
         else:
-            hyps.append({"event_idx": i, "symbols": codes, "direction": dirn,
+            hyps.append({"event_idx": orig_idx, "symbols": codes, "direction": dirn,
                          "kind": "rsi_reversal", "params": {"n": 14, "oversold": 30, "overbought": 70},
                          "rationale": e.get("summary") or "", "holding_window_days": 20})
     return hyps
@@ -589,6 +636,16 @@ def _clamp_params(kind: str, params: dict) -> dict:
         if lo >= hi:
             lo, hi = default["oversold"], default["overbought"]
         return {"n": n, "oversold": lo, "overbought": hi}
+    if kind == "breakout":
+        return {"n": max(5, min(60, int(params.get("n", default["n"]))))}
+    if kind == "bollinger":
+        n = max(5, min(60, int(params.get("n", default["n"]))))
+        k = max(1.0, min(3.5, float(params.get("k", default["k"]))))
+        return {"n": n, "k": k}
+    if kind == "volume_breakout":
+        n = max(5, min(60, int(params.get("n", default["n"]))))
+        m = max(1.0, min(4.0, float(params.get("vol_mult", default["vol_mult"]))))
+        return {"n": n, "vol_mult": m}
     return {"n": max(2, min(60, int(params.get("n", default["n"]))))}
 
 
@@ -611,8 +668,8 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
         direction = h.get("direction")
         if kind not in KINDS or direction not in ("利好", "利空") or not symbols:
             continue
-        if direction == "利空" and kind != "rsi_reversal":
-            kind = "rsi_reversal"  # 系统只做多
+        if direction == "利空" and kind not in ("rsi_reversal", "bollinger"):
+            kind = "rsi_reversal"  # 系统只做多；利空仅允许超跌反弹类
         params = _clamp_params(kind, h.get("params") or {})
         sid = "strat-" + _str2md5(ev.get("id", "") + kind + "".join(sorted(symbols)))
         name = f"{direction}·{kind}·{symbols[0]}{('+' + str(len(symbols) - 1)) if len(symbols) > 1 else ''}"
@@ -662,7 +719,7 @@ class StrategyBacktestRunner:
         from .holdings_runner import _a_share_code, _bs_hist
 
         code = _a_share_code(sym)
-        hist = _bs_hist(code, start, end, fields="date,open,high,low,close")
+        hist = _bs_hist(code, start, end, fields="date,open,high,low,close,volume")
         self._hist_cache[sym] = hist
         return hist
 

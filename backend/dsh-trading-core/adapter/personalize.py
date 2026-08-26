@@ -23,7 +23,8 @@ logger = logging.getLogger("adapter.personalize")
 # ---- 画像 / 策略激进度（O 打分）-------------------------------------------
 # 画像激进度 a ∈ [0,1]；策略需求度 demand = kind + direction 调整。
 PROFILE_AGGRESSION = {"conservative": 0.0, "balanced": 0.5, "aggressive": 1.0}
-KIND_AGGRESSION = {"ma_cross": 0.30, "momentum": 0.60, "rsi_reversal": 0.80}
+KIND_AGGRESSION = {"ma_cross": 0.30, "momentum": 0.60, "rsi_reversal": 0.80,
+                   "breakout": 0.30, "bollinger": 0.80, "volume_breakout": 0.45}
 DIRECTION_ADJUST = {"利好": 0.0, "利空": 0.10, "中性": 0.05}
 
 # 四维度权重（合计 100）+ N→O 分散化修正（组合集中度高时的加减分，可负）
@@ -200,7 +201,7 @@ def score_strategy(s: dict, ctx: dict) -> dict:
             pf_notes.append(f"行为画像{bdelta:+.2f}：行为方向修正")
     answers = ctx["answers"]
     try:
-        if answers.get("drawdown_reaction") is not None and int(answers["drawdown_reaction"]) <= 2 and kind == "rsi_reversal":
+        if answers.get("drawdown_reaction") is not None and int(answers["drawdown_reaction"]) <= 2 and kind in ("rsi_reversal", "bollinger"):
             profile_fit -= 4.0
             pf_notes.append("你回撤敏感，超跌反弹策略额外降权")
         if answers.get("product_pref") is not None and int(answers["product_pref"]) >= 4 and kind == "momentum":

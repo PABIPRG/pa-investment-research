@@ -40,7 +40,7 @@ from .strategies import _str2md5
 logger = logging.getLogger("adapter.evolution")
 
 # 可变异策略种类（与技术规则 DSL 对齐；LLM 规则降级生成的也能变）
-_MUTABLE_KINDS = ("ma_cross", "rsi_reversal", "momentum")
+_MUTABLE_KINDS = ("ma_cross", "rsi_reversal", "momentum", "breakout", "bollinger", "volume_breakout")
 
 
 def _now() -> str:
@@ -211,6 +211,16 @@ def _mutate_params(kind: str, base: dict | None, branch: int) -> dict:
         if os_ >= ob:
             ob = min(os_ + 40, 80)
         return {"n": n, "oversold": os_, "overbought": ob}
+    if kind == "breakout":
+        return {"n": _pick_variant([10, 20, 30, 40], int(base.get("n", 20)), branch)}
+    if kind == "bollinger":
+        n = _pick_variant([10, 20, 30], int(base.get("n", 20)), branch)
+        k = _pick_variant([1.5, 2.0, 2.5, 3.0], float(base.get("k", 2.0)), branch)
+        return {"n": n, "k": k}
+    if kind == "volume_breakout":
+        n = _pick_variant([10, 20, 30], int(base.get("n", 20)), branch)
+        vm = _pick_variant([1.2, 1.5, 2.0, 2.5], float(base.get("vol_mult", 1.5)), branch)
+        return {"n": n, "vol_mult": vm}
     return {"n": _pick_variant([5, 10, 20], int(base.get("n", 10)), branch)}
 
 
