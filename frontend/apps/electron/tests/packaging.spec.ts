@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import {
   commandRequiresShell,
+  createDescriptorSafeOpendir,
   createPackagerOptions,
   createPackagingPlan,
   materializePackagingLinkTargets,
@@ -18,6 +19,35 @@ describe('Electron investment sidecar packaging', () => {
     expect(commandRequiresShell('electron-forge.bat', 'win32')).toBe(true)
     expect(commandRequiresShell('pnpm', 'win32')).toBe(false)
     expect(commandRequiresShell('pnpm.cmd', 'darwin')).toBe(false)
+  })
+
+  it('retries directory opens while a recursive packager copy releases descriptors', async () => {
+    let attempts = 0
+    const expected = {} as import('node:fs').Dir
+    const opendir = ((...args: unknown[]) => {
+      const callback = args.at(-1) as (
+        error: NodeJS.ErrnoException | null,
+        directory: import('node:fs').Dir,
+      ) => void
+      attempts += 1
+      queueMicrotask(() => {
+        if (attempts < 3) {
+          const error = Object.assign(new Error('descriptor limit reached'), { code: 'EMFILE' })
+          callback(error, undefined as unknown as import('node:fs').Dir)
+          return
+        }
+        callback(null, expected)
+      })
+    }) as typeof import('node:fs').opendir
+    const descriptorSafeOpendir = createDescriptorSafeOpendir(opendir, 0, 1_000)
+
+    await expect(new Promise<import('node:fs').Dir>((resolvePromise, reject) => {
+      descriptorSafeOpendir('/tmp', (error, directory) => {
+        if (error !== null) reject(error)
+        else resolvePromise(directory)
+      })
+    })).resolves.toBe(expected)
+    expect(attempts).toBe(3)
   })
 
   it('deploys before building the current platform sidecar in isolated temporary paths', () => {

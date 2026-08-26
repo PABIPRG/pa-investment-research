@@ -6,8 +6,6 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { downloadArtifact } from '@electron/get'
-import { packager } from '@electron/packager'
 import type { Options as PackagerOptions } from '@electron/packager'
 
 const APP_NAME = 'DeepSeek Harness'
@@ -15,6 +13,7 @@ const appDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const workspaceDir = resolve(appDir, '../..')
 const require = createRequire(import.meta.url)
 const electronPackagePath = require.resolve('electron/package.json')
+type Opendir = typeof import('node:fs').opendir
 
 interface CommandSpec {
   args: string[]
@@ -59,6 +58,51 @@ type PackagerOsxSignOptions = Exclude<PackagerOptions['osxSign'], true | undefin
  */
 export function commandRequiresShell(command: string, platform: NodeJS.Platform = process.platform): boolean {
   return platform === 'win32' && /\.(?:bat|cmd)$/iu.test(command)
+}
+
+/**
+ * Retry directory opens while an upstream recursive copier is releasing its
+ * current batch. fs-extra retries EMFILE for readdir but not for opendir.
+ */
+export function createDescriptorSafeOpendir(
+  opendir: Opendir,
+  retryDelayMs = 10,
+  retryWindowMs = 120_000,
+): Opendir {
+  return function descriptorSafeOpendir(this: unknown, ...args: unknown[]): void {
+    const callback = args.at(-1)
+    if (typeof callback !== 'function') throw new TypeError('opendir callback is required')
+    const leading = args.slice(0, -1)
+    const startedAt = Date.now()
+    const attempt = (): void => {
+      Reflect.apply(opendir, this, [
+        ...leading,
+        (error: NodeJS.ErrnoException | null, directory: import('node:fs').Dir) => {
+          if ((error?.code === 'EMFILE' || error?.code === 'ENFILE')
+            && Date.now() - startedAt < retryWindowMs) {
+            setTimeout(attempt, retryDelayMs)
+            return
+          }
+          callback(error, directory)
+        },
+      ])
+    }
+    attempt()
+  } as Opendir
+}
+
+async function loadPackagingDependencies(): Promise<readonly [
+  typeof import('@electron/get'),
+  typeof import('@electron/packager'),
+]> {
+  const nodeFs = require('node:fs') as { opendir: Opendir }
+  const originalOpendir = nodeFs.opendir
+  nodeFs.opendir = createDescriptorSafeOpendir(originalOpendir)
+  try {
+    return await Promise.all([import('@electron/get'), import('@electron/packager')])
+  } finally {
+    nodeFs.opendir = originalOpendir
+  }
 }
 
 /**
@@ -206,6 +250,7 @@ async function packageApplication(): Promise<void> {
       || typeof (electronPackage as { version?: unknown }).version !== 'string') {
       throw new Error('Electron package manifest has no version')
     }
+    const [{ downloadArtifact }, { packager }] = await loadPackagingDependencies()
     const electronVersion = (electronPackage as { version: string }).version
     const checksums = JSON.parse(await readFile(join(dirname(electronPackagePath), 'checksums.json'), 'utf8')) as Record<string, string>
     const electronZip = await downloadArtifact({
