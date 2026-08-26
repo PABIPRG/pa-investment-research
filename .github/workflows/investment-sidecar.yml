@@ -50,7 +50,15 @@ jobs:
       - name: Install frontend
         run: pnpm install --frozen-lockfile
 
-      - name: Build packaged application and sidecar
+      - name: Build packaged application and sidecar (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ulimit -n 10240
+          pnpm run package:electron
+
+      - name: Build packaged application and sidecar (Windows)
+        if: runner.os == 'Windows'
         run: pnpm run package:electron
 
       - name: Smoke packaged sidecar (macOS)
