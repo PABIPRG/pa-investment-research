@@ -1,10 +1,10 @@
 /** Assemble a production deployment into a native Electron application and optional Forge artifacts. */
 
 import { spawn } from 'node:child_process'
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, opendir, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
@@ -118,6 +118,25 @@ export async function materializePackagingLinkTargets(linkTargets: PackagingLink
   await Promise.all(linkTargets.map(({ sourceDir, targetDir }) => cp(sourceDir, targetDir, { recursive: true })))
 }
 
+/** Copy one immutable sidecar tree sequentially so large Python runtimes cannot exhaust file descriptors. */
+async function copySidecarTree(source: string, destination: string): Promise<void> {
+  const sourceStat = await lstat(source)
+  if (sourceStat.isFile()) {
+    await copyFile(source, destination)
+    await chmod(destination, sourceStat.mode)
+    return
+  }
+  if (!sourceStat.isDirectory()) {
+    throw new TypeError(`investment sidecar contains an unsupported entry: ${source}`)
+  }
+  await mkdir(destination, { mode: sourceStat.mode, recursive: true })
+  const directory = await opendir(source)
+  for await (const entry of directory) {
+    await copySidecarTree(join(source, entry.name), join(destination, entry.name))
+  }
+  await chmod(destination, sourceStat.mode)
+}
+
 /**
  * Create packager options that install the sidecar directory under Electron Resources.
  * @param input - Resolved Electron artifact and temporary package paths.
@@ -138,7 +157,13 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
     executableName: 'deepseek-harness',
-    extraResource: [input.sidecarDir],
+    afterCopy: [((buildPath, _electronVersion, _platform, _arch, callback) => {
+      const destination = join(dirname(buildPath), basename(input.sidecarDir))
+      copySidecarTree(input.sidecarDir, destination).then(
+        () => { callback() },
+        (reason: unknown) => { callback(reason instanceof Error ? reason : new Error(String(reason))) },
+      )
+    })],
     name: APP_NAME,
     out: input.outDir,
     overwrite: true,
