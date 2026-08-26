@@ -1,3 +1,4 @@
 backend/dsh-trading-core/requirements.txt text eol=lf
 backend/market-watch/requirements.txt text eol=lf
+backend/industry-chain/requirements.txt text eol=lf
 frontend/config/investment-python-requirements/*.txt text eol=lf
