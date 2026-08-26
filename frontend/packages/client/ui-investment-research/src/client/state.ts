@@ -2,15 +2,13 @@ import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 
 export type InvestmentRoute =
   | 'assistant'
-  | 'dashboard'
-  | 'analysis'
-  | 'watch'
-  | 'strategy'
-  | 'shadow'
-  | 'evolution'
+  | 'opportunity'
   | 'stock-detail'
   | 'portfolio'
-  | 'chain'
+  | 'framework'
+  | 'projects'
+  | 'tasks'
+  | 'knowledge'
 
 export interface InvestmentUiSnapshot {
   readonly route: InvestmentRoute

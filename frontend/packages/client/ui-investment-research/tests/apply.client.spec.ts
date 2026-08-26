@@ -5,7 +5,6 @@ import { createElement } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { apply, inject } from '../src/client/index.ts'
-import type { InvestmentAssistantRequest } from '../src/client/assistant-context.ts'
 import {
   InvestmentBrand,
   InvestmentNewSession,
@@ -67,19 +66,13 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
     getSnapshot: () => ({ openState: 'open', openError: null }),
     subscribe: vi.fn(() => () => {}),
   }
-  const sessionScopes = new Map([
-    ['fresh-1', { id: 'fresh-1' }],
-    ['fresh-2', { id: 'fresh-2' }],
-    ['fresh-3', { id: 'fresh-3' }],
-  ])
   const sessions = {
     list: { getSnapshot: () => listSnapshot, subscribe: vi.fn(() => () => {}) },
     open: vi.fn(),
     search: vi.fn(async () => ({ ok: true as const, value: { items: [], hasMore: false } })),
     binding: vi.fn(() => ({ session: sessionFace })),
-    scope: vi.fn((sessionId: string) => sessionScopes.get(sessionId)),
+    scope: vi.fn(() => ({})),
   }
-  let freshSessionIndex = 0
   const workspaces = {
     list: {
       getSnapshot: () => ({
@@ -92,7 +85,7 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
     },
     connectWorkspace: vi.fn(async () => 'connected'),
     startSession: vi.fn(),
-    startFreshSession: vi.fn(async () => `fresh-${++freshSessionIndex}`),
+    startFreshSession: vi.fn(async () => 'fresh'),
     archiveSession: vi.fn(async () => {}),
   }
   const layout = { closeDetails: vi.fn() }
@@ -171,7 +164,7 @@ describe('ui-investment-research apply', () => {
   })
 
   it('loads an independent stock detail page and hands the resolved security to the assistant', async () => {
-    const prepareAssistant = vi.fn((_request: InvestmentAssistantRequest) => {})
+    const prepareAssistant = vi.fn()
     const requestData = vi.fn(async () => ({
       code: '600519',
       name: '贵州茅台',
@@ -233,10 +226,11 @@ describe('ui-investment-research apply', () => {
     expect(navigate).toHaveBeenCalledWith('framework')
   })
 
-  it('edits holdings through the backend and refreshes portfolio risk data', async () => {
+  it('imports pasted holdings through the backend and refreshes portfolio risk data', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.holdings') return { items: [] }
       if (request.operation === 'trading-core.risk-portfolio') return { summary: { n_positions: 0 }, breaches: [] }
+      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
       if (request.operation === 'trading-core.holdings-save') return { saved: 2 }
       return {}
     })
@@ -276,10 +270,11 @@ describe('ui-investment-research apply', () => {
         },
       })
     })
-    expect(await view.findByText('已保存 2 条持仓，组合风险正在刷新。')).toBeTruthy()
+    expect(await view.findByText('已导入 2 条持仓，持仓与风险数据已刷新。')).toBeTruthy()
     await waitFor(() => {
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(2)
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-portfolio')).toHaveLength(2)
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-alerts')).toHaveLength(2)
     })
   })
 

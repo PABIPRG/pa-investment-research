@@ -30,12 +30,6 @@ export type {
   InvestmentSidebarInjected,
   InvestmentSidebarProps,
 } from './InvestmentShell.tsx'
-export type {
-  InvestmentAssistantActionInput,
-  InvestmentAssistantContext,
-  InvestmentAssistantModule,
-  InvestmentAssistantRequest,
-} from './assistant-context.ts'
 export { InvestmentUiState } from './state.ts'
 export { assistantPrompt } from './assistant-intent.ts'
 export type { AssistantIntent } from './assistant-intent.ts'
@@ -112,6 +106,9 @@ export function apply(ctx: ClientContext): void {
     const prompt = assistantPrompt(intent)
     navigate('assistant')
     ctx.layout.closeDetails()
+    const current = ctx.sessions.list.getSnapshot().current
+    if (current !== undefined && setDraft(current, prompt)) return
+
     cancelPendingDraft?.()
     let settled = false
     let timer = 0
