@@ -29,6 +29,7 @@ GUI 无设计师供给，样式由 agent 编写并 review；没有一套机器�
 - **PostCSS 插件现状为零**（vite 无 postcss 配置，平铺 CSS 即够用；引入 nested/custom-media 前需先记入 web-styling.md）；CSS Modules 类型声明用 `css-modules.d.ts` 通配 declare（组件数超 20 再评估 typed-css-modules 逐文件生成）。
 - **动态样式走 CSS 变量桥**：JS 只写变量（`style={{'--x': v}}`），规则留在 CSS；禁止 TSX 内拼样式对象做主题/状态分支。
 - 过渡一律 `var(--dur*) var(--ease)` 且只过渡 opacity/transform/背景色/阴影；滚动容器统一 `.scrollable`（组件内禁写 `::-webkit-scrollbar`）。
+- **严格包接受源码扫描**：`scripts/verify-client-theme-styles.ts` 扫描显式严格根目录中的全部 CSS Modules 和 TypeScript 呈现源码，拒绝 React 内联样式、颜色字面量、静态色板 token、功能包自有主题选择器以及不存在的 `--dsw-*` 引用。一个根目录只有在清除现有违规后才会列入；该门禁不保留基线允许列表。
 
 ## 给 agent 的执行形态
 

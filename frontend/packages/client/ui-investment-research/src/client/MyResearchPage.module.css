@@ -344,12 +344,12 @@
 
 .riskTag[data-risk='高'] {
   color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-state-error-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover-danger);
 }
 
 .riskTag[data-risk='中'] {
-  color: var(--dsw-alias-state-warning-primary);
-  background: var(--dsw-alias-state-warning-tertiary);
+  color: var(--dsw-alias-state-warn-label);
+  background: var(--dsw-alias-state-warn-tertiary);
 }
 
 .textButton,
@@ -375,7 +375,7 @@
   margin-bottom: 12px;
   padding: 8px 10px;
   color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-state-error-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover-danger);
   text-align: left;
 }
 
@@ -403,7 +403,7 @@
 .errorState button {
   padding: 6px 12px;
   color: var(--dsw-alias-state-error-primary);
-  background: var(--dsw-alias-state-error-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover-danger);
 }
 
 .skeleton {
@@ -494,7 +494,7 @@
   padding: 8px 10px;
   color: var(--dsw-alias-state-error-primary);
   border-radius: 7px;
-  background: var(--dsw-alias-state-error-tertiary);
+  background: var(--dsw-alias-interactive-bg-hover-danger);
   font-size: 12px;
 }
 
@@ -560,16 +560,23 @@
 }
 
 .meter {
+  display: block;
+  width: 100%;
   height: 6px;
+  appearance: none;
   overflow: hidden;
+  border: 0;
   border-radius: 999px;
   background: var(--dsw-alias-bg-layer-2);
 }
 
-.meter i {
-  display: block;
-  width: var(--meter-width);
-  height: 100%;
+.meter::-webkit-progress-bar {
+  border-radius: inherit;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.meter::-webkit-progress-value,
+.meter::-moz-progress-bar {
   border-radius: inherit;
   background: var(--dsw-alias-state-business-primary);
 }
@@ -613,13 +620,13 @@
   gap: 9px;
   padding: 9px 10px;
   border-radius: 7px;
-  background: var(--dsw-alias-state-warning-tertiary);
+  background: var(--dsw-alias-state-warn-tertiary);
 }
 
 .breachList article > span {
   align-self: start;
   padding: 2px 6px;
-  color: var(--dsw-alias-state-warning-primary);
+  color: var(--dsw-alias-state-warn-label);
   border-radius: 999px;
   background: var(--dsw-alias-bg-base);
   font-size: 10px;
@@ -643,12 +650,12 @@
 
 .dialogBackdrop {
   position: fixed;
-  z-index: 50;
+  z-index: 1000;
   inset: 0;
   display: grid;
   place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, var(--dsw-alias-label-primary) 28%, transparent);
+  background: var(--dsw-alias-bg-mask-1);
 }
 
 .dialog {
@@ -659,7 +666,7 @@
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-base);
-  box-shadow: 0 16px 48px var(--dsw-alias-border-l2);
+  box-shadow: var(--dsw-shadow-lv3);
 }
 
 .dialog > header {

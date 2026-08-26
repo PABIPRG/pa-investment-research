@@ -1,6 +1,7 @@
 import type { ClientContext, SessionId, WorkspaceId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import {
   InvestmentShell,
@@ -38,7 +39,7 @@ export type { InvestmentRoute, InvestmentUiSnapshot } from './state.ts'
 
 /** Services required by the profile-scoped investment shell. */
 export const inject = [
-  'slots', 'sessions', 'workspaces', 'layout', 'conversation', 'investmentResearchRuntimeClient',
+  'slots', 'sessions', 'workspaces', 'layout', 'theme', 'conversation', 'investmentResearchRuntimeClient',
 ]
 
 /** Mount the investment navigation and workbench without replacing the shared conversation surface. */
@@ -170,6 +171,10 @@ export function apply(ctx: ClientContext): void {
     },
     archiveSession: sessionId => ctx.workspaces.archiveSession(sessionId),
     prepareAssistant,
+    toggleTheme: () => {
+      const next = ctx.theme.getTheme().active.colorScheme === 'dark' ? 'light' : 'dark'
+      ctx.theme.setTheme(next)
+    },
   })
 
   ctx.slots.inject('sidebar.workspaces', () => ctx.slots.register({
