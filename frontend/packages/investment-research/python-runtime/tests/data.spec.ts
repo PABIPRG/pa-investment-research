@@ -89,6 +89,60 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
+  it('maps all nine industry-chain operations to the fixed backend routes', async () => {
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8200', release }))
+    const calls: Array<[string, RequestInit | undefined]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init])
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    await requestInvestmentData({ operation: 'industry-chain.data-status' }, acquire)
+    await requestInvestmentData({ operation: 'industry-chain.data-bootstrap' }, acquire)
+    await requestInvestmentData({ operation: 'industry-chain.stats' }, acquire)
+    await requestInvestmentData({
+      operation: 'industry-chain.companies', input: { keyword: '电池', limit: 5 },
+    }, acquire)
+    await requestInvestmentData({ operation: 'industry-chain.company', input: { code: '300750' } }, acquire)
+    await requestInvestmentData({ operation: 'industry-chain.entity', input: { key: '正极/材料' } }, acquire)
+    await requestInvestmentData({ operation: 'industry-chain.single', input: { code: '300750' } }, acquire)
+    await requestInvestmentData({
+      operation: 'industry-chain.chain',
+      input: { code: '300750', depth_up: 1, depth_down: 3, top_up: 5, top_down: 4 },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'industry-chain.network',
+      input: {
+        min_degree: 4, min_market_cap: 120.5, min_share: 15,
+        subject_only: true, include_universe: false,
+      },
+    }, acquire)
+
+    expect(acquire.mock.calls).toEqual(Array.from({ length: 9 }, () => ['industry-chain']))
+    expect(calls).toEqual([
+      ['http://127.0.0.1:8200/data/status', { method: 'GET' }],
+      ['http://127.0.0.1:8200/data/bootstrap', { method: 'POST' }],
+      ['http://127.0.0.1:8200/stats', { method: 'GET' }],
+      ['http://127.0.0.1:8200/companies?keyword=%E7%94%B5%E6%B1%A0&limit=5', { method: 'GET' }],
+      ['http://127.0.0.1:8200/companies/300750', { method: 'GET' }],
+      ['http://127.0.0.1:8200/graph/entity/%E6%AD%A3%E6%9E%81%2F%E6%9D%90%E6%96%99', { method: 'GET' }],
+      ['http://127.0.0.1:8200/graph/single/300750', { method: 'GET' }],
+      [
+        'http://127.0.0.1:8200/graph/chain/300750?depth_up=1&depth_down=3&top_up=5&top_down=4',
+        { method: 'GET' },
+      ],
+      [
+        'http://127.0.0.1:8200/graph/network?min_degree=4&min_market_cap=120.5&min_share=15&subject_only=1&include_universe=0',
+        { method: 'GET' },
+      ],
+    ])
+    expect(release).toHaveBeenCalledTimes(9)
+  })
+
   it('maps the complete trading workflow to fixed routes and typed inputs', async () => {
     const release = vi.fn(async () => {})
     const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
@@ -116,7 +170,10 @@ describe('investment data broker', () => {
     await requestInvestmentData({ operation: 'trading-core.shadow-run', input: { force: true, strategy_id: 'strategy:alpha' } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.evolution-status' }, acquire)
     await requestInvestmentData({ operation: 'trading-core.evolution-attribution' }, acquire)
-    await requestInvestmentData({ operation: 'trading-core.evolution-run', input: { apply: true } }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.evolution-run',
+      input: { apply: true, preview_token: '3'.repeat(32) },
+    }, acquire)
     await requestInvestmentData({ operation: 'trading-core.personalized-matches' }, acquire)
     await requestInvestmentData({ operation: 'trading-core.personalized-impact', input: { limit: 9 } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.brief-start', input: { period: 'pre_market', scope: 'all' } }, acquire)
@@ -136,7 +193,7 @@ describe('investment data broker', () => {
       ['http://127.0.0.1:8000/shadow/run', 'POST', '{"force":true,"strategy_id":"strategy:alpha"}'],
       ['http://127.0.0.1:8000/evolution/status', 'GET', undefined],
       ['http://127.0.0.1:8000/evolution/attribution', 'GET', undefined],
-      ['http://127.0.0.1:8000/evolution/run', 'POST', '{"apply":true}'],
+      ['http://127.0.0.1:8000/evolution/run', 'POST', `{"apply":true,"preview_token":"${'3'.repeat(32)}"}`],
       ['http://127.0.0.1:8000/personalized/matches', 'GET', undefined],
       ['http://127.0.0.1:8000/personalized/impact?limit=9', 'GET', undefined],
       ['http://127.0.0.1:8000/brief', 'POST', '{"period":"pre_market","scope":"all"}'],
@@ -149,6 +206,9 @@ describe('investment data broker', () => {
 
   it('rejects unsafe path identifiers, unsupported transitions and unknown workflow keys before acquiring', async () => {
     const acquire = vi.fn()
+    await expect(requestInvestmentData({
+      operation: 'industry-chain.dynamic-operation',
+    } as never, acquire)).rejects.toThrow('unsupported operation')
     await expect(requestInvestmentData({
       operation: 'trading-core.report', input: { report_id: '../secret' },
     }, acquire)).rejects.toThrow('32-character lowercase hexadecimal identifier')
@@ -164,6 +224,30 @@ describe('investment data broker', () => {
     await expect(requestInvestmentData({
       operation: 'trading-core.brief-start', input: { period: 'tomorrow' },
     }, acquire)).rejects.toThrow('unsupported period')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.strategy-detail', input: { strategy_id: '../strategy' },
+    }, acquire)).rejects.toThrow('strategy_id must be a safe identifier')
+    await expect(requestInvestmentData({
+      operation: 'industry-chain.company', input: { code: '300750/private' },
+    }, acquire)).rejects.toThrow('code must be a safe identifier')
+    await expect(requestInvestmentData({
+      operation: 'industry-chain.entity', input: { key: '../材料' },
+    }, acquire)).rejects.toThrow('key must be a safe entity identifier')
+    await expect(requestInvestmentData({
+      operation: 'industry-chain.chain', input: { code: '300750', endpoint: '/arbitrary' },
+    } as never, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'industry-chain.data-bootstrap', input: { url: 'https://example.com/data' },
+    }, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.evolution-run', input: { apply: true },
+    }, acquire)).rejects.toThrow('preview_token is required')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.evolution-run', input: { apply: false, preview_token: '3'.repeat(32) },
+    }, acquire)).rejects.toThrow('preview_token is only accepted')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.evolution-run', input: { apply: true, preview_token: 'preview-token' },
+    }, acquire)).rejects.toThrow('32-character lowercase hexadecimal identifier')
     expect(acquire).not.toHaveBeenCalled()
   })
 
@@ -178,12 +262,30 @@ describe('investment data broker', () => {
 
   it('releases the lease after an upstream HTTP failure', async () => {
     const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
     vi.stubGlobal('fetch', vi.fn(async () => new Response('broken', { status: 503 })))
 
     await expect(requestInvestmentData(
       { operation: 'trading-core.risk-alerts' },
-      async () => ({ baseUrl: 'http://127.0.0.1:8000', release }),
-    )).rejects.toThrow('HTTP 503')
+      acquire,
+    )).rejects.toThrow('investment data: trading-core.risk-alerts failed with HTTP 503: broken')
+    expect(acquire).toHaveBeenCalledWith('trading-core')
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('releases the lease when a successful response contains invalid JSON', async () => {
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8100', release }))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not-json', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+
+    await expect(requestInvestmentData(
+      { operation: 'market-watch.overview' },
+      acquire,
+    )).rejects.toThrow()
+    expect(acquire).toHaveBeenCalledWith('market-watch')
     expect(release).toHaveBeenCalledOnce()
   })
 

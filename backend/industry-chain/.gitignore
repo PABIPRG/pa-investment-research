@@ -1,5 +1,5 @@
 # industry-chain 本地环境
-env/
+/env
 __pycache__/
 *.pyc
 logs/

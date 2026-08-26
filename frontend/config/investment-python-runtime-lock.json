@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "requirements": {
     "backend/dsh-trading-core/requirements.txt": "2ab3ec6b2fcb5f80509643d124755bae408ce8c8fd4f56fabfc98b2d19c0a780",
-    "backend/market-watch/requirements.txt": "8ccd6f579039edeb2efba69301f4cd4d626b10b41f79a60cc820ab8af51fd39c",
-    "backend/industry-chain/requirements.txt": "7151a6308a008632a4894e105791a1dbc540c0052923de644b2af88f92c78f09"
+    "backend/industry-chain/requirements.txt": "e22996d7b257e1a574dacbfdc9427dc45f5924a6445c35c6740ad2265caeee28",
+    "backend/market-watch/requirements.txt": "8ccd6f579039edeb2efba69301f4cd4d626b10b41f79a60cc820ab8af51fd39c"
   },
   "targets": {
     "darwin-arm64": {

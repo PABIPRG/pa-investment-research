@@ -1,8 +1,10 @@
 import clsx from 'clsx'
 import type { ReactNode } from 'react'
+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   HostObservable, InjectFace, PropsLocale, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {
   createInvestmentReadinessStore,
@@ -18,7 +20,11 @@ export interface InvestmentReadinessSectionInjected {
   hooks: {
     /** Secret-free Host readiness snapshot bound by the renderer. */
     investmentReadiness: HostObservable<InvestmentReadinessSnapshot>
+    /** Shared Session export state owned by the existing Header action. */
+    sessionLogDownload: HostObservable<SessionLogDownloadState>
   }
+  /** Start the existing Session-tree download and let its shared modal report progress. */
+  downloadSession: (sessionId: SessionId) => Promise<void>
   /** Re-read Host readiness after an operator repair. */
   refresh: () => Promise<void>
   /** Ask the launcher to restart after quiescent shutdown. */
@@ -42,7 +48,9 @@ function interpolate(text: string, key: string, value: string): string {
 }
 
 function backendName(backend: InvestmentBackendReadiness, t: Translate): string {
-  return t(backend.backendId === 'trading-core' ? 'stock' : 'market')
+  if (backend.backendId === 'trading-core') return t('stock')
+  if (backend.backendId === 'industry-chain') return t('industry')
+  return t('market')
 }
 
 function ownershipLabel(backend: InvestmentBackendReadiness, t: Translate): string {
@@ -63,7 +71,12 @@ function backendStatusLabel(backend: InvestmentBackendReadiness, t: Translate): 
   return t(keys[backend.backendStatus])
 }
 
-function credentialLabel(credential: InvestmentCredentialReadiness | undefined, t: Translate): string {
+function credentialLabel(
+  credential: InvestmentCredentialReadiness | undefined,
+  capability: InvestmentCapabilityReadiness | null,
+  t: Translate,
+): string {
+  if (credential === undefined && capability?.llm === 'none') return t('credentialNone')
   const status = credential?.status ?? 'missing'
   const keys = {
     missing: 'credentialMissing',
@@ -81,6 +94,7 @@ function capabilityLabel(capability: InvestmentCapabilityReadiness | null, t: Tr
     'stock-full': 'stockFull',
     'market-template-only': 'marketTemplate',
     'market-full': 'marketFull',
+    'industry-full': 'industryFull',
     unavailable: 'unavailable',
   } satisfies Record<InvestmentCapabilityReadiness['status'], InvestmentReadinessKey>
   return t(keys[status])
@@ -116,11 +130,15 @@ function restartFeedback(
 /** Render the secret-free investment Runtime readiness and explicit actions. */
 export function InvestmentReadinessSection(props: InvestmentReadinessSectionProps): ReactNode {
   const snapshot = props.useInvestmentReadiness(value => value)
+  const currentSession = props.useSessions(value => value.current)
+  const downloadStatus = props.useSessionLogDownload(value => currentSession === undefined
+    ? undefined
+    : value.bySession[String(currentSession)]?.status)
   const interaction = props.useStore(value => value)
   const restart = interaction.restart
-  const needsModels = snapshot.backends.some(
-    backend => (credentialOf(backend)?.status ?? 'missing') === 'missing',
-  )
+  const downloadBusy = downloadStatus === 'downloading'
+  const needsModels = snapshot.backends.some(backend => backend.capability?.llm !== 'none'
+    && (credentialOf(backend)?.status ?? 'missing') === 'missing')
   const needsRestart = snapshot.backends.some(backend => backend.restartRequired
     || credentialOf(backend)?.status === 'restart-required')
   const needsRefresh = snapshot.backends.length === 0 || snapshot.backends.some(
@@ -158,6 +176,32 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
 
   return (
     <section className={css.section}>
+      <section className={css.dataBackup} aria-labelledby="investment-research-data-backup-title">
+        <div className={css.dataBackupCopy}>
+          <h2 id="investment-research-data-backup-title">{props.t('dataBackupTitle')}</h2>
+          <p>{props.t('dataBackupIntro')}</p>
+        </div>
+        <div className={css.dataBackupAction}>
+          <button
+            type="button"
+            className={css.primaryButton}
+            disabled={currentSession === undefined || downloadBusy}
+            aria-busy={downloadBusy}
+            aria-describedby="investment-research-export-scope"
+            onClick={currentSession === undefined
+              ? undefined
+              : () => { void props.downloadSession(currentSession) }}
+          >
+            {props.t(downloadBusy ? 'exportingCurrentConversation' : 'exportCurrentConversation')}
+          </button>
+          <p id="investment-research-export-scope">
+            {props.t(currentSession === undefined
+              ? 'exportNoCurrentConversation'
+              : 'exportCurrentConversationScope')}
+          </p>
+        </div>
+      </section>
+
       <header className={css.heading}>
         <div>
           <h2>{props.t('title')}</h2>
@@ -218,7 +262,7 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
               <p className={css.backendStatus}>{backendStatusLabel(backend, props.t)}</p>
               <dl className={css.facts}>
                 <div>
-                  <dt>{credentialLabel(credentialOf(backend), props.t)}</dt>
+                  <dt>{credentialLabel(credentialOf(backend), capability, props.t)}</dt>
                   <dd>{capabilityLabel(capability, props.t)}</dd>
                 </div>
                 <div>

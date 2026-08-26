@@ -5,8 +5,8 @@
     - button "event-sourcing researcher"
     - text: /
     - button "example editor" [disabled]
-  - button "Session log":
-    - text: Session log
+  - button "Export conversation":
+    - text: Export conversation
     - img
   - tablist:
     - tab "Chat" [selected]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the two manually started persistent Python APIs.
+# Stop the three manually started persistent Python APIs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,13 +17,17 @@ wait_for_port_release() {
   return 1
 }
 
-echo "[1/2] 停止 market-watch (:8100)"
+echo "[1/3] 停止 industry-chain (:8200)"
+bash "$ROOT/backend/industry-chain/stop_all.sh"
+
+echo "[2/3] 停止 market-watch (:8100)"
 bash "$ROOT/backend/market-watch/stop_all.sh"
 
-echo "[2/2] 停止 trading-core (:8000)"
+echo "[3/3] 停止 trading-core (:8000)"
 bash "$ROOT/backend/dsh-trading-core/stop_all.sh"
 
 FAILED=0
+wait_for_port_release 8200 || FAILED=1
 wait_for_port_release 8100 || FAILED=1
 wait_for_port_release 8000 || FAILED=1
 if [[ "$FAILED" != 0 ]]; then

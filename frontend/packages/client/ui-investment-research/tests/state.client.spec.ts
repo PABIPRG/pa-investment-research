@@ -8,7 +8,7 @@ describe('InvestmentUiState', () => {
     const unsubscribe = state.subscribe(listener)
 
     expect(state.getSnapshot()).toEqual({
-      route: 'assistant',
+      route: 'dashboard',
       historyOpen: false,
       reportsOpen: false,
       analysisQuery: '',

@@ -47,6 +47,8 @@ jobs:
           ../backend/dsh-trading-core/env/bin/python -m pip install -r ../backend/dsh-trading-core/requirements.txt
           python -m venv ../backend/market-watch/env
           ../backend/market-watch/env/bin/python -m pip install -r ../backend/market-watch/requirements.txt
+          python -m venv ../backend/industry-chain/env
+          ../backend/industry-chain/env/bin/python -m pip install -r ../backend/industry-chain/requirements.txt
 
       - name: Install Python engines (Windows)
         if: runner.os == 'Windows'
@@ -56,6 +58,8 @@ jobs:
           ..\backend\dsh-trading-core\env\Scripts\python.exe -m pip install -r ..\backend\dsh-trading-core\requirements.txt
           python -m venv ..\backend\market-watch\env
           ..\backend\market-watch\env\Scripts\python.exe -m pip install -r ..\backend\market-watch\requirements.txt
+          python -m venv ..\backend\industry-chain\env
+          ..\backend\industry-chain\env\Scripts\python.exe -m pip install -r ..\backend\industry-chain\requirements.txt
 
       - name: Boot and dispose managed engines
         env:

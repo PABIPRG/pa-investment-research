@@ -515,7 +515,11 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             snap = store.get("shadow_equity", k) or {}
             if strategy_id:
                 s = (snap.get("strategies") or {}).get(strategy_id)
-                recs.append({"date": k, "strategy": s, "overall_nav": snap.get("overall_nav")})
+                # A portfolio snapshot is not evidence for a strategy that did
+                # not participate on that date. Omit the row instead of
+                # returning a null strategy beside an unrelated overall NAV.
+                if s is not None:
+                    recs.append({"date": k, "strategy": s})
             else:
                 recs.append({"date": k, "overall_nav": snap.get("overall_nav"),
                              "strategy_count": len(snap.get("strategies") or {})})
@@ -642,15 +646,25 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
         return evolution.attribution()
 
+    @app.get("/evolution/preview", response_model=dict)
+    def evolution_preview():
+        """当前待确认进化预案，供产品页与模型以同一上下文复核。"""
+        from . import evolution
+
+        return evolution.current_preview()
+
     @app.post("/evolution/run", response_model=dict)
     def evolution_run(req: EvolutionRunRequest):
-        """T→W→H 进化：升降级/淘汰 + 参数变异回流（apply=false 仅预览，true 写库）。
+        """T→W→H 进化：先生成绑定预案，再用令牌应用精确动作。
 
         数据不足（< EVOLVE_MIN_DAYS）时返回 waiting_data + 空 actions，不动作。
         """
         from . import evolution
 
-        return evolution.evolve(apply=req.apply)
+        try:
+            return evolution.evolve(apply=req.apply, preview_token=req.preview_token)
+        except evolution.EvolutionPreviewConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/analyze/{task_id}/stream")
     async def stream(task_id: str):

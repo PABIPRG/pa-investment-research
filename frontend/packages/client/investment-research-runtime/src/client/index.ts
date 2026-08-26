@@ -191,13 +191,14 @@ export const inject = ['remote']
  */
 export async function apply(ctx: Context): Promise<() => Promise<void>> {
   const disposeRemote = await ctx.remote.$mount(investmentRuntimeRemote)
-  const remote = ctx.get('remote.investmentPythonRuntime')
-  if (remote === undefined) {
+  const remoteValue: unknown = ctx.get('remote.investmentPythonRuntime')
+  if (remoteValue === undefined) {
     await disposeRemote()
     throw new Error('investment Runtime Client: mounted Remote namespace is unavailable')
   }
+  const remote = remoteValue as InvestmentRemote
   const facade = new InvestmentResearchRuntimeFacade(remote)
-  const offCredential = ctx.remote.$on('credentials/updated', (ref) => {
+  const offCredential = ctx.remote.$on('credentials/updated', (ref: unknown) => {
     if (ref === DEEPSEEK_CREDENTIAL_REF) facade.refreshInBackground('credential update')
   })
   const offConnection = ctx.on('connection/reset', () => {

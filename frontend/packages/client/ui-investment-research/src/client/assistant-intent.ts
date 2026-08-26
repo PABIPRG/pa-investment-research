@@ -48,7 +48,9 @@ export function assistantPrompt(intent: AssistantIntent): string {
   }
   if (intent.kind === 'reports') {
     const target = intent.reportId?.trim()
-    return `请调用 investment_context 工具读取 reports 上下文，${target === undefined || target === '' ? '归纳近期正式投研报告并指出结论冲突或待验证项。' : `复核报告 ${target} 的结论、证据与后续动作。`}`
+    return target === undefined || target === ''
+      ? '请调用 investment_context 工具读取 reports 上下文，归纳近期正式投研报告并指出结论冲突或待验证项。'
+      : `请调用 investment_context 工具读取 reports 上下文，并把 reference 设为报告 ID ${target}，复核该报告的结论、证据与后续动作。`
   }
   const reference = intent.reference?.trim()
   return `请调用 investment_context 工具读取 industry 上下文，解释${reference === undefined || reference === '' ? '当前事件的产业链传导、受益与受损环节。' : `“${reference}”相关事件的产业链传导、受益与受损环节。`}`

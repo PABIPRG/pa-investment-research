@@ -24,10 +24,10 @@ describe('Electron investment sidecar packaging', () => {
   it('enables bounded descriptor retries when removing the temporary package tree', async () => {
     let receivedPath = ''
     let receivedOptions: import('node:fs').RmDirOptions | undefined
-    const remove = (async (path: import('node:fs').PathLike, options?: import('node:fs').RmDirOptions) => {
+    const remove = async (path: import('node:fs').PathLike, options?: import('node:fs').RmDirOptions) => {
       receivedPath = path.toString()
       receivedOptions = options
-    }) as typeof import('node:fs/promises').rm
+    }
 
     await removePackagingRoot('/tmp/dsh-electron-test', remove)
 

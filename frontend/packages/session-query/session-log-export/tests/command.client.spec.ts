@@ -17,14 +17,15 @@ describe('/export Web download command', () => {
 
     expect(descriptor).toMatchObject({
       name: 'export',
-      description: 'Download this Session log as a ZIP archive',
+      description: 'Export this conversation as a ZIP backup',
     })
     const invoke = (rawInput: string) => descriptor?.handler({ rawInput } as CommandInvocation)
     await expect(invoke('')).resolves.toEqual({
-      kind: 'success', text: 'Session log download requested.',
+      kind: 'success', text: 'Conversation backup download requested.',
     })
     await expect(invoke(' output.zip')).resolves.toEqual({
-      kind: 'error', text: 'The Web /export command does not accept a path.',
+      kind: 'error',
+      text: 'Enter /export without a file path. The backup location follows your download settings.',
     })
 
     await fiber.dispose()

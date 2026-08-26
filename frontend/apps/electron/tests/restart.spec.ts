@@ -34,8 +34,12 @@ interface RestartHarness {
 }
 
 function deferred(): Deferred {
-  const values = Promise.withResolvers<void>()
-  return values
+  const values = Promise.withResolvers<undefined>()
+  return {
+    promise: values.promise,
+    resolve: () => { values.resolve(undefined) },
+    reject: values.reject,
+  }
 }
 
 async function start(): Promise<RestartHarness> {
@@ -78,11 +82,13 @@ async function start(): Promise<RestartHarness> {
     openStream: vi.fn(async function *(_kind: string, signal: AbortSignal) {
       events.push('stream-open')
       streamOpened.resolve()
-      await new Promise<void>(resolve => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
+      await new Promise<void>((resolve) => { signal.addEventListener('abort', () => { resolve() }, { once: true }) })
       events.push('stream-aborted-and-drained')
     }),
   }
-  class ElectronConnectionService {}
+  class ElectronConnectionService {
+    isTestDouble(): boolean { return true }
+  }
   Object.setPrototypeOf(connection, ElectronConnectionService.prototype)
   const forceExit = vi.fn((code: number) => { events.push(`profile-force-exit:${code}`) })
   const shutdown = createProcessShutdown(async () => {
@@ -124,7 +130,7 @@ async function start(): Promise<RestartHarness> {
     events,
     forceExit,
     ready,
-    get restart() { return runProfile.mock.calls[0]?.[0].restart as (() => void) | undefined },
+    get restart() { return runProfile.mock.calls[0]?.[0].restart },
     shutdown: { shutdown: shutdownCall },
     streamOpened,
     teardown,

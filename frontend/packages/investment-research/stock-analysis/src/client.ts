@@ -198,6 +198,8 @@ export interface InvestmentContextResult {
   readonly resources: Readonly<Record<string, JsonValue>>
 }
 
+const REPORT_ID_PATTERN = /^[0-9a-f]{32}$/
+
 const INVESTMENT_CONTEXT_PATHS: Readonly<Record<InvestmentContextDomain, readonly (readonly [string, string])[]>> = {
   portfolio: [
     ['holdings', '/holdings'],
@@ -213,6 +215,7 @@ const INVESTMENT_CONTEXT_PATHS: Readonly<Record<InvestmentContextDomain, readonl
   evolution: [
     ['status', '/evolution/status'],
     ['attribution', '/evolution/attribution'],
+    ['preview', '/evolution/preview'],
   ],
   reports: [['reports', '/reports?limit=20']],
   industry: [['impact', '/personalized/impact?limit=20']],
@@ -224,17 +227,31 @@ const INVESTMENT_CONTEXT_PATHS: Readonly<Record<InvestmentContextDomain, readonl
  * @param baseUrl - Verified trading-core origin leased from the investment Runtime.
  * @param domain - Fixed persisted context domain.
  * @param signal - Optional caller-owned cancellation signal shared by all domain reads.
+ * @param reference - Optional fixed-format resource identifier. Only the reports domain accepts it.
  * @returns Lossless endpoint JSON grouped under stable resource names.
- * @throws Rejects unknown domains before I/O and propagates endpoint request failures.
+ * @throws Rejects unknown domains or unsafe references before I/O and propagates endpoint request failures.
  */
 export async function getInvestmentContext(
   baseUrl: string,
   domain: InvestmentContextDomain,
   signal?: AbortSignal,
+  reference?: string,
 ): Promise<InvestmentContextResult> {
-  const requests = INVESTMENT_CONTEXT_PATHS[domain]
-  if (requests === undefined) throw new TypeError(`不支持的投研上下文领域：${String(domain)}`)
-  const entries = await Promise.all(requests.map(async ([name, path]) => [
+  const requests = (
+    INVESTMENT_CONTEXT_PATHS as Partial<Record<string, readonly (readonly [string, string])[]>>
+  )[domain]
+  if (requests === undefined) throw new TypeError(`不支持的投研上下文领域：${domain}`)
+  const trimmedReference = reference?.trim()
+  if (trimmedReference !== undefined && trimmedReference !== '') {
+    if (domain !== 'reports') throw new TypeError('只有报告上下文支持资源引用')
+    if (!REPORT_ID_PATTERN.test(trimmedReference)) {
+      throw new TypeError('报告引用必须是 32 位小写十六进制报告 ID')
+    }
+  }
+  const selectedRequests = trimmedReference === undefined || trimmedReference === ''
+    ? requests
+    : [...requests, ['report_detail', `/reports/${trimmedReference}`] as const]
+  const entries = await Promise.all(selectedRequests.map(async ([name, path]) => [
     name,
     await httpJson(baseUrl, path, 'GET', undefined, signal) as JsonValue,
   ] as const))

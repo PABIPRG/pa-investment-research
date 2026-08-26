@@ -7,7 +7,7 @@ describe('assistantPrompt', () => {
     [{ kind: 'strategy', strategyId: 'strategy-1' }, 'investment_context 工具读取 strategy 上下文'],
     [{ kind: 'shadow', strategyId: 'strategy-1' }, 'investment_context 工具读取 shadow 上下文'],
     [{ kind: 'evolution' }, 'investment_context 工具读取 evolution 上下文'],
-    [{ kind: 'reports', reportId: 'report-1' }, 'investment_context 工具读取 reports 上下文'],
+    [{ kind: 'reports', reportId: 'a'.repeat(32) }, `reference 设为报告 ID ${'a'.repeat(32)}`],
     [{ kind: 'industry', reference: '半导体' }, 'investment_context 工具读取 industry 上下文'],
   ])('asks the model to read product context through a tool for %o', (intent, expected) => {
     const prompt = assistantPrompt(intent)

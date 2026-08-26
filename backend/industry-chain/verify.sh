@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  industry-chain 验证脚本（macOS / Linux）
-#   1. 适配器健康检查 + 关键端点冒烟
+#   1. 适配器健康检查 + 只读数据状态
 #   2. 插件冒烟测试（4 工具注册即通过）
 # ============================================================
 set -euo pipefail
@@ -25,11 +25,8 @@ if ! curl -sf http://127.0.0.1:8200/health; then
     exit 1
 fi
 echo
-echo "  /stats 返回:"
-curl -sf http://127.0.0.1:8200/stats
-echo
-echo "  /graph/chain/600315 返回:"
-curl -sf "http://127.0.0.1:8200/graph/chain/600315?depth_up=1&depth_down=2&top_up=3&top_down=2" | head -c 300
+echo "  /data/status 返回（不会下载数据）:"
+curl -sf http://127.0.0.1:8200/data/status
 echo
 
 echo "[2/2] 插件冒烟测试 ..."

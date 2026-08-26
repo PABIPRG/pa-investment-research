@@ -49,24 +49,27 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => {
     const previousTitle = document.title
-    const previousWorkspacePlacement = document.body.dataset.workspaceContextPlacement
+    const previousWorkspaceContextVisibility = document.body.dataset.workspaceContextVisibility
     document.body.dataset.investmentResearchUi = ''
-    document.body.dataset.workspaceContextPlacement = 'settings'
+    document.body.dataset.workspaceContextVisibility = 'hidden'
     document.title = '投研智能体'
     return () => {
       cancelPendingDraft?.()
       cancelPendingDraft = undefined
       delete document.body.dataset.investmentResearchUi
-      if (previousWorkspacePlacement === undefined) delete document.body.dataset.workspaceContextPlacement
-      else document.body.dataset.workspaceContextPlacement = previousWorkspacePlacement
+      if (previousWorkspaceContextVisibility === undefined) {
+        delete document.body.dataset.workspaceContextVisibility
+      } else {
+        document.body.dataset.workspaceContextVisibility = previousWorkspaceContextVisibility
+      }
       document.title = previousTitle
     }
   }, 'ui-investment-research: profile marker')
 
-  // The investment product treats Workspace as an optional storage setting,
-  // not an onboarding gate. On a truly empty first run, create one ordinary
-  // Session at the Host cwd so the assistant is immediately usable without
-  // surfacing project-directory mechanics in the conversation UI.
+  // Workspace remains an internal session-grouping and tool-scope abstraction
+  // in this product. On a truly empty first run, create one ordinary Session at
+  // the Host cwd so the assistant is immediately usable without exposing
+  // project-directory or Workspace mechanics anywhere in the product UI.
   ctx.effect(() => {
     let requested = false
     const ensureFirstSession = (): void => {

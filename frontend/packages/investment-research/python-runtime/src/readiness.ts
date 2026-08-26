@@ -65,7 +65,7 @@ function projectCredentials(state: BackendReadinessState): readonly InvestmentCr
     return credentialRefs(state.definition).map(ref => Object.freeze({ ref, status: 'external-managed' as const }))
   }
   if (state.ownership !== 'owned') return []
-  return state.credentials.map((credential) => Object.freeze({
+  return state.credentials.map(credential => Object.freeze({
     ref: credential.ref,
     configured: credential.configured,
     ...(credential.source === undefined ? {} : { source: credential.source }),
@@ -105,6 +105,7 @@ function capabilityStatus(
   if (state.ownership === null || state.health !== 'healthy' || state.restartRequired) return 'unavailable'
   const configured = isConfigured(state, definition)
   if (definition.backendId === 'trading-core') return configured ? 'stock-full' : 'unavailable'
+  if (definition.backendId === 'industry-chain') return configured ? 'industry-full' : 'unavailable'
   if (definition.llm === 'enhancement' && !configured) return 'market-template-only'
   return configured ? 'market-full' : 'unavailable'
 }

@@ -1,6 +1,7 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 
 export type InvestmentRoute =
+  | 'dashboard'
   | 'assistant'
   | 'opportunity'
   | 'stock-detail'
@@ -30,7 +31,7 @@ export interface InvestmentNavigationContext {
 }
 
 const INITIAL: InvestmentUiSnapshot = Object.freeze({
-  route: 'assistant',
+  route: 'dashboard',
   historyOpen: false,
   reportsOpen: false,
   analysisQuery: '',

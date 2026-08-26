@@ -31,10 +31,10 @@ describe('投研工作台主题样式', () => {
     expect(styles).toContain('.drawerBackdrop.importBackdrop { position: fixed; z-index: 1000;')
   })
 
-  it('消费 profile 的设置态标记并隐藏新对话中的工作区上下文', () => {
-    expect(conversationStyles).toContain(":global(body[data-workspace-context-placement='settings']) .heroWorkspaceContext")
+  it('消费 profile 的隐藏标记并隐藏新对话中的工作区上下文', () => {
+    expect(conversationStyles).toContain(":global(body[data-workspace-context-visibility='hidden']) .heroWorkspaceContext")
     expect(conversationStyles).toMatch(
-      /:global\(body\[data-workspace-context-placement='settings'\]\) \.heroWorkspaceContext\s*\{\s*display:\s*none;/,
+      /:global\(body\[data-workspace-context-visibility='hidden'\]\) \.heroWorkspaceContext\s*\{\s*display:\s*none;/,
     )
   })
 })

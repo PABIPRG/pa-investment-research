@@ -5,8 +5,8 @@ rem  industry-chain init script (Windows)
 rem   1. Locate Python 3.10+ and create venv
 rem   2. Install Python deps  (pass "mirror" to use Tsinghua mirror)
 rem   3. Generate .env from .env.example
-rem   4. Download/check seed data (~25MB, iducsite static hosting)
-rem   5. Install dsh-plugin npm deps + verify key imports
+rem   4. Install dsh-plugin npm deps + verify key imports
+rem Seed data is downloaded only after explicit confirmation in the product UI.
 rem Usage: init.bat [mirror]
 rem ============================================================
 set "ROOT=%~dp0"
@@ -43,15 +43,15 @@ echo [OK] Python: %PYCMD%
 
 rem ---------- 2. create venv ----------
 if not exist "env\Scripts\python.exe" (
-    echo [1/5] Creating venv "env" ...
+    echo [1/4] Creating venv "env" ...
     %PYCMD% -m venv env
     if errorlevel 1 exit /b 1
 ) else (
-    echo [1/5] venv already exists, skip
+    echo [1/4] venv already exists, skip
 )
 
 rem ---------- 3. install Python deps ----------
-echo [2/5] Installing Python deps (first run may take minutes)...
+echo [2/4] Installing Python deps (first run may take minutes)...
 env\Scripts\python.exe -m pip install --upgrade pip -q
 if /i "%~1"=="mirror" (
     env\Scripts\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
@@ -64,7 +64,7 @@ if errorlevel 1 (
 )
 
 rem ---------- 4. generate .env ----------
-echo [3/5] Checking .env ...
+echo [3/4] Checking .env ...
 if not exist ".env" (
     copy /y ".env.example" ".env" >nul
     echo   [TIP] Created .env from .env.example (IC_ prefix, defaults are fine)
@@ -72,16 +72,8 @@ if not exist ".env" (
     echo   .env already exists, skip
 )
 
-rem ---------- 5. download/check seed data ----------
-echo [4/5] Downloading/checking seed data (about 25MB)...
-env\Scripts\python.exe scripts\fetch_seed_data.py
-if errorlevel 1 (
-    echo [ERROR] seed data download failed
-    exit /b 1
-)
-
-rem ---------- 6. dsh-plugin npm deps (optional) ----------
-echo [5/5] Installing dsh-plugin npm deps (optional)...
+rem ---------- 5. dsh-plugin npm deps (optional) ----------
+echo [4/4] Installing dsh-plugin npm deps (optional)...
 if exist "dsh-plugin\package.json" (
     pushd dsh-plugin
     call npm install >nul 2>&1
@@ -91,7 +83,7 @@ if exist "dsh-plugin\package.json" (
     echo   dsh-plugin not found, skip
 )
 
-rem ---------- 7. verify key imports ----------
+rem ---------- 6. verify key imports ----------
 echo [VERIFY] Checking key imports ...
 env\Scripts\python.exe -c "import fastapi, uvicorn, requests, dotenv; print('  imports OK')"
 if errorlevel 1 (
@@ -103,6 +95,7 @@ echo.
 echo ================================================================
 echo   Init done!
 echo     - Start: start_all.bat
+echo     - First data download: confirm it in the industry-chain page
 echo     - Stop : stop_all.bat
 echo     - Check: verify.bat
 echo ================================================================

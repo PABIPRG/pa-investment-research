@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-Web Session 日志下载控制，使用 `dsh-host-apiproxy` 拥有的 Host 流式 ZIP 端点。Host 半包注册 `/export`；浏览器半包在 Session Header 中提供 111×32 的 `Session log` 操作，以及一个供该按钮与斜杠命令共用的下载控制器和弹窗。ZIP 生成、原始 JSONL/zstd 读取、子 Session、附件、背压和 HTTP 错误语义仍由 [ApiProxy 下载实现](../../host/apiproxy/README.md)负责。
+Web 对话备份控制，使用 `dsh-host-apiproxy` 拥有的 Host 流式 ZIP 端点。Host 半包注册 `/export`；浏览器半包在对话 Header 中提供最小尺寸为 111×32 的“导出对话”操作，以及一个供该按钮与斜杠命令共用的下载控制器和弹窗。ZIP 生成、原始 JSONL/zstd 读取、关联对话、附件、背压和 HTTP 错误语义仍由 [ApiProxy 下载实现](../../host/apiproxy/README.md)负责。
 
 ## 命令约定
 
@@ -15,7 +15,7 @@ Web Session 日志下载控制，使用 `dsh-host-apiproxy` 拥有的 Host 流�
 
 Host 下载端点会在 `readRaw` 前 flush 活动的根 Session，因此斜杠命令触发的 ZIP 会包含启动下载的 `command/run` 与 `command/done` 事件对。冷持久化 Session 不需要 flush。
 
-弹窗报告准备中、开始下载或失败。关闭弹窗不会取消正在进行的下载；该操作随后完成时也不会重新打开弹窗。每个 Session 同时只允许一项下载，重复操作会共用该任务。
+完整本地化的弹窗会报告备份准备中、开始下载或稳定的重试提示。Host 错误详情仍保留在控制器状态中供诊断使用，但不会作为面向用户的文案展示。关闭弹窗不会取消正在进行的下载；该操作随后完成时也不会重新打开弹窗。每个对话同时只允许一项下载，重复操作会共用该任务。
 
 ## 组合
 

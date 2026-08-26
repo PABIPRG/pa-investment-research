@@ -3,7 +3,7 @@
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AnalyzeRequest(BaseModel):
@@ -228,12 +228,25 @@ class PersonalizedFeedbackRequest(BaseModel):
 
 
 class EvolutionRunRequest(BaseModel):
-    """POST /evolution/run 请求体：自进化闭环执行开关。"""
+    """POST /evolution/run 请求体：预览或确认一份已绑定的进化预案。"""
 
     apply: bool = Field(
         default=False,
-        description="false=仅预览（dry-run，返回 actions 清单不写库）；true=写库执行升降级/变异/回流",
+        description="false=生成带令牌的只读预案；true=仅应用 preview_token 绑定的精确预案",
     )
+    preview_token: Optional[str] = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{32}$",
+        description="apply=true 时必填；来自最近一次 apply=false 响应",
+    )
+
+    @model_validator(mode="after")
+    def validate_preview_token(self):
+        if self.apply and self.preview_token is None:
+            raise ValueError("apply=true 必须携带 preview_token")
+        if not self.apply and self.preview_token is not None:
+            raise ValueError("apply=false 不接受 preview_token")
+        return self
 
 
 class TaskStarted(BaseModel):

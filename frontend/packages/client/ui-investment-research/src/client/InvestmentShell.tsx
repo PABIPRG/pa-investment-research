@@ -12,7 +12,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { AssistantIntent } from './assistant-intent.ts'
-import { asRecord, money, number, percent, records, text } from './data.ts'
+import { asRecord, money, number, percent, productErrorText, records, text } from './data.ts'
 import { parseHoldingsImport } from './holdings-import.ts'
 import {
   EvolutionPage,
@@ -21,6 +21,7 @@ import {
   ShadowValidationPage,
   StrategyResearchPage,
 } from './ProductPages.tsx'
+import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
 import type {
   InvestmentDraftKey, InvestmentNavigationContext, InvestmentRoute, InvestmentUiSnapshot,
 } from './state.ts'
@@ -47,10 +48,6 @@ interface RequestResource {
 const EMPTY_RESOURCE: ResourceState = Object.freeze({
   phase: 'idle', loaded: false, value: undefined, error: '',
 })
-
-function errorText(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 /**
  * Own browser request flights by serialized key and ignore superseded settlements.
@@ -93,7 +90,7 @@ function useRequestResource(requestData: RequestData): RequestResource {
         setState({ phase: 'success', loaded: true, value, error: '' })
       }, (reason: unknown) => {
         if (generation !== generationRef.current) return
-        setState(current => ({ ...current, phase: 'error', error: errorText(reason) }))
+        setState(current => ({ ...current, phase: 'error', error: productErrorText(reason) }))
       })
   }, [requestData])
 
@@ -159,6 +156,7 @@ export type InvestmentWelcomeProps = PropsRuntime<'conversation.hero.welcome'> &
 type NavigationRoute = Exclude<InvestmentRoute, 'stock-detail'>
 
 const ROUTES: readonly { id: NavigationRoute; label: string; note?: string }[] = [
+  { id: 'dashboard', label: '研究工作台', note: '总览' },
   { id: 'assistant', label: '智能分析', note: 'AI' },
   { id: 'opportunity', label: '实时盯盘', note: '实时' },
   { id: 'framework', label: '策略研究', note: '策略' },
@@ -231,6 +229,7 @@ function ImportIcon() {
 
 function NavGlyph({ route }: { route: InvestmentRoute }) {
   const glyph = {
+    dashboard: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="11" y="3" width="6" height="6" rx="1" /><rect x="3" y="11" width="6" height="6" rx="1" /><rect x="11" y="11" width="6" height="6" rx="1" /></>,
     assistant: <><path d="M10 2.8 11.8 7l4.2 1.8-4.2 1.8-1.8 4.2-1.8-4.2L4 8.8 8.2 7 10 2.8Z" /><path d="m15.5 2.8.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" /></>,
     opportunity: <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
     'stock-detail': <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
@@ -598,10 +597,18 @@ export function InvestmentShell({
 
       {snapshot.route !== 'assistant' && (
         <main className={css.workbench}>
+          {snapshot.route === 'dashboard' && (
+            <ResearchWorkbenchPage
+              requestData={requestData}
+              navigate={navigate}
+              onAnalyze={prepareAssistant}
+              onOpenReports={() => { setReports(true) }}
+            />
+          )}
           {snapshot.route === 'opportunity' && (
             <OpportunityPage
               requestData={requestData}
-              initialQuery={snapshot.watchQuery}
+              initialQuery={snapshot.selectedStockCode || snapshot.watchQuery}
               onAnalyze={prepareAssistant}
               onView={(code) => { navigate('stock-detail', { stockCode: code }) }}
             />
@@ -623,6 +630,7 @@ export function InvestmentShell({
               selectedStrategyId={snapshot.selectedStrategyId}
               onSelectStrategy={selectStrategy}
               onOpenShadow={(strategyId) => { navigate('projects', { strategyId }) }}
+              onOpenReports={() => { setReports(true) }}
               onAnalyze={prepareAssistant}
             />
           )}
@@ -631,6 +639,7 @@ export function InvestmentShell({
               requestData={requestData}
               selectedStrategyId={snapshot.selectedStrategyId}
               onOpenEvolution={() => { navigate('tasks') }}
+              onOpenReports={() => { setReports(true) }}
               onAnalyze={prepareAssistant}
             />
           )}
@@ -848,7 +857,7 @@ function HistoryDrawer({
           ))}
           {items.length === 0 && <div className={css.emptyState}>没有找到匹配的对话</div>}
         </div>
-        <div className={css.drawerFoot}>对话会安全保存在本机配置的存储位置</div>
+        <div className={css.drawerFoot}>对话会自动保存在本机</div>
       </aside>
     </div>
   )
@@ -885,7 +894,10 @@ export function OpportunityPage({
 
   useEffect(() => {
     if (scan.state.phase !== 'success') return
-    if (rows.some(row => text(row.code, '') === selected)) return
+    // A stock deliberately carried back from the detail page may not appear in
+    // the current scan bucket. Keep that research subject instead of silently
+    // replacing it with the first ranked row.
+    if (selected.trim() !== '') return
     setSelected(text(rows[0]?.code, ''))
   }, [rows, scan.state.phase, selected])
 
@@ -989,7 +1001,7 @@ export function OpportunityPage({
                   onClick={() => {
                     onAnalyze({ kind: 'stock', code: selected, name: text(signalRecord.name, '') })
                   }}
-                >在智能助手中分析</button>
+                >带入智能分析</button>
               </div>
             )}
           </div>
@@ -1097,7 +1109,7 @@ function StockDetailPage({
       .then((value) => { if (alive) { setDetail(value); setLoading(false) } })
       .catch((reason: unknown) => {
         if (!alive) return
-        setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false)
+        setError(productErrorText(reason)); setLoading(false)
       })
     return () => { alive = false }
   }, [code, nonce, requestData])
@@ -1130,7 +1142,7 @@ function StockDetailPage({
             onClick={() => {
               onAnalyze({ kind: 'stock', code: resolvedCode, name })
             }}
-          >在智能助手中分析</button>
+          >带入智能分析</button>
         )}
       </PageHeader>
       {error !== '' && <ErrorCard title="个股详情暂不可用" message={error} retry={() => { setNonce(value => value + 1) }} />}
@@ -1239,7 +1251,7 @@ function HoldingsImportDialog({
       })
       onImported(result.items.length)
     } catch (reason: unknown) {
-      setError(errorText(reason))
+      setError(productErrorText(reason))
       setSaving(false)
     }
   }
@@ -1374,7 +1386,7 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
           onClick={() => {
             onAnalyze({ kind: 'portfolio' })
           }}
-        >发起持仓深度分析</button>
+        >带入智能分析持仓</button>
       </PageHeader>
       {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       <ResourceProgress label="持仓数据" resources={resources} />

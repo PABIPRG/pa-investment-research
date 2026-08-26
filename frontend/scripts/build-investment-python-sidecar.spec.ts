@@ -12,7 +12,7 @@ const roots: string[] = []
 const TARGET = 'darwin-arm64'
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map(async root => { await rm(root, { recursive: true, force: true }) }))
+  await Promise.all(roots.splice(0).map(async (root) => { await rm(root, { recursive: true, force: true }) }))
 })
 
 function hash(value: string | Buffer): string {
@@ -30,7 +30,7 @@ async function fixture() {
   const requirements = {
     'backend/dsh-trading-core/requirements.txt': 'alpha==1 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n',
     'backend/market-watch/requirements.txt': 'beta==2 --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n',
-    'backend/industry-chain/requirements.txt': 'gamma==3\n',
+    'backend/industry-chain/requirements.txt': 'gamma==3 --hash=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n',
   }
   for (const [path, value] of Object.entries(requirements)) await write(join(root, ...path.split('/')), value)
   await write(join(root, 'backend/dsh-trading-core/adapter/app.py'), 'safe trading')
@@ -45,7 +45,7 @@ async function fixture() {
   const archiveValue = Buffer.from('fixture archive')
   const archiveUrl = 'https://fixtures.invalid/python.tar.gz'
   const requirementsLockPath = `frontend/config/investment-python-requirements/${TARGET}.txt`
-  const requirementsLock = 'alpha==1\n'
+  const requirementsLock = 'alpha==1\nbeta==2\ngamma==3\n'
   await write(join(root, ...requirementsLockPath.split('/')), requirementsLock)
   const targetLock = {
     pythonVersion: '3.10.18',
@@ -118,6 +118,11 @@ describe('investment Python sidecar builder', () => {
     expect(first.python).toEqual({
       version: '3.10.18', platform: 'darwin', arch: 'arm64', executable: 'runtime/bin/python3',
     })
+    expect(first.backends).toEqual({
+      'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
+      'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+      'industry-chain': { projectDir: 'backends/industry-chain', module: 'industry_chain.app:app' },
+    })
     expect(first.files.map(entry => entry.path)).toEqual([...first.files.map(entry => entry.path)].sort())
     expect(first.files.map(entry => entry.path)).toEqual(expect.arrayContaining([
       'backends/dsh-trading-core/adapter/app.py',
@@ -127,7 +132,9 @@ describe('investment Python sidecar builder', () => {
       'site-packages/native-extension.so',
     ]))
     expect(firstJson).not.toContain('SECRET_CANARY')
-    expect(first.files.some(entry => /(?:^|\/)(?:env|data|logs|tests|__pycache__)(?:\/|$)|\.env$|\.pyc$|\.log$/u.test(entry.path))).toBe(false)
+    expect(first.files.some(
+      entry => /(?:^|\/)(?:env|data|logs|tests|__pycache__)(?:\/|$)|\.env$|\.pyc$|\.log$/u.test(entry.path),
+    )).toBe(false)
     expect(setup.runCommand).toHaveBeenCalledWith(
       expect.stringContaining(join('runtime', 'bin', 'python3')),
       expect.arrayContaining(['--no-compile']),
@@ -142,10 +149,10 @@ describe('investment Python sidecar builder', () => {
   it('fails closed for missing targets, cache/hash failures, requirements drift, and traversal', async () => {
     const setup = await fixture()
     const options = { target: TARGET, output: setup.output, cache: setup.cache, offline: true }
-    const missingTargetLock = { ...setup.lock, targets: { ...setup.lock.targets } } as unknown as {
-      targets: Record<string, unknown>
+    const missingTargetLock = {
+      ...setup.lock,
+      targets: Object.fromEntries(Object.entries(setup.lock.targets).filter(([target]) => target !== TARGET)),
     }
-    delete missingTargetLock.targets[TARGET]
     await expect(buildInvestmentPythonSidecar(options, {
       ...setup.dependencies,
       lock: missingTargetLock as unknown as InvestmentSidecarLock,

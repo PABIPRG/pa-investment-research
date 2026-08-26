@@ -46,7 +46,7 @@ Profile launches keep `cordis.patch.yml` live through `watchUserPatches` by defa
 
 ### Investment-research profile
 
-The shipped investment profile has five ordered bundle layers: `@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app`, `@deepseek-ai/dsh-investment-runtime-bundle`, `@deepseek-ai/dsh-investment-stock-analysis-bundle`, and `@deepseek-ai/dsh-investment-market-watch-bundle`. `web-app` supplies the existing renderer and Host composition; the Electron application applies its native patch only after those five layers, disabling Web carriers and replacing their connection and directory-picker rows. The product entry is `dsh electron --profile investment-research`; `dsh electron` still defaults to `web`. Inspect the portable bundle tree without running Python or reading user patches with `dsh --profile investment-research --dump-default-config`.
+The shipped investment profile has six ordered bundle layers: `@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app`, `@deepseek-ai/dsh-investment-runtime-bundle`, `@deepseek-ai/dsh-investment-stock-analysis-bundle`, `@deepseek-ai/dsh-investment-market-watch-bundle`, and `@deepseek-ai/dsh-investment-industry-chain-bundle`. `web-app` supplies the existing renderer and Host composition; the Electron application applies its native patch only after those six layers, disabling Web carriers and replacing their connection and directory-picker rows. The product entry is `dsh electron --profile investment-research`; `dsh electron` still defaults to `web`. Inspect the portable bundle tree without running Python or reading user patches with `dsh --profile investment-research --dump-default-config`.
 
 ## Model Experience
 

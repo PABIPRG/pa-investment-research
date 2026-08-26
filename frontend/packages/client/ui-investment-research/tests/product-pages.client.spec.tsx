@@ -10,6 +10,7 @@ import {
   StrategyResearchPage,
 } from '../src/client/ProductPages.tsx'
 import { InvestmentShell, InvestmentWelcome } from '../src/client/InvestmentShell.tsx'
+import type { AssistantIntent } from '../src/client/assistant-intent.ts'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
 afterEach(cleanup)
@@ -46,6 +47,7 @@ describe('投研产品闭环', () => {
       selectedStrategyId=""
       onSelectStrategy={onSelectStrategy}
       onOpenShadow={onOpenShadow}
+      onOpenReports={() => {}}
       onAnalyze={() => {}}
     />)
 
@@ -60,6 +62,7 @@ describe('投研产品闭环', () => {
   })
 
   it('策略回测只有在任务结果含正式正文时才提示已进入报告中心', async () => {
+    const onOpenReports = vi.fn()
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.strategies') {
         return {
@@ -81,11 +84,14 @@ describe('投研产品闭环', () => {
       selectedStrategyId=""
       onSelectStrategy={() => {}}
       onOpenShadow={() => {}}
+      onOpenReports={onOpenReports}
       onAnalyze={() => {}}
     />)
 
     fireEvent.click(await screen.findByRole('button', { name: '运行回测' }))
     expect(await screen.findByText('回测完成，正式结果已进入投研报告。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看本次投研报告' }))
+    expect(onOpenReports).toHaveBeenCalledOnce()
   })
 
   it('影子任务被业务护栏跳过时展示原因且不伪称已生成报告', async () => {
@@ -105,6 +111,7 @@ describe('投研产品闭环', () => {
       requestData={requestData as never}
       selectedStrategyId=""
       onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
       onAnalyze={() => {}}
     />)
 
@@ -113,12 +120,85 @@ describe('投研产品闭环', () => {
     expect(screen.queryByText(/正式结果已进入投研报告/)).toBeNull()
   })
 
+  it('影子首屏未返回真实数据前不伪造等待状态或零持仓', () => {
+    const requestData = vi.fn(() => new Promise(() => {}))
+    const view = render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+    />)
+
+    expect(view.container.textContent).not.toContain('等待数据')
+    expect(view.container.textContent).not.toContain('0 项')
+    expect(view.container.textContent).not.toContain('0 日')
+  })
+
+  it('影子验证归档后在当前页提供查看报告入口', async () => {
+    const onOpenReports = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.shadow-status') return {}
+      if (request.operation === 'trading-core.shadow-positions') return { items: [] }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      if (request.operation === 'trading-core.shadow-run') return { task_id: '3'.repeat(32) }
+      if (request.operation === 'trading-core.task-status') return { status: 'done' }
+      if (request.operation === 'trading-core.task-result') {
+        return { reports: { shadow: '# 影子验证报告' } }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      onOpenEvolution={() => {}}
+      onOpenReports={onOpenReports}
+      onAnalyze={() => {}}
+    />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '运行影子验证' }))
+    expect(await screen.findByText('影子验证完成，正式结果已进入投研报告。')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看本次投研报告' }))
+    expect(onOpenReports).toHaveBeenCalledOnce()
+  })
+
+  it('按单策略查看净值时不回退展示无关的组合净值', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.shadow-status') return {}
+      if (request.operation === 'trading-core.shadow-positions') return { items: [] }
+      if (request.operation === 'trading-core.shadow-equity') {
+        return {
+          items: [
+            { date: '2026-08-26', strategy: { nav: 1.03 } },
+            { date: '2026-08-25', strategy: null, overall_nav: 9.99 },
+          ],
+        }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId="strategy-a"
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+    />)
+
+    expect(await screen.findByText('1.03')).toBeTruthy()
+    expect(screen.queryByText('9.99')).toBeNull()
+  })
+
   it('无进化动作时保持写入禁用，且绝不请求 apply=true', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: {} }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
       if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
-        return { status: 'preview', actions: [], note: '暂无满足条件的动作' }
+        return {
+          status: 'ready', preview_status: 'pending', preview_token: '1'.repeat(32),
+          actions: [], note: '暂无满足条件的动作',
+        }
       }
       throw new Error(`unexpected operation ${request.operation}`)
     })
@@ -146,12 +226,16 @@ describe('投研产品闭环', () => {
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
       if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
         return {
-          status: 'preview',
+          status: 'ready', preview_status: 'pending', preview_token: '2'.repeat(32),
           actions: [{ sid: 'strategy-active-1', strategy_name: '事件驱动策略', type: 'promote', reason: '样本外证据稳定' }],
         }
       }
       if (request.operation === 'trading-core.evolution-run' && request.input?.apply === true) {
-        return { status: 'applied', actions: [] }
+        return {
+          status: 'ready', preview_status: 'applied', applied: true,
+          preview_token: '2'.repeat(32),
+          actions: [{ sid: 'strategy-active-1', strategy_name: '事件驱动策略', type: 'promote', reason: '样本外证据稳定' }],
+        }
       }
       throw new Error(`unexpected operation ${request.operation}`)
     })
@@ -174,7 +258,57 @@ describe('投研产品闭环', () => {
       expect(writes).toHaveLength(1)
     })
     const evolutionCalls = requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.evolution-run')
-    expect(evolutionCalls.map(([request]) => request.input)).toEqual([{ apply: false }, { apply: true }])
+    expect(evolutionCalls.map(([request]) => request.input)).toEqual([
+      { apply: false },
+      { apply: true, preview_token: '2'.repeat(32) },
+    ])
+    const applied = await screen.findByRole<HTMLButtonElement>('button', { name: '已应用' })
+    expect(applied.disabled).toBe(true)
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'AI 复核预案' }).disabled).toBe(true)
+  })
+
+  it('进化状态读取失败时明确告知并可同步重试', async () => {
+    let statusAttempts = 0
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
+        statusAttempts += 1
+        if (statusAttempts === 1) throw new Error('进化状态服务不可用')
+        return { ready: true, counts: { active: 1 } }
+      }
+      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('进化状态服务不可用')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => { expect(statusAttempts).toBe(2) })
+    await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
+  })
+
+  it('服务端拒绝失效预案后不允许继续确认', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: { active: 1 } }
+      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
+        return {
+          status: 'ready', preview_status: 'pending', preview_token: '3'.repeat(32),
+          actions: [{ sid: 'strategy-active-1', type: 'promote', reason: '预案动作' }],
+        }
+      }
+      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === true) {
+        throw new Error('investment data: HTTP 409: 策略或影子证据已变化')
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: '生成进化预案' }))
+    const confirm = await screen.findByRole<HTMLButtonElement>('button', { name: '确认并应用' })
+    fireEvent.click(confirm)
+    expect(await screen.findByText(/409.*证据已变化/)).toBeTruthy()
+    expect(confirm.disabled).toBe(true)
   })
 
   it('从统一报告列表读取 sections 详情并以 report intent 交给 AI 复核', async () => {
@@ -211,8 +345,106 @@ describe('投研产品闭环', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  it('产业链筛选、全局证券搜索和智能分析代码拥有三份独立输入状态', async () => {
+  it('刷新报告列表后会收敛到仍存在的报告，不保留旧正文', async () => {
+    const firstId = 'a'.repeat(32)
+    const removedId = 'b'.repeat(32)
+    let listCalls = 0
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.reports') {
+        listCalls += 1
+        return { items: listCalls === 1
+          ? [{ id: firstId, title: '保留报告' }, { id: removedId, title: '将被移除的报告' }]
+          : [{ id: firstId, title: '保留报告' }] }
+      }
+      if (request.operation === 'trading-core.report') {
+        const id = String(request.input?.report_id)
+        return { id, title: id === firstId ? '保留报告' : '将被移除的报告', sections: [{ key: 'body', content: id === firstId ? '保留正文' : '旧正文' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ReportCenter requestData={requestData as never} onClose={() => {}} onAnalyze={() => {}} />)
+    expect(await screen.findByText('保留正文')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /将被移除的报告/ }))
+    expect(await screen.findByText('旧正文')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '刷新报告' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /将被移除的报告/ })).toBeNull()
+      expect(screen.getByText('保留正文')).toBeTruthy()
+      expect(screen.queryByText('旧正文')).toBeNull()
+    })
+  })
+
+  it('本机缺少产业链数据时先由用户显式下载，完成前不读取图谱', async () => {
+    let finishBootstrap: ((value: unknown) => void) | undefined
+    const bootstrap = new Promise((resolve) => { finishBootstrap = resolve })
+    let statusCalls = 0
+    const requestData = vi.fn((request: { operation: string }) => {
+      if (request.operation === 'industry-chain.data-status') {
+        statusCalls += 1
+        return Promise.resolve(statusCalls === 1
+          ? { status: 'missing', files_completed: 0, files_total: 5, downloaded_bytes: 0, current_file: null, error: null }
+          : { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null })
+      }
+      if (request.operation === 'industry-chain.data-bootstrap') return bootstrap
+      if (request.operation === 'industry-chain.stats') return Promise.resolve({ total_nodes: 2594, total_edges: 8700, subject_count: 1297, relationships: 4 })
+      if (request.operation === 'trading-core.personalized-impact') return Promise.resolve({ events: [] })
+      return Promise.reject(new Error(`unexpected operation ${request.operation}`))
+    })
+
+    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} />)
+
+    expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
+    expect(screen.getByText(/约 25 MB/)).toBeTruthy()
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'industry-chain.stats')).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: '下载并开始使用' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.data-bootstrap' })
+    })
+    const busyButton = screen.getByRole<HTMLButtonElement>('button', { name: '正在下载…' })
+    expect(busyButton.disabled).toBe(true)
+    expect(busyButton.getAttribute('aria-busy')).toBe('true')
+
+    finishBootstrap?.({ status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null })
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.stats' })
+    })
+    expect(await screen.findByText('1,297 家')).toBeTruthy()
+  })
+
+  it('产业链刷新失败时保留旧数据且不展示后端路径或调用栈', async () => {
+    let statsCalls = 0
     const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'industry-chain.data-status') {
+        return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
+      }
+      if (request.operation === 'industry-chain.stats') {
+        statsCalls += 1
+        if (statsCalls > 1) throw new Error('Traceback: /Users/private/backend/industry-chain/data/seed/stats.json')
+        return { total_nodes: 2594, total_edges: 8700, subject_count: 1297, relationships: 4 }
+      }
+      if (request.operation === 'trading-core.personalized-impact') return { events: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} />)
+    expect(await screen.findByText('1,297 家')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    expect(await screen.findByText('刷新失败，继续显示上次数据')).toBeTruthy()
+    expect(screen.getByText('1,297 家')).toBeTruthy()
+    expect(screen.queryByText(/Traceback|\/Users\/private/)).toBeNull()
+  })
+
+  it('产业链筛选、全局证券搜索和智能分析代码拥有三份独立输入状态', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'industry-chain.data-status') {
+        return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
+      }
+      if (request.operation === 'industry-chain.stats') return { total_nodes: 0, total_edges: 0, subject_count: 0, relationships: 0 }
+      if (request.operation === 'industry-chain.companies') return { items: [], count: 0 }
       if (request.operation === 'trading-core.personalized-impact') return { events: [] }
       if (request.operation === 'market-watch.security-search') return { items: [] }
       return {}
@@ -228,10 +460,10 @@ describe('投研产品闭环', () => {
       const useInvestmentUi = <T,>(selector: (value: InvestmentUiSnapshot) => T): T => selector(snapshot)
       return <>
         <InvestmentShell
-          useInvestmentUi={useInvestmentUi as never}
+          useInvestmentUi={useInvestmentUi}
           useSessions={neverGlobalHook}
           useWorkspaces={neverGlobalHook}
-          requestData={requestData as never}
+          requestData={requestData}
           navigate={() => {}}
           setHistory={() => {}}
           setReports={() => {}}
@@ -256,10 +488,10 @@ describe('投研产品闭环', () => {
 
     render(<Harness />)
     await waitFor(() => {
-      expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.personalized-impact', input: { limit: 20 } })
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.stats' })
     })
     const globalSearch = screen.getByRole<HTMLInputElement>('combobox', { name: '搜索 A 股代码或名称' })
-    const chainFilter = screen.getByRole<HTMLInputElement>('textbox', { name: '筛选事件、股票或行业' })
+    const chainFilter = screen.getByRole<HTMLInputElement>('textbox', { name: '搜索公司、行业或股票代码' })
     const analysisCode = screen.getByRole<HTMLInputElement>('textbox', { name: '智能分析股票代码' })
 
     fireEvent.change(globalSearch, { target: { value: '贵州茅台' } })
@@ -271,10 +503,44 @@ describe('投研产品闭环', () => {
     fireEvent.change(analysisCode, { target: { value: '600519' } })
     expect(globalSearch.value).toBe('贵州茅台')
     expect(chainFilter.value).toBe('半导体')
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'industry-chain.companies', input: { keyword: '半导体', limit: 20 },
+      })
+    })
+    expect(globalSearch.value).toBe('贵州茅台')
+    expect(analysisCode.value).toBe('600519')
   })
 
-  it('按真实 DTO 展示产业链标的对象与影子账户字段', async () => {
-    const requestData = vi.fn(async (request: { operation: string }) => {
+  it('按真实 DTO 检索公司、逐层展示上下游并只向 AI 传短意图', async () => {
+    const onAnalyze = vi.fn<(intent: AssistantIntent) => void>()
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'industry-chain.data-status') {
+        return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
+      }
+      if (request.operation === 'industry-chain.stats') {
+        return { total_nodes: 2594, total_edges: 8700, companies: 1297, subject_count: 1297, relationships: 4 }
+      }
+      if (request.operation === 'industry-chain.companies') {
+        return { items: [{ code: '600519', name: '贵州茅台', industry: '白酒', exchange: 'SH', is_subject: true }], count: 1 }
+      }
+      if (request.operation === 'industry-chain.chain') {
+        return {
+          center: {
+            id: 'cn-600519', code: '600519', name: '贵州茅台', industry: '白酒',
+            material_count: 3, supplier_count: 5, product_count: 2, customer_count: 4,
+          },
+          up_levels: [{
+            level: -1,
+            nodes: [{ id: 'supplier-1', name: '高粱供应商', share: 18, type: 'direct', via: '高粱', note: '核心原料供应' }],
+          }],
+          down_levels: [{
+            level: 1,
+            nodes: [{ id: 'customer-1', name: '经销渠道', share: 12, type: 'direct', via: '高端白酒', note: null }],
+          }],
+        }
+      }
       if (request.operation === 'trading-core.personalized-impact') {
         return {
           events: [{
@@ -302,15 +568,34 @@ describe('投研产品闭环', () => {
       requestData={requestData as never}
       query="600519"
       onQuery={() => {}}
-      onAnalyze={() => {}}
+      onAnalyze={onAnalyze}
     />)
-    expect(await screen.findByText('贵州茅台（600519）')).toBeTruthy()
+    expect(await screen.findByText('1,297 家')).toBeTruthy()
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'industry-chain.companies', input: { keyword: '600519', limit: 20 },
+      })
+    })
+    fireEvent.click(await screen.findByRole('button', { name: /贵州茅台/ }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.chain', input: { code: '600519' } })
+    })
+    expect(await screen.findByText('高粱供应商')).toBeTruthy()
+    expect(screen.getByText('经销渠道')).toBeTruthy()
+    expect(screen.getByText('高端白酒')).toBeTruthy()
+    expect(screen.getByText('上游第 1 层')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'AI 解读所选公司' }))
+    expect(onAnalyze).toHaveBeenCalledWith({ kind: 'industry', reference: '600519 贵州茅台' })
+    const intent = onAnalyze.mock.calls[0]?.[0]
+    expect(intent?.kind).toBe('industry')
+    if (intent?.kind === 'industry') expect(intent.reference).not.toContain('{')
     industry.unmount()
 
     render(<ShadowValidationPage
       requestData={requestData as never}
       selectedStrategyId="strategy-1"
       onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
       onAnalyze={() => {}}
     />)
     expect(await screen.findByText('2026-08-26 15:30:00')).toBeTruthy()
@@ -320,7 +605,7 @@ describe('投研产品闭环', () => {
 
   it('影子验证切页后停止长任务轮询且不再读取结果', async () => {
     let finishStatus: ((value: unknown) => void) | undefined
-    const pendingStatus = new Promise(resolve => { finishStatus = resolve })
+    const pendingStatus = new Promise((resolve) => { finishStatus = resolve })
     const requestData = vi.fn((request: { operation: string }) => {
       if (request.operation === 'trading-core.shadow-status') return Promise.resolve({})
       if (request.operation === 'trading-core.shadow-positions') return Promise.resolve({ items: [] })
@@ -335,6 +620,7 @@ describe('投研产品闭环', () => {
       requestData={requestData as never}
       selectedStrategyId="strategy-1"
       onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
       onAnalyze={() => {}}
     />)
     fireEvent.click(screen.getByRole('button', { name: '运行影子验证' }))

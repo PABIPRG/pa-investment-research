@@ -38,6 +38,26 @@ describe('investment backend path resolution', () => {
     }
   })
 
+  it('resolves the industry-chain source checkout with its declared directory and module', () => {
+    const projectDir = '/repo/backend/industry-chain'
+    const pythonExecutable = `${projectDir}/env/bin/python`
+    const resolved = resolveBackendPaths(backend({
+      id: 'industry-chain',
+      service: 'industry-chain',
+      baseUrl: 'http://127.0.0.1:8200',
+      repositoryPath: ['backend', 'industry-chain'],
+      module: 'industry_chain.app:app',
+    }), {
+      packageDir: '/repo/frontend/packages/investment-research/python-runtime/lib',
+      pathApi: posix,
+      platform: 'linux',
+      isDirectory: candidate => candidate === projectDir,
+      isFile: candidate => candidate === pythonExecutable,
+    })
+
+    expect(resolved).toEqual({ source: 'source', projectDir, pythonExecutable })
+  })
+
   it.each([
     {
       platform: 'darwin' as const,
@@ -93,12 +113,12 @@ describe('investment backend path resolution', () => {
     try {
       const resolved = resolveBackendPaths(backend(), {
         packageDir,
-      pathApi,
-      platform,
-      isDirectory: candidate => candidate === projectDir,
-      isFile: candidate => candidate === (platform === 'win32'
-        ? pathApi.join(projectDir, 'env', 'Scripts', 'python.exe')
-        : pathApi.join(projectDir, 'env', 'bin', 'python')),
+        pathApi,
+        platform,
+        isDirectory: candidate => candidate === projectDir,
+        isFile: candidate => candidate === (platform === 'win32'
+          ? pathApi.join(projectDir, 'env', 'Scripts', 'python.exe')
+          : pathApi.join(projectDir, 'env', 'bin', 'python')),
       })
 
       expect(resolved.projectDir).toBe(projectDir)
@@ -152,7 +172,7 @@ describe('investment backend path resolution', () => {
       home: 'C:\\Users\\example\\AppData\\Roaming\\dsh',
       executable: 'C:\\Program Files\\DSH\\resources\\investment-python\\runtime\\python.exe',
     },
-  ])('falls back to a verified $platform bundled Runtime and derives writable state', ({
+  ])('resolves the industry-chain backend from a verified $platform bundled Runtime', ({
     platform,
     arch,
     pathApi,
@@ -185,7 +205,13 @@ describe('investment backend path resolution', () => {
         files: [{ path: platform === 'win32' ? 'runtime/python.exe' : 'runtime/bin/python3', sha256: '0'.repeat(64) }],
       },
     }
-    const resolved = resolveBackendPaths(backend(), {
+    const resolved = resolveBackendPaths(backend({
+      id: 'industry-chain',
+      service: 'industry-chain',
+      baseUrl: 'http://127.0.0.1:8200',
+      repositoryPath: ['backend', 'industry-chain'],
+      module: 'industry_chain.app:app',
+    }), {
       platform,
       arch,
       pathApi,
@@ -193,7 +219,7 @@ describe('investment backend path resolution', () => {
       dshHome: home,
       isDirectory: candidate => candidate.endsWith(pathApi.join('backend', 'dsh-trading-core')),
       isFile: candidate => candidate === descriptorPath,
-      verifyDescriptor: candidate => {
+      verifyDescriptor: (candidate) => {
         expect(candidate).toBe(descriptorPath)
         return verified
       },
@@ -201,10 +227,10 @@ describe('investment backend path resolution', () => {
 
     expect(resolved).toEqual({
       source: 'bundled',
-      projectDir: projectDirs['trading-core'],
+      projectDir: projectDirs['industry-chain'],
       pythonExecutable: executable,
       sitePackages,
-      stateDir: pathApi.join(home, 'investment-research', 'trading-core'),
+      stateDir: pathApi.join(home, 'investment-research', 'industry-chain'),
     })
   })
 

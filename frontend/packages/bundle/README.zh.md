@@ -12,7 +12,8 @@ Profile 组合包：在 manifest（元数据清单）中声明 `"dsh": { "bundle
 | [`investment-runtime/`](investment-runtime/README.md) | 共享投研 Python Runtime；必须位于能力组合包之前 | 挂载 `investment-python-runtime` |
 | [`investment-stock-analysis/`](investment-stock-analysis/README.md) | 可独立移除的股票分析能力 | 挂载 `investment-stock-analysis` |
 | [`investment-market-watch/`](investment-market-watch/README.md) | 可独立移除的盘中盯盘能力 | 挂载 `investment-market-watch` |
+| [`investment-industry-chain/`](investment-industry-chain/README.md) | 可独立移除的产业链数据能力 | 挂载 `investment-industry-chain` |
 
 内置组合包从 dsh 安装目录解析；树外（out-of-tree）组合包通过 `dsh plugin --profile <name> add <package>` 安装进 profile。
 
-随附的 `investment-research` profile 依次应用 `base`、`web-app`、`investment-runtime`、`investment-stock-analysis`、`investment-market-watch`。后两个组合包不包含进程或业务实现；各业务插件从前置 Runtime 层获取自己的 backend。
+随附的 `investment-research` profile 依次应用 `base`、`web-app`、`investment-runtime`、`investment-stock-analysis`、`investment-market-watch`、`investment-industry-chain`。后三个组合包都不包含进程实现；各业务插件从前置 Runtime 层获取自己的 backend。

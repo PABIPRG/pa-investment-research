@@ -49,6 +49,28 @@ describe('投研数据页慢请求状态', () => {
     expect(safeExternalNewsUrl('/relative')).toBeUndefined()
   })
 
+  it('从个股详情返回时保留原研究对象，即使它不在当前扫描榜单', async () => {
+    const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.scan') {
+        return Promise.resolve({ items: [{ code: '600519', name: '榜单股票' }] })
+      }
+      if (request.operation === 'market-watch.news-flash') return Promise.resolve({ items: [] })
+      if (request.operation === 'market-watch.tech-signal') {
+        return Promise.resolve({ code: request.input?.code, name: '原研究对象', signals: [] })
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<OpportunityPage requestData={requestData} initialQuery="000001" onAnalyze={() => {}} onView={() => {}} />)
+
+    await screen.findByText('原研究对象')
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'market-watch.tech-signal', input: { code: '000001', lookback: 120 },
+    })
+    expect(screen.getByText('榜单股票')).toBeTruthy()
+    expect(screen.getByText('000001')).toBeTruthy()
+  })
+
   it('逐项展示机会数据，并只重试失败的资讯请求', async () => {
     const scan = deferred<unknown>()
     const firstNews = deferred<unknown>()

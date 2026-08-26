@@ -3,4 +3,4 @@ fastapi
 uvicorn[standard]
 pydantic>=2
 python-dotenv
-requests            # fetch_seed_data.py 下载种子数据用
+requests            # 用户触发首次数据下载与手动下载脚本

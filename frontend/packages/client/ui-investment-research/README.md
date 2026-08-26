@@ -2,13 +2,15 @@
 
 English | [中文](README.zh.md)
 
-The investment workbench UI for the `investment-research` profile. It keeps the production conversation, message, composer, attachment, tool, and approval surfaces, then adds global security search, seven business modules, session history, and one report center through `shell.overlay`. Workspace selection is treated only as local conversation and file storage configuration, so it appears in Investment settings instead of the sidebar or blank-conversation flow.
+The investment product UI for the `investment-research` profile. It keeps the production conversation, message, composer, attachment, tool, and approval surfaces, then adds a default Research Workbench, global security search, seven business modules, session history, and one report center through `shell.overlay`. The Research Workbench aggregates real holdings, portfolio risk, personalized events, explainable strategy matches, and pre-market brief tasks; it is distinct from the internal Workspace storage abstraction. Workspace remains hidden from the sidebar, blank-conversation flow, and product settings. On a first run with no registered Workspace, the profile creates a regular Host-cwd Session so the assistant is immediately usable.
 
-The seven entries form one evidence-driven research lifecycle and never create demo data:
+The Research Workbench plus seven business entries form one evidence-driven `1+7` research lifecycle and never create demo data:
+
+- Research Workbench is the default landing page. Its holdings, risk, alerts, personalized-event, and strategy-match regions settle independently; it labels holdings value as cost amount rather than pretending that cost price is a live market price. Personalized events request `comment: false`, so browsing does not depend on an LLM credential.
 
 - Intelligent Analysis reuses the production conversation and model tools. Realtime Watch reads market scans, technical signals, and basic realtime news.
 - Strategy Research turns real events into hypotheses and out-of-sample backtests. Shadow Validation reads paper-account state, positions, and equity. Evolution shows attribution and a read-only plan before a second, explicit confirmation can write to the strategy store.
-- My Research reads persisted holdings, portfolio risk, and alerts and supports validated CSV, TSV, or pasted-table imports. Industry Chain reads backend-expanded event transmission data and shows graph degradation explicitly.
+- My Research reads persisted holdings, portfolio risk, and alerts and supports validated CSV, TSV, or pasted-table imports. Industry Chain checks local data status first and downloads about 25 MB of licensed data only after explicit user confirmation on first use. Once ready, it reads statistics, company search, and layered upstream/downstream relations from the `industry-chain` backend while keeping event transmission as a separate secondary reference. Download, search, and chain refreshes expose their own loading, empty, failure, and retained-stale-data states.
 
 Realtime Watch and My Research settle each data region independently, display completed regions immediately, and keep failures and retries local. An unsettled identical request is reused, same-key refreshes retain the last successful value, and late superseded responses cannot replace the current selection. Strategy backtests and shadow runs poll the real task state; successful backend tasks persist formal reports.
 

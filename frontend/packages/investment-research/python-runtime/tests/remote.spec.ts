@@ -15,10 +15,6 @@ class StubCredentials extends CredentialProvider {
   unset(): Promise<void> { return Promise.resolve() }
 }
 
-interface RestartableRuntime extends InvestmentPythonRuntime {
-  requestRestart(): InvestmentRestartResult
-}
-
 const externalBackend: PythonBackendDefinition = {
   id: 'trading-core',
   service: 'trading-core',
@@ -32,12 +28,12 @@ const externalBackend: PythonBackendDefinition = {
   managedEnv: { DEEPSEEK_API_KEY: SECRET },
 }
 
-function runtimeWith(appRestart?: () => void): RestartableRuntime {
+function runtimeWith(appRestart?: () => void): InvestmentPythonRuntime {
   const ctx = new Context()
   new StubCredentials(ctx)
   ctx.provide('subprocess', {} as never)
   if (appRestart !== undefined) ctx.provide('appRestart', appRestart)
-  return new InvestmentPythonRuntime(ctx) as RestartableRuntime
+  return new InvestmentPythonRuntime(ctx)
 }
 
 afterEach(() => {
@@ -147,7 +143,9 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(result).toEqual({ status: 'accepted' })
     expect(appRestart).not.toHaveBeenCalled()
     expect(scheduled).toHaveLength(1)
-    scheduled[0]!()
+    const restart = scheduled.at(0)
+    if (restart === undefined) throw new Error('restart callback was not scheduled')
+    restart()
     expect(appRestart).toHaveBeenCalledOnce()
   })
 
@@ -155,14 +153,14 @@ describe('InvestmentPythonRuntime Remote', () => {
     const order: string[] = []
     const runtime = runtimeWith(() => { order.push('restart') })
 
-    const invokeThroughGatewayBoundary = async () => {
-      const result = await Reflect.apply(runtime.requestRestart, runtime, [])
+    const invokeThroughGatewayBoundary = () => {
+      const result: InvestmentRestartResult = runtime.requestRestart()
       order.push('gateway decode')
       expect(result).toEqual({ status: 'accepted' })
       order.push('gateway response assembly')
     }
 
-    await invokeThroughGatewayBoundary()
+    invokeThroughGatewayBoundary()
     expect(order).toEqual(['gateway decode', 'gateway response assembly'])
     await new Promise<void>(resolve => setImmediate(resolve))
     expect(order).toEqual(['gateway decode', 'gateway response assembly', 'restart'])

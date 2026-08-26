@@ -204,11 +204,11 @@ describe('ui-investment-research apply', () => {
     expect(view.getByText('MA 多头排列')).toBeTruthy()
     expect(view.getByText('公司发布经营数据')).toBeTruthy()
 
-    fireEvent.click(view.getByRole('button', { name: '在智能助手中分析' }))
+    fireEvent.click(view.getByRole('button', { name: '带入智能分析' }))
     expect(prepareAssistant).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' })
   })
 
-  it('presents the seven-module product chain without a workspace selector', () => {
+  it('presents the research workbench and seven-module product chain without a workspace selector', () => {
     const navigate = vi.fn()
     const view = render(InvestmentSidebar({
       wide: true,
@@ -218,11 +218,11 @@ describe('ui-investment-research apply', () => {
 
     const routes = view.getAllByRole('button')
     expect(routes.map(route => route.getAttribute('aria-label'))).toEqual([
-      '智能分析', '实时盯盘', '策略研究', '影子验证', '自进化', '我的投研', '产业链',
+      '研究工作台', '智能分析', '实时盯盘', '策略研究', '影子验证', '自进化', '我的投研', '产业链',
     ])
-    expect(routes[5]?.getAttribute('aria-current')).toBe('page')
+    expect(routes[6]?.getAttribute('aria-current')).toBe('page')
     expect(view.queryByText('工作区')).toBeNull()
-    fireEvent.click(routes[2]!)
+    fireEvent.click(routes[3]!)
     expect(navigate).toHaveBeenCalledWith('framework')
   })
 
@@ -365,12 +365,12 @@ describe('ui-investment-research apply', () => {
     expect(welcome.options.priority).toBe(-100)
     expect(shell.options).toMatchObject({ id: 'investment-research-shell', order: -100 })
     expect(document.body.dataset.investmentResearchUi).toBe('')
-    expect(document.body.dataset.workspaceContextPlacement).toBe('settings')
+    expect(document.body.dataset.workspaceContextVisibility).toBe('hidden')
     expect(document.title).toBe('投研智能体')
 
     await fiber.dispose()
     expect(document.body.dataset.investmentResearchUi).toBeUndefined()
-    expect(document.body.dataset.workspaceContextPlacement).toBeUndefined()
+    expect(document.body.dataset.workspaceContextVisibility).toBeUndefined()
   })
 
   it('routes profile actions to the real runtime services', async () => {

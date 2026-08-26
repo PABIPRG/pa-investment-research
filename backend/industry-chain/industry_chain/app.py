@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """industry-chain 产业链图谱适配器：同步 FastAPI，端口 8200。
 
-全部为秒级只读查询（纯内存图谱，数据懒加载自 data/seed/），无 SSE/任务管理器。
+图谱查询为秒级只读操作；种子数据只在用户显式请求后下载，不在启动时联网。
 端点在 dsh-plugin 的 4 个只读工具一一对应（chain_search/chain_profile/chain_graph/chain_expand）。
 """
 
@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from . import graph
 from .config import settings
+from .seed_data import SeedDataManager
 
 app = FastAPI(title="Industry Chain Adapter", version="0.1.0")
 app.add_middleware(
@@ -20,6 +21,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+seed_data_manager = SeedDataManager(settings.data_dir, settings.seed_base_url)
 
 
 def _data_or_503(exc: Exception) -> HTTPException:
@@ -35,6 +37,21 @@ def _company_or_404(code: str, result):
 @app.get("/health")
 def health():
     return {"ok": True, "service": "industry-chain", "port": 8200, "ts": int(time.time())}
+
+
+@app.get("/data/status")
+def data_status():
+    """读取本地种子数据状态；不触发任何网络请求。"""
+    return seed_data_manager.status()
+
+
+@app.post("/data/bootstrap")
+def data_bootstrap():
+    """用户显式触发固定五文件下载；并发请求复用同一个任务。"""
+    result = seed_data_manager.bootstrap()
+    if result["status"] == "ready":
+        graph.invalidate()
+    return result
 
 
 @app.get("/stats")
