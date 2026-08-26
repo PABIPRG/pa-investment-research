@@ -39,6 +39,9 @@
       "path": "../../packages/bundle/investment-market-watch"
     },
     {
+      "path": "../../packages/bundle/investment-industry-chain"
+    },
+    {
       "path": "../../packages/bundle/web-app"
     },
     {

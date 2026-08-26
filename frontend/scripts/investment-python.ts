@@ -22,14 +22,14 @@ export interface InvestmentPythonDependencies {
 }
 
 interface BackendCommand {
-  readonly id: 'dsh-trading-core' | 'market-watch'
+  readonly id: 'dsh-trading-core' | 'market-watch' | 'industry-chain'
   readonly directory: string
   readonly initScript: string
   readonly verifyScript: string
   readonly pythonExecutable: string
 }
 
-const BACKENDS = ['dsh-trading-core', 'market-watch'] as const
+const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 
 function defaultRepoRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -58,7 +58,7 @@ async function spawnAndWait(spawn: SpawnFn, command: string, args: readonly stri
   })
 }
 
-/** Run the two investment Python setup commands in their fixed dependency order. */
+/** Run the investment Python setup commands in their fixed dependency order. */
 export async function runInvestmentPython(
   action: InvestmentPythonAction,
   dependencies: InvestmentPythonDependencies = {},
@@ -83,8 +83,13 @@ export async function runInvestmentPython(
 
   for (const backend of backends) {
     const script = action === 'init' ? backend.initScript : backend.verifyScript
-    const command = platform === 'win32' ? 'cmd.exe' : script
-    const args = platform === 'win32' ? ['/d', '/s', '/c', script] : []
+    const environmentOnly = action === 'verify' && backend.id === 'industry-chain'
+      ? ['--environment']
+      : []
+    const command = platform === 'win32' ? 'cmd.exe' : 'bash'
+    const args = platform === 'win32'
+      ? ['/d', '/s', '/c', script, ...environmentOnly]
+      : [script, ...environmentOnly]
     const exitCode = await spawnAndWait(spawn, command, args, backend.directory)
     if (exitCode !== 0) return exitCode
   }

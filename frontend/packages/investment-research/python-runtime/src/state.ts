@@ -36,7 +36,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isBackendId(value: unknown): value is InvestmentBackendId {
-  return value === 'trading-core' || value === 'market-watch'
+  return value === 'trading-core' || value === 'market-watch' || value === 'industry-chain'
 }
 
 function isOwnedBackendState(value: unknown): value is OwnedBackendState {

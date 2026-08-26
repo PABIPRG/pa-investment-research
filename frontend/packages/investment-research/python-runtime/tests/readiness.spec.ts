@@ -66,6 +66,17 @@ const definitions: Record<InvestmentBackendId, PythonBackendDefinition> = {
     initCommand: { posix: './init.sh', windows: 'init.bat' },
     credentialEnv: [{ ref: DEEPSEEK_API_KEY, env: 'DEEPSEEK_API_KEY', role: 'enhancement' }],
   },
+  'industry-chain': {
+    id: 'industry-chain',
+    service: 'industry-chain',
+    mode: 'managed',
+    baseUrl: 'http://127.0.0.1:8200',
+    repositoryPath: ['backend', 'industry-chain'],
+    module: 'industry_chain.app:app',
+    healthPath: '/health',
+    healthOk: { ok: true },
+    initCommand: { posix: './init.sh', windows: 'init.bat' },
+  },
 }
 
 interface ReadinessManager {

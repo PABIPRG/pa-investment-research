@@ -1,7 +1,7 @@
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 
 /** Stable investment Python backend identifiers. */
-export type InvestmentBackendId = 'trading-core' | 'market-watch'
+export type InvestmentBackendId = 'trading-core' | 'market-watch' | 'industry-chain'
 
 /** Backend ownership modes selected by plugin configuration. */
 export type InvestmentBackendMode = 'managed' | 'external'
@@ -95,11 +95,44 @@ export type InvestmentDataOperation =
   | 'market-watch.watch-add'
   | 'market-watch.watch-remove'
   | 'market-watch.alerts'
+  | 'trading-core.analyze'
   | 'trading-core.holdings'
   | 'trading-core.holdings-save'
+  | 'trading-core.holdings-analyze'
   | 'trading-core.risk-portfolio'
   | 'trading-core.risk-alerts'
   | 'trading-core.personalized-cards'
+  | 'trading-core.personalized-feedback'
+  | 'trading-core.personalized-matches'
+  | 'trading-core.personalized-profile'
+  | 'trading-core.risk-profile'
+  | 'trading-core.kyc-profile'
+  | 'trading-core.kyc-questionnaire'
+  | 'trading-core.kyc-adjust'
+  | 'trading-core.kyc-parse'
+  | 'trading-core.strategies'
+  | 'trading-core.strategy-detail'
+  | 'trading-core.strategies-hypothesize'
+  | 'trading-core.strategy-run'
+  | 'trading-core.strategy-action'
+  | 'trading-core.brief-run'
+  | 'trading-core.backtest-run'
+  | 'trading-core.task-status'
+  | 'trading-core.task-result'
+  | 'trading-core.shadow-run'
+  | 'trading-core.shadow-status'
+  | 'trading-core.shadow-positions'
+  | 'trading-core.shadow-equity'
+  | 'trading-core.evolution-status'
+  | 'trading-core.evolution-attribution'
+  | 'trading-core.evolution-run'
+  | 'industry-chain.stats'
+  | 'industry-chain.companies'
+  | 'industry-chain.company'
+  | 'industry-chain.entity'
+  | 'industry-chain.single'
+  | 'industry-chain.chain'
+  | 'industry-chain.network'
 
 /** Lossless JSON value accepted across the generated Remote boundary. */
 export type InvestmentJsonValue =
@@ -143,7 +176,7 @@ export interface PythonBackendDefinition {
   /** Backend directory components relative to a repository root. */
   readonly repositoryPath: readonly string[]
   /** Uvicorn application module. */
-  readonly module: 'adapter.app:app' | 'market_watch.app:app'
+  readonly module: 'adapter.app:app' | 'market_watch.app:app' | 'industry_chain.app:app'
   /** Health endpoint relative to the backend origin. */
   readonly healthPath: '/health'
   /** Additional response fields required for a healthy service. */

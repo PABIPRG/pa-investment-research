@@ -85,7 +85,7 @@ export async function smokeInvestmentPythonSidecar(
   const descriptor = JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8')) as RuntimeDescriptor
   const executable = safePath(descriptor.python.executable)
   const sitePackages = safePath(descriptor.sitePackages)
-  const modules = ['trading-core', 'market-watch'].map((id) => {
+  const modules = ['trading-core', 'market-watch', 'industry-chain'].map((id) => {
     const backend = descriptor.backends[id]
     if (backend === undefined) throw new Error(`missing backend descriptor: ${id}`)
     return { projectDir: safePath(backend.projectDir), module: backend.module }

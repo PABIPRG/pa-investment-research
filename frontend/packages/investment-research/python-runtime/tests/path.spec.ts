@@ -166,6 +166,7 @@ describe('investment backend path resolution', () => {
     const projectDirs = {
       'trading-core': pathApi.join(root, 'backends', 'dsh-trading-core'),
       'market-watch': pathApi.join(root, 'backends', 'market-watch'),
+      'industry-chain': pathApi.join(root, 'backends', 'industry-chain'),
     }
     const verified: VerifiedInvestmentRuntime = {
       root,
@@ -179,6 +180,7 @@ describe('investment backend path resolution', () => {
         backends: {
           'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
           'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+          'industry-chain': { projectDir: 'backends/industry-chain', module: 'industry_chain.app:app' },
         },
         files: [{ path: platform === 'win32' ? 'runtime/python.exe' : 'runtime/bin/python3', sha256: '0'.repeat(64) }],
       },

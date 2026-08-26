@@ -246,6 +246,7 @@
     { "path": "./packages/bundle/investment-runtime" },
     { "path": "./packages/bundle/investment-stock-analysis" },
     { "path": "./packages/bundle/investment-market-watch" },
+    { "path": "./packages/bundle/investment-industry-chain" },
     { "path": "./packages/bundle/web-app" },
     { "path": "./packages/boot/app-boot" },
     { "path": "./packages/boot/cmdline" },
@@ -300,6 +301,7 @@
     { "path": "./packages/lsp/tool-lsp" },
     { "path": "./packages/investment-research/stock-analysis" },
     { "path": "./packages/investment-research/market-watch" },
+    { "path": "./packages/investment-research/industry-chain" },
     { "path": "./packages/investment-research/python-runtime" },
     { "path": "./apps/cli" },
     { "path": "./apps/electron" }

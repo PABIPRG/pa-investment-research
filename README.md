@@ -14,23 +14,23 @@
 ### 首次使用
 
 ```bash
-bash scripts/init.sh
-cd frontend && pnpm run investment:python:init
+./start.sh init
 ```
 
-先安装并构建前端，再初始化投研所需的两个 Python 后台环境。macOS 下会自动移除 native 模块的 quarantine 标记，避免 Gatekeeper 拦截。
+该命令会安装并构建前端、准备 Electron 运行时，再初始化投研所需的三个 Python 后台环境。每个新 clone 或 Git worktree 都需要执行一次；macOS 下还会自动移除 native 模块的 quarantine 标记，避免 Gatekeeper 拦截。
 
 ### 可用命令
 
 | 命令 | 说明 |
 |------|------|
+| `init` | 初始化当前工作区的前端、Electron 与三个投研 Python 环境；新 clone 或 worktree 首次使用时执行 |
 | `investment-web` | 构建并启动 Web 版投研；自动托管并清理 Python 后台，可继续传入 `--host`、`--port` 等 Web 参数 |
 | `investment-electron` | 构建并启动 Electron 版投研；Electron 退出时自动清理其托管的 Python 后台 |
 | `backend-start` | 手动启动常驻后台：`trading-core(:8000)` 和 `market-watch(:8100)`，仅用于独立调试 |
 | `backend-stop` | 停止通过手动常驻模式运行的两个投研后台 |
 | `sync-upstream` | 同步上游 deepseek-harness 到 `frontend/`（git subtree + squash） |
 
-正常使用 Web 或 Electron 时不需要先执行 `backend-start`。产品入口会自行启动后台，并且只清理本次运行所拥有的进程。手动执行 `backend-start` 后，后台会跨越 Web/Electron 生命周期持续运行，需使用 `./start.sh backend-stop` 明确停止。
+正常使用 Web 或 Electron 时不需要先执行 `backend-start`。产品入口会先验证当前工作区的 Python 环境，再自行启动后台，并且只清理本次运行所拥有的进程；环境尚未初始化时会在构建前失败并提示执行 `./start.sh init`。手动执行 `backend-start` 后，后台会跨越 Web/Electron 生命周期持续运行，需使用 `./start.sh backend-stop` 明确停止。
 
 ### 同步上游
 

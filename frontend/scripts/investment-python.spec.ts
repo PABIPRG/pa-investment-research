@@ -21,11 +21,14 @@ describe('investment Python setup driver', () => {
     })).resolves.toBe(0)
 
     expect(spawn.mock.calls).toEqual([
-      [posix.join(root, 'backend/dsh-trading-core/init.sh'), [], {
+      ['bash', [posix.join(root, 'backend/dsh-trading-core/init.sh')], {
         cwd: posix.join(root, 'backend/dsh-trading-core'), stdio: 'inherit',
       }],
-      [posix.join(root, 'backend/market-watch/init.sh'), [], {
+      ['bash', [posix.join(root, 'backend/market-watch/init.sh')], {
         cwd: posix.join(root, 'backend/market-watch'), stdio: 'inherit',
+      }],
+      ['bash', [posix.join(root, 'backend/industry-chain/init.sh')], {
+        cwd: posix.join(root, 'backend/industry-chain'), stdio: 'inherit',
       }],
     ])
   })
@@ -44,6 +47,7 @@ describe('investment Python setup driver', () => {
     expect(spawn.mock.calls.map(call => [call[0], call[1]])).toEqual([
       ['cmd.exe', ['/d', '/s', '/c', win32.join(root, 'backend/dsh-trading-core/verify.bat')]],
       ['cmd.exe', ['/d', '/s', '/c', win32.join(root, 'backend/market-watch/verify.bat')]],
+      ['cmd.exe', ['/d', '/s', '/c', win32.join(root, 'backend/industry-chain/verify.bat'), '--environment']],
     ])
   })
 
@@ -76,5 +80,7 @@ describe('investment Python setup driver', () => {
     expect(output).toContain(posix.join(root, 'backend/dsh-trading-core/init.sh'))
     expect(output).toContain(posix.join(root, 'backend/market-watch'))
     expect(output).toContain(posix.join(root, 'backend/market-watch/init.sh'))
+    expect(output).toContain(posix.join(root, 'backend/industry-chain'))
+    expect(output).toContain(posix.join(root, 'backend/industry-chain/init.sh'))
   })
 })

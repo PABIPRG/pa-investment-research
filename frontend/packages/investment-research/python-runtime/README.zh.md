@@ -33,11 +33,17 @@
 
 ## 项目发现与初始化
 
-源码启动会从本安装包向上查找 `backend/dsh-trading-core` 与 `backend/market-watch`。使用 `pnpm run investment:python:init` 按固定顺序初始化两个环境，再用 `pnpm run investment:python:verify` 执行只读检查。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
+源码启动会从本安装包向上查找 `backend/dsh-trading-core`、`backend/market-watch` 与 `backend/industry-chain`。使用 `pnpm run investment:python:init` 按固定顺序初始化三个环境，再用 `pnpm run investment:python:verify` 执行只读检查。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
 
-解析采用严格优先级：显式绝对项目／解释器组合最高，其次是两个 Python 环境都完整的源码 checkout，最后是 Electron `Resources/investment-python/runtime.json` sidecar。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单：每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内；缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
+解析采用严格优先级：显式绝对项目／解释器组合最高，其次是三个 Python 环境都完整的源码 checkout，最后是 Electron `Resources/investment-python/runtime.json` sidecar。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单：每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内；缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
 
 trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程。backend scheduler（调度器）与 push（推送）设置仍归 Python 端所有；随附 profile 保持股票分析的对话内推送关闭（`enableInChatPush: false`），也不会把这些设置解释为 profile 组合维度。
+
+## 浏览器数据操作
+
+Runtime 同时是浏览器发起投研数据读取的信任边界。客户端只发送 `InvestmentDataOperation`，不能传入后端地址或 URL。`requestInvestmentData` 为每个操作选择固定 backend、HTTP 方法和路径，校验所有输入键与数值边界，获取经过验证的 backend lease，并在响应结束后释放 lease。未知操作名、未知输入字段、不支持的枚举值和越界数量会在请求发给后端前失败。
+
+操作白名单覆盖 `market-watch` 的市场观测、`trading-core` 的个人投研数据与分析/简报/回测/策略/影子/自进化流程，以及 `industry-chain` 的公司搜索、公司与实体档案、五列链路、有界多层链路、统计和服务端过滤网络切片。统一任务只开放固定启动、状态和结果路由；它不开放任意后端访问，也不生成虚构结果。
 
 ## 日志与状态
 

@@ -120,12 +120,20 @@ export const PROFILE_TEMPLATES: Record<string, readonly string[]> = {
     '@deepseek-ai/dsh-investment-runtime-bundle',
     '@deepseek-ai/dsh-investment-stock-analysis-bundle',
     '@deepseek-ai/dsh-investment-market-watch-bundle',
+    '@deepseek-ai/dsh-investment-industry-chain-bundle',
   ],
 }
 
 /** Installation-owned bundle tuples normalized to the shipped template. */
 const INSTALLATION_OWNED_PROFILE_TUPLES: Record<string, readonly string[]> = {
   headless: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-headless'],
+  'investment-research': [
+    '@deepseek-ai/dsh-base',
+    '@deepseek-ai/dsh-web-app',
+    '@deepseek-ai/dsh-investment-runtime-bundle',
+    '@deepseek-ai/dsh-investment-stock-analysis-bundle',
+    '@deepseek-ai/dsh-investment-market-watch-bundle',
+  ],
 }
 
 /** The bundle list a `dsh plugin` init uses for a name with no shipped template. */

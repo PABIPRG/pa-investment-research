@@ -5,6 +5,7 @@ import { createElement } from 'react'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { apply, inject } from '../src/client/index.ts'
+import type { InvestmentAssistantRequest } from '../src/client/assistant-context.ts'
 import {
   InvestmentBrand,
   InvestmentNewSession,
@@ -47,17 +48,23 @@ async function bench() {
     getSnapshot: () => ({ openState: 'open', openError: null }),
     subscribe: vi.fn(() => () => {}),
   }
+  const sessionScopes = new Map([
+    ['fresh-1', { id: 'fresh-1' }],
+    ['fresh-2', { id: 'fresh-2' }],
+    ['fresh-3', { id: 'fresh-3' }],
+  ])
   const sessions = {
     list: { getSnapshot: () => listSnapshot, subscribe: vi.fn(() => () => {}) },
     open: vi.fn(),
     search: vi.fn(async () => ({ ok: true as const, value: { items: [], hasMore: false } })),
     binding: vi.fn(() => ({ session: sessionFace })),
-    scope: vi.fn(() => ({})),
+    scope: vi.fn((sessionId: string) => sessionScopes.get(sessionId)),
   }
+  let freshSessionIndex = 0
   const workspaces = {
     connectWorkspace: vi.fn(async () => 'connected'),
     startSession: vi.fn(),
-    startFreshSession: vi.fn(async () => 'fresh'),
+    startFreshSession: vi.fn(async () => `fresh-${++freshSessionIndex}`),
     archiveSession: vi.fn(async () => {}),
   }
   const layout = { closeDetails: vi.fn() }
@@ -70,7 +77,7 @@ async function bench() {
   ctx.provide('layout', layout as never)
   ctx.provide('conversation', conversation as never)
   ctx.provide('investmentResearchRuntimeClient', { requestData } as never)
-  return { ctx, slots, sessions, workspaces, layout, setDraft, requestData, rename }
+  return { ctx, slots, sessions, workspaces, layout, conversation, setDraft, requestData, rename }
 }
 
 describe('ui-investment-research apply', () => {
@@ -104,10 +111,70 @@ describe('ui-investment-research apply', () => {
     })
     fireEvent.click(option)
     expect(navigate).toHaveBeenCalledWith('stock-detail', '600519')
+    expect(input.getAttribute('value')).toBe('')
+  })
+
+  it('clears a submitted security code and does not refill it from route state', () => {
+    const navigate = vi.fn()
+    let snapshot = { route: 'dashboard', historyOpen: false, stockQuery: '' }
+    const props = {
+      useInvestmentUi: (selector: (value: unknown) => unknown) => selector(snapshot),
+      requestData: vi.fn(async () => ({ items: [] })),
+      navigate,
+      setHistory: vi.fn(),
+      startSession: vi.fn(),
+      openSession: vi.fn(),
+      searchSessions: vi.fn(),
+      renameSession: vi.fn(),
+      archiveSession: vi.fn(),
+      prepareAssistant: vi.fn(async () => {}),
+    } as never
+    const view = render(createElement(InvestmentShell, props))
+    const input = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
+
+    fireEvent.change(input, { target: { value: '600519' } })
+    fireEvent.submit(input.closest('form')!)
+    expect(navigate).toHaveBeenCalledWith('stock-detail', '600519')
+    expect(input.getAttribute('value')).toBe('')
+
+    snapshot = { route: 'stock-detail', historyOpen: false, stockQuery: '600519' }
+    view.rerender(createElement(InvestmentShell, props))
+    expect(input.getAttribute('value')).toBe('')
+  })
+
+  it('opens a fresh assistant panel without leaving the current business route', async () => {
+    const prepareAssistant = vi.fn(async (_request: InvestmentAssistantRequest) => {})
+    const view = render(createElement(InvestmentShell, {
+      useInvestmentUi: (selector: (snapshot: unknown) => unknown) => selector({
+        route: 'strategy', historyOpen: false, stockQuery: '',
+      }),
+      requestData: vi.fn(async () => ({ items: [] })),
+      navigate: vi.fn(),
+      setHistory: vi.fn(),
+      startSession: vi.fn(),
+      openSession: vi.fn(),
+      searchSessions: vi.fn(),
+      renameSession: vi.fn(),
+      archiveSession: vi.fn(),
+      prepareAssistant,
+    } as never))
+
+    fireEvent.click(view.getByRole('button', { name: '打开投研助理' }))
+    const panel = await view.findByRole('dialog', { name: '投研助理面板' })
+    await waitFor(() => { expect(prepareAssistant).toHaveBeenCalledOnce() })
+    expect(prepareAssistant.mock.calls[0]?.[0]).toMatchObject({
+      intent: 'overall.research',
+      context: { scope: 'overall', module: 'overall', currentRoute: 'strategy' },
+    })
+    expect(panel.textContent).toContain('整体投研')
+    expect(document.body.dataset.investmentAssistantOpen).toBe('')
+
+    fireEvent.click(view.getByRole('button', { name: '关闭投研助理' }))
+    expect(view.queryByRole('dialog', { name: '投研助理面板' })).toBeNull()
   })
 
   it('loads an independent stock detail page and hands the resolved security to the assistant', async () => {
-    const prepareAssistant = vi.fn()
+    const prepareAssistant = vi.fn((_request: InvestmentAssistantRequest) => {})
     const requestData = vi.fn(async () => ({
       code: '600519',
       name: '贵州茅台',
@@ -150,15 +217,19 @@ describe('ui-investment-research apply', () => {
     expect(view.getByText('公司发布经营数据')).toBeTruthy()
 
     fireEvent.click(view.getByRole('button', { name: '在智能助手中分析' }))
-    expect(prepareAssistant).toHaveBeenCalledWith(expect.stringContaining('贵州茅台（600519）'))
+    await waitFor(() => { expect(prepareAssistant).toHaveBeenCalledOnce() })
+    const assistantRequest = prepareAssistant.mock.calls[0]?.[0]
+    expect(assistantRequest?.question).toContain('贵州茅台（600519）')
+    expect(assistantRequest?.context.module).toBe('stock-detail')
+    expect(assistantRequest?.context.moduleData.backendSnapshot).toHaveProperty('security')
   })
 
-  it('presents portfolio analysis as the primary navigation entry', () => {
+  it('presents the eight capability domains with the research dashboard first', () => {
     const navigate = vi.fn()
     const view = render(InvestmentSidebar({
       wide: true,
       useInvestmentUi: (selector: (snapshot: unknown) => unknown) => selector({
-        route: 'portfolio', historyOpen: false, stockQuery: '',
+        route: 'dashboard', historyOpen: false, stockQuery: '',
       }),
       useSessions: (selector: (snapshot: unknown) => unknown) => selector({ current: undefined }),
       useWorkspaces: (selector: (snapshot: unknown) => unknown) => selector({ items: [] }),
@@ -167,17 +238,17 @@ describe('ui-investment-research apply', () => {
     } as never))
 
     const routes = view.getAllByRole('button')
-    expect(routes[0]?.getAttribute('aria-label')).toBe('持仓分析')
+    expect(routes).toHaveLength(8)
+    expect(routes[0]?.getAttribute('aria-label')).toBe('研究工作台')
     expect(routes[0]?.getAttribute('aria-current')).toBe('page')
     fireEvent.click(routes[1]!)
-    expect(navigate).toHaveBeenCalledWith('assistant')
+    expect(navigate).toHaveBeenCalledWith('analysis')
   })
 
-  it('imports pasted holdings through the backend and refreshes portfolio risk data', async () => {
+  it('edits holdings through the backend and refreshes portfolio risk data', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.holdings') return { items: [] }
       if (request.operation === 'trading-core.risk-portfolio') return { summary: { n_positions: 0 }, breaches: [] }
-      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
       if (request.operation === 'trading-core.holdings-save') return { saved: 2 }
       return {}
     })
@@ -196,14 +267,17 @@ describe('ui-investment-research apply', () => {
       prepareAssistant: vi.fn(),
     } as never))
 
-    expect(await view.findByText(/尚未保存持仓/)).toBeTruthy()
-    fireEvent.click(view.getByRole('button', { name: '导入持仓' }))
-    fireEvent.change(view.getByRole('textbox', { name: '持仓导入内容' }), {
-      target: { value: '股票代码,数量,成本价\n600519,100,1500\n000858,200,135' },
-    })
-
-    expect(view.getByText('导入预览')).toBeTruthy()
-    fireEvent.click(view.getByRole('button', { name: '替换并导入 2 条' }))
+    expect(await view.findByText('还没有持仓')).toBeTruthy()
+    fireEvent.click(view.getByRole('button', { name: '添加持仓' }))
+    fireEvent.click(view.getByRole('button', { name: '＋ 添加一行' }))
+    fireEvent.click(view.getByRole('button', { name: '＋ 添加一行' }))
+    fireEvent.change(view.getByRole('textbox', { name: '第 1 行股票代码' }), { target: { value: '600519' } })
+    fireEvent.change(view.getByRole('textbox', { name: '第 1 行持仓数量' }), { target: { value: '100' } })
+    fireEvent.change(view.getByRole('textbox', { name: '第 1 行持仓成本' }), { target: { value: '1500' } })
+    fireEvent.change(view.getByRole('textbox', { name: '第 2 行股票代码' }), { target: { value: '000858' } })
+    fireEvent.change(view.getByRole('textbox', { name: '第 2 行持仓数量' }), { target: { value: '200' } })
+    fireEvent.change(view.getByRole('textbox', { name: '第 2 行持仓成本' }), { target: { value: '135' } })
+    fireEvent.click(view.getByRole('button', { name: '保存持仓' }))
 
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
@@ -216,11 +290,10 @@ describe('ui-investment-research apply', () => {
         },
       })
     })
-    expect(await view.findByText('已导入 2 条持仓，持仓与风险数据已刷新。')).toBeTruthy()
+    expect(await view.findByText('已保存 2 条持仓，组合风险正在刷新。')).toBeTruthy()
     await waitFor(() => {
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(2)
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-portfolio')).toHaveLength(2)
-      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-alerts')).toHaveLength(2)
     })
   })
 
@@ -273,11 +346,34 @@ describe('ui-investment-research apply', () => {
 
     await expect(shell.requestData({ operation: 'market-watch.overview' })).resolves.toEqual({ status: 'ok' })
     expect(b.requestData).toHaveBeenCalledWith({ operation: 'market-watch.overview' })
-    shell.prepareAssistant('分析贵州茅台')
-    expect(b.setDraft).toHaveBeenCalledWith('分析贵州茅台')
+    const assistantRequest = {
+      intent: 'stock.research',
+      question: '分析贵州茅台',
+      context: {
+        schema: 'investment-research-context/v1',
+        scope: 'module',
+        module: 'stock-detail',
+        moduleLabel: '个股详情',
+        currentRoute: 'stock-detail',
+        overallData: {},
+        moduleData: { backendSnapshot: { security: { code: '600519', name: '贵州茅台' } } },
+        unavailable: [],
+      },
+    } as const
+    await shell.prepareAssistant(assistantRequest)
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
+    expect(b.sessions.scope).toHaveBeenLastCalledWith('fresh-1')
+    expect(b.conversation.input.for).toHaveBeenLastCalledWith({ id: 'fresh-1' })
+    expect(b.setDraft).toHaveBeenCalledWith(expect.stringContaining('"intent": "stock.research"'))
+    expect(b.setDraft).toHaveBeenCalledWith(expect.stringContaining('"name": "贵州茅台"'))
+    await shell.prepareAssistant({ ...assistantRequest, intent: 'portfolio.risk', question: '分析组合风险' })
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
+    expect(b.sessions.scope).toHaveBeenLastCalledWith('fresh-2')
+    expect(b.conversation.input.for).toHaveBeenLastCalledWith({ id: 'fresh-2' })
+    expect(b.setDraft).toHaveBeenLastCalledWith(expect.stringContaining('"question": "分析组合风险"'))
 
     await shell.startSession()
-    expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(3)
 
     await shell.openSession('session' as never)
     expect(b.sessions.open).toHaveBeenLastCalledWith('session')

@@ -7,6 +7,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+if [[ "${1:-}" == "--environment" ]]; then
+    if [[ ! -x env/bin/python ]]; then
+        echo "[错误] Python 虚拟环境不存在，请先运行 init.sh" >&2
+        exit 1
+    fi
+    env/bin/python -c "from industry_chain.app import app; print('industry-chain Python imports OK')"
+    exit 0
+fi
+
 echo "== industry-chain 验证 =="
 echo
 echo "[1/2] 适配器健康检查 ..."

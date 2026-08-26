@@ -30,10 +30,12 @@ async function fixture() {
   const requirements = {
     'backend/dsh-trading-core/requirements.txt': 'alpha==1 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n',
     'backend/market-watch/requirements.txt': 'beta==2 --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n',
+    'backend/industry-chain/requirements.txt': 'gamma==3\n',
   }
   for (const [path, value] of Object.entries(requirements)) await write(join(root, ...path.split('/')), value)
   await write(join(root, 'backend/dsh-trading-core/adapter/app.py'), 'safe trading')
   await write(join(root, 'backend/market-watch/market_watch/app.py'), 'safe market')
+  await write(join(root, 'backend/industry-chain/industry_chain/app.py'), 'safe industry')
   await write(join(root, 'backend/dsh-trading-core/.env'), 'SECRET_CANARY')
   await write(join(root, 'backend/dsh-trading-core/env/private.py'), 'SECRET_CANARY')
   await write(join(root, 'backend/dsh-trading-core/data/cache.json'), 'SECRET_CANARY')
@@ -120,6 +122,7 @@ describe('investment Python sidecar builder', () => {
     expect(first.files.map(entry => entry.path)).toEqual(expect.arrayContaining([
       'backends/dsh-trading-core/adapter/app.py',
       'backends/market-watch/market_watch/app.py',
+      'backends/industry-chain/industry_chain/app.py',
       'runtime/bin/python3',
       'site-packages/native-extension.so',
     ]))

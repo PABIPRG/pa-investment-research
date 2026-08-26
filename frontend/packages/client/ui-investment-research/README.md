@@ -2,22 +2,22 @@
 
 English | [中文](README.zh.md)
 
-`investment-research` Profile 专用的投研工作台 UI。该包保留正式产品壳的会话、消息、输入、附件、工具、审批和工作区能力，只替换侧栏中的业务导航，并通过 `shell.overlay` 增加顶部搜索、业务页面和历史对话抽屉。
+Profile-specific investment research workbench UI. The package keeps the production shell's sessions, messages, composer, attachments, tools, approvals, and workspace services. It replaces the business navigation and adds the workbench surfaces through `shell.overlay`.
 
-当前已接入两个真实数据页面：
+The sidebar organizes eight product areas into four groups:
 
-- “机会发现”通过 Host 白名单调用 `market-watch` 的市场扫描、技术信号和实时资讯接口。
-- “持仓分析”是工作台的默认主入口，通过 Host 白名单调用 `trading-core` 的持仓、组合风险和风险预警接口；进入应用时会优先展示该页面。页面支持选择 CSV / TSV 文件或粘贴表格文本导入持仓，导入前会校验并预览数据，确认后通过 `trading-core.holdings-save` 整体替换后端持仓并刷新风险结果。
+- Overview: Research Workbench.
+- Analysis and monitoring: Intelligent Analysis and Real-time Monitoring.
+- Strategy loop: Strategy Research, Shadow Validation, and Self-evolution.
+- Personal research and graph: My Research and Industry Chain.
 
-两个页面都按数据区独立加载。市场扫描、资讯、技术信号以及持仓、组合风险、风险预警互不等待，先完成的数据立即展示；单个数据区失败时只在该区域显示错误和重试入口。同一请求尚未完成时不会重复发起，刷新同一数据区会保留上次成功结果并标记“更新中”，页面顶部同时显示已完成项数。切换机会扫描类型只重新请求扫描结果及其选中股票的技术信号，不重复请求无关资讯；晚到的旧响应不会覆盖当前结果。
+The Research Workbench is the default route. It combines holdings, risk alerts, personalized market events, strategy matches, and the current risk profile without turning the page into another chat transcript. Real-time Monitoring uses the `market-watch` scan, technical signal, and news operations. My Research reads and edits holdings, watchlist entries, KYC, risk profile, behavioral profile, and portfolio risk on its current page. Industry Chain performs company search, company and entity profiles, five-column chains, multi-level expansion, and network slicing on its current page. Strategy Research, Shadow Validation, and Self-evolution read their corresponding strategy, shadow-position, equity, readiness, and attribution operations.
 
-“机会发现”首屏明确请求基础实时资讯，不启用事件富化或个性化排序，因此不会同步等待完整慢来源或最长 60 秒的可选 LLM。后端返回部分来源或 stale cache 时，页面分别显示“部分来源”或“缓存资讯”；完整来源、事件富化与个性化仍保留为 `news-flash` 的显式可选能力。
+Each independent data region loads and fails independently. A completed region renders immediately, a failed region keeps its own retry action, and a refresh keeps the last successful value visible while the replacement request runs. Request generations prevent a late response for an old selection from overwriting the current selection. This is a browser state guard, not network cancellation; the current Host transport does not receive an `AbortSignal` from these pages.
 
-这里的“忽略晚到响应”只是浏览器状态保护，不是网络取消。当前 Host transport 不接收本页面传入的 `AbortSignal`，被新请求取代的后端调用仍会运行到结束。
+The browser never supplies a backend origin, port, or arbitrary path. Every read and business write uses a stable operation name that the Host maps to a fixed route and backend lease. Stock and holdings analysis, briefs, historical backtests, strategy hypotheses and persistence, strategy backtests and state transitions, shadow validation, and evolution all call their backend workflows from their owning pages. Only result interpretation and follow-up research enter the investment assistant.
 
-浏览器不能传入后端地址、端口或任意路径。所有请求都使用稳定的 operation 名称，由 Host 映射到固定接口并管理后端租约。投研框架、项目组合、投研任务和知识库在对应数据模型完成前显示“真实能力接入中”，不生成演示数据。
-
-历史对话抽屉直接使用正式 Session 与 Workspace 服务，支持标题和消息内容搜索、打开、重命名和归档。页面中的“在智能助手中分析”会返回共享会话页并预填输入框，由用户确认后再发送，因此不会绕过现有模型选择、附件、审批或发送策略。
+The floating assistant entry and page-level research actions open the production conversation area beside the current business route without compressing the page, navigation, or state loss. Every entry creates an independent conversation through the Workspace service and then writes structured business context into that conversation's shared composer; historical conversations are never reused. Module context combines the click-time page snapshot, a module backend snapshot, and compact overall data, and explicitly limits the task to financial research rather than code or project analysis. The user reviews and sends the message, so model selection, attachments, approvals, and send policies remain unchanged. The history drawer continues to use the production Session and Workspace services for search, open, rename, and archive actions.
 
 ## Model Experience
 
@@ -25,19 +25,19 @@ English | [中文](README.zh.md)
 
 #### What the model sees
 
-模型不会直接看到页面读取的行情、持仓或风险 JSON。只有用户在共享输入框中确认并发送的内容，才会沿用 `ctx.conversation` 的正式上下文组装路径进入模型请求。
+The model receives no page data while the user only browses. After an assistant interpretation action, the page snapshot, module backend snapshot, and compact overall data form a structured draft. They enter the normal `ctx.conversation` context assembly path only after the user reviews and sends it.
 
 #### Token effect
 
-浏览和刷新业务页面不消耗模型 token。“深度分析”按钮只预填一段简短提示词；用户发送后，其 token 影响与普通会话输入相同。
+Browsing, filtering, refreshing, and running backend workflows consume no model tokens. An assistant interpretation action prefills bounded structured context; after the user sends it, token use depends on the page snapshot size and is counted with ordinary messages in that conversation.
 
 #### KV Cache effect
 
-业务页面本身不创建模型请求，因此不影响 KV Cache。用户发送预填提示词后，缓存行为与同一会话中的其他消息一致。
+Direct-data pages do not create model requests and therefore do not affect the KV cache. A sent prefilled prompt follows the same caching behavior as other messages in the active conversation.
 
 ## Known Limitations and Deferred Work
 
-- 当前页面按后端现有响应做容错展示，没有在浏览器复制后端业务规则。
-- Host 返回错误时页面显示可重试的真实错误状态，不回退到交互稿假数据。
-- 页面可以忽略被新筛选取代的响应，但尚不能取消已经交给 Host 的后端调用。
-- 投研框架、项目组合、投研任务和知识库需要先完成与正式 Workspace、Goal、Workflow、文件和会话产物的统一建模。
+- The browser presents backend responses defensively but does not duplicate backend business rules.
+- A Host or backend error remains a visible, retryable real-data state; the UI does not substitute fabricated results.
+- Superseded responses can be ignored in React state, but the already-dispatched Host request continues until it finishes.
+- Unified tasks currently use status polling to retrieve results. If the page closes or the app restarts, an in-memory task must be queried again with the task id returned by the backend.

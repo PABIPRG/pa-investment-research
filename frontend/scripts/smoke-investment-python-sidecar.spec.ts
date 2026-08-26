@@ -22,6 +22,7 @@ async function fixture() {
     'site-packages/native.so': 'native',
     'backends/dsh-trading-core/adapter/app.py': 'trading',
     'backends/market-watch/market_watch/app.py': 'market',
+    'backends/industry-chain/industry_chain/app.py': 'industry',
   }
   for (const [path, value] of Object.entries(files)) {
     const absolute = join(root, ...path.split('/'))
@@ -35,6 +36,7 @@ async function fixture() {
     backends: {
       'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
       'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+      'industry-chain': { projectDir: 'backends/industry-chain', module: 'industry_chain.app:app' },
     },
     files: Object.entries(files).sort(([left], [right]) => left.localeCompare(right)).map(([path, value]) => ({
       path, sha256: createHash('sha256').update(value).digest('hex'),
@@ -70,6 +72,7 @@ describe('investment Python sidecar smoke', () => {
     expect(args[2]).toContain('/health')
     expect(args[2]).toContain('adapter.app:app')
     expect(args[2]).toContain('market_watch.app:app')
+    expect(args[2]).toContain('industry_chain.app:app')
     expect(observedEnv?.DSH_INVESTMENT_STATE_DIR).toContain('dsh-investment-sidecar-smoke-')
     expect(observedEnv?.PYTHONDONTWRITEBYTECODE).toBe('1')
   })

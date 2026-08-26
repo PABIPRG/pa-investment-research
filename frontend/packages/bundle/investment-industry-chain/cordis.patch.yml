@@ -1,0 +1,3 @@
+- insert:
+    - id: investment-industry-chain
+      name: '@deepseek-ai/dsh-investment-industry-chain'
