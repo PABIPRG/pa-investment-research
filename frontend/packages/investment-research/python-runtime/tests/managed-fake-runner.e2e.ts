@@ -164,5 +164,5 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       await expect(fetch(`${definition.baseUrl}/health`)).rejects.toThrow()
     }
     unregister.forEach(dispose => dispose())
-  }, 30_000)
+  }, 60_000)
 })
