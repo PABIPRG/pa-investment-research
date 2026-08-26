@@ -1,8 +1,8 @@
 - banner:
   - navigation "Session hierarchy":
     - button "Use the read tool twice" [disabled]
-  - button "Session log":
-    - text: Session log
+  - button "Export conversation":
+    - text: Export conversation
     - img
   - tablist:
     - tab "Chat" [selected]

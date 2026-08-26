@@ -3,8 +3,8 @@
     - button "Begin your reply with the" [disabled]
   - img
   - text: Standard mode
-  - button "Session log":
-    - text: Session log
+  - button "Export conversation":
+    - text: Export conversation
     - img
   - tablist:
     - tab "Chat" [selected]

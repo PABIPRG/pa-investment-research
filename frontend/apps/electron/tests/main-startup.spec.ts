@@ -13,6 +13,13 @@ import { APP_SCHEME } from '../src/protocol.ts'
 
 const originalArgv = [...process.argv]
 
+interface StartupOptions {
+  readonly profile: string
+  readonly patchFiles: readonly string[]
+  readonly restart: () => Promise<void>
+  readonly watchPatches: boolean
+}
+
 afterEach(() => {
   process.argv = [...originalArgv]
 })
@@ -23,7 +30,7 @@ const mocks = vi.hoisted(() => {
     ready,
     requestSingleInstanceLock: vi.fn(() => true),
     registerSchemesAsPrivileged: vi.fn(),
-    runProfile: vi.fn(() => new Promise<never>(() => {})),
+    runProfile: vi.fn((_options: StartupOptions) => new Promise<never>(() => {})),
   }
 })
 
@@ -53,7 +60,10 @@ describe('Electron main startup', () => {
   it('claims the scheme privileges and finishes evaluation before readiness, then boots the selected profile', async () => {
     process.argv = ['/electron', '/app', '--profile', 'investment-research']
     const loading = import('../src/main.ts')
-    await vi.waitFor(() => { expect(mocks.requestSingleInstanceLock).toHaveBeenCalledOnce() })
+    await vi.waitFor(
+      () => { expect(mocks.requestSingleInstanceLock).toHaveBeenCalledOnce() },
+      { timeout: 5_000 },
+    )
 
     const state = await Promise.race([
       loading.then(() => 'loaded' as const),
@@ -70,11 +80,12 @@ describe('Electron main startup', () => {
     mocks.ready.resolve(undefined)
 
     await vi.waitFor(() => { expect(mocks.runProfile).toHaveBeenCalledOnce() })
-    expect(mocks.runProfile).toHaveBeenCalledWith(expect.objectContaining({
+    const startupOptions = mocks.runProfile.mock.calls[0]?.[0]
+    expect(startupOptions).toMatchObject({
       profile: 'investment-research',
       patchFiles: [expect.stringMatching(/electron\.patch\.yml$/u)],
-      restart: expect.any(Function),
       watchPatches: false,
-    }))
+    })
+    expect(startupOptions?.restart).toEqual(expect.any(Function))
   })
 })

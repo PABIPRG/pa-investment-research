@@ -283,7 +283,7 @@ export class InvestmentBackendManager {
     this.config = { ...DEFAULT_CONFIG, ...options.config, dshHome: resolveDshHome(options.config?.dshHome) }
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
     this.resolvePaths = options.resolvePaths ?? (definition => defaultResolvePaths(definition, { dshHome: this.config.dshHome }))
-    this.resolveCredential = options.resolveCredential ?? (async () => undefined)
+    this.resolveCredential = options.resolveCredential ?? (() => Promise.resolve(undefined))
     this.describeCredential = options.describeCredential
     this.resolveLogPaths = options.resolveLogPaths ?? backendLogPaths
     this.normalizeEnvironmentKey = options.normalizeEnvironmentKey ?? defaultNormalizeEnvironmentKey
@@ -687,10 +687,10 @@ export class InvestmentBackendManager {
     const credentialEnv = resolvedCredentials.environment
     const bundledEnv = paths.source === 'bundled'
       ? {
-          PYTHONPATH: paths.sitePackages!,
-          DSH_INVESTMENT_STATE_DIR: paths.stateDir!,
-          PYTHONDONTWRITEBYTECODE: '1',
-        }
+        PYTHONPATH: paths.sitePackages,
+        DSH_INVESTMENT_STATE_DIR: paths.stateDir,
+        PYTHONDONTWRITEBYTECODE: '1',
+      }
       : undefined
     const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined && bundledEnv === undefined
       ? undefined

@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events'
 import { posix, win32 } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { runInvestmentPython } from './investment-python.ts'
+import { runInvestmentPython, type InvestmentPythonDependencies } from './investment-python.ts'
+
+type Spawn = NonNullable<InvestmentPythonDependencies['spawn']>
 
 function child(exitCode: number) {
   const emitter = new EventEmitter()
@@ -12,7 +14,7 @@ function child(exitCode: number) {
 describe('investment Python setup driver', () => {
   it('runs POSIX backend scripts in the fixed order without using caller cwd', async () => {
     const root = '/tmp/项目 with spaces'
-    const spawn = vi.fn().mockImplementation(() => child(0))
+    const spawn = vi.fn<Spawn>(() => child(0))
 
     await expect(runInvestmentPython('init', {
       repoRoot: root,
@@ -35,7 +37,7 @@ describe('investment Python setup driver', () => {
 
   it('uses cmd argv entries for Windows paths with spaces and Chinese characters', async () => {
     const root = 'C:\\Program Files\\深度求索'
-    const spawn = vi.fn().mockImplementation(() => child(0))
+    const spawn = vi.fn<Spawn>(() => child(0))
 
     await expect(runInvestmentPython('verify', {
       repoRoot: root,
@@ -71,7 +73,7 @@ describe('investment Python setup driver', () => {
       platform: 'linux',
       exists: () => false,
       spawn,
-      writeError: message => { errors.push(message) },
+      writeError: (message) => { errors.push(message) },
     })).resolves.toBe(1)
 
     expect(spawn).not.toHaveBeenCalled()

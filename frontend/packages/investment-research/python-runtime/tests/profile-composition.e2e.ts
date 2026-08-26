@@ -17,6 +17,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import { composeEntries, loadOverlayPatches, renderConfigDump } from '@deepseek-ai/dsh-app-boot'
 import InvestmentPythonRuntime, { checkBackendHealth } from '../src/index.ts'
+import type { InvestmentBackendId } from '../src/types.ts'
 import * as StockAnalysis from '../../stock-analysis/src/index.ts'
 import * as MarketWatch from '../../market-watch/src/index.ts'
 
@@ -102,14 +103,16 @@ async function freePort(): Promise<number> {
 }
 
 async function createProject(root: string, name: string): Promise<string> {
+  if (python === undefined) throw new Error('DSH_INVESTMENT_TEST_PYTHON is required')
   const project = join(root, name)
   await cp(fixture, project, { recursive: true })
-  await execFileAsync(python!, ['-m', 'venv', join(project, 'env')])
+  await execFileAsync(python, ['-m', 'venv', join(project, 'env')])
   return project
 }
 
 async function mount(config: string, credential?: string): Promise<Context> {
-  const root = roots.at(-1)!
+  const root = roots.at(-1)
+  if (root === undefined) throw new Error('a profile test root must be created before mounting')
   const configPath = join(root, `cordis-${contexts.length}.yml`)
   await writeFile(configPath, config)
   const { default: LocalSubprocessRuntime } = await importLocalRuntime()
@@ -139,6 +142,12 @@ async function mount(config: string, credential?: string): Promise<Context> {
   await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
   await ctx.loader.await()
   return ctx
+}
+
+function backendReadiness(ctx: Context, backendId: InvestmentBackendId) {
+  const backend = ctx.investmentPythonRuntime.readiness().backends.find(candidate => candidate.backendId === backendId)
+  if (backend === undefined) throw new Error(`missing readiness for ${backendId}`)
+  return backend
 }
 
 function composition(options: {
@@ -174,11 +183,11 @@ function composition(options: {
   ].join('\n')
 }
 
-async function listen(service: 'trading-core' | 'market-watch' | 'unknown'): Promise<string> {
+async function listen(service: 'trading-core' | 'market-watch' | 'industry-chain' | 'unknown'): Promise<string> {
   const server = createServer((request, response) => {
     const health = service === 'trading-core'
       ? { service, status: 'ok' }
-      : service === 'market-watch' ? { service, ok: true } : { service }
+      : service === 'market-watch' || service === 'industry-chain' ? { service, ok: true } : { service }
     const payload = request.url === '/health'
       ? health
       : service === 'trading-core'
@@ -217,20 +226,16 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
     const ctx = await mount(config)
 
     expect(ctx.tools.schemas()).toHaveLength(21)
-    expect(ctx.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        backendId: 'trading-core',
-        backendStatus: 'healthy-owned',
-        capability: expect.objectContaining({ toolCount: 10, status: 'unavailable' }),
-        restartRequired: false,
-      }),
-      expect.objectContaining({
-        backendId: 'market-watch',
-        backendStatus: 'healthy-owned',
-        capability: expect.objectContaining({ toolCount: 11, status: 'market-template-only' }),
-        restartRequired: false,
-      }),
-    ]))
+    const tradingReadiness = backendReadiness(ctx, 'trading-core')
+    const marketReadiness = backendReadiness(ctx, 'market-watch')
+    expect(tradingReadiness.backendStatus).toBe('healthy-owned')
+    expect(tradingReadiness.capability?.toolCount).toBe(10)
+    expect(tradingReadiness.capability?.status).toBe('unavailable')
+    expect(tradingReadiness.restartRequired).toBe(false)
+    expect(marketReadiness.backendStatus).toBe('healthy-owned')
+    expect(marketReadiness.capability?.toolCount).toBe(11)
+    expect(marketReadiness.capability?.status).toBe('market-template-only')
+    expect(marketReadiness.restartRequired).toBe(false)
     const signal = new AbortController().signal
     await expect(ctx.tools.execute({ signal, callId: CallId('stock-watchlist'), name: 'get_watchlist', arguments: {} }))
       .resolves.toMatchObject({ isError: false, value: { tickers: ['AAPL'] } })
@@ -242,47 +247,38 @@ describe.skipIf(python === undefined)('investment profile composition', () => {
 
     const credentials = ctx.credentials as TestCredentials
     await credentials.set(DEEPSEEK_API_KEY, CANARY)
-    expect(ctx.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        backendId: 'trading-core',
-        restartRequired: true,
-        capability: expect.objectContaining({ status: 'unavailable' }),
-      }),
-      expect.objectContaining({
-        backendId: 'market-watch',
-        restartRequired: true,
-        capability: expect.objectContaining({ status: 'unavailable' }),
-      }),
-    ]))
+    expect(backendReadiness(ctx, 'trading-core').restartRequired).toBe(true)
+    expect(backendReadiness(ctx, 'trading-core').capability?.status).toBe('unavailable')
+    expect(backendReadiness(ctx, 'market-watch').restartRequired).toBe(true)
+    expect(backendReadiness(ctx, 'market-watch').capability?.status).toBe('unavailable')
     const stockBlocked = await ctx.tools.execute({
       signal,
       callId: CallId('stock-restart-required'),
       name: 'analyze_stock',
       arguments: { ticker: '000001' },
     })
-    expect(stockBlocked).toMatchObject({ isError: true, error: { message: expect.stringMatching(/restart/i) } })
+    expect(stockBlocked.isError).toBe(true)
+    if (!stockBlocked.isError) throw new Error('expected stock analysis to be blocked until restart')
+    expect(stockBlocked.error.message).toMatch(/restart/i)
     expect(JSON.stringify(stockBlocked)).not.toContain(CANARY)
 
     contexts.splice(contexts.indexOf(ctx), 1)
     await ctx.fiber.dispose()
     const restarted = await mount(config, CANARY)
     expect(restarted.tools.schemas()).toHaveLength(21)
-    expect(restarted.investmentPythonRuntime.readiness().backends).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        backendId: 'trading-core',
-        capability: expect.objectContaining({ toolCount: 10, status: 'stock-full' }),
-        restartRequired: false,
-      }),
-      expect.objectContaining({
-        backendId: 'market-watch',
-        capability: expect.objectContaining({ toolCount: 11, status: 'market-full' }),
-        restartRequired: false,
-      }),
-    ]))
+    const restartedTrading = backendReadiness(restarted, 'trading-core')
+    const restartedMarket = backendReadiness(restarted, 'market-watch')
+    expect(restartedTrading.capability?.toolCount).toBe(10)
+    expect(restartedTrading.capability?.status).toBe('stock-full')
+    expect(restartedTrading.restartRequired).toBe(false)
+    expect(restartedMarket.capability?.toolCount).toBe(11)
+    expect(restartedMarket.capability?.status).toBe('market-full')
+    expect(restartedMarket.restartRequired).toBe(false)
     expect(JSON.stringify(restarted.investmentPythonRuntime.readiness())).not.toContain(CANARY)
 
     const stock = [...restarted.loader.entries()].find(entry => entry.options.name === '@deepseek-ai/dsh-investment-stock-analysis')
-    await stock!.fiber!.dispose()
+    if (stock?.fiber === undefined) throw new Error('stock analysis plugin fiber was not mounted')
+    await stock.fiber.dispose()
     expect(restarted.tools.schemas()).toHaveLength(11)
     expect([...restarted.loader.entries()].some(entry => entry.options.name === '@deepseek-ai/dsh-investment-python-runtime')).toBe(true)
     expect(restarted.tools.schemas().some(schema => schema.name === 'watch_list')).toBe(true)

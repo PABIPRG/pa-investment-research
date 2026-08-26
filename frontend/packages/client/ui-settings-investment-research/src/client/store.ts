@@ -51,15 +51,15 @@ export function createInvestmentReadinessStore(): EngineStoreHandle<
       refresh: 'idle',
     }),
     actions: {
-      beginRestart: draft => { draft.restart = { status: 'pending' } },
-      acceptRestart: draft => { draft.restart = { status: 'accepted' } },
+      beginRestart: (draft) => { draft.restart = { status: 'pending' } },
+      acceptRestart: (draft) => { draft.restart = { status: 'accepted' } },
       unavailableRestart: (draft, reason: string) => {
         draft.restart = { status: 'unavailable', reason }
       },
-      failRestart: draft => { draft.restart = { status: 'error' } },
-      beginRefresh: draft => { draft.refresh = 'pending' },
-      finishRefresh: draft => { draft.refresh = 'idle' },
-      failRefresh: draft => { draft.refresh = 'error' },
+      failRestart: (draft) => { draft.restart = { status: 'error' } },
+      beginRefresh: (draft) => { draft.refresh = 'pending' },
+      finishRefresh: (draft) => { draft.refresh = 'idle' },
+      failRefresh: (draft) => { draft.refresh = 'error' },
     },
   })
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type {
   SessionId, SessionSearchResultItem,
@@ -12,17 +12,22 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { AssistantIntent } from './assistant-intent.ts'
-import { asRecord, money, number, percent, records, text } from './data.ts'
+import { SmartAnalysisPage } from './AnalysisPage.tsx'
+import { asRecord, money, number, percent, productErrorText, records, text } from './data.ts'
+import {
+  EventReportDialog, RiskDetailDialog, eventPrimaryTicker, riskIntentTarget,
+} from './DetailDialogs.tsx'
 import { parseHoldingsImport } from './holdings-import.ts'
 import {
   EvolutionPage,
   IndustryChainPage,
   ReportCenter,
-  ShadowValidationPage,
   StrategyResearchPage,
 } from './ProductPages.tsx'
+import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
 import type {
-  InvestmentDraftKey, InvestmentNavigationContext, InvestmentRoute, InvestmentUiSnapshot,
+  AssistantDisplayMode, AssistantModule, InvestmentDraftKey, InvestmentNavigationContext,
+  InvestmentRoute, InvestmentUiSnapshot,
 } from './state.ts'
 import css from './InvestmentShell.module.css'
 
@@ -47,10 +52,6 @@ interface RequestResource {
 const EMPTY_RESOURCE: ResourceState = Object.freeze({
   phase: 'idle', loaded: false, value: undefined, error: '',
 })
-
-function errorText(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason)
-}
 
 /**
  * Own browser request flights by serialized key and ignore superseded settlements.
@@ -93,7 +94,7 @@ function useRequestResource(requestData: RequestData): RequestResource {
         setState({ phase: 'success', loaded: true, value, error: '' })
       }, (reason: unknown) => {
         if (generation !== generationRef.current) return
-        setState(current => ({ ...current, phase: 'error', error: errorText(reason) }))
+        setState(current => ({ ...current, phase: 'error', error: productErrorText(reason) }))
       })
   }, [requestData])
 
@@ -140,6 +141,8 @@ export interface InvestmentShellInjected extends UiInjected {
   requestData: RequestData
   setHistory: (open: boolean) => void
   setReports: (open: boolean) => void
+  setAssistantMode: (mode: AssistantDisplayMode) => void
+  setAssistantModule: (module: AssistantModule) => void
   setModuleDraft: (key: InvestmentDraftKey, value: string) => void
   selectStrategy: (strategyId: string) => void
   startSession: () => Promise<void>
@@ -147,7 +150,7 @@ export interface InvestmentShellInjected extends UiInjected {
   searchSessions: (query: string, signal: AbortSignal) => Promise<readonly SessionSearchResultItem[]>
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
   archiveSession: (sessionId: SessionId) => Promise<void>
-  prepareAssistant: (intent: AssistantIntent) => void
+  prepareAssistant: (intent: AssistantIntent, module?: AssistantModule) => void
   toggleTheme: () => void
 }
 
@@ -156,13 +159,13 @@ export type InvestmentBrandProps = PropsRuntime<'sidebar.brand'>
 export type InvestmentNewSessionProps = PropsRuntime<'sidebar.newSession'>
 export type InvestmentWelcomeProps = PropsRuntime<'conversation.hero.welcome'> & HeroWelcomeOwnerProps
 
-type NavigationRoute = Exclude<InvestmentRoute, 'stock-detail'>
+type NavigationRoute = Exclude<InvestmentRoute, 'stock-detail' | 'assistant' | 'projects'>
 
 const ROUTES: readonly { id: NavigationRoute; label: string; note?: string }[] = [
-  { id: 'assistant', label: '智能分析', note: 'AI' },
+  { id: 'dashboard', label: '研究工作台', note: '总览' },
+  { id: 'analysis', label: '智能分析', note: 'AI' },
   { id: 'opportunity', label: '实时盯盘', note: '实时' },
   { id: 'framework', label: '策略研究', note: '策略' },
-  { id: 'projects', label: '影子验证', note: '纸面' },
   { id: 'tasks', label: '自进化', note: '闭环' },
   { id: 'portfolio', label: '我的投研', note: '组合' },
   { id: 'knowledge', label: '产业链', note: '图谱' },
@@ -229,9 +232,10 @@ function ImportIcon() {
   )
 }
 
-function NavGlyph({ route }: { route: InvestmentRoute }) {
+function NavGlyph({ route }: { route: NavigationRoute }) {
   const glyph = {
-    assistant: <><path d="M10 2.8 11.8 7l4.2 1.8-4.2 1.8-1.8 4.2-1.8-4.2L4 8.8 8.2 7 10 2.8Z" /><path d="m15.5 2.8.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" /></>,
+    dashboard: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="11" y="3" width="6" height="6" rx="1" /><rect x="3" y="11" width="6" height="6" rx="1" /><rect x="11" y="11" width="6" height="6" rx="1" /></>,
+    analysis: <><path d="M10 2.8 11.8 7l4.2 1.8-4.2 1.8-1.8 4.2-1.8-4.2L4 8.8 8.2 7 10 2.8Z" /><path d="m15.5 2.8.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" /></>,
     opportunity: <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
     'stock-detail': <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
     portfolio: <><path d="M10 3a7 7 0 1 0 7 7h-7V3Z" /><path d="M12 3.3A7 7 0 0 1 16.7 8H12V3.3Z" /></>,
@@ -262,53 +266,67 @@ export function InvestmentNewSession(_props: InvestmentNewSessionProps) {
   return null
 }
 
-const RESEARCH_PROMPTS = [
-  ['个股研究', '请调用 analyze_stock 工具分析贵州茅台近期基本面、估值与主要风险'],
-  ['行业机会', '请调用 investment_context 工具读取 industry 上下文，梳理半导体产业链的景气信号'],
-  ['持仓诊断', '请调用 investment_context 工具读取 portfolio 上下文，再检查当前组合风险'],
-  ['策略复核', '请调用 investment_context 工具读取 strategy 上下文，复核当前候选策略'],
-] as const
+interface ResearchExpert {
+  readonly id: 'stock' | 'industry' | 'portfolio' | 'strategy' | 'watch'
+  readonly label: string
+  readonly role: string
+  readonly summary: string
+  readonly prompt: string
+  readonly tools: readonly string[]
+  readonly sources: readonly string[]
+  readonly outputs: readonly string[]
+}
 
-/** Investment-specific blank-conversation welcome from the approved interaction draft. */
-export function InvestmentWelcome({ disabled, onPrompt }: InvestmentWelcomeProps) {
-  const [analysisCode, setAnalysisCode] = useState('')
-  const submitStock = (): void => {
-    const code = analysisCode.trim()
-    if (!/^\d{6}$/.test(code)) return
-    onPrompt(`请调用 analyze_stock 工具，对 ${code} 做完整投研分析，并明确核心逻辑、风险与后续观察信号。`)
-  }
+const RESEARCH_EXPERTS: readonly ResearchExpert[] = [
+  {
+    id: 'stock', label: '个股研究专家', role: '基本面 · 估值 · 风险',
+    summary: '拆解公司经营、估值位置、催化与主要下行风险，形成可继续跟踪的研究结论。',
+    prompt: '请调用 analyze_stock 工具完成个股研究；如需组合或行业信息，请再通过 investment_context 工具按需读取上下文。',
+    tools: ['analyze_stock', 'investment_context'],
+    sources: ['公司与行情分析结果', '关联行业与持仓上下文'],
+    outputs: ['核心投资逻辑', '估值与关键指标', '风险清单', '后续观察信号'],
+  },
+  {
+    id: 'industry', label: '产业链研究专家', role: '行业景气 · 上下游 · 影响传导',
+    summary: '从产业链结构、供需变化和事件传导路径识别机会与风险。',
+    prompt: '请调用 investment_context 工具读取 industry 上下文，梳理目标行业的景气信号、产业链传导与相关标的。',
+    tools: ['investment_context（industry）'],
+    sources: ['产业链图谱', '行业事件与关联标的'],
+    outputs: ['景气判断', '上中下游影响', '受益与承压环节', '验证信号'],
+  },
+  {
+    id: 'portfolio', label: '组合风控专家', role: '持仓诊断 · 风险预算 · 处置建议',
+    summary: '复核持仓集中度、画像预算与关联预警，给出分级处理顺序。',
+    prompt: '请调用 investment_context 工具读取 portfolio 上下文，诊断当前组合的集中度、风险预算突破与关联事件，并给出分级建议。',
+    tools: ['investment_context（portfolio）'],
+    sources: ['真实持仓', '组合风险预算', '风险预警'],
+    outputs: ['风险排序', '触发原因', '受影响持仓', '复核与调整建议'],
+  },
+  {
+    id: 'strategy', label: '策略验证专家', role: '假设 · 回测 · 影子验证',
+    summary: '复核策略假设、样本外阈值和纸面验证证据，判断下一生命周期动作。',
+    prompt: '请调用 investment_context 工具读取 strategy 上下文，复核当前策略的假设、样本外证据和影子验证准入条件。',
+    tools: ['investment_context（strategy）'],
+    sources: ['策略库', '样本内/样本外回测', '影子账户证据'],
+    outputs: ['假设可证伪性', '阈值判定', '证据缺口', '继续/退回/归档建议'],
+  },
+  {
+    id: 'watch', label: '实时盯盘专家', role: '异动 · 事件 · 观察清单',
+    summary: '结合盘中异动、关注列表和关联事件，整理当下最值得核验的信号。',
+    prompt: '请调用 investment_context 工具读取 watch 上下文，整理当前异动、关联事件和需要继续观察的信号。',
+    tools: ['investment_context（watch）'],
+    sources: ['盘中异动', '关注列表', '关联事件'],
+    outputs: ['异动摘要', '可能原因', '关联标的', '观察与失效条件'],
+  },
+]
+
+/** Blank Session chrome only; structured analysis belongs to SmartAnalysisPage. */
+export function InvestmentWelcome(_props: InvestmentWelcomeProps) {
   return (
     <section className={css.investmentWelcome} aria-labelledby="investment-welcome-title">
       <span className={css.welcomeMark} aria-hidden="true">✦</span>
-      <h1 id="investment-welcome-title">今天想研究什么？</h1>
-      <p>我可以结合投研框架、行情信号和持仓上下文，协助你拆解个股、行业机会与组合风险。</p>
-      <form className={css.inlineForm} onSubmit={(event) => { event.preventDefault(); submitStock() }}>
-        <label htmlFor="investment-analysis-code">智能分析股票代码</label>
-        <input
-          id="investment-analysis-code"
-          className={css.fieldInput}
-          value={analysisCode}
-          disabled={disabled}
-          inputMode="numeric"
-          maxLength={6}
-          placeholder="输入 6 位 A 股代码"
-          onChange={(event) => { setAnalysisCode(event.target.value) }}
-        />
-        <button type="submit" disabled={disabled || !/^\d{6}$/.test(analysisCode.trim())}>开始分析</button>
-      </form>
-      <div className={css.promptGrid} aria-label="快捷研究入口">
-        {RESEARCH_PROMPTS.map(([label, prompt]) => (
-          <button
-            key={label}
-            type="button"
-            disabled={disabled}
-            onClick={() => { onPrompt(prompt) }}
-          >
-            <strong>{label}</strong>
-            <span>{prompt}</span>
-          </button>
-        ))}
-      </div>
+      <h1 id="investment-welcome-title">AI 研究助理</h1>
+      <p>输入自然语言问题即可。需要业务事实时，助理会通过当前模块的受控工具按需读取。</p>
     </section>
   )
 }
@@ -317,7 +335,9 @@ export function InvestmentSidebar({
   wide, useInvestmentUi, navigate,
 }: InvestmentSidebarProps) {
   const route = useInvestmentUi(s => s.route)
-  const activeRoute: NavigationRoute = route === 'stock-detail' ? 'opportunity' : route
+  const activeRoute: NavigationRoute = route === 'stock-detail'
+    ? 'opportunity'
+    : route === 'projects' ? 'framework' : route === 'assistant' ? 'analysis' : route
 
   return (
     <div className={wide ? css.sidebarRegion : `${css.sidebarRegion} ${css.sidebarRegionCompact}`}>
@@ -467,9 +487,106 @@ function GlobalStockSearch({
   )
 }
 
+const GENERAL_ASSISTANT_OPTION = {
+  id: 'general', label: '通用研究', note: '根据当前页面按需选择工具',
+} as const
+
+const ASSISTANT_MODULE_OPTIONS: readonly { id: AssistantModule; label: string; note: string }[] = [
+  GENERAL_ASSISTANT_OPTION,
+  ...RESEARCH_EXPERTS.map(expert => ({ id: expert.id, label: expert.label, note: expert.role })),
+]
+
+/** Natural-language module intent for the shared Host conversation composer. */
+export function assistantModulePrompt(module: AssistantModule): string {
+  if (module === 'general') return ''
+  return RESEARCH_EXPERTS.find(expert => expert.id === module)?.prompt ?? ''
+}
+
+function AssistantFloatingSurface({
+  mode, module, starting, historyOpen, launcherRef, historyRef,
+  onMode, onModule, onNew, onHistory,
+}: {
+  mode: AssistantDisplayMode
+  module: AssistantModule
+  starting: boolean
+  historyOpen: boolean
+  launcherRef: RefObject<HTMLButtonElement>
+  historyRef: RefObject<HTMLButtonElement>
+  onMode: (mode: AssistantDisplayMode) => void
+  onModule: (module: AssistantModule) => void
+  onNew: () => void
+  onHistory: () => void
+}) {
+  const selected = ASSISTANT_MODULE_OPTIONS.find(item => item.id === module) ?? GENERAL_ASSISTANT_OPTION
+  if (mode === 'closed') {
+    return (
+      <button
+        ref={launcherRef}
+        type="button"
+        className={css.assistantLauncher}
+        data-action="assistant-open"
+        aria-label="打开 AI 研究助理"
+        aria-controls="investment-assistant-panel"
+        aria-expanded="false"
+        onClick={() => { onMode('docked') }}
+      ><span aria-hidden="true">AI</span></button>
+    )
+  }
+  return (
+    <>
+      {mode === 'expanded' && (
+        <div className={css.assistantBackdrop} role="presentation" onMouseDown={() => { onMode('docked') }} />
+      )}
+      <section
+        id="investment-assistant-panel"
+        className={css.assistantPanel}
+        data-testid="assistant-panel"
+        data-mode={mode}
+        role={mode === 'expanded' ? 'dialog' : 'complementary'}
+        aria-modal={mode === 'expanded' ? 'true' : undefined}
+        aria-label="AI 研究助理"
+      >
+        <header className={css.assistantHeader}>
+          <div className={css.assistantIdentity}>
+            <span aria-hidden="true">✦</span>
+            <div><strong>AI 研究助理</strong><small>{selected.note}</small></div>
+          </div>
+          <div className={css.assistantHeaderActions}>
+            <button
+              type="button"
+              data-action={mode === 'expanded' ? 'assistant-collapse' : 'assistant-expand'}
+              aria-label={mode === 'expanded' ? '收起 AI 助理' : '近全屏展开 AI 助理'}
+              title={mode === 'expanded' ? '收起' : '近全屏展开'}
+              onClick={() => { onMode(mode === 'expanded' ? 'docked' : 'expanded') }}
+            >{mode === 'expanded' ? '↘' : '↗'}</button>
+            <button type="button" data-action="assistant-close" aria-label="关闭 AI 研究助理" title="关闭" onClick={() => { onMode('closed') }}>×</button>
+          </div>
+        </header>
+        <div className={css.assistantToolbar}>
+          <label>
+            <span>研究模块</span>
+            <select
+              aria-label="选择 AI 研究模块"
+              value={module}
+              onChange={(event) => { onModule(event.target.value as AssistantModule) }}
+            >
+              {ASSISTANT_MODULE_OPTIONS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+            </select>
+          </label>
+          <div>
+            <button type="button" data-action="assistant-new" disabled={starting} aria-busy={starting} onClick={onNew}><PlusIcon />{starting ? '创建中…' : '新对话'}</button>
+            <button ref={historyRef} type="button" aria-haspopup="dialog" aria-expanded={historyOpen} onClick={onHistory}><HistoryIcon />历史</button>
+          </div>
+        </div>
+        <p className={css.assistantScope}>上下文由工具按需读取，输入框不会写入业务 JSON。</p>
+      </section>
+    </>
+  )
+}
+
 export function InvestmentShell({
   useInvestmentUi, useSessions, useWorkspaces, requestData, navigate, setHistory, setReports,
-  setModuleDraft, selectStrategy, startSession, openSession, searchSessions, renameSession,
+  setAssistantMode, setAssistantModule, setModuleDraft, selectStrategy, startSession, openSession, searchSessions, renameSession,
   archiveSession, prepareAssistant, toggleTheme,
 }: InvestmentShellProps) {
   const snapshot = useInvestmentUi(s => s)
@@ -479,14 +596,73 @@ export function InvestmentShell({
   const [sessionError, setSessionError] = useState<string | null>(null)
   const historyTriggerRef = useRef<HTMLButtonElement>(null)
   const reportTriggerRef = useRef<HTMLButtonElement>(null)
+  const assistantTriggerRef = useRef<HTMLButtonElement>(null)
+  const workbenchRef = useRef<HTMLElement>(null)
+  const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
   const historyCloseTimerRef = useRef(0)
+  const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
+  const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
+  const assistantMode = snapshot.assistantMode
+  const assistantModule = snapshot.assistantModule
 
   useEffect(() => () => { window.clearTimeout(historyCloseTimerRef.current) }, [])
   useEffect(() => {
-    if (snapshot.route === 'assistant') delete document.body.dataset.investmentWorkbenchActive
-    else document.body.dataset.investmentWorkbenchActive = ''
-    return () => { delete document.body.dataset.investmentWorkbenchActive }
-  }, [snapshot.route])
+    if (isAnalysisRoute) setAnalysisVisited(true)
+  }, [isAnalysisRoute])
+  useEffect(() => {
+    document.body.dataset.investmentAssistantMode = assistantMode
+    if (assistantMode === 'closed') document.body.dataset.investmentWorkbenchActive = ''
+    else delete document.body.dataset.investmentWorkbenchActive
+    return () => {
+      delete document.body.dataset.investmentWorkbenchActive
+      delete document.body.dataset.investmentAssistantMode
+    }
+  }, [assistantMode])
+  useEffect(() => {
+    const previous = previousAssistantModeRef.current
+    previousAssistantModeRef.current = assistantMode
+    if (previous !== 'closed' && assistantMode === 'closed') {
+      window.requestAnimationFrame(() => { assistantTriggerRef.current?.focus() })
+    }
+  }, [assistantMode])
+  useEffect(() => {
+    const workbench = workbenchRef.current
+    if (workbench === null) return
+    if (assistantMode === 'expanded') {
+      workbench.setAttribute('inert', '')
+      workbench.setAttribute('aria-hidden', 'true')
+    } else {
+      workbench.removeAttribute('inert')
+      workbench.removeAttribute('aria-hidden')
+    }
+  }, [assistantMode])
+  useEffect(() => {
+    if (assistantMode === 'closed') return
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || snapshot.historyOpen || snapshot.reportsOpen) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        setAssistantMode(assistantMode === 'expanded' ? 'docked' : 'closed')
+        return
+      }
+      if (event.key !== 'Tab' || assistantMode !== 'expanded') return
+      const panel = document.getElementById('investment-assistant-panel')
+      const conversation = document.querySelector<HTMLElement>('[data-conversation-scroll]')
+      const selector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      const focusable = [
+        ...(panel?.querySelectorAll<HTMLElement>(selector) ?? []),
+        ...(conversation?.querySelectorAll<HTMLElement>(selector) ?? []),
+      ].filter(element => element.offsetParent !== null)
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => { window.removeEventListener('keydown', handleKeyDown) }
+  }, [assistantMode, setAssistantMode, snapshot.historyOpen, snapshot.reportsOpen])
 
   const closeHistory = useCallback(() => {
     if (historyClosing) return
@@ -551,42 +727,6 @@ export function InvestmentShell({
           >
             <ThemeIcon />
           </button>
-          {snapshot.route === 'assistant' && (
-            <>
-              <button
-                type="button"
-                className={css.primaryButton}
-                aria-label="新对话"
-                aria-busy={startingSession}
-                disabled={startingSession || switchingSessionId !== undefined}
-                title="新对话"
-                onClick={() => {
-                  if (startingSession) return
-                  setStartingSession(true)
-                  setSessionError(null)
-                  setHistory(false)
-                  void startSession()
-                    .catch(() => { setSessionError('新对话创建失败，请稍后重试。') })
-                    .finally(() => { setStartingSession(false) })
-                }}
-              >
-                <PlusIcon /><span className={css.actionLabel}>{startingSession ? '创建中…' : '新对话'}</span>
-              </button>
-              <button
-                ref={historyTriggerRef}
-                type="button"
-                className={css.secondaryButton}
-                aria-label="历史对话"
-                aria-haspopup="dialog"
-                aria-expanded={snapshot.historyOpen}
-                aria-controls="investment-history-drawer"
-                title="历史对话"
-                onClick={() => { setHistoryClosing(false); setHistory(true) }}
-              >
-                <HistoryIcon /><span className={css.actionLabel}>历史对话</span>
-              </button>
-            </>
-          )}
         </div>
       </header>
       {switchingSessionId !== undefined && (
@@ -596,57 +736,93 @@ export function InvestmentShell({
       )}
       {sessionError !== null && <div className={css.sessionError} role="alert">{sessionError}</div>}
 
-      {snapshot.route !== 'assistant' && (
-        <main className={css.workbench}>
-          {snapshot.route === 'opportunity' && (
-            <OpportunityPage
+      <main ref={workbenchRef} className={css.workbench}>
+        {analysisVisited && (
+          <div className={css.routeSurface} hidden={!isAnalysisRoute}>
+            <SmartAnalysisPage
               requestData={requestData}
-              initialQuery={snapshot.watchQuery}
-              onAnalyze={prepareAssistant}
-              onView={(code) => { navigate('stock-detail', { stockCode: code }) }}
+              stockQuery={snapshot.analysisQuery}
+              backtestQuery={snapshot.backtestQuery}
+              onStockQuery={(value) => { setModuleDraft('analysisQuery', value) }}
+              onBacktestQuery={(value) => { setModuleDraft('backtestQuery', value) }}
+              onOpenReports={() => { setReports(true) }}
+              onOpenAssistant={prepareAssistant}
+              onOpenPortfolio={() => { navigate('portfolio') }}
             />
-          )}
-          {snapshot.route === 'stock-detail' && (
-            <StockDetailPage
-              requestData={requestData}
-              code={snapshot.selectedStockCode}
-              onBack={() => { navigate('opportunity') }}
-              onAnalyze={prepareAssistant}
-            />
-          )}
-          {snapshot.route === 'portfolio' && (
-            <PortfolioPage requestData={requestData} onAnalyze={prepareAssistant} />
-          )}
-          {snapshot.route === 'framework' && (
-            <StrategyResearchPage
-              requestData={requestData}
-              selectedStrategyId={snapshot.selectedStrategyId}
-              onSelectStrategy={selectStrategy}
-              onOpenShadow={(strategyId) => { navigate('projects', { strategyId }) }}
-              onAnalyze={prepareAssistant}
-            />
-          )}
-          {snapshot.route === 'projects' && (
-            <ShadowValidationPage
-              requestData={requestData}
-              selectedStrategyId={snapshot.selectedStrategyId}
-              onOpenEvolution={() => { navigate('tasks') }}
-              onAnalyze={prepareAssistant}
-            />
-          )}
-          {snapshot.route === 'tasks' && (
-            <EvolutionPage requestData={requestData} onAnalyze={prepareAssistant} />
-          )}
-          {snapshot.route === 'knowledge' && (
-            <IndustryChainPage
-              requestData={requestData}
-              query={snapshot.chainQuery}
-              onQuery={(query) => { setModuleDraft('chainQuery', query) }}
-              onAnalyze={prepareAssistant}
-            />
-          )}
-        </main>
-      )}
+          </div>
+        )}
+        {snapshot.route === 'dashboard' && (
+          <ResearchWorkbenchPage
+            requestData={requestData}
+            navigate={navigate}
+            onAnalyze={prepareAssistant}
+            onOpenReports={() => { setReports(true) }}
+          />
+        )}
+        {snapshot.route === 'opportunity' && (
+          <OpportunityPage
+            requestData={requestData}
+            initialQuery={snapshot.selectedStockCode || snapshot.watchQuery}
+            onAnalyze={prepareAssistant}
+            onView={(code) => { navigate('stock-detail', { stockCode: code }) }}
+          />
+        )}
+        {snapshot.route === 'stock-detail' && (
+          <StockDetailPage
+            requestData={requestData}
+            code={snapshot.selectedStockCode}
+            onBack={() => { navigate('opportunity') }}
+            onAnalyze={prepareAssistant}
+          />
+        )}
+        {snapshot.route === 'portfolio' && (
+          <PortfolioPage requestData={requestData} onAnalyze={prepareAssistant} />
+        )}
+        {(snapshot.route === 'framework' || snapshot.route === 'projects') && (
+          <StrategyResearchPage
+            requestData={requestData}
+            selectedStrategyId={snapshot.selectedStrategyId}
+            onSelectStrategy={selectStrategy}
+            onOpenShadow={(strategyId) => { navigate('projects', { strategyId }) }}
+            onOpenReports={() => { setReports(true) }}
+            onAnalyze={prepareAssistant}
+            initialView={snapshot.route === 'projects' ? 'shadow' : 'pool'}
+            onOpenEvolution={() => { navigate('tasks') }}
+          />
+        )}
+        {snapshot.route === 'tasks' && (
+          <EvolutionPage requestData={requestData} onAnalyze={prepareAssistant} />
+        )}
+        {snapshot.route === 'knowledge' && (
+          <IndustryChainPage
+            requestData={requestData}
+            query={snapshot.chainQuery}
+            onQuery={(query) => { setModuleDraft('chainQuery', query) }}
+            onAnalyze={prepareAssistant}
+          />
+        )}
+      </main>
+
+      <AssistantFloatingSurface
+        mode={assistantMode}
+        module={assistantModule}
+        starting={startingSession}
+        historyOpen={snapshot.historyOpen}
+        launcherRef={assistantTriggerRef}
+        historyRef={historyTriggerRef}
+        onMode={setAssistantMode}
+        onModule={setAssistantModule}
+        onNew={() => {
+          if (startingSession) return
+          setStartingSession(true)
+          setSessionError(null)
+          setHistory(false)
+          void startSession()
+            .catch(() => { setSessionError('新对话创建失败，请稍后重试。') })
+            .finally(() => { setStartingSession(false) })
+        }}
+        onHistory={() => { setHistoryClosing(false); setHistory(true) }}
+      />
 
       {snapshot.historyOpen && (
         <HistoryDrawer
@@ -848,7 +1024,7 @@ function HistoryDrawer({
           ))}
           {items.length === 0 && <div className={css.emptyState}>没有找到匹配的对话</div>}
         </div>
-        <div className={css.drawerFoot}>对话会安全保存在本机配置的存储位置</div>
+        <div className={css.drawerFoot}>对话会自动保存在本机</div>
       </aside>
     </div>
   )
@@ -885,7 +1061,10 @@ export function OpportunityPage({
 
   useEffect(() => {
     if (scan.state.phase !== 'success') return
-    if (rows.some(row => text(row.code, '') === selected)) return
+    // A stock deliberately carried back from the detail page may not appear in
+    // the current scan bucket. Keep that research subject instead of silently
+    // replacing it with the first ranked row.
+    if (selected.trim() !== '') return
     setSelected(text(rows[0]?.code, ''))
   }, [rows, scan.state.phase, selected])
 
@@ -989,7 +1168,7 @@ export function OpportunityPage({
                   onClick={() => {
                     onAnalyze({ kind: 'stock', code: selected, name: text(signalRecord.name, '') })
                   }}
-                >在智能助手中分析</button>
+                >带入智能分析</button>
               </div>
             )}
           </div>
@@ -1097,7 +1276,7 @@ function StockDetailPage({
       .then((value) => { if (alive) { setDetail(value); setLoading(false) } })
       .catch((reason: unknown) => {
         if (!alive) return
-        setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false)
+        setError(productErrorText(reason)); setLoading(false)
       })
     return () => { alive = false }
   }, [code, nonce, requestData])
@@ -1130,7 +1309,7 @@ function StockDetailPage({
             onClick={() => {
               onAnalyze({ kind: 'stock', code: resolvedCode, name })
             }}
-          >在智能助手中分析</button>
+          >带入智能分析</button>
         )}
       </PageHeader>
       {error !== '' && <ErrorCard title="个股详情暂不可用" message={error} retry={() => { setNonce(value => value + 1) }} />}
@@ -1239,7 +1418,7 @@ function HoldingsImportDialog({
       })
       onImported(result.items.length)
     } catch (reason: unknown) {
-      setError(errorText(reason))
+      setError(productErrorText(reason))
       setSaving(false)
     }
   }
@@ -1336,23 +1515,32 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
   const [nonce, setNonce] = useState(0)
   const [importOpen, setImportOpen] = useState(false)
   const [notice, setNotice] = useState('')
+  const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown>>()
+  const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
   const holdings = useRequestResource(requestData)
   const risk = useRequestResource(requestData)
   const alerts = useRequestResource(requestData)
+  const events = useRequestResource(requestData)
 
   useEffect(() => {
     holdings.run({ operation: 'trading-core.holdings' })
     risk.run({ operation: 'trading-core.risk-portfolio' })
     alerts.run({ operation: 'trading-core.risk-alerts' })
-  }, [alerts.run, holdings.run, nonce, risk.run])
+    events.run({
+      operation: 'trading-core.personalized-cards',
+      input: { limit: 20, bucket: 'all', match: true, comment: false },
+    })
+  }, [alerts.run, events.run, holdings.run, nonce, risk.run])
 
   const positions = records(asRecord(holdings.state.value).items)
   const riskRecord = asRecord(risk.state.value)
   const summary = asRecord(riskRecord.summary)
   const breaches = records(riskRecord.breaches)
-  const alertItems = records(asRecord(alerts.state.value).items)
+  const alertRecord = asRecord(alerts.state.value)
+  const alertItems = records(alertRecord.items)
+  const eventItems = records(asRecord(events.state.value).cards)
   const equalWeight = number(summary.equal_weight)
-  const resources = [holdings.state, risk.state, alerts.state]
+  const resources = [holdings.state, risk.state, alerts.state, events.state]
   const busy = resources.some(resource => resource.phase === 'loading' || resource.phase === 'refreshing')
 
   return (
@@ -1374,7 +1562,7 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
           onClick={() => {
             onAnalyze({ kind: 'portfolio' })
           }}
-        >发起持仓深度分析</button>
+        >带入智能分析持仓</button>
       </PageHeader>
       {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       <ResourceProgress label="持仓数据" resources={resources} />
@@ -1453,7 +1641,13 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
             </div>
             {risk.state.loaded && (
               <>
-                {breaches.map((item, index) => <RiskRow key={text(item.indicator, String(index))} item={item} />)}
+                {breaches.map((item, index) => (
+                  <RiskRow
+                    key={text(item.indicator, String(index))}
+                    item={item}
+                    onOpen={() => { setSelectedRisk({ ...item, source: text(item.source, 'portfolio') }) }}
+                  />
+                ))}
                 {breaches.length === 0 && <div className={css.goodState}>当前没有检测到风险预算突破</div>}
               </>
             )}
@@ -1474,13 +1668,70 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
             {!alerts.state.loaded && alerts.state.error === '' && <LoadingSkeleton rows={3} />}
             {alerts.state.loaded && (
               <>
-                {alertItems.slice(0, 12).map((item, index) => <AlertRow key={text(item.id, String(index))} item={item} />)}
+                {alertItems.slice(0, 12).map((item, index) => (
+                  <AlertRow
+                    key={text(item.id, String(index))}
+                    item={item}
+                    onOpen={() => {
+                      setSelectedRisk({
+                        ...item,
+                        degraded: alertRecord.degraded === true,
+                        degraded_reason: text(alertRecord.degraded_reason, '关联事件暂未更新，组合与画像预警仍可用。'),
+                      })
+                    }}
+                  />
+                ))}
                 {alertItems.length === 0 && <div className={css.emptyState}>当前没有预警记录</div>}
               </>
             )}
           </div>
         </section>
       </div>
+      <section data-testid="portfolio-events" className={`${css.panelCard} ${css.portfolioEvents}`} aria-busy={events.busy} aria-labelledby="portfolio-events-title">
+        <div className={css.sectionHeading}>
+          <div><strong id="portfolio-events-title">研究事件</strong><small>点击事件，以 Markdown 文档查看来源、关联原因与风险说明；持久报告仍以报告标识为准</small></div>
+          <ResourceLabel state={events.state} settled={`${eventItems.length} 条`} />
+        </div>
+        {events.state.error !== '' && (
+          <ErrorCard
+            title={events.state.loaded ? '研究事件更新失败' : '研究事件暂不可用'}
+            message={events.state.error}
+            retry={() => { events.run({ operation: 'trading-core.personalized-cards', input: { limit: 20, bucket: 'all', match: true, comment: false } }) }}
+            retained={events.state.loaded}
+          />
+        )}
+        {!events.state.loaded && events.state.error === '' && <LoadingSkeleton rows={3} />}
+        {events.state.loaded && (
+          <div className={css.portfolioEventList}>
+            {eventItems.map((item, index) => {
+              const itemRisk = asRecord(item.risk)
+              const eventId = text(item.event_id, text(item.source_event_id, ''))
+              const persistent = text(item.report_id, '') !== ''
+              return (
+                <button
+                  key={text(item.card_id, String(index))}
+                  type="button"
+                  data-event-id={eventId === '' ? undefined : eventId}
+                  data-action="event-report-open"
+                  aria-haspopup="dialog"
+                  onClick={() => { setSelectedEvent(item) }}
+                >
+                  <span>
+                    <strong>{text(item.title, '市场事件')}</strong>
+                    <small>{text(item.source, '来源未知')} · {text(item.time, '时间未知')}</small>
+                  </span>
+                  <span>
+                    {text(item.direction, '') !== '' && <b>{text(item.direction)}</b>}
+                    {text(itemRisk.level, '') !== '' && <b data-severity={text(itemRisk.level)}>{text(itemRisk.level)}风险</b>}
+                    <i>{persistent ? '查看投研报告' : '查看事件详情'} →</i>
+                  </span>
+                </button>
+              )
+            })}
+            {eventItems.length === 0 && <div className={css.emptyState}>当前没有与持仓、自选或策略关联的研究事件。</div>}
+          </div>
+        )}
+      </section>
       {importOpen && (
         <HoldingsImportDialog
           requestData={requestData}
@@ -1492,16 +1743,45 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
           }}
         />
       )}
+      {selectedRisk !== undefined && (
+        <RiskDetailDialog
+          item={selectedRisk}
+          onClose={() => { setSelectedRisk(undefined) }}
+          onAnalyze={() => {
+            const target = riskIntentTarget(selectedRisk)
+            setSelectedRisk(undefined)
+            if (target.strategyId !== undefined) onAnalyze({ kind: 'strategy', strategyId: target.strategyId })
+            else if (target.code !== undefined) onAnalyze({ kind: 'stock', code: target.code })
+            else onAnalyze({ kind: 'portfolio' })
+          }}
+        />
+      )}
+      {selectedEvent !== undefined && (
+        <EventReportDialog
+          item={selectedEvent}
+          requestData={requestData}
+          onClose={() => { setSelectedEvent(undefined) }}
+          onAnalyze={() => {
+            const ticker = eventPrimaryTicker(selectedEvent)
+            const reference = text(selectedEvent.title, '')
+            setSelectedEvent(undefined)
+            if (ticker !== undefined) onAnalyze({ kind: 'stock', code: ticker.code, name: ticker.name })
+            else onAnalyze({ kind: 'industry', reference })
+          }}
+        />
+      )}
     </div>
   )
 }
 
-function RiskRow({ item }: { item: Record<string, unknown> }) {
-  return <div className={css.riskRow}><span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span><div><strong>{text(item.label)}</strong><p>当前 {scalar(item.value)} · 上限 {scalar(item.limit)}</p></div></div>
+function RiskRow({ item, onOpen }: { item: Record<string, unknown>; onOpen: () => void }) {
+  const riskId = text(item.id, text(item.indicator, text(item.label, 'risk')))
+  return <div className={css.riskRow}><span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span><div><strong>{text(item.label)}</strong><p>当前 {scalar(item.value)} · 上限 {scalar(item.limit)}</p></div><button type="button" data-action="risk-detail" data-risk-id={riskId} aria-haspopup="dialog" onClick={onOpen}>详情</button></div>
 }
 
-function AlertRow({ item }: { item: Record<string, unknown> }) {
-  return <article className={css.alertRow}><div><span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span><strong>{text(item.title)}</strong></div><p>{text(item.detail)}</p><small>{text(item.ts, '')}</small></article>
+function AlertRow({ item, onOpen }: { item: Record<string, unknown>; onOpen: () => void }) {
+  const riskId = text(item.id, text(item.indicator, text(item.title, 'risk')))
+  return <article className={css.alertRow}><div><span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span><strong>{text(item.title)}</strong><button type="button" data-action="risk-detail" data-risk-id={riskId} aria-haspopup="dialog" onClick={onOpen}>详情</button></div><p>{text(item.detail)}</p><small>{text(item.ts, '')}</small></article>
 }
 
 function PageHeader({ title, description, children }: { title: string; description: string; children?: ReactNode }) {

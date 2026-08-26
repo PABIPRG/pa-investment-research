@@ -6,7 +6,7 @@ import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import { SessionLogDownloadController } from '../src/client/controller.ts'
 import { SessionLogDownloadHeaderAction } from '../src/client/HeaderAction.tsx'
 import type { SessionLogDownloadDialogProps } from '../src/client/Dialog.tsx'
-import { en } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 
 const SID = 'session-export-header' as SessionId
 
@@ -19,7 +19,7 @@ function bindSessionExport(controller: SessionLogDownloadController) {
   }
 }
 
-function bench() {
+function bench(dictionary: typeof en = en) {
   const controller = new SessionLogDownloadController(async () => new Response('zip'), vi.fn())
   const request = vi.fn((sessionId: SessionId) => controller.download(sessionId))
   const dismiss = vi.fn((sessionId: SessionId) => { controller.dismiss(sessionId) })
@@ -29,7 +29,7 @@ function bench() {
     useSessionLogDownload,
     request,
     dismiss,
-    t: (key: keyof typeof en): string => en[key],
+    t: (key: keyof typeof en): string => dictionary[key],
   } as unknown as SessionLogDownloadDialogProps
   const view = render(<SessionLogDownloadHeaderAction {...props} />)
   return { controller, request, view }
@@ -40,11 +40,11 @@ afterEach(cleanup)
 describe('Session export Header action', () => {
   it('renders the 111×32 text capsule and downloads through the shared controller', async () => {
     const b = bench()
-    const button = b.view.getByRole('button', { name: 'Session log' })
+    const button = b.view.getByRole('button', { name: 'Export conversation' })
     expect(button.querySelector('svg')).not.toBeNull()
     fireEvent.click(button)
     await waitFor(() => { expect(b.request).toHaveBeenCalledWith(SID) })
-    expect(await b.view.findByRole('dialog', { name: 'Session download started' })).toBeTruthy()
+    expect(await b.view.findByRole('dialog', { name: 'Conversation backup download started' })).toBeTruthy()
   })
 
   it('disables the capsule while either entry path downloads this Session', async () => {
@@ -62,11 +62,37 @@ describe('Session export Header action', () => {
     } as unknown as SessionLogDownloadDialogProps)} />)
 
     const download = controller.download(SID)
-    const button = b.view.getByRole('button', { name: 'Session log' })
-    await waitFor(() => { expect(button.getAttribute('aria-busy')).toBe('true') })
+    const button = b.view.getByRole('button', { name: 'Export conversation' })
+    await waitFor(() => {
+      expect(button.getAttribute('aria-busy')).toBe('true')
+      expect(button.textContent).toContain('Exporting…')
+    })
     expect((button as HTMLButtonElement).disabled).toBe(true)
     release(new Response('zip'))
     await download
     await waitFor(() => { expect(button.getAttribute('aria-busy')).toBe('false') })
+  })
+
+  it('localizes the idle and busy labels in Chinese', async () => {
+    const b = bench(zh)
+    const button = b.view.getByRole('button', { name: '导出对话' })
+    let release!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { release = resolve })
+    const controller = new SessionLogDownloadController(() => pending, vi.fn())
+    b.view.rerender(<SessionLogDownloadHeaderAction {...({
+      sessionId: SID,
+      useSessionLogDownload: bindSessionExport(controller),
+      request: (sessionId: SessionId) => controller.download(sessionId),
+      dismiss: (sessionId: SessionId) => { controller.dismiss(sessionId) },
+      t: (key: keyof typeof zh): string => zh[key],
+    } as unknown as SessionLogDownloadDialogProps)} />)
+
+    expect(button.textContent).toContain('导出对话')
+    const download = controller.download(SID)
+    await waitFor(() => {
+      expect(b.view.getByRole('button', { name: '正在导出…' }).getAttribute('aria-busy')).toBe('true')
+    })
+    release(new Response('zip'))
+    await download
   })
 })

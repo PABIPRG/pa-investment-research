@@ -8,7 +8,7 @@ export const inject = ['commands']
 
 const REQUESTED: CommandResult = {
   kind: 'success',
-  text: 'Session log download requested.',
+  text: 'Conversation backup download requested.',
 }
 
 /**
@@ -18,9 +18,12 @@ const REQUESTED: CommandResult = {
 export function apply(ctx: Context): void {
   ctx.effect(() => ctx.commands.register({
     name: 'export',
-    description: 'Download this Session log as a ZIP archive',
+    description: 'Export this conversation as a ZIP backup',
     handler: invocation => Promise.resolve(invocation.rawInput.trim() === ''
       ? REQUESTED
-      : { kind: 'error', text: 'The Web /export command does not accept a path.' }),
+      : {
+        kind: 'error',
+        text: 'Enter /export without a file path. The backup location follows your download settings.',
+      }),
   }), 'session-log-download: command')
 }

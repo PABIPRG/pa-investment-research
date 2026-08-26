@@ -1,16 +1,19 @@
-/** Industry-chain backend lifecycle plugin. @module @deepseek-ai/dsh-investment-industry-chain */
+/** Industry-chain Python backend lifecycle registration for the investment Profile. */
 
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
-import type { PythonBackendDefinition, PythonBackendLease } from '@deepseek-ai/dsh-investment-python-runtime'
+import type {
+  PythonBackendDefinition,
+  PythonBackendLease,
+} from '@deepseek-ai/dsh-investment-python-runtime'
 
 export const name = 'investment-industry-chain'
 
-/** Industry-chain adapter connection settings. */
+/** Industry-chain backend connection settings. */
 export interface Config {
   /** Runtime ownership mode. Defaults to managed. */
   backendMode?: 'managed' | 'external'
-  /** Backend origin verified by the runtime. Defaults to `http://127.0.0.1:8200`. */
+  /** Backend origin verified by the Runtime. Defaults to `http://127.0.0.1:8200`. */
   backendBaseUrl?: string
   /** Explicit absolute industry-chain checkout when repository discovery is unavailable. */
   backendProjectDir?: string
@@ -34,25 +37,42 @@ function industryChainBackend(config: Config): PythonBackendDefinition {
     repositoryPath: ['backend', 'industry-chain'],
     module: 'industry_chain.app:app',
     healthPath: '/health',
-    healthOk: { ok: true },
+    healthOk: { ok: true, service: 'industry-chain' },
     initCommand: { posix: './init.sh', windows: 'init.bat' },
   }
 }
 
-/** Register, acquire, and release the industry-chain backend in one ordered effect. */
+/** Register and lease the industry-chain backend without adding duplicate model tools. */
 export async function apply(ctx: Context, config: Config = {}): Promise<void> {
   await ctx.effect(async () => {
     const unregister = ctx.investmentPythonRuntime.register(industryChainBackend(config))
     let lease: PythonBackendLease | undefined
+    let disposeCapability: (() => void) | undefined
+    // This package deliberately owns zero tools. Keep the lifecycle boundary
+    // explicit so future registrations cannot reorder teardown accidentally.
+    const disposeTools = (): void => {}
     const disposeResources = async (): Promise<void> => {
       try {
-        await lease?.release()
+        disposeTools()
       } finally {
-        unregister()
+        try {
+          disposeCapability?.()
+        } finally {
+          try {
+            await lease?.release()
+          } finally {
+            unregister()
+          }
+        }
       }
     }
     try {
       lease = await ctx.investmentPythonRuntime.acquire('industry-chain')
+      disposeCapability = ctx.investmentPythonRuntime.registerCapability({
+        backendId: 'industry-chain',
+        toolCount: 0,
+        llm: 'none',
+      })
       return disposeResources
     } catch (error) {
       await disposeResources()

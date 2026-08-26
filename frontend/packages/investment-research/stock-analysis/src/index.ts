@@ -144,8 +144,10 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
     const disposers = toolDisposers.reverse()
     const disposeFrom = async (index: number): Promise<void> => {
       if (index === disposers.length) return
+      const dispose = disposers[index]
+      if (dispose === undefined) return
       try {
-        disposers[index]!()
+        dispose()
       } finally {
         await disposeFrom(index + 1)
       }
@@ -227,7 +229,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
         }),
         async execute(args, exec) {
           ctx.investmentPythonRuntime.assertCapability('trading-core', 'llm-required')
-        // 1) 启动分析任务
+          // 1) 启动分析任务
           const body: Record<string, unknown> = {
             ticker: args.ticker,
           }
@@ -620,14 +622,19 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
       defineTool({
         name: 'investment_context',
         description:
-          '按需读取交易后端已持久化的最新投研上下文。只接受领域枚举，不接受 JSON 字符串、URL 或路径，' +
-          '也不会读取浏览器本地状态。可读取组合、策略、影子验证、自进化、报告或产业影响上下文。',
+          '按需读取交易后端已持久化的最新投研上下文。不接受 JSON 字符串、URL 或路径，' +
+          '也不会读取浏览器本地状态。可读取组合、策略、影子验证、自进化、报告或产业影响上下文；' +
+          '报告领域可用受限报告 ID 读取对应详情。',
         parameters: {
           domain: {
             type: 'string',
             required: true,
             description: '要读取的投研领域',
             enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] as const,
+          },
+          reference: {
+            type: 'string',
+            description: '可选；仅 reports 领域接受 32 位小写十六进制报告 ID，用于读取该报告详情',
           },
         },
         output: {
@@ -645,12 +652,12 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           },
           render: (_args, value) => [{
             type: 'text',
-            text: `已读取${INVESTMENT_CONTEXT_LABELS[value.domain as InvestmentContextDomain] ?? '投研'}上下文：\n${JSON.stringify(value.resources ?? {}, null, 2)}`,
+            text: `已读取${INVESTMENT_CONTEXT_LABELS[value.domain as InvestmentContextDomain]}上下文：\n${JSON.stringify(value.resources ?? {}, null, 2)}`,
           }],
         },
         presentCall: args => ({
           card: 'generic',
-          title: `🧭 读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain] ?? '投研'}上下文`,
+          title: `🧭 读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain]}上下文`,
           kind: 'other',
           rawInput: args,
         }),
@@ -659,7 +666,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
           title: '投研上下文已读取',
           content: [{
             type: 'text',
-            text: `已按需读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain] ?? '投研'}上下文。`,
+            text: `已按需读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain]}上下文。`,
           }],
         }),
         async execute(args, exec) {
@@ -668,6 +675,7 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
             resolvedConfig.adapterBaseUrl,
             stringValue(args.domain) as InvestmentContextDomain,
             exec.signal,
+            typeof args.reference === 'string' ? args.reference : undefined,
           )
         },
       }),

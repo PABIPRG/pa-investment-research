@@ -9,12 +9,15 @@ import {
   InvestmentNewSession,
   InvestmentWelcome,
   InvestmentSidebar,
+  assistantModulePrompt,
   type InvestmentShellInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import {
   InvestmentUiState,
+  type AssistantDisplayMode,
+  type AssistantModule,
   type InvestmentDraftKey,
   type InvestmentNavigationContext,
   type InvestmentRoute,
@@ -34,7 +37,8 @@ export { InvestmentUiState } from './state.ts'
 export { assistantPrompt } from './assistant-intent.ts'
 export type { AssistantIntent } from './assistant-intent.ts'
 export type {
-  InvestmentDraftKey, InvestmentNavigationContext, InvestmentRoute, InvestmentUiSnapshot,
+  AssistantDisplayMode, AssistantModule, InvestmentDraftKey, InvestmentNavigationContext,
+  InvestmentRoute, InvestmentUiSnapshot,
 } from './state.ts'
 
 /** Services required by the profile-scoped investment shell. */
@@ -49,24 +53,27 @@ export function apply(ctx: ClientContext): void {
 
   ctx.effect(() => {
     const previousTitle = document.title
-    const previousWorkspacePlacement = document.body.dataset.workspaceContextPlacement
+    const previousWorkspaceContextVisibility = document.body.dataset.workspaceContextVisibility
     document.body.dataset.investmentResearchUi = ''
-    document.body.dataset.workspaceContextPlacement = 'settings'
+    document.body.dataset.workspaceContextVisibility = 'hidden'
     document.title = '投研智能体'
     return () => {
       cancelPendingDraft?.()
       cancelPendingDraft = undefined
       delete document.body.dataset.investmentResearchUi
-      if (previousWorkspacePlacement === undefined) delete document.body.dataset.workspaceContextPlacement
-      else document.body.dataset.workspaceContextPlacement = previousWorkspacePlacement
+      if (previousWorkspaceContextVisibility === undefined) {
+        delete document.body.dataset.workspaceContextVisibility
+      } else {
+        document.body.dataset.workspaceContextVisibility = previousWorkspaceContextVisibility
+      }
       document.title = previousTitle
     }
   }, 'ui-investment-research: profile marker')
 
-  // The investment product treats Workspace as an optional storage setting,
-  // not an onboarding gate. On a truly empty first run, create one ordinary
-  // Session at the Host cwd so the assistant is immediately usable without
-  // surfacing project-directory mechanics in the conversation UI.
+  // Workspace remains an internal session-grouping and tool-scope abstraction
+  // in this product. On a truly empty first run, create one ordinary Session at
+  // the Host cwd so the assistant is immediately usable without exposing
+  // project-directory or Workspace mechanics anywhere in the product UI.
   ctx.effect(() => {
     let requested = false
     const ensureFirstSession = (): void => {
@@ -92,7 +99,7 @@ export function apply(ctx: ClientContext): void {
 
   const navigate = (route: InvestmentRoute, context: InvestmentNavigationContext = {}): void => {
     state.navigate(route, context)
-    if (route !== 'assistant') ctx.layout.closeDetails()
+    ctx.layout.closeDetails()
   }
 
   const setDraft = (sessionId: SessionId, prompt: string): boolean => {
@@ -102,9 +109,25 @@ export function apply(ctx: ClientContext): void {
     return true
   }
 
-  const prepareAssistant = (intent: AssistantIntent): void => {
+  const applyModulePromptToBlankDraft = (module: AssistantModule): void => {
+    const current = ctx.sessions.list.getSnapshot().current
+    if (current === undefined) return
+    const scope = ctx.sessions.scope(current)
+    if (scope === undefined) return
+    const input = ctx.conversation.input.for(scope)
+    if (input.state.getSnapshot().draft.trim() !== '') return
+    const prompt = assistantModulePrompt(module)
+    if (prompt !== '') input.setDraft(prompt)
+  }
+
+  const prepareAssistant = (intent: AssistantIntent, moduleOverride?: AssistantModule): void => {
     const prompt = assistantPrompt(intent)
-    navigate('assistant')
+    const module: AssistantModule = moduleOverride ?? (intent.kind === 'stock' ? 'stock'
+      : intent.kind === 'portfolio' ? 'portfolio'
+        : intent.kind === 'strategy' || intent.kind === 'shadow' || intent.kind === 'evolution' ? 'strategy'
+          : intent.kind === 'watch' ? 'watch'
+            : intent.kind === 'industry' ? 'industry' : 'general')
+    state.openAssistant(module)
     ctx.layout.closeDetails()
     const current = ctx.sessions.list.getSnapshot().current
     if (current !== undefined && setDraft(current, prompt)) return
@@ -148,12 +171,18 @@ export function apply(ctx: ClientContext): void {
     requestData: request => ctx.investmentResearchRuntimeClient.requestData(request),
     setHistory: (open) => { state.setHistory(open) },
     setReports: (open) => { state.setReports(open) },
+    setAssistantMode: (mode: AssistantDisplayMode) => { state.setAssistantMode(mode) },
+    setAssistantModule: (module: AssistantModule) => {
+      state.setAssistantModule(module)
+      applyModulePromptToBlankDraft(module)
+    },
     setModuleDraft: (key: InvestmentDraftKey, value: string) => { state.setDraft(key, value) },
     selectStrategy: (strategyId) => { state.selectStrategy(strategyId) },
     startSession: async () => {
       cancelPendingDraft?.()
       cancelPendingDraft = undefined
-      navigate('assistant')
+      state.setAssistantModule('general')
+      state.openAssistant('general')
       const fresh = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
       if (fresh !== undefined) setDraft(fresh, '')
     },

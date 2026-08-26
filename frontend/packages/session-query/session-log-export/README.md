@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Web Session-log download control over the host-streamed ZIP endpoint owned by `dsh-host-apiproxy`. The Host half registers `/export`; the browser half owns a 111×32 `Session log` action in the Session Header, one download controller, and one modal shared by that button and the slash command. ZIP generation, raw JSONL/zstd reads, descendants, attachments, backpressure, and HTTP error semantics remain owned by the [ApiProxy download implementation](../../host/apiproxy/README.md).
+Web conversation-backup control over the host-streamed ZIP endpoint owned by `dsh-host-apiproxy`. The Host half registers `/export`; the browser half owns an `Export conversation` action with a minimum 111×32 footprint in the conversation Header, one download controller, and one modal shared by that button and the slash command. ZIP generation, raw JSONL/zstd reads, related conversations, attachments, backpressure, and HTTP error semantics remain owned by the [ApiProxy download implementation](../../host/apiproxy/README.md).
 
 ## Command contract
 
@@ -15,7 +15,7 @@ The command is mounted only by the Web bundle. The local `command/executed` ackn
 
 The Host download endpoint flushes a live root Session before `readRaw`, so a slash-triggered ZIP includes the `command/run` and `command/done` pair whose acknowledgment started the download. Cold persisted Sessions require no flush.
 
-The modal reports preparation, download start, or failure. Closing it does not cancel an in-flight download and does not reopen it when that operation later settles. One Session admits one active download at a time; repeated gestures share that operation.
+The fully localized modal reports backup preparation, download start, or a stable retry message. Host error details remain in controller state for diagnostics but are never presented as user-facing copy. Closing the modal does not cancel an in-flight download and does not reopen it when that operation later settles. One conversation admits one active download at a time; repeated gestures share that operation.
 
 ## Composition
 

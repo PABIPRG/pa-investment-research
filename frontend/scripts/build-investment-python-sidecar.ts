@@ -104,8 +104,12 @@ function parseTarget(value: string): InvestmentSidecarTarget {
 }
 
 function validateLock(lock: InvestmentSidecarLock, target: InvestmentSidecarTarget): InvestmentSidecarTargetLock {
-  if (lock.schemaVersion !== 1) throw new Error('unsupported investment Python runtime lock schema')
-  const targetLock = lock.targets[target]
+  const runtimeLock = lock as unknown as {
+    readonly schemaVersion?: unknown
+    readonly targets?: Partial<Record<InvestmentSidecarTarget, InvestmentSidecarTargetLock>>
+  }
+  if (runtimeLock.schemaVersion !== 1) throw new Error('unsupported investment Python runtime lock schema')
+  const targetLock = runtimeLock.targets?.[target]
   if (targetLock === undefined) throw new Error(`investment Python runtime lock has no target ${target}`)
   if (!/^3\.10\.\d+$/u.test(targetLock.pythonVersion)) throw new Error(`${target} must lock an exact Python 3.10 patch`)
   if (!HASH_PATTERN.test(targetLock.archiveSha256)) {
@@ -160,7 +164,7 @@ async function defaultRunCommand(command: string, args: readonly string[], cwd: 
   return await new Promise<number>((resolveExit, reject) => {
     const child = spawn(command, [...args], { cwd, stdio: 'inherit' })
     child.once('error', reject)
-    child.once('exit', code => { resolveExit(code ?? 1) })
+    child.once('exit', (code) => { resolveExit(code ?? 1) })
   })
 }
 
@@ -182,14 +186,15 @@ async function copyBackend(source: string, destination: string): Promise<void> {
   await cp(source, destination, {
     recursive: true,
     dereference: false,
-    filter: candidate => {
+    filter: (candidate) => {
       const rel = relative(source, candidate)
       return rel === '' || !shouldExclude(rel)
     },
   })
   const pending = [destination]
   while (pending.length > 0) {
-    const directory = pending.pop()!
+    const directory = pending.pop()
+    if (directory === undefined) break
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name)
       if (entry.isSymbolicLink()) throw new Error(`backend source contains a symlink: ${path}`)
@@ -352,7 +357,8 @@ function parseCli(argv: readonly string[]): BuildInvestmentSidecarOptions {
   const values = new Map<string, string>()
   let offline = false
   for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index]!
+    const argument = argv[index]
+    if (argument === undefined) throw new Error(`missing argument at position ${index}`)
     if (argument === '--offline') {
       offline = true
       continue

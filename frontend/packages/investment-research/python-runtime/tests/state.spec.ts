@@ -23,13 +23,21 @@ const state: OwnedBackendState = {
 describe('owned backend state', () => {
   it('uses the stable DSH_HOME path and owner-only permissions', async () => {
     const home = await mkdtemp(join(tmpdir(), 'investment-state-'))
-    const path = ownedBackendStatePath(home, 'trading-core')
-    expect(path).toBe(join(home, 'investment-research', 'trading-core', 'runtime.json'))
-    await writeOwnedBackendState(path, state)
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(state)
+    const industryState = {
+      ...state,
+      id: 'industry-chain',
+      service: 'industry-chain',
+      baseUrl: 'http://127.0.0.1:8200',
+      projectDir: '/repo/backend/industry-chain',
+    } as const
+    const path = ownedBackendStatePath(home, 'industry-chain')
+    expect(path).toBe(join(home, 'investment-research', 'industry-chain', 'runtime.json'))
+    await writeOwnedBackendState(path, industryState)
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(industryState)
+    expect(await readOwnedBackendState(path)).toEqual({ kind: 'current', state: industryState })
     if (process.platform !== 'win32') {
       expect((await stat(path)).mode & 0o777).toBe(0o600)
-      expect((await stat(join(home, 'investment-research', 'trading-core'))).mode & 0o777).toBe(0o700)
+      expect((await stat(join(home, 'investment-research', 'industry-chain'))).mode & 0o777).toBe(0o700)
     }
   })
 

@@ -40,6 +40,16 @@ function withoutLogPrefixes(text: string): string {
   return text.replaceAll('[stdout] ', '').replaceAll('[stderr] ', '')
 }
 
+async function captureRejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise
+  } catch (reason: unknown) {
+    if (reason instanceof Error) return reason
+    throw new TypeError('expected rejection to be an Error')
+  }
+  throw new Error('expected promise to reject')
+}
+
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
@@ -450,17 +460,17 @@ describe('InvestmentBackendManager', () => {
     const earlyManager = new InvestmentBackendManager({
       subprocess: early.subprocess,
       config: { dshHome: early.home },
-      checkHealth: async () => early.specs.length === 0 ? refused : refused,
+      checkHealth: async () => refused,
       resolveCredential: async () => secret,
     })
     earlyManager.register({
       ...definition,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
-    const earlyError = await earlyManager.acquire('trading-core').catch(error => error)
+    const earlyError = await captureRejection(earlyManager.acquire('trading-core'))
     expect(earlyError).toBeInstanceOf(Error)
-    expect((earlyError as Error).message).toMatch(/stdout diagnostic.*stderr diagnostic/s)
-    expect((earlyError as Error).message).not.toContain(secret)
+    expect(earlyError.message).toMatch(/stdout diagnostic.*stderr diagnostic/s)
+    expect(earlyError.message).not.toContain(secret)
     const earlyLog = await readFile(join(early.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(earlyLog).toContain('stdout diagnostic')
     expect(earlyLog).toContain('stderr diagnostic')
@@ -480,9 +490,9 @@ describe('InvestmentBackendManager', () => {
       ...definition,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
-    const cleanupError = await cleanupManager.acquire('trading-core').catch(error => error)
+    const cleanupError = await captureRejection(cleanupManager.acquire('trading-core'))
     expect(cleanupError).toBeInstanceOf(AggregateError)
-    expect((cleanupError as Error).message).not.toContain(secret)
+    expect(cleanupError.message).not.toContain(secret)
     const cleanupLog = await readFile(join(cleanup.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(cleanupLog).toContain('cleanup diagnostic')
     expect(cleanupLog).not.toContain(secret)
@@ -507,11 +517,11 @@ describe('InvestmentBackendManager', () => {
       ...definition,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
-    const error = await manager.acquire('trading-core').catch(reason => reason)
+    const error = await captureRejection(manager.acquire('trading-core'))
     expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('early diagnostic')
-    expect((error as Error).message).toContain('preserved detail')
-    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    expect(error.message).toContain('early diagnostic')
+    expect(error.message).toContain('preserved detail')
+    expect(withoutLogPrefixes(error.message)).not.toContain(secret)
     const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(log).toContain('early diagnostic')
     expect(log).toContain('preserved detail')
@@ -539,12 +549,12 @@ describe('InvestmentBackendManager', () => {
       ...definition,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
-    const error = await manager.acquire('trading-core').catch(reason => reason)
+    const error = await captureRejection(manager.acquire('trading-core'))
     expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('timed out')
-    expect((error as Error).message).toContain('timeout diagnostic')
-    expect((error as Error).message).toContain('preserved timeout detail')
-    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    expect(error.message).toContain('timed out')
+    expect(error.message).toContain('timeout diagnostic')
+    expect(error.message).toContain('preserved timeout detail')
+    expect(withoutLogPrefixes(error.message)).not.toContain(secret)
     const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(log).toContain('timeout diagnostic')
     expect(log).toContain('preserved timeout detail')
@@ -575,11 +585,11 @@ describe('InvestmentBackendManager', () => {
       ...definition,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
-    const error = await manager.acquire('trading-core').catch(reason => reason)
+    const error = await captureRejection(manager.acquire('trading-core'))
     expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('before termination')
-    expect((error as Error).message).toContain('after child exit')
-    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    expect(error.message).toContain('before termination')
+    expect(error.message).toContain('after child exit')
+    expect(withoutLogPrefixes(error.message)).not.toContain(secret)
     const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(log).toContain('before termination')
     expect(log).toContain('after child exit')
@@ -606,11 +616,11 @@ describe('InvestmentBackendManager', () => {
       ...definition,
       credentialEnv: [{ ref: credentialRef('trading-api-key'), env: 'TRADING_API_KEY', role: 'required' }],
     })
-    const error = await manager.acquire('trading-core').catch(reason => reason)
+    const error = await captureRejection(manager.acquire('trading-core'))
     expect(error).toBeInstanceOf(AggregateError)
-    expect((error as Error).message).toContain('cleanup diagnostic')
-    expect((error as Error).message).toContain('preserved cleanup detail')
-    expect(withoutLogPrefixes((error as Error).message)).not.toContain(secret)
+    expect(error.message).toContain('cleanup diagnostic')
+    expect(error.message).toContain('preserved cleanup detail')
+    expect(withoutLogPrefixes(error.message)).not.toContain(secret)
     const log = await readFile(join(current.home, 'investment-research', 'trading-core', 'backend.log'), 'utf8')
     expect(log).toContain('cleanup diagnostic')
     expect(log).toContain('preserved cleanup detail')
@@ -1227,9 +1237,14 @@ describe('InvestmentBackendManager', () => {
     const credentialsFiber = await ctx.plugin(StubCredentials)
     const subprocessFiber = await ctx.plugin(StubSubprocess)
     const credentials = ctx.credentials as StubCredentials
-    const subprocess = ctx.subprocess as StubSubprocess
+    const subprocess = ctx.subprocess
     const handle = fakeHandle()
-    subprocess.spawn = vi.fn(() => handle)
+    const spawnSpecs: SubprocessSpawnSpec[] = []
+    const spawn = vi.fn((spec: SubprocessSpawnSpec) => {
+      spawnSpecs.push(spec)
+      return handle
+    })
+    subprocess.spawn = spawn
     const updated = vi.spyOn(InvestmentBackendManager.prototype, 'credentialUpdated')
     const runtimeFiber = await ctx.plugin(InvestmentPythonRuntime, { dshHome: home, healthPollMs: 1 })
     const runtime = ctx.investmentPythonRuntime
@@ -1241,9 +1256,8 @@ describe('InvestmentBackendManager', () => {
     const lease = await runtime.acquire('trading-core')
     expect(credentials.resolveCalls).toEqual([credentialRef('DEEPSEEK_API_KEY')])
     expect(credentials.describeCalls).toEqual([credentialRef('DEEPSEEK_API_KEY')])
-    expect(subprocess.spawn).toHaveBeenCalledWith(expect.objectContaining({
-      env: expect.objectContaining({ DEEPSEEK_API_KEY: 'runtime-bound-secret' }),
-    }))
+    expect(spawn).toHaveBeenCalledOnce()
+    expect(spawnSpecs.at(0)?.env).toMatchObject({ DEEPSEEK_API_KEY: 'runtime-bound-secret' })
     runtime.registerCapability({ backendId: 'trading-core', toolCount: 9, llm: 'required' })
     credentials.update(credentialRef('DEEPSEEK_API_KEY'))
     expect(runtime.readiness().backends[0]?.restartRequired).toBe(true)

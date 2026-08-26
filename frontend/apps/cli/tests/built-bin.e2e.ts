@@ -734,6 +734,7 @@ describe.skipIf(!existsSync(dshBin))('dsh BUILT bin (node lib/bin.js, no tsx)', 
         '@deepseek-ai/dsh-investment-runtime-bundle',
         '@deepseek-ai/dsh-investment-stock-analysis-bundle',
         '@deepseek-ai/dsh-investment-market-watch-bundle',
+        '@deepseek-ai/dsh-investment-industry-chain-bundle',
       ]
       const offsets = layers.map(layer => stdout.indexOf(`# == ${layer}`))
       expect(offsets.every(offset => offset >= 0)).toBe(true)
@@ -742,6 +743,8 @@ describe.skipIf(!existsSync(dshBin))('dsh BUILT bin (node lib/bin.js, no tsx)', 
         .toBeLessThan(stdout.indexOf('id: investment-stock-analysis'))
       expect(stdout.indexOf('id: investment-python-runtime'))
         .toBeLessThan(stdout.indexOf('id: investment-market-watch'))
+      expect(stdout.indexOf('id: investment-market-watch'))
+        .toBeLessThan(stdout.indexOf('id: investment-industry-chain'))
       expect(stdout).not.toMatch(/file:\/\//u)
     }, 30_000)
 

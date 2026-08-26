@@ -63,7 +63,7 @@ def render_strategy_report(
     status: str,
     backtest: Mapping[str, Any],
 ) -> str:
-    """渲染候选策略的样本内/样本外证据和生命周期结论。"""
+    """渲染候选策略的样本内/样本外证据及独立生命周期、验证分类。"""
     in_sample = backtest.get("in_sample")
     out_sample = backtest.get("out_of_sample")
     in_sample = in_sample if isinstance(in_sample, Mapping) else {}
@@ -71,7 +71,21 @@ def render_strategy_report(
     symbols = strategy.get("symbols")
     symbol_text = "、".join(_text(item) for item in symbols) if isinstance(symbols, list) else "—"
     reason = _text(backtest.get("reason"), "未返回阈值结论")
-    passed = "通过" if backtest.get("thresholds_pass") is True else "未通过"
+    verification_status = _text(backtest.get("verification_status"), "")
+    if verification_status == "":
+        if backtest.get("thresholds_pass") is True:
+            verification_status = "passed"
+        elif "成交不足" in reason or "样本不足" in reason:
+            verification_status = "pending"
+        else:
+            verification_status = "failed"
+    verification_labels = {
+        "pending": "未验证",
+        "passed": "已验证通过",
+        "failed": "验证未通过",
+        "archived": "已归档",
+    }
+    verification_label = verification_labels.get(verification_status, "数据不足")
     return "\n".join(
         [
             "# 策略样本外回测报告",
@@ -82,6 +96,7 @@ def render_strategy_report(
             f"- 研究方向：{_text(strategy.get('direction'))}",
             f"- 标的：{symbol_text or '—'}",
             f"- 生命周期状态：{_text(status)}",
+            f"- 验证分类：{verification_label}",
             "",
             "| 指标 | 样本内 | 样本外 |",
             "| --- | ---: | ---: |",
@@ -91,12 +106,12 @@ def render_strategy_report(
             f"| 年化 Sharpe | {_number(in_sample.get('sharpe_annualized'))} | {_number(out_sample.get('sharpe_annualized'))} |",
             f"| 最大回撤 | {_number(in_sample.get('max_drawdown_pct'), '%')} | {_number(out_sample.get('max_drawdown_pct'), '%')} |",
             "",
-            "## 生命周期结论",
+            "## 验证结论",
             "",
-            f"- 阈值判定：{passed}",
+            f"- 阈值判定：{verification_label}",
             f"- 结论原因：{reason}",
             "",
-            "> 样本外证据用于决定是否进入纸面验证；任何人工激活都应保留复核记录。",
+            "> 样本外验证分类与策略生命周期相互独立；生命周期变化必须由显式业务动作完成。",
         ]
     )
 

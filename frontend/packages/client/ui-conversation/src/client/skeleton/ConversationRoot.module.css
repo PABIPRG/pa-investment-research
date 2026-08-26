@@ -358,9 +358,9 @@
   min-width: 0;
 }
 
-/* Profiles may move storage/workspace selection into Settings without coupling
- * the shared conversation package to a profile name or visual theme. */
-:global(body[data-workspace-context-placement='settings']) .heroWorkspaceContext {
+/* Profiles may hide the internal Workspace abstraction without coupling the
+ * shared conversation package to a profile name or visual theme. */
+:global(body[data-workspace-context-visibility='hidden']) .heroWorkspaceContext {
   display: none;
 }
 

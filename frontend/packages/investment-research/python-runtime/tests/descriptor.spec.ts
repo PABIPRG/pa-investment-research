@@ -11,7 +11,7 @@ interface MutableDescriptor {
   schemaVersion: number
   python: { version: string; platform: string; arch: string; executable: string }
   sitePackages: string
-  backends: Record<'trading-core' | 'market-watch' | 'industry-chain', { projectDir: string; module: string }>
+  backends: Record<string, { projectDir: string; module: string }>
   files: Array<{ path: string; sha256: string }>
   extra?: boolean
 }
@@ -90,7 +90,20 @@ describe('investment packaged Runtime descriptor', () => {
     ['wrong Python minor', (value: MutableDescriptor) => { value.python.version = '3.11.9' }],
     ['wrong platform', (value: MutableDescriptor) => { value.python.platform = process.platform === 'darwin' ? 'win32' : 'darwin' }],
     ['wrong architecture', (value: MutableDescriptor) => { value.python.arch = `${process.arch}-other` }],
-    ['wrong module', (value: MutableDescriptor) => { value.backends['trading-core'].module = 'other.app:app' }],
+    ['wrong module', (value: MutableDescriptor) => {
+      const backend = value.backends['trading-core']
+      if (backend === undefined) throw new Error('missing trading-core fixture')
+      backend.module = 'other.app:app'
+    }],
+    ['wrong industry module', (value: MutableDescriptor) => {
+      const backend = value.backends['industry-chain']
+      if (backend === undefined) throw new Error('missing industry-chain fixture')
+      backend.module = 'other.app:app'
+    }],
+    ['missing backend', (value: MutableDescriptor) => { delete value.backends['industry-chain'] }],
+    ['unknown backend', (value: MutableDescriptor) => {
+      value.backends.unknown = { projectDir: 'backends/unknown', module: 'unknown.app:app' }
+    }],
     ['traversal', (value: MutableDescriptor) => { value.sitePackages = '../site-packages' }],
     ['backslash traversal', (value: MutableDescriptor) => { value.sitePackages = '..\\site-packages' }],
     ['absolute path', (value: MutableDescriptor) => { value.sitePackages = '/site-packages' }],

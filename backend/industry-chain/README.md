@@ -19,6 +19,8 @@
 | 端点 | 说明 |
 |---|---|
 | `GET /health` | 健康检查 |
+| `GET /data/status` | 只读数据状态：`missing / downloading / ready / error`，不会联网 |
+| `POST /data/bootstrap` | 用户显式触发固定五文件首次下载；无请求参数，并发请求复用同一任务 |
 | `GET /stats` | 图统计（节点/边/公司/社区） |
 | `GET /companies?keyword=&limit=` | 公司搜索（名称/代码/行业模糊） |
 | `GET /companies/{code}` | 核心公司档案（行业/市值/描述/上下游计数） |
@@ -30,15 +32,25 @@
 ## 安装与运行
 
 ```bash
-./init.sh        # venv + 依赖 + .env + 下载种子数据（5 个 JSON 约 25MB，落 data/seed/）
+./init.sh        # venv + 依赖 + .env；不会下载种子数据
 ./start.sh       # 适配器 :8200 + dsh :3082（已运行自动跳过）
-./verify.sh      # 适配器冒烟 + dsh 插件冒烟（4 工具注册 + 实时 schema 校验）
+./verify.sh      # 健康／只读数据状态 + dsh 插件冒烟；不会下载种子数据
 ./stop_all.sh    # 停 :8200 / :3082
 ```
 
 Windows：`init.bat` / `start_all.bat` / `verify.bat` / `stop_all.bat`。
 
-种子数据可随时重刷：`python scripts/fetch_seed_data.py`（幂等，已存在则跳过）。
+源码开发者也可手动执行 `python scripts/fetch_seed_data.py`（幂等，已存在则跳过）；
+默认产品路径仍由用户在产业链页面确认后触发。
+
+打包应用不分发种子数据，也不会在启动时联网。产业链页面会先读取 `GET /data/status`，
+仅在用户确认后调用 `POST /data/bootstrap`。下载逐文件写入临时目录，并执行大小上限、
+JSON 与最低结构校验；完整五文件全部通过后才原子发布。失败会清理临时文件，不会把半成品
+误判为就绪。并发 bootstrap 调用等待并复用同一次下载。
+
+打包 Runtime 把数据写入宿主提供的
+`$DSH_HOME/investment-research/industry-chain/data/seed`；源码模式仍默认使用本项目的
+`data/seed`。`/health` 只表达服务健康，不因种子数据尚未下载而失败。
 
 ## 数据出处与免责
 

@@ -44,7 +44,7 @@ pnpm run make:electron
 
 ## 运行时结构
 
-- main 进程解析唯一的 `--profile <name>` 参数（缺省为 `web`），把该 profile 传给 `runProfile`，然后且只再应用 `electron.patch.yml`。对于 `investment-research`，profile 会先按 base → web-app → investment-runtime → investment-stock-analysis → investment-market-watch 组合；Electron patch 随后禁用 Web server、静态 Web runtime、Web Connection provider、自适应浏览器目录选择器与 client HMR，再挂载原生目录选择器组合和 Electron Connection provider。
+- main 进程解析唯一的 `--profile <name>` 参数（缺省为 `web`），把该 profile 传给 `runProfile`，然后且只再应用 `electron.patch.yml`。对于 `investment-research`，profile 会先按 base → web-app → investment-runtime → investment-stock-analysis → investment-market-watch → investment-industry-chain 组合；Electron patch 随后禁用 Web server、静态 Web runtime、Web Connection provider、自适应浏览器目录选择器与 client HMR，再挂载原生目录选择器组合和 Electron Connection provider。
 - main 与 preload bundle 将 `electron` 模块保留为外部依赖，因为 Electron executable 会在运行时提供该模块。
 - ESM main 模块会调度应用启动，但不会在顶层等待 `app.whenReady()`，使 Electron readiness 事件可以在初始模块求值后运行。把 `dsh` scheme 注册为 standard、secure 且支持 Fetch 也发生在该模块求值期间，因为 Electron 只在就绪之前接受特权列表。
 - profile 安装锚点从已修复的 profile 依赖目录解析裸插件。Electron 不暴露 Node 内部模块 loader 时，app boot 会使用公开的 Node 解析机制。

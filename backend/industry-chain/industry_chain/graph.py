@@ -33,7 +33,7 @@ def _load(name: str):
             path = settings.data_dir / name
             if not path.is_file():
                 raise FileNotFoundError(
-                    f"种子数据缺失: {path} —— 请先运行 init.sh 或 scripts/fetch_seed_data.py 下载"
+                    f"种子数据缺失: {path} —— 请先在产业链页面完成首次数据下载"
                 )
             with open(path, encoding="utf-8") as f:
                 _caches[name] = json.load(f)

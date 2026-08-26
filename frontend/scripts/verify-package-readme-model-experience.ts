@@ -113,6 +113,8 @@ const SENTENCE_MODEL_EXPERIENCE: Readonly<Record<string, SentenceContract>> = {
   'packages/bundle/investment-runtime': { kind: 'indirect', reason: 'The patch inserts the lifecycle service; business plugins own every model-facing contribution after acquisition.' },
   'packages/bundle/investment-stock-analysis': { kind: 'indirect', reason: 'The patch inserts the stock-analysis plugin, which owns its schemas, progress messages, results, and optional brief delivery.' },
   'packages/bundle/investment-market-watch': { kind: 'indirect', reason: 'The patch inserts the market-watch plugin, which owns its schemas and results.' },
+  'packages/bundle/investment-industry-chain': { kind: 'none', reason: 'The patch inserts a lifecycle-only industry-chain backend registration and adds no model-facing schema, prompt, message, or result.' },
+  'packages/investment-research/industry-chain': { kind: 'none', reason: 'The backend registration publishes readiness only; industry model context remains owned by the existing investment_context tool.' },
   'packages/investment-research/python-runtime': { kind: 'none', reason: 'The Host lifecycle service registers no prompt, tool schema, session event, or result.' },
   'packages/llm/llm': { kind: 'none', reason: 'The adapter registry forwards already-assembled requests unchanged.' },
   'packages/llm/token-meter': { kind: 'indirect', reason: 'The measurement service leaves model-visible changes to its consumers.' },

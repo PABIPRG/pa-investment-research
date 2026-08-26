@@ -8,7 +8,8 @@
 - 回测：baostock 前复权日线 → 内联轻量指标（ma/rsi，纯 pandas，不 import tradingagents）
   → 全序列先算信号（因果、无 look-ahead）→ 按行数切样本内(70%)/样本外(30%) →
   统一「bar t 信号 → bar t+1 开盘价成交」状态机逐笔成交 → compute_summary 聚合副口径
-  + 合成组合净值曲线自算日频回撤/Sharpe 主口径 → 过阈值进 active，否则 rejected。
+  + 合成组合净值曲线自算日频回撤/Sharpe 主口径。回测只更新 verification_status，
+  不直接改变 candidate/active/rejected/retired 生命周期。
 """
 
 import hashlib
@@ -30,6 +31,7 @@ logger = logging.getLogger("adapter.strategies")
 
 # 支持的策略 kind
 KINDS = ("ma_cross", "rsi_reversal", "momentum")
+VERIFICATION_STATUSES = frozenset({"pending", "passed", "failed", "archived"})
 # A 股可交易前缀：0=深主板/中小、3=创业板、6=沪主板/科创板；4/8=北交所排除，2/9=B 股排除
 _ALLOWED_PREFIXES = ("0", "3", "6")
 # 利空只允许超跌反弹（系统做多）
@@ -54,6 +56,97 @@ def _now() -> str:
 
 def _str2md5(s: str) -> str:
     return hashlib.md5(s.encode()).hexdigest()[:10]
+
+
+def _verification_from_backtest(backtest: object) -> str:
+    """从最新回测证据派生验证分类，不使用生命周期状态兜底。"""
+    if not isinstance(backtest, dict) or not backtest:
+        return "pending"
+    if backtest.get("thresholds_pass") is True:
+        return "passed"
+    if backtest.get("thresholds_pass") is False:
+        reason = str(backtest.get("reason") or "")
+        if "成交不足" in reason or "样本不足" in reason:
+            return "pending"
+        return "failed"
+    return "pending"
+
+
+def strategy_verification_status(strategy: object) -> str:
+    """返回稳定验证分类，并为缺少新字段的历史记录提供只读兼容投影。"""
+    if not isinstance(strategy, dict):
+        return "pending"
+    if strategy.get("status") == "retired":
+        return "archived"
+    explicit = strategy.get("verification_status")
+    if explicit in VERIFICATION_STATUSES and explicit != "archived":
+        return str(explicit)
+    return _verification_from_backtest(strategy.get("backtest"))
+
+
+def project_strategy_verification(strategy: object) -> dict:
+    """复制策略并补齐 verification_status，不在列表读取时隐式改写磁盘。"""
+    projected = dict(strategy) if isinstance(strategy, dict) else {}
+    projected["verification_status"] = strategy_verification_status(projected)
+    return projected
+
+
+def _verification_outcome(out_summary: dict, min_oos: int) -> tuple[str, bool, str]:
+    """把样本外指标转成验证分类、阈值布尔值和可审计原因。"""
+    oos_n = int(out_summary.get("n_evaluated") or 0)
+    oos_wr = out_summary.get("win_rate_pct")
+    oos_avg = out_summary.get("avg_simulated_return_pct")
+    if oos_n < min_oos:
+        return "pending", False, f"样本外成交不足({oos_n}<{min_oos})"
+    if oos_wr is not None and oos_avg is not None and oos_wr >= 50.0 and oos_avg > 0:
+        return "passed", True, "样本外胜率/均收益达标"
+    return "failed", False, f"样本外未达标(wr={oos_wr}, avg={oos_avg})"
+
+
+def _persist_strategy_backtest(
+    store: JsonStore,
+    strategy_id: str,
+    fallback_strategy: dict,
+    backtest: dict,
+    verification_status: str,
+) -> dict:
+    """原子保存回测证据；生命周期由用户动作维护，回测不得覆盖。"""
+    if verification_status not in VERIFICATION_STATUSES - {"archived"}:
+        raise ValueError(f"非法验证分类: {verification_status}")
+
+    def persist_result(current):
+        record = dict(current or fallback_strategy)
+        lifecycle_status = record.get("status") or "candidate"
+        record.update(
+            status=lifecycle_status,
+            verification_status=(
+                "archived" if lifecycle_status == "retired" else verification_status
+            ),
+            backtest=backtest,
+            updated_at=_now(),
+        )
+        return record
+
+    return store.mutate("strategies", strategy_id, persist_result)
+
+
+def transition_strategy(store: JsonStore, strategy_id: str, action: str) -> dict:
+    """显式迁移生命周期，同时维护但不伪造最新验证分类。"""
+    statuses = {"activate": "active", "reject": "rejected", "retire": "retired"}
+    if action not in statuses:
+        raise ValueError(f"未知生命周期动作: {action}")
+
+    def transition(current):
+        if not isinstance(current, dict) or not current:
+            raise KeyError(strategy_id)
+        next_record = {**current, "status": statuses[action], "updated_at": _now()}
+        next_record["verification_status"] = (
+            "archived" if action == "retire"
+            else strategy_verification_status(next_record)
+        )
+        return next_record
+
+    return store.mutate("strategies", strategy_id, transition)
 
 
 # ---- 事件源 -------------------------------------------------------------
@@ -625,6 +718,7 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
             "source_event_summary": ev.get("summary") or "",
             "holding_window_days": int(h.get("holding_window_days", 20)),
             "status": "candidate",
+            "verification_status": "pending",
             "backtest": None,
             "created_at": _now(), "updated_at": _now(),
         }
@@ -735,54 +829,41 @@ class StrategyBacktestRunner:
         in_summary = _agg(all_in, per_in, "in")
         out_summary = _agg(all_out, per_out, "out")
 
-        # 阈值：OOS 成交不足 → 保持 candidate；够且胜率/均收益达标 → active；否则 rejected
-        oos_n = int(out_summary.get("n_evaluated") or 0)
-        oos_wr = out_summary.get("win_rate_pct")
-        oos_avg = out_summary.get("avg_simulated_return_pct")
-        if oos_n < min_oos:
-            status, passed, reason = "candidate", False, f"样本外成交不足({oos_n}<{min_oos})"
-        elif oos_wr is not None and oos_avg is not None and oos_wr >= 50.0 and oos_avg > 0:
-            status, passed, reason = "active", True, "样本外胜率/均收益达标"
-        else:
-            status, passed, reason = "rejected", False, f"样本外未达标(wr={oos_wr}, avg={oos_avg})"
-
-        # 手动退役过的策略，回测不擅自改回
-        if (strategy.get("status") == "retired" and status != "retired"):
-            status = strategy.get("status")
+        verification_status, passed, reason = _verification_outcome(out_summary, min_oos)
 
         backtest = {
             "in_sample": in_summary,
             "out_of_sample": out_summary,
             "thresholds_pass": passed,
+            "verification_status": verification_status,
             "reason": reason,
             "ran_at": _now(),
             "per_symbol": per_symbol,
             "symbol_errors": symbol_errors,
         }
-        saved_status = status
-
-        def persist_result(current):
-            nonlocal saved_status
-            rec = dict(current or strategy)
-            if rec.get("status") == "retired" and saved_status != "retired":
-                saved_status = "retired"
-            rec.update(status=saved_status, backtest=backtest, updated_at=_now())
-            return rec
-
-        self.store.mutate("strategies", sid, persist_result)
-        status = saved_status
-        progress_cb(f"🏁 状态 → {status}（{reason}）")
+        saved = _persist_strategy_backtest(
+            self.store, sid, strategy, backtest, verification_status
+        )
+        lifecycle_status = str(saved.get("status") or "candidate")
+        saved_verification = str(saved["verification_status"])
+        progress_cb(
+            f"🏁 验证 → {saved_verification}；生命周期保持 {lifecycle_status}（{reason}）"
+        )
         return {
             "strategy_id": sid,
-            "status": status,
+            "status": lifecycle_status,
+            "verification_status": saved_verification,
             "backtest": backtest,
             "symbol_errors": symbol_errors,
             "signal": {
                 "signal_type": "strategy_backtest",
                 "strategy_id": sid,
                 "strategy_name": strategy.get("name"),
-                "status": status,
+                "status": lifecycle_status,
+                "verification_status": saved_verification,
                 "thresholds_pass": passed,
             },
-            "reports": {"strategy": render_strategy_report(strategy, status, backtest)},
+            "reports": {
+                "strategy": render_strategy_report(strategy, lifecycle_status, backtest)
+            },
         }

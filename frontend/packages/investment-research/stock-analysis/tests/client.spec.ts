@@ -100,6 +100,7 @@ describe('stock-analysis adapter client', () => {
       `${BASE}/shadow/equity?limit=30`,
       `${BASE}/evolution/status`,
       `${BASE}/evolution/attribution`,
+      `${BASE}/evolution/preview`,
       `${BASE}/reports?limit=20`,
       `${BASE}/personalized/impact?limit=20`,
     ])
@@ -107,7 +108,7 @@ describe('stock-analysis adapter client', () => {
       ['portfolio', ['holdings', 'portfolio_risk', 'risk_alerts']],
       ['strategy', ['strategies']],
       ['shadow', ['status', 'positions', 'equity']],
-      ['evolution', ['status', 'attribution']],
+      ['evolution', ['status', 'attribution', 'preview']],
       ['reports', ['reports']],
       ['industry', ['impact']],
     ])
@@ -117,6 +118,42 @@ describe('stock-analysis adapter client', () => {
     })
     await expect(getInvestmentContext(BASE, 'browser-state' as never, signal))
       .rejects.toThrow('不支持的投研上下文领域')
+  })
+
+  it('reads a selected report detail through a validated fixed route', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url)
+      return response({ source: url })
+    }))
+    const reportId = 'a'.repeat(32)
+    const result = await getInvestmentContext(
+      BASE,
+      'reports',
+      new AbortController().signal,
+      reportId,
+    )
+
+    expect(calls).toEqual([
+      `${BASE}/reports?limit=20`,
+      `${BASE}/reports/${reportId}`,
+    ])
+    expect(result.resources).toEqual({
+      reports: { source: `${BASE}/reports?limit=20` },
+      report_detail: { source: `${BASE}/reports/${reportId}` },
+    })
+  })
+
+  it('rejects unsafe or cross-domain context references before network I/O', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const signal = new AbortController().signal
+
+    await expect(getInvestmentContext(BASE, 'reports', signal, '../risk_profile'))
+      .rejects.toThrow('32 位小写十六进制报告 ID')
+    await expect(getInvestmentContext(BASE, 'portfolio', signal, 'a'.repeat(32)))
+      .rejects.toThrow('只有报告上下文支持资源引用')
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('reports HTTP errors and missing task ids from the adapter', async () => {

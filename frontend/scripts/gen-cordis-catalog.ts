@@ -229,6 +229,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   InvestmentBackendId: 'investment-research.md',
   InvestmentCapabilityDefinition: 'investment-research.md',
   InvestmentCapabilityUse: 'investment-research.md',
+  InvestmentDataRequest: 'investment-research.md',
+  InvestmentJsonValue: 'investment-research.md',
   InvestmentReadinessSnapshot: 'investment-research.md',
   InvestmentRestartResult: 'investment-research.md',
   PythonBackendDefinition: 'investment-research.md',

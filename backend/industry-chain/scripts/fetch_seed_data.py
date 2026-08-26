@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""下载 industry-chain 种子数据（打包自托管）。
+"""显式下载 industry-chain 种子数据（项目不重新分发数据文件）。
 
 源：IDUXGRAPH / iducsite 公开静态托管（https://villadora.github.io/iducsite/data/）。
 数据由上市公司财报/研报自动化抽取 + Neo4j 图谱推断而来，仅供产业链研究与参考，
@@ -18,51 +18,12 @@ import argparse
 import sys
 from pathlib import Path
 
-import requests
-
 # 模块根（本文件在 scripts/ 下）
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from industry_chain.config import settings  # noqa: E402
-
-SEED_FILES = (
-    "stats.json",
-    "companies.json",
-    "market-caps.json",
-    "view-data-all.json",
-    "network-data.json",
-)
-
-TIMEOUT = 60
-
-
-def _files_ok(data_dir: Path) -> bool:
-    if not data_dir.is_dir():
-        return False
-    return all((data_dir / f).is_file() and (data_dir / f).stat().st_size > 0 for f in SEED_FILES)
-
-
-def fetch(data_dir: Path) -> None:
-    data_dir.mkdir(parents=True, exist_ok=True)
-    base = settings.seed_base_url.rstrip("/")
-    for name in SEED_FILES:
-        url = f"{base}/{name}"
-        dest = data_dir / name
-        print(f"downloading {name} <- {url} ...", end=" ", flush=True)
-        try:
-            with requests.get(url, timeout=TIMEOUT, stream=True) as r:
-                r.raise_for_status()
-                size = 0
-                with open(dest, "wb") as f:
-                    for chunk in r.iter_content(1 << 16):
-                        f.write(chunk)
-                        size += len(chunk)
-            print(f"{size / 1e6:.1f} MB OK")
-        except Exception as exc:  # noqa: BLE001
-            print(f"FAILED: {exc}")
-            raise SystemExit(1)
-    print(f"\n种子数据就绪：{data_dir}")
+from industry_chain.seed_data import SeedDataManager  # noqa: E402
 
 
 def main() -> None:
@@ -72,13 +33,20 @@ def main() -> None:
     args = ap.parse_args()
     data_dir = Path(args.dir)
 
-    if _files_ok(data_dir):
+    manager = SeedDataManager(data_dir, settings.seed_base_url)
+    status = manager.status()
+    if status["status"] == "ready":
         print(f"种子数据已就绪：{data_dir}")
         return
     if args.check:
         print(f"种子数据缺失（{data_dir}），请运行 scripts/fetch_seed_data.py 下载")
         raise SystemExit(1)
-    fetch(data_dir)
+    print("开始下载并校验 5 个种子数据文件……")
+    result = manager.bootstrap()
+    if result["status"] != "ready":
+        print(f"种子数据下载失败：{result['error'] or '未知错误'}")
+        raise SystemExit(1)
+    print(f"种子数据就绪：{data_dir}（{result['downloaded_bytes'] / 1e6:.1f} MB）")
 
 
 if __name__ == "__main__":

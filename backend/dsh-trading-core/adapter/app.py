@@ -446,37 +446,42 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     @app.get("/strategies", response_model=dict)
     async def strategies_list(limit: int = 50):
         """策略池列表（created_at 倒序）。"""
+        from .strategies import project_strategy_verification
+
         store = JsonStore()
-        rows = list((store.all("strategies") or {}).values())
+        rows = [
+            project_strategy_verification(item)
+            for item in (store.all("strategies") or {}).values()
+        ]
         rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         return {"count": len(rows), "items": rows[: max(1, min(limit, 200))]}
 
     @app.get("/strategies/{sid}", response_model=dict)
     async def strategies_get(sid: str):
         """单条策略详情（含 backtest）。"""
+        from .strategies import project_strategy_verification
+
         store = JsonStore()
         s = store.get("strategies", sid)
         if not s:
             raise HTTPException(status_code=404, detail="策略不存在")
-        return s
+        return project_strategy_verification(s)
 
     @app.post("/strategies/{sid}/{action}", response_model=dict)
     async def strategies_transition(sid: str, action: Literal["activate", "reject", "retire"]):
-        """手动状态迁移：activate→active / reject→rejected / retire→retired。"""
+        """手动迁移生命周期；验证分类由最新回测证据独立维护。"""
+        from .strategies import transition_strategy
+
         store = JsonStore()
-        status = {"activate": "active", "reject": "rejected", "retire": "retired"}[action]
-
-        def transition(current):
-            if not current:
-                raise HTTPException(status_code=404, detail="策略不存在")
-            return {
-                **dict(current),
-                "status": status,
-                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            }
-
-        store.mutate("strategies", sid, transition)
-        return {"id": sid, "status": status}
+        try:
+            updated = transition_strategy(store, sid, action)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="策略不存在") from exc
+        return {
+            "id": sid,
+            "status": updated["status"],
+            "verification_status": updated["verification_status"],
+        }
 
     # ---- 实时影子策略验证（架构图 I） ----------------------------------
 
@@ -515,7 +520,11 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             snap = store.get("shadow_equity", k) or {}
             if strategy_id:
                 s = (snap.get("strategies") or {}).get(strategy_id)
-                recs.append({"date": k, "strategy": s, "overall_nav": snap.get("overall_nav")})
+                # A portfolio snapshot is not evidence for a strategy that did
+                # not participate on that date. Omit the row instead of
+                # returning a null strategy beside an unrelated overall NAV.
+                if s is not None:
+                    recs.append({"date": k, "strategy": s})
             else:
                 recs.append({"date": k, "overall_nav": snap.get("overall_nav"),
                              "strategy_count": len(snap.get("strategies") or {})})
@@ -642,15 +651,25 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
         return evolution.attribution()
 
+    @app.get("/evolution/preview", response_model=dict)
+    def evolution_preview():
+        """当前待确认进化预案，供产品页与模型以同一上下文复核。"""
+        from . import evolution
+
+        return evolution.current_preview()
+
     @app.post("/evolution/run", response_model=dict)
     def evolution_run(req: EvolutionRunRequest):
-        """T→W→H 进化：升降级/淘汰 + 参数变异回流（apply=false 仅预览，true 写库）。
+        """T→W→H 进化：先生成绑定预案，再用令牌应用精确动作。
 
         数据不足（< EVOLVE_MIN_DAYS）时返回 waiting_data + 空 actions，不动作。
         """
         from . import evolution
 
-        return evolution.evolve(apply=req.apply)
+        try:
+            return evolution.evolve(apply=req.apply, preview_token=req.preview_token)
+        except evolution.EvolutionPreviewConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/analyze/{task_id}/stream")
     async def stream(task_id: str):

@@ -1,8 +1,8 @@
 - banner:
   - navigation "Session hierarchy":
     - button "Math rendering" [disabled]
-  - button "Session log":
-    - text: Session log
+  - button "Export conversation":
+    - text: Export conversation
     - img
   - tablist:
     - tab "Chat" [selected]

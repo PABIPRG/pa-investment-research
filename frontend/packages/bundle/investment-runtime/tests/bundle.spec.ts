@@ -8,7 +8,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const loaderSchema = yaml.DEFAULT_SCHEMA.extend([
   new yaml.Type('tag:yaml.org,2002:js', {
     kind: 'scalar',
-    construct: expression => expression,
+    construct: (expression: unknown): unknown => expression,
   }),
 ])
 
@@ -22,7 +22,9 @@ describe('investment runtime bundle', () => {
 
     expect(manifest.name).toBe('@deepseek-ai/dsh-investment-runtime-bundle')
     expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
-    expect(yaml.load(readFileSync(resolve(root, manifest.dsh!.bundle!.patch!), 'utf8'))).toEqual([
+    const patchPath = manifest.dsh?.bundle?.patch
+    if (patchPath === undefined) throw new Error('investment runtime bundle patch is missing')
+    expect(yaml.load(readFileSync(resolve(root, patchPath), 'utf8'))).toEqual([
       {
         insert: [
           {

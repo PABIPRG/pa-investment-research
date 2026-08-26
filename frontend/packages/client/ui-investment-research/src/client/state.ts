@@ -1,6 +1,9 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 
 export type InvestmentRoute =
+  | 'dashboard'
+  | 'analysis'
+  /** @deprecated Compatibility alias. New navigation must use `analysis`. */
   | 'assistant'
   | 'opportunity'
   | 'stock-detail'
@@ -10,19 +13,25 @@ export type InvestmentRoute =
   | 'tasks'
   | 'knowledge'
 
+export type AssistantDisplayMode = 'closed' | 'docked' | 'expanded'
+export type AssistantModule = 'general' | 'stock' | 'industry' | 'portfolio' | 'strategy' | 'watch'
+
 export interface InvestmentUiSnapshot {
   readonly route: InvestmentRoute
   readonly historyOpen: boolean
   readonly reportsOpen: boolean
+  readonly assistantMode: AssistantDisplayMode
+  readonly assistantModule: AssistantModule
   /** Drafts intentionally stay independent so typing in one module cannot mutate another. */
   readonly analysisQuery: string
+  readonly backtestQuery: string
   readonly watchQuery: string
   readonly chainQuery: string
   readonly selectedStockCode: string
   readonly selectedStrategyId: string
 }
 
-export type InvestmentDraftKey = 'analysisQuery' | 'watchQuery' | 'chainQuery'
+export type InvestmentDraftKey = 'analysisQuery' | 'backtestQuery' | 'watchQuery' | 'chainQuery'
 
 export interface InvestmentNavigationContext {
   readonly stockCode?: string
@@ -30,10 +39,13 @@ export interface InvestmentNavigationContext {
 }
 
 const INITIAL: InvestmentUiSnapshot = Object.freeze({
-  route: 'assistant',
+  route: 'dashboard',
   historyOpen: false,
   reportsOpen: false,
+  assistantMode: 'closed',
+  assistantModule: 'general',
   analysisQuery: '',
+  backtestQuery: '',
   watchQuery: '',
   chainQuery: '',
   selectedStockCode: '',
@@ -52,9 +64,10 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
   }
 
   navigate(route: InvestmentRoute, context: InvestmentNavigationContext = {}): void {
+    const nextRoute = route === 'assistant' ? 'analysis' : route
     this.publish({
       ...this.snapshot,
-      route,
+      route: nextRoute,
       historyOpen: false,
       reportsOpen: false,
       selectedStockCode: context.stockCode ?? this.snapshot.selectedStockCode,
@@ -63,7 +76,23 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
       // concrete strategy id; a stale candidate selected while backtesting
       // must never leak into paper validation.
       selectedStrategyId: context.strategyId
-        ?? (route === 'projects' ? '' : this.snapshot.selectedStrategyId),
+        ?? (nextRoute === 'projects' ? '' : this.snapshot.selectedStrategyId),
+    })
+  }
+
+  setAssistantMode(mode: AssistantDisplayMode): void {
+    this.publish({ ...this.snapshot, assistantMode: mode })
+  }
+
+  setAssistantModule(module: AssistantModule): void {
+    this.publish({ ...this.snapshot, assistantModule: module })
+  }
+
+  openAssistant(module: AssistantModule = this.snapshot.assistantModule): void {
+    this.publish({
+      ...this.snapshot,
+      assistantMode: this.snapshot.assistantMode === 'closed' ? 'docked' : this.snapshot.assistantMode,
+      assistantModule: module,
     })
   }
 
@@ -87,7 +116,10 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
     if (next.route === this.snapshot.route
       && next.historyOpen === this.snapshot.historyOpen
       && next.reportsOpen === this.snapshot.reportsOpen
+      && next.assistantMode === this.snapshot.assistantMode
+      && next.assistantModule === this.snapshot.assistantModule
       && next.analysisQuery === this.snapshot.analysisQuery
+      && next.backtestQuery === this.snapshot.backtestQuery
       && next.watchQuery === this.snapshot.watchQuery
       && next.chainQuery === this.snapshot.chainQuery
       && next.selectedStockCode === this.snapshot.selectedStockCode

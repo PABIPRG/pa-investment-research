@@ -376,7 +376,7 @@ const SERVICE_ROLES: ServiceRole[] = [
     pkg: 'investment-python-runtime',
     title: 'Investment Python backend lifecycle',
     mode: 'core',
-    consumers: ['investment-stock-analysis', 'investment-market-watch'],
+    consumers: ['investment-stock-analysis', 'investment-market-watch', 'investment-industry-chain'],
     note: 'Business plugins register complete backend definitions and acquire verified reference-counted leases; the service starts and joins only subprocess handles it owns.',
   },
   {

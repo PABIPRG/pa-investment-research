@@ -56,8 +56,11 @@ const STOCK_CONTRACTS = [
   { name: 'get_latest_brief', description: '读取最近一次生成的市场简报（含是否已在 dsh 对话内播报的标记）。', parameters: input({}), schema: output({ id: { type: 'string' }, period: { type: 'string' }, trade_date: { type: 'string' }, summary: { type: 'string' }, dsh_pushed: { type: 'boolean' } }) },
   {
     name: 'investment_context',
-    description: '按需读取交易后端已持久化的最新投研上下文。只接受领域枚举，不接受 JSON 字符串、URL 或路径，也不会读取浏览器本地状态。可读取组合、策略、影子验证、自进化、报告或产业影响上下文。',
-    parameters: input({ domain: { type: 'string', description: '要读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] } }, ['domain']),
+    description: '按需读取交易后端已持久化的最新投研上下文。不接受 JSON 字符串、URL 或路径，也不会读取浏览器本地状态。可读取组合、策略、影子验证、自进化、报告或产业影响上下文；报告领域可用受限报告 ID 读取对应详情。',
+    parameters: input({
+      domain: { type: 'string', description: '要读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] },
+      reference: { type: 'string', description: '可选；仅 reports 领域接受 32 位小写十六进制报告 ID，用于读取该报告详情' },
+    }, ['domain']),
     schema: output({ domain: { type: 'string', description: '实际读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] }, resources: { description: '按稳定资源名分组的后端无损 JSON' } }),
   },
 ] as const
