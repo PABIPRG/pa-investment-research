@@ -12,6 +12,20 @@ import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversat
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, money, number, percent, records, text } from './data.ts'
 import { parseHoldingsImport } from './holdings-import.ts'
+import {
+  AnalysisPage,
+  DashboardPage,
+  EvolutionPage,
+  ShadowPage,
+  StrategyPage,
+} from './V2Pages.tsx'
+import { IndustryChainPage } from './IndustryChainPage.tsx'
+import { MyResearchPage } from './MyResearchPage.tsx'
+import {
+  buildInvestmentAssistantRequest,
+  type InvestmentAssistantActionInput,
+  type InvestmentAssistantRequest,
+} from './assistant-context.ts'
 import type { InvestmentRoute, InvestmentUiSnapshot } from './state.ts'
 import css from './InvestmentShell.module.css'
 
@@ -100,6 +114,20 @@ function useRequestResource(requestData: RequestData): RequestResource {
   }
 }
 
+/** Only expose backend-provided HTTP(S) article addresses as external links. */
+export function safeExternalNewsUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+  try {
+    const url = new URL(value.trim())
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username !== '' || url.password !== '') {
+      return undefined
+    }
+    return url.toString()
+  } catch {
+    return undefined
+  }
+}
+
 interface UiInjected {
   hooks: { investmentUi: HostObservable<InvestmentUiSnapshot> }
   navigate: (route: InvestmentRoute, stockQuery?: string) => void
@@ -121,7 +149,7 @@ export interface InvestmentShellInjected extends UiInjected {
   searchSessions: (query: string, signal: AbortSignal) => Promise<readonly SessionSearchResultItem[]>
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
   archiveSession: (sessionId: SessionId) => Promise<void>
-  prepareAssistant: (prompt: string) => void
+  prepareAssistant: (request: InvestmentAssistantRequest) => Promise<void>
 }
 
 export type InvestmentShellProps = PropsRuntime<'shell.overlay'> & InjectFace<InvestmentShellInjected>
@@ -129,16 +157,13 @@ export type InvestmentBrandProps = PropsRuntime<'sidebar.brand'>
 export type InvestmentNewSessionProps = PropsRuntime<'sidebar.newSession'>
 export type InvestmentWelcomeProps = PropsRuntime<'conversation.hero.welcome'> & HeroWelcomeOwnerProps
 
-type NavigationRoute = Exclude<InvestmentRoute, 'stock-detail'>
+type NavigationRoute = Exclude<InvestmentRoute, 'assistant' | 'stock-detail'>
 
-const ROUTES: readonly { id: NavigationRoute; label: string; note?: string; disabled?: boolean }[] = [
-  { id: 'portfolio', label: '持仓分析', note: '风控' },
-  { id: 'assistant', label: '智能助手', note: 'AI' },
-  { id: 'opportunity', label: '机会发现', note: '实时' },
-  { id: 'framework', label: '投研框架', note: '规划', disabled: true },
-  { id: 'projects', label: '项目组合', note: '规划', disabled: true },
-  { id: 'tasks', label: '投研任务', note: '规划', disabled: true },
-  { id: 'knowledge', label: '知识库', note: '规划', disabled: true },
+const ROUTE_GROUPS: readonly { label: string; items: readonly { id: NavigationRoute; label: string }[] }[] = [
+  { label: '总览', items: [{ id: 'dashboard', label: '研究工作台' }] },
+  { label: '分析与盯盘', items: [{ id: 'analysis', label: '智能分析' }, { id: 'watch', label: '实时盯盘' }] },
+  { label: '策略闭环', items: [{ id: 'strategy', label: '策略研究' }, { id: 'shadow', label: '影子验证' }, { id: 'evolution', label: '自进化' }] },
+  { label: '个人与图谱', items: [{ id: 'portfolio', label: '我的投研' }, { id: 'chain', label: '产业链' }] },
 ]
 
 const SCAN_KINDS = [
@@ -187,26 +212,28 @@ function ImportIcon() {
 function NavGlyph({ route }: { route: InvestmentRoute }) {
   const glyph = {
     assistant: <><path d="M10 2.8 11.8 7l4.2 1.8-4.2 1.8-1.8 4.2-1.8-4.2L4 8.8 8.2 7 10 2.8Z" /><path d="m15.5 2.8.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" /></>,
-    opportunity: <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
+    dashboard: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="11" y="3" width="6" height="6" rx="1" /><rect x="3" y="11" width="6" height="6" rx="1" /><rect x="11" y="11" width="6" height="6" rx="1" /></>,
+    analysis: <><path d="M10 2.8 11.8 7l4.2 1.8-4.2 1.8-1.8 4.2-1.8-4.2L4 8.8 8.2 7 10 2.8Z" /><path d="m15.5 2.8.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" /></>,
+    watch: <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
     'stock-detail': <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>,
     portfolio: <><path d="M10 3a7 7 0 1 0 7 7h-7V3Z" /><path d="M12 3.3A7 7 0 0 1 16.7 8H12V3.3Z" /></>,
-    framework: <><path d="m10 2.8 7.2 7.2-7.2 7.2L2.8 10 10 2.8Z" /><path d="m7.2 10 1.8 1.8 3.8-4" /></>,
-    projects: <><rect x="3" y="4" width="14" height="12" rx="2" /><path d="M7 4V2.8h6V4M3 8h14" /></>,
-    tasks: <><path d="M4 3.5h12v13H4z" /><path d="m7 9 2 2 4-4M7 14h6" /></>,
-    knowledge: <><path d="M4 3.5h8.5A3.5 3.5 0 0 1 16 7v9.5H7.5A3.5 3.5 0 0 1 4 13V3.5Z" /><path d="M7.5 16.5A3.5 3.5 0 0 1 11 13h5" /></>,
+    strategy: <><path d="m10 2.8 7.2 7.2-7.2 7.2L2.8 10 10 2.8Z" /><path d="m7.2 10 1.8 1.8 3.8-4" /></>,
+    shadow: <><path d="M3 10s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4Z" /><circle cx="10" cy="10" r="2" /></>,
+    evolution: <><path d="M4 7a6.5 6.5 0 0 1 11-2l1.5 2" /><path d="M16.5 3.5V7H13" /><path d="M16 13a6.5 6.5 0 0 1-11 2l-1.5-2" /><path d="M3.5 16.5V13H7" /></>,
+    chain: <><circle cx="5" cy="5" r="2" /><circle cx="15" cy="6" r="2" /><circle cx="7" cy="15" r="2" /><path d="m6.8 6.2 6.4-1M6 7l1 6M9 14l4.5-6.5" /></>,
   }[route]
   return <svg className={css.navGlyph} viewBox="0 0 20 20" aria-hidden="true">{glyph}</svg>
 }
 
 /** Profile identity from the approved shared investment shell. */
 export function InvestmentBrand({ compact }: InvestmentBrandProps) {
-  if (compact) return <span className={css.brandCompact}>✦</span>
+  if (compact) return <span className={css.brandCompact}>PA</span>
   return (
     <div className={css.investmentBrand} aria-label="投研智能体">
-      <span className={css.brandMark}>✦</span>
+      <span className={css.brandMark}>PA</span>
       <span className={css.brandCopy}>
         <strong>投研智能体</strong>
-        <small>v2.4.0 · 智能投研系统</small>
+        <small>智能研究工作台</small>
       </span>
     </div>
   )
@@ -252,7 +279,7 @@ export function InvestmentSidebar({
   wide, useInvestmentUi, useSessions, useWorkspaces, navigate, selectWorkspace,
 }: InvestmentSidebarProps) {
   const route = useInvestmentUi(s => s.route)
-  const activeRoute: NavigationRoute = route === 'stock-detail' ? 'opportunity' : route
+  const activeRoute: NavigationRoute | undefined = route === 'stock-detail' ? 'watch' : route === 'assistant' ? undefined : route
   const current = useSessions(s => s.current)
   const workspaces = useWorkspaces(s => s.items)
   const active = workspaces.find(workspace => current !== undefined && workspace.sessionIds.includes(current))
@@ -274,23 +301,24 @@ export function InvestmentSidebar({
         </label>
       )}
       <nav className={css.investmentNav} aria-label="投研功能导航">
-        {ROUTES.map(item => (
-          <button
-            key={item.id}
-            type="button"
-            className={activeRoute === item.id ? css.navActive : undefined}
-            aria-current={activeRoute === item.id ? 'page' : undefined}
-            aria-label={item.label}
-            disabled={item.disabled}
-            title={item.disabled ? `${item.label}：等待后端能力接入` : wide ? undefined : item.label}
-            onClick={() => {
-              navigate(item.id)
-            }}
-          >
-            <span className={css.navIcon}><NavGlyph route={item.id} /></span>
-            {wide && <span className={css.navLabel}>{item.label}</span>}
-            {wide && item.note !== undefined && <span className={css.navNote}>{item.note}</span>}
-          </button>
+        {ROUTE_GROUPS.map(group => (
+          <div className={css.navGroup} key={group.label}>
+            {wide && <span className={css.navGroupLabel}>{group.label}</span>}
+            {group.items.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                className={activeRoute === item.id ? css.navActive : undefined}
+                aria-current={activeRoute === item.id ? 'page' : undefined}
+                aria-label={item.label}
+                title={wide ? undefined : item.label}
+                onClick={() => { navigate(item.id) }}
+              >
+                <span className={css.navIcon}><NavGlyph route={item.id} /></span>
+                {wide && <span className={css.navLabel}>{item.label}</span>}
+              </button>
+            ))}
+          </div>
         ))}
       </nav>
     </div>
@@ -312,19 +340,14 @@ function securitySearchItems(value: unknown): SecuritySearchItem[] {
 }
 
 function GlobalStockSearch({
-  requestData, initialValue, navigate,
-}: { requestData: RequestData; initialValue: string; navigate: UiInjected['navigate'] }) {
-  const [query, setQuery] = useState(initialValue)
+  requestData, navigate,
+}: { requestData: RequestData; navigate: UiInjected['navigate'] }) {
+  const [query, setQuery] = useState('')
   const [items, setItems] = useState<SecuritySearchItem[]>([])
   const [focused, setFocused] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
-
-  useEffect(() => {
-    setQuery(initialValue)
-    setFocused(false)
-  }, [initialValue])
 
   useEffect(() => {
     const keyword = query.trim()
@@ -349,7 +372,10 @@ function GlobalStockSearch({
   }, [focused, query, requestData])
 
   const select = (item: SecuritySearchItem): void => {
-    setQuery(`${item.name} ${item.code}`)
+    setQuery('')
+    setItems([])
+    setError('')
+    setActiveIndex(0)
     setFocused(false)
     navigate('stock-detail', item.code)
   }
@@ -359,6 +385,10 @@ function GlobalStockSearch({
     const item = items[activeIndex] ?? items[0]
     if (item !== undefined) { select(item); return }
     if (/^\d{6}$/.test(keyword)) {
+      setQuery('')
+      setItems([])
+      setError('')
+      setActiveIndex(0)
       setFocused(false)
       navigate('stock-detail', keyword)
       return
@@ -434,10 +464,43 @@ export function InvestmentShell({
   const [switchingSessionId, setSwitchingSessionId] = useState<SessionId | undefined>()
   const [historyClosing, setHistoryClosing] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [assistantStarting, setAssistantStarting] = useState(false)
+  const [assistantError, setAssistantError] = useState('')
+  const [assistantContextLabel, setAssistantContextLabel] = useState('整体投研')
+  const assistantGenerationRef = useRef(0)
   const historyTriggerRef = useRef<HTMLButtonElement>(null)
   const historyCloseTimerRef = useRef(0)
 
   useEffect(() => () => { window.clearTimeout(historyCloseTimerRef.current) }, [])
+
+  useEffect(() => {
+    if (!assistantOpen) return
+    document.body.dataset.investmentAssistantOpen = ''
+    return () => { delete document.body.dataset.investmentAssistantOpen }
+  }, [assistantOpen])
+
+  useEffect(() => { setAssistantOpen(false) }, [snapshot.route])
+
+  const askAssistant = useCallback((input: InvestmentAssistantActionInput): void => {
+    const generation = ++assistantGenerationRef.current
+    setAssistantOpen(true)
+    setAssistantStarting(true)
+    setAssistantError('')
+    void buildInvestmentAssistantRequest(requestData, snapshot.route, snapshot.stockQuery, input)
+      .then((request) => {
+        if (generation === assistantGenerationRef.current) setAssistantContextLabel(request.context.moduleLabel)
+        return prepareAssistant(request)
+      })
+      .catch((reason: unknown) => {
+        if (generation === assistantGenerationRef.current) {
+          setAssistantError(reason instanceof Error ? reason.message : '投研助理启动失败，请重试。')
+        }
+      })
+      .finally(() => {
+        if (generation === assistantGenerationRef.current) setAssistantStarting(false)
+      })
+  }, [prepareAssistant, requestData, snapshot.route, snapshot.stockQuery])
 
   const closeHistory = useCallback(() => {
     if (historyClosing) return
@@ -473,7 +536,7 @@ export function InvestmentShell({
   return (
     <>
       <header className={css.topbar}>
-        <GlobalStockSearch requestData={requestData} initialValue={snapshot.stockQuery} navigate={navigate} />
+        <GlobalStockSearch requestData={requestData} navigate={navigate} />
         <div className={css.topActions} role="group" aria-label="对话操作">
           {snapshot.route === 'assistant' && (
             <>
@@ -522,11 +585,22 @@ export function InvestmentShell({
 
       {snapshot.route !== 'assistant' && (
         <main className={css.workbench}>
-          {snapshot.route === 'opportunity' && (
+          {snapshot.route === 'dashboard' && (
+            <DashboardPage
+              requestData={requestData}
+              onAnalyze={askAssistant}
+              onNavigate={(route) => { navigate(route) }}
+            />
+          )}
+          {snapshot.route === 'analysis' && (
+            <AnalysisPage requestData={requestData} onAnalyze={askAssistant} onPortfolio={() => { navigate('portfolio') }} />
+          )}
+          {snapshot.route === 'watch' && (
             <OpportunityPage
               requestData={requestData}
               initialQuery={snapshot.stockQuery}
-              onAnalyze={prepareAssistant}
+              showOverview
+              onAnalyze={askAssistant}
               onView={(code) => { navigate('stock-detail', code) }}
             />
           )}
@@ -534,17 +608,38 @@ export function InvestmentShell({
             <StockDetailPage
               requestData={requestData}
               code={snapshot.stockQuery}
-              onBack={() => { navigate('opportunity') }}
-              onAnalyze={prepareAssistant}
+              onBack={() => { navigate('watch') }}
+              onAnalyze={askAssistant}
             />
           )}
+          {snapshot.route === 'strategy' && <StrategyPage requestData={requestData} onAnalyze={askAssistant} />}
+          {snapshot.route === 'shadow' && <ShadowPage requestData={requestData} onAnalyze={askAssistant} />}
+          {snapshot.route === 'evolution' && <EvolutionPage requestData={requestData} onAnalyze={askAssistant} />}
           {snapshot.route === 'portfolio' && (
-            <PortfolioPage requestData={requestData} onAnalyze={prepareAssistant} />
+            <MyResearchPage requestData={requestData} onAskAssistant={askAssistant} />
           )}
-          {!['opportunity', 'stock-detail', 'portfolio'].includes(snapshot.route) && (
-            <DeferredPage route={snapshot.route} />
+          {snapshot.route === 'chain' && (
+            <IndustryChainPage requestData={requestData} onAskAssistant={askAssistant} />
           )}
         </main>
+      )}
+
+      {snapshot.route !== 'assistant' && (
+        <button type="button" className={css.assistantDock} aria-label="打开投研助理" onClick={() => { askAssistant('') }}>
+          <span>AI</span><strong>投研助理</strong>
+        </button>
+      )}
+
+      {assistantOpen && (
+        <section className={css.assistantPanelHeader} role="dialog" aria-label="投研助理面板">
+          <div>
+            <strong>投研助理</strong>
+            <span>{assistantStarting ? '正在汇集投研数据并创建新对话…' : assistantContextLabel}</span>
+            {assistantError !== '' && <em role="alert">{assistantError}</em>}
+          </div>
+          <button type="button" disabled={assistantStarting} onClick={() => { askAssistant('') }}>新对话</button>
+          <button type="button" aria-label="关闭投研助理" onClick={() => { setAssistantOpen(false) }}>×</button>
+        </section>
       )}
 
       {snapshot.historyOpen && (
@@ -752,14 +847,28 @@ function HistoryDrawer({
 
 /** Opportunity workbench with independently settling market data regions. */
 export function OpportunityPage({
-  requestData, initialQuery, onAnalyze, onView,
-}: { requestData: RequestData; initialQuery: string; onAnalyze: (prompt: string) => void; onView: (code: string) => void }) {
+  requestData, initialQuery, showOverview = false, onAnalyze, onView,
+}: {
+  requestData: RequestData
+  initialQuery: string
+  showOverview?: boolean
+  onAnalyze: (prompt: string) => void
+  onView: (code: string) => void
+}) {
   const [kind, setKind] = useState('gainers')
   const [nonce, setNonce] = useState(0)
   const [selected, setSelected] = useState(initialQuery)
   const scan = useRequestResource(requestData)
   const news = useRequestResource(requestData)
   const signal = useRequestResource(requestData)
+  const overview = useRequestResource(requestData)
+  const alertRules = useRequestResource(requestData)
+
+  useEffect(() => {
+    if (!showOverview) return
+    overview.run({ operation: 'market-watch.overview' })
+    alertRules.run({ operation: 'market-watch.alerts' })
+  }, [alertRules.run, nonce, overview.run, showOverview])
 
   useEffect(() => {
     const query = initialQuery.trim()
@@ -804,11 +913,14 @@ export function OpportunityPage({
   const resources = selected.trim() === ''
     ? [scan.state, news.state]
     : [scan.state, news.state, signal.state]
+  if (showOverview) resources.unshift(overview.state, alertRules.state)
   const busy = resources.some(resource => resource.phase === 'loading' || resource.phase === 'refreshing')
+  const overviewRows = records(asRecord(overview.state.value).items)
+  const rules = records(asRecord(alertRules.state.value).items)
 
   return (
     <div className={css.pageScroll}>
-      <PageHeader title="机会发现" description="基于实时扫描、技术信号和基础实时资讯发现研究线索">
+      <PageHeader title="实时盯盘" description="扫描行情异动、技术信号与市场快讯，快速发现值得研究的线索。">
         <button
           type="button"
           className={css.secondaryButton}
@@ -817,6 +929,75 @@ export function OpportunityPage({
           onClick={() => { setNonce(value => value + 1) }}
         >{busy ? '加载中…' : '刷新数据'}</button>
       </PageHeader>
+      {showOverview && (
+        <div className={css.watchOverviewGrid}>
+          <section className={css.tableCard} aria-busy={overview.busy} aria-labelledby="watch-overview-title">
+            <div className={css.sectionHeading}>
+              <strong id="watch-overview-title">自选实时行情</strong>
+              <ResourceLabel state={overview.state} settled={`${overviewRows.length} 只自选`} />
+            </div>
+            {overview.state.error !== '' && (
+              <ErrorCard
+                title={overview.state.loaded ? '自选行情更新失败' : '自选行情暂不可用'}
+                message={overview.state.error}
+                retry={() => { overview.run({ operation: 'market-watch.overview' }) }}
+                retained={overview.state.loaded}
+              />
+            )}
+            {!overview.state.loaded && overview.state.error === '' && <LoadingSkeleton rows={3} />}
+            {overview.state.loaded && overviewRows.length === 0 && (
+              <div className={css.emptyState}>自选列表为空，可让投研助理添加关注标的。</div>
+            )}
+            {overview.state.loaded && overviewRows.length > 0 && (
+              <div className={css.v2TableWrap}>
+                <table>
+                  <thead><tr><th>标的</th><th>现价</th><th>涨跌幅</th><th>量比</th><th>主力净流入</th><th>规则状态</th></tr></thead>
+                  <tbody>
+                    {overviewRows.map((row, index) => {
+                      const code = text(row.code, String(index))
+                      const hits = records(row.hit)
+                      const near = records(row.near)
+                      return (
+                        <tr key={code}>
+                          <td><button type="button" className={css.codeButton} onClick={() => { onView(code) }}><strong>{text(row.name, code)}</strong><small>{code}</small></button></td>
+                          <td>{money(row.price)}</td>
+                          <td className={(number(row.pct_change) ?? 0) < 0 ? css.negative : css.positive}>{percent(row.pct_change)}</td>
+                          <td>{number(row.volume_ratio)?.toFixed(2) ?? '—'}</td>
+                          <td>{number(row.fund_flow_yi)?.toFixed(2) ?? '—'} 亿</td>
+                          <td><span className={css.watchRuleState} data-hit={hits.length > 0 ? 'true' : undefined}>{hits.length > 0 ? `命中 ${hits.length}` : near.length > 0 ? `逼近 ${near.length}` : '正常'}</span></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+          <section className={css.panelCard} aria-busy={alertRules.busy} aria-labelledby="watch-rules-title">
+            <div className={css.sectionHeading}>
+              <strong id="watch-rules-title">条件预警</strong>
+              <ResourceLabel state={alertRules.state} settled={`${rules.length} 条规则`} />
+            </div>
+            {alertRules.state.error !== '' && (
+              <ErrorCard
+                title={alertRules.state.loaded ? '预警规则更新失败' : '预警规则暂不可用'}
+                message={alertRules.state.error}
+                retry={() => { alertRules.run({ operation: 'market-watch.alerts' }) }}
+                retained={alertRules.state.loaded}
+              />
+            )}
+            {!alertRules.state.loaded && alertRules.state.error === '' && <LoadingSkeleton rows={3} />}
+            {alertRules.state.loaded && rules.slice(0, 4).map((rule, index) => (
+              <div className={css.watchRule} key={text(rule.id, String(index))}>
+                <div><strong>{text(rule.name, '未命名规则')}</strong><span>{text(rule.ticker, '全部自选')}</span></div>
+                <span data-enabled={rule.enabled === false ? 'false' : 'true'}>{rule.enabled === false ? '已暂停' : '监控中'}</span>
+              </div>
+            ))}
+            {alertRules.state.loaded && rules.length === 0 && <div className={css.emptyState}>暂未配置预警规则。</div>}
+            <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze('请帮我创建一条盯盘预警规则，并先询问标的、触发条件与通知频率。') }}>创建预警</button>
+          </section>
+        </div>
+      )}
       <div className={css.segmented} role="group" aria-label="市场扫描类型">
         {SCAN_KINDS.map(([value, label]) => (
           <button
@@ -944,7 +1125,24 @@ export function OpportunityPage({
               <>
                 {headlines.slice(0, 8).map((item, index) => {
                   const row = asRecord(item)
-                  return <article key={text(row.id, String(index))}><strong>{text(row.title, text(row.summary, '市场快讯'))}</strong><span>{text(row.time, text(row.ts, ''))}</span></article>
+                  const title = text(row.title, text(row.summary, '市场快讯'))
+                  const source = text(row.source, text(row.tag, '资讯源'))
+                  const url = safeExternalNewsUrl(row.url)
+                  return (
+                    <article key={text(row.id, String(index))}>
+                      <div className={css.newsHeadline}>
+                        {url === undefined
+                          ? <strong>{title}</strong>
+                          : (
+                            <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`${title}（打开原文）`}>
+                              <strong>{title}</strong><span aria-hidden="true">↗</span>
+                            </a>
+                          )}
+                        <small>{source}{url === undefined ? ' · 暂无原文链接' : ' · 原文'}</small>
+                      </div>
+                      <time>{text(row.time, text(row.ts, ''))}</time>
+                    </article>
+                  )
                 })}
                 {headlines.length === 0 && <p>当前数据源未返回资讯。</p>}
               </>
@@ -1000,7 +1198,7 @@ function StockDetailPage({
   return (
     <div className={css.pageScroll}>
       <PageHeader title={loading ? '个股详情' : `${name} · ${resolvedCode}`} description="实时行情、技术位置、资金与个股资讯的统一研究视图">
-        <button type="button" className={css.secondaryButton} onClick={onBack}>返回机会发现</button>
+        <button type="button" className={css.secondaryButton} onClick={onBack}>返回实时盯盘</button>
         <button type="button" className={css.secondaryButton} onClick={() => { setNonce(value => value + 1) }}>刷新详情</button>
         {!loading && error === '' && (
           <button
@@ -1209,7 +1407,7 @@ export function PortfolioPage({ requestData, onAnalyze }: { requestData: Request
 
   return (
     <div className={css.pageScroll}>
-      <PageHeader title="持仓分析" description="只展示后端已保存的持仓、风险预算与真实预警结果">
+      <PageHeader title="我的投研" description="管理持仓，检查风险预算，并把当前上下文带入智能分析。">
         <button type="button" className={css.secondaryButton} onClick={() => { setNotice(''); setImportOpen(true) }}>
           <ImportIcon /><span className={css.actionLabel}>导入持仓</span>
         </button>
@@ -1354,17 +1552,6 @@ function RiskRow({ item }: { item: Record<string, unknown> }) {
 
 function AlertRow({ item }: { item: Record<string, unknown> }) {
   return <article className={css.alertRow}><div><span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span><strong>{text(item.title)}</strong></div><p>{text(item.detail)}</p><small>{text(item.ts, '')}</small></article>
-}
-
-function DeferredPage({ route }: { route: InvestmentRoute }) {
-  const item = ROUTES.find(candidate => candidate.id === route)
-  const descriptions: Partial<Record<InvestmentRoute, string>> = {
-    framework: '后端已有 KYC、风险画像、策略池、回测和自进化接口；下一阶段将按真实策略生命周期实现。',
-    projects: '将映射现有工作区和会话，不创建与 Workspace 平行的本地项目数据。',
-    tasks: '需要先统一投研任务与 Goal / Schedule / Workflow 的状态模型。',
-    knowledge: '将以工作区文件、附件和真实会话产物为数据源，不使用交互稿中的假研报。',
-  }
-  return <div className={css.deferred}><span><NavGlyph route={route} /></span><h1>{item?.label}</h1><p>{descriptions[route] ?? '该模块正在接入真实能力。'}</p><strong>真实能力接入中</strong></div>
 }
 
 function PageHeader({ title, description, children }: { title: string; description: string; children?: ReactNode }) {

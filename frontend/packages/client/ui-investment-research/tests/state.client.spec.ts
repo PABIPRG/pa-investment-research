@@ -2,23 +2,23 @@ import { describe, expect, it, vi } from 'vitest'
 import { InvestmentUiState } from '../src/client/state.ts'
 
 describe('InvestmentUiState', () => {
-  it('starts on the portfolio workbench and publishes profile navigation', () => {
+  it('starts on the research dashboard and publishes profile navigation', () => {
     const state = new InvestmentUiState()
     const listener = vi.fn()
     const unsubscribe = state.subscribe(listener)
 
     expect(state.getSnapshot()).toEqual({
-      route: 'portfolio',
+      route: 'dashboard',
       historyOpen: false,
       stockQuery: '',
     })
 
     state.setHistory(true)
-    state.navigate('opportunity', '600519')
+    state.navigate('watch', '600519')
 
     expect(listener).toHaveBeenCalledTimes(2)
     expect(state.getSnapshot()).toEqual({
-      route: 'opportunity',
+      route: 'watch',
       historyOpen: false,
       stockQuery: '600519',
     })

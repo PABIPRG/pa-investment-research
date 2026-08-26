@@ -189,6 +189,7 @@ describe('loadProfile', () => {
       '@deepseek-ai/dsh-investment-runtime-bundle',
       '@deepseek-ai/dsh-investment-stock-analysis-bundle',
       '@deepseek-ai/dsh-investment-market-watch-bundle',
+      '@deepseek-ai/dsh-investment-industry-chain-bundle',
     ])
     try {
       loadProfile('t', 'web', anchor, home)
@@ -212,6 +213,9 @@ describe('loadProfile', () => {
       '@deepseek-ai/dsh-investment-market-watch-bundle': {
         patch: "- insert:\n    - id: investment-market-watch\n      name: '@deepseek-ai/dsh-investment-market-watch'\n",
       },
+      '@deepseek-ai/dsh-investment-industry-chain-bundle': {
+        patch: "- insert:\n    - id: investment-industry-chain\n      name: '@deepseek-ai/dsh-investment-industry-chain'\n",
+      },
     })
     const home = tmp()
     const profile = loadProfile('t', 'investment-research', anchor, home)
@@ -222,6 +226,7 @@ describe('loadProfile', () => {
       'investment-python-runtime',
       'investment-stock-analysis',
       'investment-market-watch',
+      'investment-industry-chain',
     ])
 
     const dir = resolveProfileDir('investment-research', home)
@@ -240,14 +245,19 @@ describe('loadProfile', () => {
       'web-app',
       'investment-python-runtime',
       'investment-market-watch',
+      'investment-industry-chain',
     ])
   })
 
-  it('normalizes only the exact installation-owned headless bundle tuple', () => {
+  it('normalizes only exact installation-owned bundle tuples', () => {
     const anchor = stageInstallation({
       '@deepseek-ai/dsh-base': { patch: '[]\n' },
       '@deepseek-ai/dsh-web-app': { patch: '[]\n' },
       '@deepseek-ai/dsh-headless': { patch: '[]\n' },
+      '@deepseek-ai/dsh-investment-runtime-bundle': { patch: '[]\n' },
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle': { patch: '[]\n' },
+      '@deepseek-ai/dsh-investment-market-watch-bundle': { patch: '[]\n' },
+      '@deepseek-ai/dsh-investment-industry-chain-bundle': { patch: '[]\n' },
       'custom-bundle': { patch: '[]\n' },
     })
     const home = tmp()
@@ -258,6 +268,18 @@ describe('loadProfile', () => {
     loadProfile('t', 'headless', anchor, home)
     expect(readProfileManifest('t', stock).dsh?.profile?.bundles)
       .toEqual(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-headless'])
+
+    const investment = resolveProfileDir('investment-research', home)
+    initProfile(investment, [
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-investment-runtime-bundle',
+      '@deepseek-ai/dsh-investment-stock-analysis-bundle',
+      '@deepseek-ai/dsh-investment-market-watch-bundle',
+    ])
+    loadProfile('t', 'investment-research', anchor, home)
+    expect(readProfileManifest('t', investment).dsh?.profile?.bundles)
+      .toEqual(PROFILE_TEMPLATES['investment-research'])
 
     const customHome = tmp()
     const custom = resolveProfileDir('headless', customHome)

@@ -11,6 +11,10 @@ import {
   type InvestmentShellInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
+import {
+  formatInvestmentAssistantDraft,
+  type InvestmentAssistantRequest,
+} from './assistant-context.ts'
 import { InvestmentUiState, type InvestmentRoute } from './state.ts'
 
 export { InvestmentBrand, InvestmentNewSession, InvestmentShell, InvestmentSidebar, InvestmentWelcome } from './InvestmentShell.tsx'
@@ -23,6 +27,12 @@ export type {
   InvestmentSidebarInjected,
   InvestmentSidebarProps,
 } from './InvestmentShell.tsx'
+export type {
+  InvestmentAssistantActionInput,
+  InvestmentAssistantContext,
+  InvestmentAssistantModule,
+  InvestmentAssistantRequest,
+} from './assistant-context.ts'
 export { InvestmentUiState } from './state.ts'
 export type { InvestmentRoute, InvestmentUiSnapshot } from './state.ts'
 
@@ -60,32 +70,37 @@ export function apply(ctx: ClientContext): void {
     return true
   }
 
-  const prepareAssistant = (prompt: string): void => {
-    navigate('assistant')
+  const prepareAssistant = async (request: InvestmentAssistantRequest): Promise<void> => {
     ctx.layout.closeDetails()
-    const current = ctx.sessions.list.getSnapshot().current
-    if (current !== undefined && setDraft(current, prompt)) return
-
     cancelPendingDraft?.()
-    let settled = false
-    let timer = 0
-    let unsubscribe = (): void => {}
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timer)
-      unsubscribe()
-      cancelPendingDraft = undefined
-    }
-    const tryApply = (): void => {
-      const next = ctx.sessions.list.getSnapshot().current
-      if (next !== undefined && setDraft(next, prompt)) finish()
-    }
-    unsubscribe = ctx.sessions.list.subscribe(tryApply)
-    timer = window.setTimeout(finish, 8_000)
-    cancelPendingDraft = finish
-    ctx.workspaces.startSession()
-    tryApply()
+    const sessionId = await ctx.workspaces.startFreshSession()
+    if (sessionId === undefined) throw new Error('请先选择一个工作区，再使用投研助理。')
+    const prompt = formatInvestmentAssistantDraft(request)
+    if (setDraft(sessionId, prompt)) return
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      let timer = 0
+      let unsubscribe = (): void => {}
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        unsubscribe()
+        cancelPendingDraft = undefined
+        if (error === undefined) resolve()
+        else reject(error)
+      }
+      const tryApply = (): void => {
+        if (setDraft(sessionId, prompt)) finish()
+      }
+      unsubscribe = ctx.sessions.list.subscribe(tryApply)
+      timer = window.setTimeout(() => {
+        finish(new Error('新对话输入区载入超时，请重试。'))
+      }, 8_000)
+      cancelPendingDraft = finish
+      tryApply()
+    })
   }
 
   const shared = {
@@ -106,7 +121,6 @@ export function apply(ctx: ClientContext): void {
     requestData: request => ctx.investmentResearchRuntimeClient.requestData(request),
     setHistory: (open) => { state.setHistory(open) },
     startSession: async () => {
-      navigate('assistant')
       await ctx.workspaces.startFreshSession()
     },
     openSession: async (sessionId) => {

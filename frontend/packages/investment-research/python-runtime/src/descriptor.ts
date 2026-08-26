@@ -7,6 +7,7 @@ import type { InvestmentBackendId } from './types.ts'
 const BACKEND_MODULES = {
   'trading-core': 'adapter.app:app',
   'market-watch': 'market_watch.app:app',
+  'industry-chain': 'industry_chain.app:app',
 } as const
 
 /** One immutable file entry verified before a bundled Runtime is used. */
@@ -149,7 +150,7 @@ function parseDescriptor(value: unknown): InvestmentRuntimeDescriptor {
   if (typeof value.python.platform !== 'string' || typeof value.python.arch !== 'string') throw invalid('Python target')
   const executable = parseRelativePath(value.python.executable, 'python executable')
   const sitePackages = parseRelativePath(value.sitePackages, 'sitePackages')
-  if (!isRecord(value.backends) || !exactKeys(value.backends, ['trading-core', 'market-watch'])) {
+  if (!isRecord(value.backends) || !exactKeys(value.backends, ['trading-core', 'market-watch', 'industry-chain'])) {
     throw invalid('backends')
   }
   if (!Array.isArray(value.files) || value.files.length === 0) throw invalid('files')
@@ -160,13 +161,17 @@ function parseDescriptor(value: unknown): InvestmentRuntimeDescriptor {
     return Object.freeze({ path: filePath, sha256: entry.sha256 })
   })
   const filePaths = files.map(entry => entry.path)
-  if (new Set(filePaths).size !== filePaths.length || filePaths.some((entry, index) => index > 0 && filePaths[index - 1]! >= entry)) {
+  if (new Set(filePaths).size !== filePaths.length || filePaths.some((entry, index) => {
+    const previous = filePaths[index - 1]
+    return previous !== undefined && previous >= entry
+  })) {
     throw invalid('files order')
   }
   if (!filePaths.includes(executable)) throw invalid('unhashed Python executable')
   const backends = Object.freeze({
     'trading-core': parseBackend(value.backends['trading-core'], 'trading-core'),
     'market-watch': parseBackend(value.backends['market-watch'], 'market-watch'),
+    'industry-chain': parseBackend(value.backends['industry-chain'], 'industry-chain'),
   })
   return Object.freeze({
     schemaVersion: 1,
@@ -222,6 +227,7 @@ export function verifyInvestmentRuntimeDescriptor(
   const projectDirs = Object.freeze({
     'trading-core': resolveRelative(root, descriptor.backends['trading-core'].projectDir, pathApi),
     'market-watch': resolveRelative(root, descriptor.backends['market-watch'].projectDir, pathApi),
+    'industry-chain': resolveRelative(root, descriptor.backends['industry-chain'].projectDir, pathApi),
   })
   if (!isFile(pythonExecutable)) throw invalid('Python executable missing')
   if (!isDirectory(sitePackages)) throw invalid('sitePackages missing')

@@ -49,6 +49,7 @@
     "@deepseek-ai/dsh-host-directory-picker-native": "workspace:^",
     "@deepseek-ai/dsh-host-apiproxy": "workspace:^",
     "@deepseek-ai/dsh-investment-market-watch-bundle": "workspace:^",
+    "@deepseek-ai/dsh-investment-industry-chain-bundle": "workspace:^",
     "@deepseek-ai/dsh-investment-runtime-bundle": "workspace:^",
     "@deepseek-ai/dsh-investment-stock-analysis-bundle": "workspace:^"
   },

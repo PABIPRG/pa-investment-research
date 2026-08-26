@@ -13,7 +13,7 @@ import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
 const TARGETS = ['darwin-arm64', 'darwin-x64', 'win32-x64'] as const
-const BACKENDS = ['dsh-trading-core', 'market-watch'] as const
+const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const EXCLUDED_SEGMENTS = new Set(['.git', '__pycache__', 'data', 'env', 'logs', 'tests'])
 
@@ -64,6 +64,7 @@ interface RuntimeDescriptor {
   readonly backends: {
     readonly 'trading-core': { readonly projectDir: 'backends/dsh-trading-core'; readonly module: 'adapter.app:app' }
     readonly 'market-watch': { readonly projectDir: 'backends/market-watch'; readonly module: 'market_watch.app:app' }
+    readonly 'industry-chain': { readonly projectDir: 'backends/industry-chain'; readonly module: 'industry_chain.app:app' }
   }
   readonly files: readonly { readonly path: string; readonly sha256: string }[]
 }
@@ -333,6 +334,7 @@ export async function buildInvestmentPythonSidecar(
       backends: {
         'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
         'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+        'industry-chain': { projectDir: 'backends/industry-chain', module: 'industry_chain.app:app' },
       },
       files: await collectFiles(staging, dependencies.descriptorFileSha256 ?? fileSha256),
     }

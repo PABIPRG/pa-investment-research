@@ -11,7 +11,7 @@ interface MutableDescriptor {
   schemaVersion: number
   python: { version: string; platform: string; arch: string; executable: string }
   sitePackages: string
-  backends: Record<'trading-core' | 'market-watch', { projectDir: string; module: string }>
+  backends: Record<'trading-core' | 'market-watch' | 'industry-chain', { projectDir: string; module: string }>
   files: Array<{ path: string; sha256: string }>
   extra?: boolean
 }
@@ -34,6 +34,7 @@ async function fixture(): Promise<{
   const files = {
     'backends/dsh-trading-core/adapter/app.py': 'trading',
     'backends/market-watch/market_watch/app.py': 'market',
+    'backends/industry-chain/industry_chain/app.py': 'industry',
     'runtime/bin/python3': 'python',
     'site-packages/native.so': 'native',
   }
@@ -54,6 +55,7 @@ async function fixture(): Promise<{
     backends: {
       'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
       'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+      'industry-chain': { projectDir: 'backends/industry-chain', module: 'industry_chain.app:app' },
     },
     files: Object.entries(files).sort(([left], [right]) => left.localeCompare(right)).map(([path, value]) => ({
       path,
@@ -77,6 +79,7 @@ describe('investment packaged Runtime descriptor', () => {
       projectDirs: {
         'trading-core': join(root, 'backends', 'dsh-trading-core'),
         'market-watch': join(root, 'backends', 'market-watch'),
+        'industry-chain': join(root, 'backends', 'industry-chain'),
       },
     })
   })

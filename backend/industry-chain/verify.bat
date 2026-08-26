@@ -8,6 +8,16 @@ rem ============================================================
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
+if /i "%~1"=="--environment" (
+    if not exist "env\Scripts\python.exe" (
+        echo [ERROR] Python virtual environment missing. Run init.bat first.
+        exit /b 1
+    )
+    env\Scripts\python.exe -c "from industry_chain.app import app; print('industry-chain Python imports OK')"
+    if errorlevel 1 exit /b 1
+    exit /b 0
+)
+
 echo == industry-chain verify ==
 echo.
 echo [1/2] adapter health check ...

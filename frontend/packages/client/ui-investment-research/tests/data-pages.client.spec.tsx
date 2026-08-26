@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode, type ComponentProps } from 'react'
-import { OpportunityPage, PortfolioPage } from '../src/client/InvestmentShell.tsx'
+import { OpportunityPage, PortfolioPage, safeExternalNewsUrl } from '../src/client/InvestmentShell.tsx'
 
 type RequestData = ComponentProps<typeof OpportunityPage>['requestData']
 
@@ -22,6 +22,70 @@ function deferred<T>(): Deferred<T> {
 afterEach(cleanup)
 
 describe('投研数据页慢请求状态', () => {
+  it('只把后端返回的安全原文地址渲染为新窗口链接', async () => {
+    const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.scan') return Promise.resolve({ items: [] })
+      if (request.operation === 'market-watch.news-flash') {
+        return Promise.resolve({
+          items: [
+            { id: 'safe', title: '可查看原文', source: '新浪财经', time: '10:01', url: 'https://finance.example/news/1' },
+            { id: 'unsafe', title: '不安全地址', source: '未知源', time: '10:00', url: 'javascript:alert(1)' },
+          ],
+        })
+      }
+      return Promise.resolve({})
+    })
+
+    render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
+
+    const link = await screen.findByRole<HTMLAnchorElement>('link', { name: '可查看原文（打开原文）' })
+    expect(link.href).toBe('https://finance.example/news/1')
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toBe('noopener noreferrer')
+    expect(screen.getByText('新浪财经 · 原文')).toBeTruthy()
+    expect(screen.getByText('未知源 · 暂无原文链接')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /不安全地址/ })).toBeNull()
+    expect(safeExternalNewsUrl('https://user:pass@example.com/private')).toBeUndefined()
+    expect(safeExternalNewsUrl('/relative')).toBeUndefined()
+  })
+
+  it('实时盯盘首屏展示自选行情与条件预警', async () => {
+    const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.overview') {
+        return Promise.resolve({
+          items: [{
+            code: '600519', name: '贵州茅台', price: 1688, pct_change: 1.2,
+            volume_ratio: 1.8, fund_flow_yi: 2.6, hit: [{ name: '放量' }],
+          }],
+        })
+      }
+      if (request.operation === 'market-watch.alerts') {
+        return Promise.resolve({ items: [{ id: 'a1', name: '放量上行', ticker: '600519', enabled: true }] })
+      }
+      if (request.operation === 'market-watch.scan') return Promise.resolve({ items: [] })
+      if (request.operation === 'market-watch.news-flash') return Promise.resolve({ items: [] })
+      return Promise.resolve({})
+    })
+
+    render(
+      <OpportunityPage
+        requestData={requestData}
+        initialQuery=""
+        showOverview
+        onAnalyze={() => {}}
+        onView={() => {}}
+      />,
+    )
+
+    expect(await screen.findByText('自选实时行情')).toBeTruthy()
+    expect(await screen.findByText('贵州茅台')).toBeTruthy()
+    expect(screen.getByText('命中 1')).toBeTruthy()
+    expect(screen.getByText('放量上行')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '创建预警' })).toBeTruthy()
+    expect(requestData).toHaveBeenCalledWith({ operation: 'market-watch.overview' })
+    expect(requestData).toHaveBeenCalledWith({ operation: 'market-watch.alerts' })
+  })
+
   it('逐项展示机会数据，并只重试失败的资讯请求', async () => {
     const scan = deferred<unknown>()
     const firstNews = deferred<unknown>()
