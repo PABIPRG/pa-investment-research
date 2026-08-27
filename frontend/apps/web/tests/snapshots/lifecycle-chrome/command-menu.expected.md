@@ -1,7 +1,7 @@
 - listbox "Trigger suggestions":
   - text: Commands
   - option "compact Compact older conversation history" [selected]
-  - option "export Download this Session log as a ZIP archive"
+  - option "export Export this conversation as a ZIP backup"
   - option "feedback record feedback about this session"
   - option "goal set or view the goal for a long-running task"
   - option "permission Switch the permission preset (sandbox mode + approval policy)"

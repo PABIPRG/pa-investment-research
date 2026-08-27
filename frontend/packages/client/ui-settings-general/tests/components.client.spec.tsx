@@ -27,10 +27,10 @@ describe('chrome content', () => {
     expect(screen.getByText('Settings')).toBeTruthy()
   })
 
-  it('TriggerContent drops the label in the rail state', () => {
+  it('TriggerContent keeps an accessible visually-hidden label in the rail state', () => {
     const { container } = render(<TriggerContent {...kit} wide={false} t={t} />)
     expect(container.querySelector('svg')).toBeTruthy()
-    expect(screen.queryByText('Settings')).toBeNull()
+    expect(screen.getByText('Settings').className).toContain('visuallyHidden')
   })
 
   it('HeaderContent and CloseLabel render their translated text', () => {

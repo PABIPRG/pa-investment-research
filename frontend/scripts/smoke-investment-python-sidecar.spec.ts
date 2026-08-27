@@ -11,7 +11,7 @@ import {
 const roots: string[] = []
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map(async root => { await rm(root, { recursive: true, force: true }) }))
+  await Promise.all(roots.splice(0).map(async (root) => { await rm(root, { recursive: true, force: true }) }))
 })
 
 async function fixture() {
@@ -43,11 +43,11 @@ async function fixture() {
     })),
   }
   await writeFile(join(root, 'runtime.json'), JSON.stringify(descriptor))
-  return { root }
+  return { root, descriptor }
 }
 
 describe('investment Python sidecar smoke', () => {
-  it('uses the sidecar interpreter to import native dependencies and verify both health routes', async () => {
+  it('uses the sidecar interpreter to verify all health routes and the industry data lifecycle routes', async () => {
     const { root } = await fixture()
     let observedEnv: Readonly<Record<string, string>> | undefined
     const runCommand = vi.fn<NonNullable<SmokeInvestmentSidecarDependencies['runCommand']>>(async (
@@ -70,6 +70,8 @@ describe('investment Python sidecar smoke', () => {
     expect(args[2]).toContain('"numpy", "pandas", "uvicorn"')
     expect(args[2]).not.toContain('sys.dont_write_bytecode')
     expect(args[2]).toContain('/health')
+    expect(args[2]).toContain('/data/status')
+    expect(args[2]).toContain('/data/bootstrap')
     expect(args[2]).toContain('adapter.app:app')
     expect(args[2]).toContain('market_watch.app:app')
     expect(args[2]).toContain('industry_chain.app:app')
@@ -92,5 +94,20 @@ describe('investment Python sidecar smoke', () => {
     await expect(smokeInvestmentPythonSidecar(healthy.root, {
       runCommand: async () => 17,
     })).rejects.toThrow(/smoke failed with exit code 17/u)
+  })
+
+  it('requires exactly the three backend descriptor entries before launch', async () => {
+    const { root, descriptor } = await fixture()
+    await writeFile(join(root, 'runtime.json'), JSON.stringify({
+      ...descriptor,
+      backends: {
+        'trading-core': descriptor.backends['trading-core'],
+        'market-watch': descriptor.backends['market-watch'],
+      },
+    }))
+    const runCommand = vi.fn(async () => 0)
+
+    await expect(smokeInvestmentPythonSidecar(root, { runCommand })).rejects.toThrow(/exactly the three/u)
+    expect(runCommand).not.toHaveBeenCalled()
   })
 })

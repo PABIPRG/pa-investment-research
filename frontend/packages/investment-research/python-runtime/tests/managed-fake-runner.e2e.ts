@@ -70,13 +70,13 @@ async function freePort(): Promise<number> {
 }
 
 describe.skipIf(python === undefined)('managed fake Python runner', () => {
-  it('owns both fake backends and forwards each credential allowlist without exposing it in argv or diagnostics', async () => {
+  it('owns all three fake backends and forwards each credential allowlist without exposing it in argv or diagnostics', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh investment 运行时 '))
     roots.push(root)
     const projectDir = join(root, 'fake project')
     await cp(fixture, projectDir, { recursive: true })
     await execFileAsync(python!, ['-m', 'venv', join(projectDir, 'env')])
-    const [tradingPort, marketPort] = await Promise.all([freePort(), freePort()])
+    const [tradingPort, marketPort, industryPort] = await Promise.all([freePort(), freePort(), freePort()])
     const home = join(root, 'dsh home')
     const ctx = new Context()
     contexts.push(ctx)
@@ -128,15 +128,34 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
         { ref: 'DEEPSEEK_API_KEY' as CredentialRef, env: 'DEEPSEEK_API_KEY', role: 'enhancement' },
       ],
     }
-    const unregister = [runtime.register(trading), runtime.register(market)]
-    const leases = await Promise.all([runtime.acquire('trading-core'), runtime.acquire('market-watch')])
-    expect(leases.map(lease => lease.ownership)).toEqual(['owned', 'owned'])
-    await expect(fetch(`${leases[0]!.baseUrl}/health`).then(response => response.json()))
+    const industry: PythonBackendDefinition = {
+      id: 'industry-chain',
+      service: 'industry-chain',
+      mode: 'managed',
+      baseUrl: `http://127.0.0.1:${industryPort}`,
+      projectDir,
+      repositoryPath: ['unused'],
+      module: 'industry_chain.app:app',
+      healthPath: '/health',
+      healthOk: { service: 'industry-chain', ok: true },
+      initCommand: { posix: './init.sh', windows: 'init.bat' },
+      managedEnv: { FAKE_ENV_MARKER: 'industry-visible' },
+    }
+    const unregister = [runtime.register(trading), runtime.register(market), runtime.register(industry)]
+    const leases = await Promise.all([
+      runtime.acquire('trading-core'),
+      runtime.acquire('market-watch'),
+      runtime.acquire('industry-chain'),
+    ])
+    expect(leases.map(lease => lease.ownership)).toEqual(['owned', 'owned', 'owned'])
+    await expect(fetch(`${leases[0].baseUrl}/health`).then(response => response.json()))
       .resolves.toMatchObject({ service: 'trading-core', status: 'ok', env: 'trading-visible' })
-    await expect(fetch(`${leases[1]!.baseUrl}/health`).then(response => response.json()))
+    await expect(fetch(`${leases[1].baseUrl}/health`).then(response => response.json()))
       .resolves.toMatchObject({ service: 'market-watch', ok: true })
+    await expect(fetch(`${leases[2].baseUrl}/health`).then(response => response.json()))
+      .resolves.toMatchObject({ service: 'industry-chain', ok: true })
 
-    expect(specs).toHaveLength(2)
+    expect(specs).toHaveLength(3)
     const byModule = new Map(specs.map(spec => [spec.argv[3], spec]))
     expect(byModule.get('adapter.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'trading-visible',
@@ -148,9 +167,12 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       MW_LLM_ENABLED: 'true',
       DEEPSEEK_API_KEY: CANARY,
     })
+    expect(byModule.get('industry_chain.app:app')?.env).toEqual({
+      FAKE_ENV_MARKER: 'industry-visible',
+    })
     expect(specs.flatMap(spec => spec.argv)).not.toContain(CANARY)
 
-    for (const id of ['trading-core', 'market-watch'] as const) {
+    for (const id of ['trading-core', 'market-watch', 'industry-chain'] as const) {
       await expect(access(ownedBackendStatePath(home, id))).resolves.toBeUndefined()
       const log = await readFile(backendLogPaths(home, id).active, 'utf8')
       expect(log).toContain('fake uvicorn ready')
@@ -159,10 +181,10 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     expect(JSON.stringify(runtime.readiness())).not.toContain(CANARY)
 
     await Promise.all(leases.map(lease => lease.release()))
-    for (const definition of [trading, market]) {
+    for (const definition of [trading, market, industry]) {
       await expect(access(ownedBackendStatePath(home, definition.id))).rejects.toThrow()
       await expect(fetch(`${definition.baseUrl}/health`)).rejects.toThrow()
     }
-    unregister.forEach(dispose => dispose())
-  }, 30_000)
+    for (const dispose of unregister) dispose()
+  }, 60_000)
 })

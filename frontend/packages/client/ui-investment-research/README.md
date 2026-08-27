@@ -2,28 +2,31 @@
 
 English | [中文](README.zh.md)
 
-Profile-specific investment research workbench UI. The package keeps the production shell's sessions, messages, composer, attachments, tools, approvals, and workspace services. It replaces the business navigation and adds the workbench surfaces through `shell.overlay`.
+The investment product UI for the `investment-research` profile. It keeps the production conversation, message, composer, attachment, tool, and approval surfaces, then adds a default Research Workbench, global security search, seven business modules, session history, and one report center through `shell.overlay`. The Research Workbench aggregates real holdings, portfolio risk, personalized events, explainable strategy matches, and pre-market brief tasks; it is distinct from the internal Workspace storage abstraction. Workspace remains hidden from the sidebar, blank-conversation flow, and product settings. On a first run with no registered Workspace, the profile creates a regular Host-cwd Session so the assistant is immediately usable.
 
-The sidebar organizes eight product areas into four groups:
+The Research Workbench plus seven business entries form one evidence-driven `1+7` research lifecycle and never create demo data:
 
-- Overview: Research Workbench.
-- Analysis and monitoring: Intelligent Analysis and Real-time Monitoring.
-- Strategy loop: Strategy Research, Shadow Validation, and Self-evolution.
-- Personal research and graph: My Research and Industry Chain.
+- Research Workbench is the default landing page. Its holdings, risk, alerts, personalized-event, and strategy-match regions settle independently; it labels holdings value as cost amount rather than pretending that cost price is a live market price. Personalized events request `comment: false`, so browsing does not depend on an LLM credential.
 
-The Research Workbench is the default route. It combines holdings, risk alerts, personalized market events, strategy matches, and the current risk profile without turning the page into another chat transcript. Real-time Monitoring uses the `market-watch` scan, technical signal, and news operations. My Research reads and edits holdings, watchlist entries, KYC, risk profile, behavioral profile, and portfolio risk on its current page. Industry Chain performs company search, company and entity profiles, five-column chains, multi-level expansion, and network slicing on its current page. Strategy Research, Shadow Validation, and Self-evolution read their corresponding strategy, shadow-position, equity, readiness, and attribution operations.
+- Intelligent Analysis reuses the production conversation and model tools. Realtime Watch reads market scans, technical signals, and basic realtime news.
+- Strategy Research turns real events into hypotheses and out-of-sample backtests. Shadow Validation reads paper-account state, positions, and equity. Evolution shows attribution and a read-only plan before a second, explicit confirmation can write to the strategy store.
+- My Research reads persisted holdings, portfolio risk, and alerts and supports validated CSV, TSV, or pasted-table imports. Industry Chain checks local data status first and downloads about 25 MB of licensed data only after explicit user confirmation on first use. Once ready, it reads statistics, company search, and layered upstream/downstream relations from the `industry-chain` backend while keeping event transmission as a separate secondary reference. Download, search, and chain refreshes expose their own loading, empty, failure, and retained-stale-data states.
 
-Each independent data region loads and fails independently. A completed region renders immediately, a failed region keeps its own retry action, and a refresh keeps the last successful value visible while the replacement request runs. Request generations prevent a late response for an old selection from overwriting the current selection. This is a browser state guard, not network cancellation; the current Host transport does not receive an `AbortSignal` from these pages.
+Realtime Watch and My Research settle each data region independently, display completed regions immediately, and keep failures and retries local. An unsettled identical request is reused, same-key refreshes retain the last successful value, and late superseded responses cannot replace the current selection. Strategy backtests and shadow runs poll the real task state; successful backend tasks persist formal reports.
 
-The browser never supplies a backend origin, port, or arbitrary path. Every read and business write uses a stable operation name that the Host maps to a fixed route and backend lease. Stock and holdings analysis, briefs, historical backtests, strategy hypotheses and persistence, strategy backtests and state transitions, shadow validation, and evolution all call their backend workflows from their owning pages. Only result interpretation and follow-up research enter the investment assistant.
+Realtime Watch explicitly requests basic news without event enrichment or personalized ranking, so its first view does not wait for the slow complete-source or optional LLM paths. Partial-source and stale-cache responses are labeled; enrichment remains an explicit backend capability.
 
-The floating assistant entry and page-level research actions open the production conversation area beside the current business route without compressing the page, navigation, or state loss. Every entry creates an independent conversation through the Workspace service and then writes structured business context into that conversation's shared composer; historical conversations are never reused. Module context combines the click-time page snapshot, a module backend snapshot, and compact overall data, and explicitly limits the task to financial research rather than code or project analysis. The user reviews and sends the message, so model selection, attachments, approvals, and send policies remain unchanged. The history drawer continues to use the production Session and Workspace services for search, open, rename, and archive actions.
+Ignoring a late response protects browser state; it is not network cancellation. The current Host transport does not accept an `AbortSignal` from this page, so a superseded backend request still runs to settlement.
 
-## Theme and overlay constraints
+The browser cannot supply a backend address, port, URL, or arbitrary path. Every request uses a stable operation name that the Host maps to a fixed endpoint while managing the backend lease. The Host also validates dynamic report, strategy, and task identifiers before inserting them into a fixed route.
 
-Feature styles in this package use only `--dsw-alias-*` semantic tokens supplied by `ui-theme`. React inline styles, color literals, `--dsw-static-*` palette variables, and feature-level light/dark selectors are not allowed. Shared colors must first be defined as semantic tokens in `ui-theme`. `pnpm run verify-client-theme-styles` scans every current and future CSS Module and TypeScript rendering source in this package, and CI rejects violations or undefined tokens.
+Session history uses the production Session service for title and content search, opening, renaming, and archival. New Conversation cancels any pending prefill and explicitly clears the new session draft. AI actions prefill only a short tool intent rather than business JSON; after the user sends it, the model reads current state through `investment_context` or the appropriate analysis or watch tool. The global Research Reports entry lists persisted reports from analysis, backtest, and validation tasks.
 
-Theme preference is read and changed only through `ctx.theme`. Modal overlays that must cover the whole application mount on `document.body` through a React Portal and use the application modal layer and semantic mask token, so content containers, the top bar, or sidebar stacking contexts cannot clip them.
+## 主题与浮层约束
+
+Feature styles use only `--dsw-alias-*` semantic tokens from `ui-theme`, with no React inline styles, literal colors, `--dsw-static-*` palette variables, or component theme selectors. Shared colors are defined in `ui-theme` before this package consumes them. `pnpm run verify-client-theme-styles` scans current and future CSS Modules and TypeScript presentation sources and rejects invalid or unknown tokens.
+
+Theme preference is read and changed only through `ctx.theme`. Application-level modal surfaces render through a React Portal on `document.body` and use the application modal layer and semantic mask token so content, top-bar, and sidebar stacking contexts cannot clip them.
 
 ## Model Experience
 
@@ -31,19 +34,18 @@ Theme preference is read and changed only through `ctx.theme`. Modal overlays th
 
 #### What the model sees
 
-The model receives no page data while the user only browses. After an assistant interpretation action, the page snapshot, module backend snapshot, and compact overall data form a structured draft. They enter the normal `ctx.conversation` context assembly path only after the user reviews and sends it.
+The model does not directly see market, portfolio, strategy, or report JSON read by the pages. Only a short tool intent that the user confirms and sends follows the production `ctx.conversation` assembly path. The model then calls `investment_context` or another tool as needed, and the tool result enters context through durable conversation events.
 
 #### Token effect
 
-Browsing, filtering, refreshing, and running backend workflows consume no model tokens. An assistant interpretation action prefills bounded structured context; after the user sends it, token use depends on the page snapshot size and is counted with ordinary messages in that conversation.
+Browsing and refreshing business pages consumes no model tokens. AI actions only prefill a short intent; after the user sends it, the prompt and subsequent tool results consume tokens under normal conversation rules.
 
 #### KV Cache effect
 
-Direct-data pages do not create model requests and therefore do not affect the KV cache. A sent prefilled prompt follows the same caching behavior as other messages in the active conversation.
+Business pages do not create model requests, so they do not affect the KV cache. After the user sends a prefilled intent, caching behaves like other messages and tool calls in the same session.
 
 ## Known Limitations and Deferred Work
 
-- The browser presents backend responses defensively but does not duplicate backend business rules.
-- A Host or backend error remains a visible, retryable real-data state; the UI does not substitute fabricated results.
-- Superseded responses can be ignored in React state, but the already-dispatched Host request continues until it finishes.
-- Unified tasks currently use status polling to retrieve results. If the page closes or the app restarts, an in-memory task must be queried again with the task id returned by the backend.
+- Pages render backend responses defensively without duplicating strategy, shadow, or evolution policy in the browser.
+- Host errors remain visible and retryable; the UI never falls back to prototype data.
+- Superseded responses can be ignored but Host requests cannot yet be cancelled. A task that exceeds the UI wait window continues in the backend and can later be found in the report center.

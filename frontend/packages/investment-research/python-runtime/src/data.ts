@@ -53,10 +53,100 @@ function optionalBoolean(input: Readonly<Record<string, unknown>>, key: string):
 function optionalStringArray(input: Readonly<Record<string, unknown>>, key: string): string[] | undefined {
   const value = input[key]
   if (value === undefined) return undefined
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || item.trim() === '')) {
+  if (!isNonEmptyStringArray(value)) {
     throw new TypeError(`investment data: ${key} must be an array of non-empty strings`)
   }
-  return value.map(item => item as string)
+  return value
+}
+
+function isNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string' && item.trim() !== '')
+}
+
+function oneOf<const T extends string>(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  allowed: readonly T[],
+  required: true,
+): T
+function oneOf<const T extends string>(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  allowed: readonly T[],
+  required?: false,
+): T | undefined
+function oneOf<const T extends string>(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  allowed: readonly T[],
+  required = false,
+): T | undefined {
+  const value = optionalString(input, key)
+  if (value === undefined) {
+    if (required) throw new TypeError(`investment data: ${key} is required`)
+    return undefined
+  }
+  if (!(allowed as readonly string[]).includes(value)) {
+    throw new TypeError(`investment data: unsupported ${key} ${JSON.stringify(value)}`)
+  }
+  return value as T
+}
+
+const PATH_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const REPORT_IDENTIFIER = /^[a-f0-9]{32}$/
+
+function pathIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (value.length > 128) throw new TypeError(`investment data: ${key} must be at most 128 characters`)
+  if (!PATH_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be a safe identifier`)
+  }
+  return encodeURIComponent(value)
+}
+
+function reportIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (!REPORT_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be a 32-character lowercase hexadecimal identifier`)
+  }
+  return encodeURIComponent(value)
+}
+
+function taskIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (!PATH_IDENTIFIER.test(value)) {
+    throw new TypeError(
+      `investment data: ${key} must be a safe identifier or a 32-character lowercase hexadecimal identifier`,
+    )
+  }
+  return encodeURIComponent(value)
+}
+
+function entityIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key).trim()
+  if (value.length > 128) throw new TypeError(`investment data: ${key} must be at most 128 characters`)
+  const segments = value.split('/')
+  if (
+    segments.some(segment => segment === '' || segment === '.' || segment === '..')
+    || /[\\\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError(`investment data: ${key} must be a safe entity identifier`)
+  }
+  return encodeURIComponent(value)
+}
+
+function boundedNumberWithDefault(
+  input: Readonly<Record<string, unknown>>,
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const value = optionalNumber(input, key) ?? fallback
+  if (value < min || value > max) {
+    throw new TypeError(`investment data: ${key} must be between ${min} and ${max}`)
+  }
+  return value
 }
 
 function stringValue(input: Readonly<Record<string, unknown>>, key: string): string {
@@ -71,22 +161,6 @@ function integer(input: Readonly<Record<string, unknown>>, key: string, fallback
     throw new TypeError(`investment data: ${key} must be an integer between ${min} and ${max}`)
   }
   return value
-}
-
-function boundedNumber(
-  input: Readonly<Record<string, unknown>>, key: string, fallback: number, min: number, max: number,
-): number {
-  const value = optionalNumber(input, key) ?? fallback
-  if (value < min || value > max) {
-    throw new TypeError(`investment data: ${key} must be between ${min} and ${max}`)
-  }
-  return value
-}
-
-function pathValue(input: Readonly<Record<string, unknown>>, key: string): string {
-  const value = stringValue(input, key).trim()
-  if (value.length > 128) throw new TypeError(`investment data: ${key} must be at most 128 characters`)
-  return encodeURIComponent(value)
 }
 
 function query(path: string, values: Readonly<Record<string, string | number | boolean | undefined>>): string {
@@ -109,7 +183,18 @@ function noInput(path: string, backendId: InvestmentBackendId): RequestSpec {
   }
 }
 
-const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
+function noInputPost(path: string, backendId: InvestmentBackendId): RequestSpec {
+  return {
+    backendId,
+    method: 'POST',
+    path: (input) => {
+      knownKeys(input, [])
+      return path
+    },
+  }
+}
+
+const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   'market-watch.overview': noInput('/overview', 'market-watch'),
   'market-watch.security-search': {
     backendId: 'market-watch',
@@ -205,14 +290,8 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     path: () => '/analyze',
     body: (input) => {
       knownKeys(input, ['ticker', 'date', 'market', 'research_depth', 'risk_profile'])
-      const researchDepth = optionalString(input, 'research_depth') ?? 'standard'
-      const riskProfile = optionalString(input, 'risk_profile')
-      if (!['quick', 'basic', 'standard', 'deep', 'full'].includes(researchDepth)) {
-        throw new TypeError('investment data: unsupported research_depth')
-      }
-      if (riskProfile !== undefined && !['conservative', 'balanced', 'aggressive'].includes(riskProfile)) {
-        throw new TypeError('investment data: unsupported risk_profile')
-      }
+      const researchDepth = oneOf(input, 'research_depth', ['quick', 'basic', 'standard', 'deep', 'full']) ?? 'standard'
+      const riskProfile = oneOf(input, 'risk_profile', ['conservative', 'balanced', 'aggressive'])
       return {
         ticker: stringValue(input, 'ticker'),
         ...(optionalString(input, 'date') === undefined ? {} : { date: optionalString(input, 'date') }),
@@ -220,6 +299,19 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
         research_depth: researchDepth,
         ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
       }
+    },
+  },
+  'trading-core.watchlist': noInput('/watchlist', 'trading-core'),
+  'trading-core.watchlist-save': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/watchlist',
+    body: (input) => {
+      knownKeys(input, ['tickers'])
+      if (!Array.isArray(input.tickers) || input.tickers.some(ticker => typeof ticker !== 'string')) {
+        throw new TypeError('investment data: tickers must be an array of strings')
+      }
+      return { tickers: input.tickers }
     },
   },
   'trading-core.holdings': noInput('/holdings', 'trading-core'),
@@ -242,13 +334,12 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       knownKeys(input, ['holdings', 'mode', 'use_saved', 'risk_profile'])
       const holdings = input.holdings
       const mode = optionalString(input, 'mode') ?? 'deep'
-      const riskProfile = optionalString(input, 'risk_profile')
+      const riskProfile = oneOf(input, 'risk_profile', ['conservative', 'balanced', 'aggressive'])
       if (holdings !== undefined && !Array.isArray(holdings)) {
         throw new TypeError('investment data: holdings must be an array')
       }
-      if (!['quick', 'deep'].includes(mode)) throw new TypeError('investment data: mode must be quick or deep')
-      if (riskProfile !== undefined && !['conservative', 'balanced', 'aggressive'].includes(riskProfile)) {
-        throw new TypeError('investment data: unsupported risk_profile')
+      if (mode !== 'quick' && mode !== 'deep') {
+        throw new TypeError('investment data: mode must be quick or deep')
       }
       return {
         ...(holdings === undefined ? {} : { holdings }),
@@ -291,7 +382,6 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       }
     },
   },
-  'trading-core.personalized-matches': noInput('/personalized/matches', 'trading-core'),
   'trading-core.personalized-profile': noInput('/personalized/profile', 'trading-core'),
   'trading-core.risk-profile': noInput('/risk_profile', 'trading-core'),
   'trading-core.kyc-profile': noInput('/kyc/profile', 'trading-core'),
@@ -301,12 +391,8 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     path: () => '/kyc/questionnaire',
     body: (input) => {
       knownKeys(input, ['answers', 'tier', 'method', 'voice_source'])
-      const tier = stringValue(input, 'tier')
-      const method = optionalString(input, 'method') ?? 'questionnaire'
-      if (tier !== 'quick' && tier !== 'full') throw new TypeError('investment data: tier must be quick or full')
-      if (method !== 'questionnaire' && method !== 'voice') {
-        throw new TypeError('investment data: method must be questionnaire or voice')
-      }
+      const tier = oneOf(input, 'tier', ['quick', 'full'], true)
+      const method = oneOf(input, 'method', ['questionnaire', 'voice']) ?? 'questionnaire'
       if (!Array.isArray(input.answers) || input.answers.length === 0) {
         throw new TypeError('investment data: answers must be a non-empty array')
       }
@@ -323,7 +409,9 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
         answers,
         tier,
         method,
-        ...(optionalString(input, 'voice_source') === undefined ? {} : { voice_source: optionalString(input, 'voice_source') }),
+        ...(optionalString(input, 'voice_source') === undefined
+          ? {}
+          : { voice_source: optionalString(input, 'voice_source') }),
       }
     },
   },
@@ -334,7 +422,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     body: (input) => {
       knownKeys(input, ['risk_tolerance', 'horizon_years', 'note'])
       return {
-        risk_tolerance: boundedNumber(input, 'risk_tolerance', 0.5, 0, 1),
+        risk_tolerance: boundedNumberWithDefault(input, 'risk_tolerance', 0.5, 0, 1),
         horizon_years: integer(input, 'horizon_years', 3, 1, 10),
         note: optionalString(input, 'note') ?? '',
       }
@@ -347,6 +435,68 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     body: (input) => {
       knownKeys(input, ['text'])
       return { text: stringValue(input, 'text') }
+    },
+  },
+  'trading-core.brief-start': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/brief',
+    body: (input) => {
+      knownKeys(input, ['period', 'scope', 'tickers', 'risk_profile'])
+      const tickers = optionalStringArray(input, 'tickers')
+      const riskProfile = oneOf(input, 'risk_profile', ['conservative', 'balanced', 'aggressive'])
+      return {
+        period: oneOf(input, 'period', ['pre_market', 'post_market', 'now']) ?? 'pre_market',
+        scope: oneOf(input, 'scope', ['market', 'industry', 'concept', 'news', 'watchlist', 'all']) ?? 'all',
+        ...(tickers === undefined ? {} : { tickers }),
+        ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
+      }
+    },
+  },
+  'trading-core.brief-run': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/brief',
+    body: (input) => {
+      knownKeys(input, ['period', 'scope', 'tickers', 'risk_profile'])
+      const period = optionalString(input, 'period') ?? 'now'
+      const scope = optionalString(input, 'scope') ?? 'all'
+      const tickers = optionalStringArray(input, 'tickers')
+      const riskProfile = optionalString(input, 'risk_profile')
+      if (!['pre_market', 'post_market', 'now'].includes(period)) {
+        throw new TypeError('investment data: period must be pre_market, post_market, or now')
+      }
+      if (!['market', 'industry', 'concept', 'news', 'watchlist', 'all'].includes(scope)) {
+        throw new TypeError('investment data: unsupported brief scope')
+      }
+      if (riskProfile !== undefined && !['conservative', 'balanced', 'aggressive'].includes(riskProfile)) {
+        throw new TypeError('investment data: unsupported risk_profile')
+      }
+      return {
+        period,
+        scope,
+        ...(tickers === undefined ? {} : { tickers }),
+        ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
+      }
+    },
+  },
+  'trading-core.reports': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['limit', 'task_type'])
+      return query('/reports', {
+        limit: integer(input, 'limit', 20, 1, 200),
+        task_type: oneOf(input, 'task_type', ['stock', 'holdings', 'brief', 'backtest', 'strategy', 'shadow']),
+      })
+    },
+  },
+  'trading-core.report': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['report_id'])
+      return `/reports/${reportIdentifier(input, 'report_id')}`
     },
   },
   'trading-core.strategies': {
@@ -365,7 +515,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['strategy_id'])
-      return `/strategies/${pathValue(input, 'strategy_id')}`
+      return `/strategies/${pathIdentifier(input, 'strategy_id')}`
     },
   },
   'trading-core.strategies-hypothesize': {
@@ -380,19 +530,14 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       }
     },
   },
-  'trading-core.strategy-run': {
+  'trading-core.strategy-transition': {
     backendId: 'trading-core',
     method: 'POST',
-    path: () => '/strategies/run',
-    body: (input) => {
-      knownKeys(input, ['strategy_id', 'lookback_years', 'oos_frac', 'initial_capital', 'min_oos_trades'])
-      return {
-        strategy_id: stringValue(input, 'strategy_id'),
-        lookback_years: boundedNumber(input, 'lookback_years', 2, 0.5, 10),
-        oos_frac: boundedNumber(input, 'oos_frac', 0.3, 0.001, 0.499),
-        initial_capital: boundedNumber(input, 'initial_capital', 0, 0, 1_000_000_000_000),
-        min_oos_trades: integer(input, 'min_oos_trades', 4, 1, 100),
-      }
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'action'])
+      const strategyId = pathIdentifier(input, 'strategy_id')
+      const action = oneOf(input, 'action', ['activate', 'reject', 'retire'], true)
+      return `/strategies/${strategyId}/${action}`
     },
   },
   'trading-core.strategy-action': {
@@ -404,32 +549,25 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       if (!['activate', 'reject', 'retire'].includes(action)) {
         throw new TypeError('investment data: action must be activate, reject, or retire')
       }
-      return `/strategies/${pathValue(input, 'strategy_id')}/${action}`
+      return `/strategies/${pathIdentifier(input, 'strategy_id')}/${action}`
     },
   },
-  'trading-core.brief-run': {
+  'trading-core.strategy-run': {
     backendId: 'trading-core',
     method: 'POST',
-    path: () => '/brief',
+    path: () => '/strategies/run',
     body: (input) => {
-      knownKeys(input, ['period', 'scope', 'tickers', 'risk_profile'])
-      const period = optionalString(input, 'period') ?? 'now'
-      const scope = optionalString(input, 'scope') ?? 'all'
-      const riskProfile = optionalString(input, 'risk_profile')
-      if (!['pre_market', 'post_market', 'now'].includes(period)) {
-        throw new TypeError('investment data: period must be pre_market, post_market, or now')
-      }
-      if (!['market', 'industry', 'concept', 'news', 'watchlist', 'all'].includes(scope)) {
-        throw new TypeError('investment data: unsupported brief scope')
-      }
-      if (riskProfile !== undefined && !['conservative', 'balanced', 'aggressive'].includes(riskProfile)) {
-        throw new TypeError('investment data: unsupported risk_profile')
+      knownKeys(input, ['strategy_id', 'lookback_years', 'oos_frac', 'initial_capital', 'min_oos_trades'])
+      const strategyId = stringValue(input, 'strategy_id')
+      if (!PATH_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
       }
       return {
-        period,
-        scope,
-        ...(optionalStringArray(input, 'tickers') === undefined ? {} : { tickers: optionalStringArray(input, 'tickers') }),
-        ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
+        strategy_id: strategyId,
+        lookback_years: boundedNumberWithDefault(input, 'lookback_years', 2, 0.5, 10),
+        oos_frac: boundedNumberWithDefault(input, 'oos_frac', 0.3, 0.001, 0.499),
+        initial_capital: boundedNumberWithDefault(input, 'initial_capital', 0, 0, 1_000_000_000_000),
+        min_oos_trades: integer(input, 'min_oos_trades', 4, 1, 100),
       }
     },
   },
@@ -438,44 +576,19 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'POST',
     path: () => '/backtest/run',
     body: (input) => {
-      knownKeys(input, ['code', 'force', 'eval_window_days', 'min_age_days', 'limit', 'stop_loss_pct', 'take_profit_pct', 'neutral_band_pct'])
+      knownKeys(input, [
+        'code', 'force', 'eval_window_days', 'min_age_days', 'limit',
+        'stop_loss_pct', 'take_profit_pct', 'neutral_band_pct',
+      ])
       return {
         ...(optionalString(input, 'code') === undefined ? {} : { code: optionalString(input, 'code') }),
         force: optionalBoolean(input, 'force') ?? false,
         eval_window_days: integer(input, 'eval_window_days', 10, 1, 120),
         min_age_days: integer(input, 'min_age_days', 14, 0, 365),
         limit: integer(input, 'limit', 200, 1, 2_000),
-        stop_loss_pct: boundedNumber(input, 'stop_loss_pct', 5, 0, 100),
-        take_profit_pct: boundedNumber(input, 'take_profit_pct', 10, 0, 1_000),
-        neutral_band_pct: boundedNumber(input, 'neutral_band_pct', 2, 0, 100),
-      }
-    },
-  },
-  'trading-core.task-status': {
-    backendId: 'trading-core',
-    method: 'GET',
-    path: (input) => {
-      knownKeys(input, ['task_id'])
-      return `/analyze/${pathValue(input, 'task_id')}`
-    },
-  },
-  'trading-core.task-result': {
-    backendId: 'trading-core',
-    method: 'GET',
-    path: (input) => {
-      knownKeys(input, ['task_id'])
-      return `/analyze/${pathValue(input, 'task_id')}/result`
-    },
-  },
-  'trading-core.shadow-run': {
-    backendId: 'trading-core',
-    method: 'POST',
-    path: () => '/shadow/run',
-    body: (input) => {
-      knownKeys(input, ['force', 'strategy_id'])
-      return {
-        force: optionalBoolean(input, 'force') ?? false,
-        ...(optionalString(input, 'strategy_id') === undefined ? {} : { strategy_id: optionalString(input, 'strategy_id') }),
+        stop_loss_pct: boundedNumberWithDefault(input, 'stop_loss_pct', 5, 0, 100),
+        take_profit_pct: boundedNumberWithDefault(input, 'take_profit_pct', 10, 0, 1_000),
+        neutral_band_pct: boundedNumberWithDefault(input, 'neutral_band_pct', 2, 0, 100),
       }
     },
   },
@@ -485,7 +598,11 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['strategy_id'])
-      return query('/shadow/positions', { strategy_id: optionalString(input, 'strategy_id') })
+      const strategyId = optionalString(input, 'strategy_id')
+      if (strategyId !== undefined && !PATH_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
+      return query('/shadow/positions', { strategy_id: strategyId })
     },
   },
   'trading-core.shadow-equity': {
@@ -493,23 +610,82 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['strategy_id', 'limit'])
+      const strategyId = optionalString(input, 'strategy_id')
+      if (strategyId !== undefined && !PATH_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
       return query('/shadow/equity', {
-        strategy_id: optionalString(input, 'strategy_id'),
+        strategy_id: strategyId,
         limit: integer(input, 'limit', 120, 1, 1_000),
       })
     },
   },
+  'trading-core.shadow-run': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/shadow/run',
+    body: (input) => {
+      knownKeys(input, ['force', 'strategy_id'])
+      const strategyId = optionalString(input, 'strategy_id')
+      if (strategyId !== undefined && !PATH_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
+      return {
+        force: optionalBoolean(input, 'force') ?? false,
+        ...(strategyId === undefined ? {} : { strategy_id: strategyId }),
+      }
+    },
+  },
   'trading-core.evolution-status': noInput('/evolution/status', 'trading-core'),
   'trading-core.evolution-attribution': noInput('/evolution/attribution', 'trading-core'),
+  'trading-core.evolution-preview': noInput('/evolution/preview', 'trading-core'),
   'trading-core.evolution-run': {
     backendId: 'trading-core',
     method: 'POST',
     path: () => '/evolution/run',
     body: (input) => {
-      knownKeys(input, ['apply'])
-      return { apply: optionalBoolean(input, 'apply') ?? false }
+      knownKeys(input, ['apply', 'preview_token'])
+      const apply = optionalBoolean(input, 'apply') ?? false
+      const previewToken = optionalString(input, 'preview_token')
+      if (apply && previewToken === undefined) {
+        throw new TypeError('investment data: preview_token is required when apply is true')
+      }
+      if (!apply && previewToken !== undefined) {
+        throw new TypeError('investment data: preview_token is only accepted when apply is true')
+      }
+      if (previewToken !== undefined && !REPORT_IDENTIFIER.test(previewToken)) {
+        throw new TypeError('investment data: preview_token must be a 32-character lowercase hexadecimal identifier')
+      }
+      return { apply, ...(previewToken === undefined ? {} : { preview_token: previewToken }) }
     },
   },
+  'trading-core.personalized-matches': noInput('/personalized/matches', 'trading-core'),
+  'trading-core.personalized-impact': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['limit'])
+      return query('/personalized/impact', { limit: integer(input, 'limit', 5, 1, 50) })
+    },
+  },
+  'trading-core.task-status': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['task_id'])
+      return `/analyze/${taskIdentifier(input, 'task_id')}`
+    },
+  },
+  'trading-core.task-result': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['task_id'])
+      return `/analyze/${taskIdentifier(input, 'task_id')}/result`
+    },
+  },
+  'industry-chain.data-status': noInput('/data/status', 'industry-chain'),
+  'industry-chain.data-bootstrap': noInputPost('/data/bootstrap', 'industry-chain'),
   'industry-chain.stats': noInput('/stats', 'industry-chain'),
   'industry-chain.companies': {
     backendId: 'industry-chain',
@@ -527,7 +703,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['code'])
-      return `/companies/${pathValue(input, 'code')}`
+      return `/companies/${pathIdentifier(input, 'code')}`
     },
   },
   'industry-chain.entity': {
@@ -535,7 +711,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['key'])
-      return `/graph/entity/${pathValue(input, 'key')}`
+      return `/graph/entity/${entityIdentifier(input, 'key')}`
     },
   },
   'industry-chain.single': {
@@ -543,7 +719,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['code'])
-      return `/graph/single/${pathValue(input, 'code')}`
+      return `/graph/single/${pathIdentifier(input, 'code')}`
     },
   },
   'industry-chain.chain': {
@@ -551,7 +727,7 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['code', 'depth_up', 'depth_down', 'top_up', 'top_down'])
-      return query(`/graph/chain/${pathValue(input, 'code')}`, {
+      return query(`/graph/chain/${pathIdentifier(input, 'code')}`, {
         depth_up: integer(input, 'depth_up', 2, 1, 3),
         depth_down: integer(input, 'depth_down', 2, 1, 3),
         top_up: integer(input, 'top_up', 3, 1, 5),
@@ -566,8 +742,8 @@ const SPECS: Record<InvestmentDataOperation, RequestSpec> = {
       knownKeys(input, ['min_degree', 'min_market_cap', 'min_share', 'subject_only', 'include_universe'])
       return query('/graph/network', {
         min_degree: integer(input, 'min_degree', 3, 0, 500),
-        min_market_cap: boundedNumber(input, 'min_market_cap', 0, 0, 10_000_000),
-        min_share: boundedNumber(input, 'min_share', 10, 0, 100),
+        min_market_cap: boundedNumberWithDefault(input, 'min_market_cap', 0, 0, 10_000_000),
+        min_share: boundedNumberWithDefault(input, 'min_share', 10, 0, 100),
         subject_only: optionalBoolean(input, 'subject_only') ?? false,
         include_universe: optionalBoolean(input, 'include_universe') ?? false,
       })
@@ -581,6 +757,9 @@ export async function requestInvestmentData(
   acquire: (id: InvestmentBackendId) => Promise<{ baseUrl: string; release(): Promise<void> }>,
 ): Promise<InvestmentJsonValue> {
   const spec = SPECS[request.operation]
+  if (spec === undefined) {
+    throw new TypeError(`investment data: unsupported operation ${JSON.stringify(request.operation)}`)
+  }
   const input = record(request.input, 'input')
   const path = spec.path(input)
   const body = spec.body?.(input)

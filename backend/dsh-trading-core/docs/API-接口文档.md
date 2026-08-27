@@ -2,7 +2,7 @@
 
 > 面向：后端联调 / 前端桥接层开发者 / 部署运维。
 > 本文档描述 **Python 适配器（FastAPI，`adapter/app.py`）** 暴露的全部 HTTP 接口。
-> 版本：适配器 0.1.0 · 覆盖代码当前实现（**32 个端点**：一期 个股/持仓/简报 14 个 + 二期 回测/策略/影子/KYC 18 个）。
+> 版本：适配器 0.1.0 · 覆盖代码当前实现（**46 个端点**）。
 
 ---
 
@@ -20,7 +20,7 @@
         │     → 返回 task_id → 轮询 /analyze/{id} 或 订阅 SSE /analyze/{id}/stream
         ├─ 同步慢接口：POST /strategies/hypothesize（LLM 阻塞 10-30s）
         └─ 轻量接口：watchlist / risk_profile / kyc / holdings / brief/latest /
-              strategies / shadow / backtest 查询 / health
+              strategies / shadow / backtest / reports 查询 / health
               → 同步请求/响应，秒级返回
         │
         ▼
@@ -33,7 +33,7 @@
 | 任务式 | `/analyze`、`/holdings/analyze`、`/brief` | 异步长任务（单股分析 3–9 分钟），先拿 `task_id`，再轮询或订阅 SSE |
 | 任务式 | `/backtest/run`、`/strategies/run`、`/shadow/run` | 异步任务（分钟级），同一套 `task_id` + SSE 协议 |
 | 同步慢 | `/strategies/hypothesize` | 普通 HTTP（LLM 生成假设，10–30s），直接返回结果；不要设短超时 |
-| 轻量 | `/watchlist`、`/risk_profile`、`/kyc/*`、`/holdings`、`/holdings/save`、`/brief/latest`、`/strategies*`、`/shadow/*`、`/backtest/*`、`/health` | 同步短请求，直接返回结果 |
+| 轻量 | `/watchlist`、`/risk_profile`、`/kyc/*`、`/holdings`、`/holdings/save`、`/brief/latest`、`/strategies*`、`/shadow/*`、`/backtest/*`、`/reports*`、`/health` | 同步短请求，直接返回结果 |
 | 流式 | `/analyze/{id}/stream` | SSE 进度流（六类任务共用），事件见 §5.3 |
 
 > **fake 模式**（`ADAPTER_RUNNER=fake`）：`stock/holdings/brief` 三个 runner 换成假实现，但
@@ -48,14 +48,14 @@
 - **CORS**：`allow_origins=["*"]`，浏览器跨域可直接调用
 - **错误格式**：FastAPI 标准错误 `{"detail": "..."}`；自定义错误码见下表
 - **认证**：当前无鉴权（仅绑定 127.0.0.1 默认；对外部署需自行加反向代理/网关）
-- **任务状态**：任务全部保存在**适配器进程内存**中（`TaskManager`），**进程重启后任务丢失**
+- **任务状态**：任务全部保存在**适配器进程内存**中（`TaskManager`），**进程重启后任务丢失**；成功任务中的非空报告正文另行持久化，重启后仍可由 `/reports` 查询
 
 ### 1.3 错误码速查
 
 | 状态码 | 场景 |
 |---|---|
 | 200 | 成功 |
-| 404 | 任务不存在 / 策略不存在 / 简报记录缺失 |
+| 404 | 任务不存在 / 策略不存在 / 简报或报告记录缺失 |
 | 409 | `GET /analyze/{id}/result` 任务尚未完成；`POST /kyc/adjust` 尚未完成风险问卷 |
 | 422 | 请求体校验失败（字段缺失、非法枚举；`/kyc/questionnaire` 缺题/分数非法；`/kyc/parse` 空文本） |
 | 500 | 引擎异常（已由 `TaskManager` 捕获，任务标记 `failed`，SSE 会推 `error` 事件） |
@@ -121,6 +121,8 @@
 | 42 | GET | `/evolution/status` | **自进化闭环状态**：影子数据是否就绪 + 策略生命周期统计 | 轻量 |
 | 43 | GET | `/evolution/attribution` | **S→T 归因**：影子组合整体 + 每策略 收益/回撤/平仓胜率（只读） | 轻量 |
 | 44 | POST | `/evolution/run` | **T→W→H 进化**：升降级/淘汰 + 参数变异回流（apply=false 预览 / true 写库） | 轻量 |
+| 45 | GET | `/reports` | 持久化报告摘要列表（`?limit=&task_type=`） | 轻量 |
+| 46 | GET | `/reports/{report_id}` | 持久化报告完整详情 | 轻量 |
 
 ---
 
@@ -1259,6 +1261,62 @@ data: {}
 
 > **晚订阅**：任务已完成且队列已空时，订阅者会立即收到一次 `result` + `done`（补发）。
 > **向后兼容**：旧 str-based `stage`（`node`/`message`）仍透传；前端应同时兼容两种形态。
+
+### 5.4 GET /reports —— 统一报告摘要列表
+
+任务正常产出 `reports: Record<string, string>` 且至少一个分节正文非空时，适配器会在任务
+进入 `done` 前，以 `task_id` 为稳定报告 ID 原子写入 `reports.json`。报告与进程内任务状态
+分离，因此服务重启后仍然可查；无报告正文的成功任务不会生成空记录。
+
+查询参数：
+
+| 参数 | 类型 | 默认 | 约束 |
+|---|---|---|---|
+| `limit` | integer | `20` | `1`～`200` |
+| `task_type` | enum | 空 | `stock` / `holdings` / `brief` / `backtest` / `strategy` / `shadow` |
+
+```jsonc
+// GET /reports?limit=20&task_type=stock
+{
+  "count": 1,
+  "items": [{
+    "id": "3f9a2b8c1d0e4f5a6b7c8d9e0f1a2b34",
+    "title": "个股分析报告 · 贵州茅台（600519）",
+    "kind": "stock",
+    "created_at": "2026-08-26T10:00:00+00:00",
+    "summary": "贵州茅台（600519）",
+    "task_id": "3f9a2b8c1d0e4f5a6b7c8d9e0f1a2b34"
+  }]
+}
+```
+
+HTTP 摘要是稳定前端 DTO：`kind` 对应磁盘记录的 `task_type`，`task_id` 与 `id` 相同；
+不携带 `signal` 和 Markdown 正文，避免列表接口返回过大的报告内容。列表按
+`created_at` 倒序；非法 `limit`、`task_type` 返回 **422**。
+
+### 5.5 GET /reports/{report_id} —— 完整报告详情
+
+`report_id` 必须是任务生成的 32 位小写十六进制 `task_id`；格式非法返回 **422**，合法但
+不存在返回 **404**。成功时返回稳定详情 DTO，非空正文统一投影为有序 `sections`：
+
+```jsonc
+{
+  "id": "3f9a2b8c1d0e4f5a6b7c8d9e0f1a2b34",
+  "title": "个股分析报告 · 贵州茅台（600519）",
+  "kind": "stock",
+  "created_at": "2026-08-26T10:00:00+00:00",
+  "summary": "贵州茅台（600519）",
+  "task_id": "3f9a2b8c1d0e4f5a6b7c8d9e0f1a2b34",
+  "sections": [
+    {"key": "market", "title": "市场分析", "content": "# 市场分析\n…"},
+    {"key": "risk", "title": "风险判断", "content": "# 风险判断\n…"}
+  ]
+}
+```
+
+磁盘记录内部仍完整保留 `task_type`、`subject`、`reference`、`section_keys`、`signal` 和
+`reports`，HTTP 边界不直接泄漏该存储结构。读取时会再次校验 ID、任务类型、带时区时间、
+分节列表与正文映射；损坏记录不会以伪造的空数据降级返回。
 
 ---
 

@@ -15,10 +15,6 @@ class StubCredentials extends CredentialProvider {
   unset(): Promise<void> { return Promise.resolve() }
 }
 
-interface RestartableRuntime extends InvestmentPythonRuntime {
-  requestRestart(): InvestmentRestartResult
-}
-
 const externalBackend: PythonBackendDefinition = {
   id: 'trading-core',
   service: 'trading-core',
@@ -32,12 +28,12 @@ const externalBackend: PythonBackendDefinition = {
   managedEnv: { DEEPSEEK_API_KEY: SECRET },
 }
 
-function runtimeWith(appRestart?: () => void): RestartableRuntime {
+function runtimeWith(appRestart?: () => void): InvestmentPythonRuntime {
   const ctx = new Context()
   new StubCredentials(ctx)
   ctx.provide('subprocess', {} as never)
   if (appRestart !== undefined) ctx.provide('appRestart', appRestart)
-  return new InvestmentPythonRuntime(ctx) as RestartableRuntime
+  return new InvestmentPythonRuntime(ctx)
 }
 
 afterEach(() => {
@@ -75,6 +71,56 @@ describe('InvestmentPythonRuntime Remote', () => {
     await lease.release()
   })
 
+  it('round-trips a fixed data operation without exposing a browser-controlled path', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url)
+      if (url.endsWith('/health')) {
+        return new Response(JSON.stringify({ service: 'trading-core', status: 'ok' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(JSON.stringify({
+        id: '11111111111111111111111111111111',
+        title: '个股分析报告 · 贵州茅台（600519）',
+        kind: 'stock',
+        created_at: '2026-08-26T03:00:00+00:00',
+        summary: '贵州茅台（600519）',
+        task_id: '11111111111111111111111111111111',
+        sections: [{ key: 'market', title: '市场分析', content: '# 市场分析' }],
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }))
+    const runtime = runtimeWith()
+    runtime.register(externalBackend)
+
+    await expect(runtime.requestData({
+      operation: 'trading-core.report',
+      input: { report_id: '11111111111111111111111111111111' },
+    })).resolves.toEqual({
+      id: '11111111111111111111111111111111',
+      title: '个股分析报告 · 贵州茅台（600519）',
+      kind: 'stock',
+      created_at: '2026-08-26T03:00:00+00:00',
+      summary: '贵州茅台（600519）',
+      task_id: '11111111111111111111111111111111',
+      sections: [{ key: 'market', title: '市场分析', content: '# 市场分析' }],
+    })
+
+    expect(calls).toEqual([
+      'https://research.example/health',
+      'https://research.example/reports/11111111111111111111111111111111',
+    ])
+    await expect(runtime.requestData({
+      operation: 'trading-core.report',
+      input: { report_id: '../unsafe' },
+    })).rejects.toThrow('32-character lowercase hexadecimal identifier')
+    expect(calls).toHaveLength(2)
+  })
+
   it('reports an actionable secret-free unavailable result when the launcher has no restart callback', () => {
     const result = runtimeWith().requestRestart()
     const serialized = JSON.stringify(result)
@@ -97,7 +143,9 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(result).toEqual({ status: 'accepted' })
     expect(appRestart).not.toHaveBeenCalled()
     expect(scheduled).toHaveLength(1)
-    scheduled[0]!()
+    const restart = scheduled.at(0)
+    if (restart === undefined) throw new Error('restart callback was not scheduled')
+    restart()
     expect(appRestart).toHaveBeenCalledOnce()
   })
 
@@ -105,14 +153,14 @@ describe('InvestmentPythonRuntime Remote', () => {
     const order: string[] = []
     const runtime = runtimeWith(() => { order.push('restart') })
 
-    const invokeThroughGatewayBoundary = async () => {
-      const result = await Reflect.apply(runtime.requestRestart, runtime, [])
+    const invokeThroughGatewayBoundary = () => {
+      const result: InvestmentRestartResult = runtime.requestRestart()
       order.push('gateway decode')
       expect(result).toEqual({ status: 'accepted' })
       order.push('gateway response assembly')
     }
 
-    await invokeThroughGatewayBoundary()
+    invokeThroughGatewayBoundary()
     expect(order).toEqual(['gateway decode', 'gateway response assembly'])
     await new Promise<void>(resolve => setImmediate(resolve))
     expect(order).toEqual(['gateway decode', 'gateway response assembly', 'restart'])

@@ -40,7 +40,7 @@ export interface InvestmentCapabilityReadiness {
   /** Complete registered tool count, including tools unavailable in the current credential state. */
   readonly toolCount: number
   /** User-visible capability level derived from backend and credential state. */
-  readonly status: 'stock-full' | 'market-template-only' | 'market-full' | 'unavailable'
+  readonly status: 'stock-full' | 'market-template-only' | 'market-full' | 'industry-full' | 'unavailable'
 }
 
 /** Serializable readiness facts for one registered investment backend. */
@@ -96,6 +96,8 @@ export type InvestmentDataOperation =
   | 'market-watch.watch-remove'
   | 'market-watch.alerts'
   | 'trading-core.analyze'
+  | 'trading-core.watchlist'
+  | 'trading-core.watchlist-save'
   | 'trading-core.holdings'
   | 'trading-core.holdings-save'
   | 'trading-core.holdings-analyze'
@@ -104,28 +106,36 @@ export type InvestmentDataOperation =
   | 'trading-core.personalized-cards'
   | 'trading-core.personalized-feedback'
   | 'trading-core.personalized-matches'
+  | 'trading-core.personalized-impact'
   | 'trading-core.personalized-profile'
   | 'trading-core.risk-profile'
   | 'trading-core.kyc-profile'
   | 'trading-core.kyc-questionnaire'
   | 'trading-core.kyc-adjust'
   | 'trading-core.kyc-parse'
+  | 'trading-core.brief-start'
+  | 'trading-core.brief-run'
+  | 'trading-core.reports'
+  | 'trading-core.report'
   | 'trading-core.strategies'
   | 'trading-core.strategy-detail'
   | 'trading-core.strategies-hypothesize'
-  | 'trading-core.strategy-run'
+  | 'trading-core.strategy-transition'
   | 'trading-core.strategy-action'
-  | 'trading-core.brief-run'
+  | 'trading-core.strategy-run'
   | 'trading-core.backtest-run'
-  | 'trading-core.task-status'
-  | 'trading-core.task-result'
-  | 'trading-core.shadow-run'
   | 'trading-core.shadow-status'
   | 'trading-core.shadow-positions'
   | 'trading-core.shadow-equity'
+  | 'trading-core.shadow-run'
   | 'trading-core.evolution-status'
   | 'trading-core.evolution-attribution'
+  | 'trading-core.evolution-preview'
   | 'trading-core.evolution-run'
+  | 'trading-core.task-status'
+  | 'trading-core.task-result'
+  | 'industry-chain.data-status'
+  | 'industry-chain.data-bootstrap'
   | 'industry-chain.stats'
   | 'industry-chain.companies'
   | 'industry-chain.company'
@@ -133,6 +143,22 @@ export type InvestmentDataOperation =
   | 'industry-chain.single'
   | 'industry-chain.chain'
   | 'industry-chain.network'
+
+/** Client-safe progress returned by the industry-chain seed-data lifecycle endpoints. */
+export interface IndustryChainDataStatus {
+  /** Local dataset lifecycle. Backend health remains independent from this value. */
+  readonly status: 'missing' | 'downloading' | 'ready' | 'error'
+  /** Files validated in the active download, or all files when ready. */
+  readonly files_completed: number
+  /** Fixed seed-file count. */
+  readonly files_total: 5
+  /** Bytes received by the active or completed bootstrap. */
+  readonly downloaded_bytes: number
+  /** File currently downloading, absent outside the downloading state. */
+  readonly current_file: string | null
+  /** Safe actionable detail for the error state. */
+  readonly error: string | null
+}
 
 /** Lossless JSON value accepted across the generated Remote boundary. */
 export type InvestmentJsonValue =
@@ -222,18 +248,27 @@ export interface Config {
 }
 
 /** Resolved backend directory and platform interpreter. */
-export interface ResolvedBackendPaths {
-  /** Deployment source selected by the fixed resolver priority. */
-  readonly source: 'source' | 'bundled'
-  /** Absolute Python backend directory. */
-  readonly projectDir: string
-  /** Absolute virtual-environment interpreter path. */
-  readonly pythonExecutable: string
-  /** Absolute import root for a bundled Runtime. */
-  readonly sitePackages?: string
-  /** Absolute writable backend root for a bundled Runtime. */
-  readonly stateDir?: string
-}
+export type ResolvedBackendPaths =
+  | Readonly<{
+    /** Source checkout selected by the fixed resolver priority. */
+    source: 'source'
+    /** Absolute Python backend directory. */
+    projectDir: string
+    /** Absolute virtual-environment interpreter path. */
+    pythonExecutable: string
+  }>
+  | Readonly<{
+    /** Verified packaged sidecar selected by the fixed resolver priority. */
+    source: 'bundled'
+    /** Absolute Python backend directory. */
+    projectDir: string
+    /** Absolute virtual-environment interpreter path. */
+    pythonExecutable: string
+    /** Absolute import root for a bundled Runtime. */
+    sitePackages: string
+    /** Absolute writable backend root for a bundled Runtime. */
+    stateDir: string
+  }>
 
 /** Validated network address used for health and Uvicorn arguments. */
 export interface ResolvedBackendAddress {

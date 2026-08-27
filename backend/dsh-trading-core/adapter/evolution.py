@@ -30,17 +30,84 @@
 """
 
 import hashlib
-import logging
+import json
+import secrets
+import threading
 import time
 
 from .config import settings
 from .store import JsonStore
 from .strategies import _str2md5
 
-logger = logging.getLogger("adapter.evolution")
-
 # 可变异策略种类（与技术规则 DSL 对齐；LLM 规则降级生成的也能变）
 _MUTABLE_KINDS = ("ma_cross", "rsi_reversal", "momentum", "breakout", "bollinger", "volume_breakout")
+_PREVIEW_COLLECTION = "evolution_previews"
+_CURRENT_PREVIEW_KEY = "_current"
+_PREVIEW_TTL_SECONDS = 30 * 60
+_EVOLUTION_LOCK = threading.Lock()
+
+
+class EvolutionPreviewConflict(RuntimeError):
+    """待确认预案已失效、已提交或与当前业务状态不一致。"""
+
+
+def _source_version(store: JsonStore) -> str:
+    """绑定所有会影响进化动作的持久化输入与阈值。"""
+    payload = {
+        "strategies": store.all("strategies") or {},
+        "shadow_equity": store.all("shadow_equity") or {},
+        "shadows": store.all("shadows") or {},
+        "settings": {
+            "min_days": settings.evolve_min_days,
+            "retire_nav": settings.evolve_retire_nav,
+            "retire_closed_win": settings.evolve_retire_closed_win,
+            "demote_nav": settings.evolve_demote_nav,
+            "promote_nav": settings.evolve_promote_nav,
+            "mutate_cooldown_days": settings.evolve_mutate_cooldown_days,
+            "mutate_branches": settings.evolve_mutate_branches,
+        },
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _public_preview(record: dict) -> dict:
+    return {key: value for key, value in record.items() if not key.startswith("_")}
+
+
+def _store_preview(store: JsonStore, response: dict, state_version: str) -> dict:
+    token = secrets.token_hex(16)
+    now = time.time()
+    record = {
+        **response,
+        "preview_token": token,
+        "state_version": state_version,
+        "preview_status": "pending",
+        "expires_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + _PREVIEW_TTL_SECONDS)),
+        "_expires_at_epoch": now + _PREVIEW_TTL_SECONDS,
+    }
+    previous = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+    if isinstance(previous, str):
+        old = store.get(_PREVIEW_COLLECTION, previous)
+        if isinstance(old, dict) and old.get("preview_status") == "pending":
+            store.update(_PREVIEW_COLLECTION, previous, preview_status="superseded")
+    store.set(_PREVIEW_COLLECTION, token, record)
+    store.set(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY, token)
+    return _public_preview(record)
+
+
+def current_preview(store: JsonStore | None = None) -> dict:
+    """返回模型可读取的当前待确认预案及其有效性，不暴露内部存储字段。"""
+    store = store or JsonStore()
+    token = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+    record = store.get(_PREVIEW_COLLECTION, token) if isinstance(token, str) else None
+    if not isinstance(record, dict) or record.get("preview_status") != "pending":
+        return {"preview_status": "none", "actions": [], "count": 0}
+    result = _public_preview(record)
+    if time.time() > float(record.get("_expires_at_epoch") or 0):
+        return {**result, "preview_status": "expired", "valid": False}
+    valid = record.get("state_version") == _source_version(store)
+    return {**result, "preview_status": "pending" if valid else "stale", "valid": valid}
 
 
 def _now() -> str:
@@ -238,8 +305,12 @@ def _child_id(parent: str, kind: str, params: dict, branch: int) -> str:
     return "strat-" + _str2md5(key)
 
 
-def evolve(store: JsonStore | None = None, apply: bool = False) -> dict:
-    """T→W→H 主循环。apply=False 只生成 actions 清单（dry-run 预览）。
+def evolve(
+    store: JsonStore | None = None,
+    apply: bool = False,
+    preview_token: str | None = None,
+) -> dict:
+    """T→W→H 主循环。写入只能应用已绑定当时状态的精确预案。
 
     规则（护栏 3 可配置）：
       - nav ≤ retire_nav          → retired（淘汰）
@@ -248,12 +319,25 @@ def evolve(store: JsonStore | None = None, apply: bool = False) -> dict:
       - nav ≥ promote_nav         → tier=2（升级）+ 若样本外达标且在冷却期外 → 变异回流候选
     """
     store = store or JsonStore()
+    if apply:
+        return _apply_preview(store, preview_token)
+
+    with _EVOLUTION_LOCK:
+        version_before = _source_version(store)
+        response = _build_preview(store)
+        version_after = _source_version(store)
+        if version_before != version_after:
+            raise EvolutionPreviewConflict("进化数据在生成预案时已变化，请重新生成后再确认")
+        return _store_preview(store, response, version_after)
+
+
+def _build_preview(store: JsonStore) -> dict:
     days, n = _shadow_series(store)
     resp = {
         "as_of": _now(),
         "days_of_data": n,
         "min_days": settings.evolve_min_days,
-        "applied": bool(apply),
+        "applied": False,
         "count": 0,
         "actions": [],
     }
@@ -373,13 +457,53 @@ def evolve(store: JsonStore | None = None, apply: bool = False) -> dict:
                     )
     resp["count"] = len(actions)
     resp["actions"] = actions
-    if apply and actions:
-        for a in actions:
-            try:
-                _apply_action(store, a)
-            except Exception as exc:  # noqa: BLE001 — 单动作失败不阻断整轮
-                logger.warning("自进化动作失败 %s: %s", a.get("type"), exc)
     return resp
+
+
+def _apply_preview(store: JsonStore, preview_token: str | None) -> dict:
+    if not isinstance(preview_token, str) or not preview_token:
+        raise EvolutionPreviewConflict("确认应用必须携带预览令牌，请先重新生成预案")
+    with _EVOLUTION_LOCK:
+        record = store.get(_PREVIEW_COLLECTION, preview_token)
+        if not isinstance(record, dict):
+            raise EvolutionPreviewConflict("预案不存在，请重新生成")
+        preview_status = record.get("preview_status")
+        if preview_status != "pending":
+            raise EvolutionPreviewConflict(f"预案已{preview_status or '失效'}，不能重复提交")
+        current = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+        if current != preview_token:
+            store.update(_PREVIEW_COLLECTION, preview_token, preview_status="superseded")
+            raise EvolutionPreviewConflict("已生成更新的预案，请确认最新预案")
+        if time.time() > float(record.get("_expires_at_epoch") or 0):
+            store.update(_PREVIEW_COLLECTION, preview_token, preview_status="expired")
+            raise EvolutionPreviewConflict("预案已过期，请重新生成")
+        if record.get("state_version") != _source_version(store):
+            store.update(_PREVIEW_COLLECTION, preview_token, preview_status="stale")
+            raise EvolutionPreviewConflict("策略或影子证据已变化，未应用旧预案；请重新生成")
+
+        actions = record.get("actions") or []
+        store.update(_PREVIEW_COLLECTION, preview_token, preview_status="applying")
+        try:
+            for action in actions:
+                _apply_action(store, action)
+        except Exception:
+            store.update(_PREVIEW_COLLECTION, preview_token, preview_status="failed")
+            raise
+        applied_at = _now()
+        store.update(
+            _PREVIEW_COLLECTION,
+            preview_token,
+            preview_status="applied",
+            applied=True,
+            applied_at=applied_at,
+        )
+        store.delete(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+        return {
+            **_public_preview(record),
+            "preview_status": "applied",
+            "applied": True,
+            "applied_at": applied_at,
+        }
 
 
 def _apply_action(store: JsonStore, a: dict) -> None:
@@ -397,6 +521,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             else:  # retire
                 ev.update({"state": "retired", "updated_at": ts, "note": a["reason"]})
                 rec["status"] = "retired"
+                rec["verification_status"] = "archived"
                 rec["retire_reason"] = a["reason"]
             rec["evolve"] = ev
             return rec
@@ -423,6 +548,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             "symbols": a["symbols"],
             "params": a["params"],
             "status": "candidate",
+            "verification_status": "pending",
             "source": "evolution",
             "mutated_from": a["parent"],
             "generation": generation,

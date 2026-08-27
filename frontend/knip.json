@@ -272,6 +272,9 @@
       "project": [
         "src/**/*.ts",
         "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "zod"
       ]
     },
     "packages/core/tools": {
@@ -780,6 +783,7 @@
         "@electron-forge/maker-zip",
         "@deepseek-ai/dsh-client-ui-directory-picker-native",
         "@deepseek-ai/dsh-host-directory-picker-native",
+        "@deepseek-ai/dsh-investment-industry-chain-bundle",
         "@deepseek-ai/dsh-investment-market-watch-bundle",
         "@deepseek-ai/dsh-investment-runtime-bundle",
         "@deepseek-ai/dsh-investment-stock-analysis-bundle"
@@ -834,6 +838,11 @@
       ]
     },
     "packages/bundle/investment-market-watch": {
+      "ignoreDependencies": [
+        "@deepseek-ai/.+"
+      ]
+    },
+    "packages/bundle/investment-industry-chain": {
       "ignoreDependencies": [
         "@deepseek-ai/.+"
       ]

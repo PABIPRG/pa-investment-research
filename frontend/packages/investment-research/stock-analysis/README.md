@@ -6,7 +6,7 @@ This function plugin registers stock-analysis tools over a Python HTTP endpoint 
 
 ## Tools
 
-The plugin registers `analyze_stock`, `analyze_holdings`, and `market_brief` for streaming analysis or brief generation, plus `set_watchlist`, `set_holdings`, `get_watchlist`, `set_risk_profile`, `get_risk_profile`, and `get_latest_brief` for endpoint-backed saved state. The package plugin declares their model-facing schemas.
+The plugin registers `analyze_stock`, `analyze_holdings`, and `market_brief` for streaming analysis or brief generation, plus `set_watchlist`, `set_holdings`, `get_watchlist`, `set_risk_profile`, `get_risk_profile`, and `get_latest_brief` for endpoint-backed saved state. The read-only `investment_context` tool lets the model select the `portfolio`, `strategy`, `shadow`, `evolution`, `reports`, or `industry` domain and read its latest persisted context on demand. Its optional `reference` parameter is accepted only for `reports` and must be a 32-character lowercase hexadecimal report id; a valid reference adds that report's full detail to the normal report-summary context. The tool accepts no context JSON, URL, or path and never reads browser-local state. The package plugin declares their model-facing schemas.
 
 `analyze_stock` exposes these latency and coverage tiers:
 
@@ -34,7 +34,7 @@ The plugin registers `analyze_stock`, `analyze_holdings`, and `market_brief` for
 
 ## Backend behavior and lifecycle
 
-`analyze_stock` starts `POST /analyze`; `analyze_holdings` starts `POST /holdings/analyze`; and `market_brief` starts `POST /brief`. Each task then reads `GET /analyze/<taskId>/stream` as SSE. The plugin maps `stage` messages into plugin-sourced user messages through `exec.agent.inject()` without waking the agent, retains the `result` payload as lossless JSON, and renders result cards and Markdown reports from that payload. Lightweight state tools use the endpoint's JSON routes for watchlists, holdings, risk profiles, and the latest brief.
+`analyze_stock` starts `POST /analyze`; `analyze_holdings` starts `POST /holdings/analyze`; and `market_brief` starts `POST /brief`. Each task then reads `GET /analyze/<taskId>/stream` as SSE. The plugin maps `stage` messages into plugin-sourced user messages through `exec.agent.inject()` without waking the agent, retains the `result` payload as lossless JSON, and renders result cards and Markdown reports from that payload. Lightweight state tools use the endpoint's JSON routes for watchlists, holdings, risk profiles, and the latest brief. `investment_context` uses only fixed trading-core routes and groups their lossless responses under stable resource names. The evolution domain includes status, attribution, and the current pending preview. The reports domain always reads `/reports?limit=20`; when a validated report reference is present it additionally reads `/reports/<reportId>` as `report_detail`, so the model receives the selected report's sections rather than only its summary row.
 
 On activation the plugin registers `trading-core`, forwards an explicitly set `ADAPTER_RUNNER` only to an owned managed child, and acquires a verified lease before registering tools. All tool registrations and the optional brief-poll timer live in Cordis effects. Disposal removes them first, releases the lease, and unregisters the backend definition. Process creation and termination remain Runtime-owned.
 
@@ -54,7 +54,7 @@ Package tests characterize HTTP paths and bodies, SSE framing and failure handli
 
 #### What the model sees
 
-The model sees this package's nine registered schemas while the plugin is registered. Streaming calls additionally append endpoint-provided `stage` messages, and every completed call appends the rendered result derived from the endpoint JSON. The [tool catalog's package map](../../../docs/tool-catalog.md#tool-package-map) records the generated catalog's `tool-*` scope, which excludes this package.
+The model sees this package's ten registered schemas while the plugin is registered. Streaming calls additionally append endpoint-provided `stage` messages, and every completed call appends the rendered result derived from the endpoint JSON. `investment_context` contributes a domain enum and the optional reports-only `reference` field; backend context and any selected report detail appear only in the call result. The [tool catalog's package map](../../../docs/tool-catalog.md#tool-package-map) records the generated catalog's `tool-*` scope, which excludes this package.
 
 #### Token effect
 

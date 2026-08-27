@@ -29,27 +29,29 @@
 
 投研 profile 复用 Models 设置页作为 `DEEPSEEK_API_KEY` 的唯一产品输入。只有在启动 `owned` managed child 时，凭据 provider 才会解析该引用；Runtime 也只会把它转发给显式允许该引用的 backend 定义。凭据值不会复制进 backend `.env`、Runtime state、日志、就绪快照或 Client Remote 数据。`attached` 与 `external` endpoint 不接收本机凭据，其凭据由该服务的 operator 负责。
 
-就绪状态会报告 backend 归属、安全凭据事实、能力等级、工具数、重启要求和诊断日志路径。Key 更新后，活动 owned backend 会标记为 `restart-required`；应用完成 quiescent restart（静默收敛重启）前，新的 LLM 依赖工具调用会在 preflight 阶段失败。非 LLM 操作继续按能力声明保持可用。
+就绪状态会报告 backend 归属、安全凭据事实、能力等级、工具数、重启要求和诊断日志路径。Key 更新后，活动 owned backend 会标记为 `restart-required`；应用完成 quiescent restart（静默收敛重启）前，新的 LLM 依赖工具调用会在 preflight 阶段失败。非 LLM 操作继续按能力声明保持可用；健康且声明 `llm: none` 的 `industry-chain` 能力无需读取模型凭据，并报告 `industry-full`。
 
 ## 项目发现与初始化
 
-源码启动会从本安装包向上查找 `backend/dsh-trading-core`、`backend/market-watch` 与 `backend/industry-chain`。使用 `pnpm run investment:python:init` 按固定顺序初始化三个环境，再用 `pnpm run investment:python:verify` 执行只读检查。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
+源码启动会从本安装包向上查找 `backend/dsh-trading-core`、`backend/market-watch` 与 `backend/industry-chain`。使用 `pnpm run investment:python:init` 按固定顺序初始化三个环境，再用 `pnpm run investment:python:verify` 执行只读检查。industry-chain 的初始化和验证都不会下载种子数据；首次下载仍是独立的用户确认产品操作。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
 
-解析采用严格优先级：显式绝对项目／解释器组合最高，其次是三个 Python 环境都完整的源码 checkout，最后是 Electron `Resources/investment-python/runtime.json` sidecar。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单：每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内；缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
+每个 backend 都按严格优先级解析：显式绝对项目／解释器组合最高，其次是源码 checkout 中对应的 backend 与环境，最后是 Electron `Resources/investment-python/runtime.json` sidecar。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单，只能包含位于 `adapter.app:app` 的 `trading-core`、位于 `market_watch.app:app` 的 `market-watch` 与位于 `industry_chain.app:app` 的 `industry-chain`；每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内，缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
 
 trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程。backend scheduler（调度器）与 push（推送）设置仍归 Python 端所有；随附 profile 保持股票分析的对话内推送关闭（`enableInChatPush: false`），也不会把这些设置解释为 profile 组合维度。
-
-## 浏览器数据操作
-
-Runtime 同时是浏览器发起投研数据读取的信任边界。客户端只发送 `InvestmentDataOperation`，不能传入后端地址或 URL。`requestInvestmentData` 为每个操作选择固定 backend、HTTP 方法和路径，校验所有输入键与数值边界，获取经过验证的 backend lease，并在响应结束后释放 lease。未知操作名、未知输入字段、不支持的枚举值和越界数量会在请求发给后端前失败。
-
-操作白名单覆盖 `market-watch` 的市场观测、`trading-core` 的个人投研数据与分析/简报/回测/策略/影子/自进化流程，以及 `industry-chain` 的公司搜索、公司与实体档案、五列链路、有界多层链路、统计和服务端过滤网络切片。统一任务只开放固定启动、状态和结果路由；它不开放任意后端访问，也不生成虚构结果。
 
 ## 日志与状态
 
 每个 backend 写入 `$DSH_HOME/investment-research/<id>/backend.log`，超出上限的文件会在下次打开时轮转为 `backend.previous.log`。owned 进程元数据以私有权限原子写入 `runtime.json`，并且仅在其仍与内存中的精确 owned 进程匹配时删除。启动诊断会遮蔽显式转发的环境值。
 
-打包应用资源只读。Host 为 owned bundled child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，backend 的 data、cache、logs、state 和用户配置均从该可写目录派生；源码模式未设置该变量时保留既有仓库内默认值。
+打包应用资源只读。Host 为 owned bundled child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，backend 的 data、cache、logs、state 和用户配置均从该可写目录派生；其中 industry-chain 种子数据位于 `$DSH_HOME/investment-research/industry-chain/data/seed`。源码模式未设置该变量时保留既有仓库内默认值。
+
+sidecar 不重新分发 industry-chain 种子数据，应用启动也绝不下载。`industry-chain.data-status` 在不联网的情况下读取本地 `missing`、`downloading`、`ready` 或 `error` 状态；只有用户显式触发 `industry-chain.data-bootstrap` 才会下载固定五文件。backend 会限制文件大小，在临时目录校验 JSON 与最低结构，仅在完整数据集全部通过后发布，并清理失败的临时数据；并发 bootstrap 请求复用同一次下载。
+
+## 浏览器安全数据操作
+
+Host 的 `request-data` Remote 只接受编译期列举的 operation（操作）与各 operation 已知输入键，浏览器不能传入 backend origin、任意 URL 或任意 path。动态报告、策略和任务 id 必须符合受限标识符格式，并在拼接固定路由前经过 `encodeURIComponent`；未知键、非法枚举、越界数值和不安全 id 都会在获取 backend lease 前被拒绝。
+
+白名单覆盖 `market-watch` 的市场观测；`trading-core` 的个人投研数据、分析、简报、回测、统一报告列表／详情、策略假设／状态迁移／运行、影子状态／持仓／净值／运行、自进化状态／归因／运行、个性化匹配／产业影响与后台任务状态／结果；以及 `industry-chain` 的无输入 `GET /data/status`、`POST /data/bootstrap` 数据生命周期路由、图谱统计、公司搜索／详情、实体档案、单公司视图、多层产业链与筛选后的全局网络。两条生命周期 operation 都返回 `{ status, files_completed, files_total, downloaded_bytes, current_file, error }`；bootstrap 是一次非流式长请求，界面可同时轮询 status 展示进度。实体业务名称可以包含 `/`，Host 会把整段编码成一个参数，同时拒绝类似路径穿越的分段和不安全标识符。浏览器不能传入下载 URL 或请求 body。其他写操作的 JSON body 只由 Host 根据已知键构造；报告列表与所有只读状态通过固定 GET 路由读取；系统既不开放任意 backend 访问，也不生成虚构结果。
 
 ## 模型体验
 

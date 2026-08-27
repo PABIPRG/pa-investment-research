@@ -22,6 +22,23 @@ function tradingAdapter(): Server {
       json(response, { task_id: 'snapshot-stock' })
       return
     }
+    if (request.url === '/holdings') {
+      json(response, {
+        items: [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }],
+      })
+      return
+    }
+    if (request.url === '/risk/portfolio') {
+      json(response, { risk_level: 'medium', concentration: 0.42 })
+      return
+    }
+    if (request.url === '/risk/alerts') {
+      json(response, {
+        count: 1,
+        items: [{ id: 'snapshot-risk', severity: 'medium', summary: '单一持仓集中度偏高' }],
+      })
+      return
+    }
     if (request.url === '/analyze/snapshot-stock/stream') {
       response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' })
       response.end([

@@ -1,12 +1,14 @@
 import { existsSync } from 'node:fs'
 import { spawn as nodeSpawn } from 'node:child_process'
-import type { ChildProcess } from 'node:child_process'
 import { dirname, posix, resolve, win32 } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export type InvestmentPythonAction = 'init' | 'verify'
 
-type SpawnChild = Pick<ChildProcess, 'once'>
+interface SpawnChild {
+  once(event: 'error', listener: (error: Error) => void): unknown
+  once(event: 'exit', listener: (code: number | null) => void): unknown
+}
 type SpawnFn = (
   command: string,
   args: readonly string[],
@@ -54,11 +56,11 @@ async function spawnAndWait(spawn: SpawnFn, command: string, args: readonly stri
   return await new Promise<number>((resolveExit, reject) => {
     const child = spawn(command, args, { cwd, stdio: 'inherit' })
     child.once('error', reject)
-    child.once('exit', code => { resolveExit(code ?? 1) })
+    child.once('exit', (code) => { resolveExit(code ?? 1) })
   })
 }
 
-/** Run the investment Python setup commands in their fixed dependency order. */
+/** Run the three investment Python setup commands in their fixed dependency order. */
 export async function runInvestmentPython(
   action: InvestmentPythonAction,
   dependencies: InvestmentPythonDependencies = {},
@@ -66,8 +68,8 @@ export async function runInvestmentPython(
   const repoRoot = dependencies.repoRoot ?? defaultRepoRoot()
   const platform = dependencies.platform ?? process.platform
   const exists = dependencies.exists ?? existsSync
-  const spawn = dependencies.spawn ?? (nodeSpawn as unknown as SpawnFn)
-  const writeError = dependencies.writeError ?? (message => { process.stderr.write(message) })
+  const spawn = dependencies.spawn ?? ((command, args, options) => nodeSpawn(command, [...args], options))
+  const writeError = dependencies.writeError ?? ((message) => { process.stderr.write(message) })
   const backends = backendCommands(repoRoot, platform)
 
   if (action === 'verify') {

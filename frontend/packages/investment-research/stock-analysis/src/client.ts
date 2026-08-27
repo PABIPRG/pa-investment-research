@@ -4,6 +4,7 @@
 // 事件序列：stage* → result → done（失败为 error → done）。
 
 import { createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { JsonValue } from '@deepseek-ai/dsh-session'
 
 /** 进度注入目标（dsh 的 ToolRunContext 的最小切片，便于独立测试）。 */
 export interface ProgressSink {
@@ -180,6 +181,81 @@ export function saveHoldings(
   signal?: AbortSignal,
 ): Promise<unknown> {
   return httpJson(baseUrl, '/holdings/save', 'POST', { holdings }, signal)
+}
+
+/** Persistent investment domains available to the model through one read-only tool. */
+export type InvestmentContextDomain =
+  | 'portfolio'
+  | 'strategy'
+  | 'shadow'
+  | 'evolution'
+  | 'reports'
+  | 'industry'
+
+/** Lossless responses grouped by their fixed backend resource names. */
+export interface InvestmentContextResult {
+  readonly domain: InvestmentContextDomain
+  readonly resources: Readonly<Record<string, JsonValue>>
+}
+
+const REPORT_ID_PATTERN = /^[0-9a-f]{32}$/
+
+const INVESTMENT_CONTEXT_PATHS: Readonly<Record<InvestmentContextDomain, readonly (readonly [string, string])[]>> = {
+  portfolio: [
+    ['holdings', '/holdings'],
+    ['portfolio_risk', '/risk/portfolio'],
+    ['risk_alerts', '/risk/alerts'],
+  ],
+  strategy: [['strategies', '/strategies?limit=50']],
+  shadow: [
+    ['status', '/shadow/status'],
+    ['positions', '/shadow/positions'],
+    ['equity', '/shadow/equity?limit=30'],
+  ],
+  evolution: [
+    ['status', '/evolution/status'],
+    ['attribution', '/evolution/attribution'],
+    ['preview', '/evolution/preview'],
+  ],
+  reports: [['reports', '/reports?limit=20']],
+  industry: [['impact', '/personalized/impact?limit=20']],
+}
+
+/**
+ * Read one persisted investment context domain from fixed trading-core endpoints.
+ * The caller selects only a domain enum; it cannot provide an origin, path, or serialized context.
+ * @param baseUrl - Verified trading-core origin leased from the investment Runtime.
+ * @param domain - Fixed persisted context domain.
+ * @param signal - Optional caller-owned cancellation signal shared by all domain reads.
+ * @param reference - Optional fixed-format resource identifier. Only the reports domain accepts it.
+ * @returns Lossless endpoint JSON grouped under stable resource names.
+ * @throws Rejects unknown domains or unsafe references before I/O and propagates endpoint request failures.
+ */
+export async function getInvestmentContext(
+  baseUrl: string,
+  domain: InvestmentContextDomain,
+  signal?: AbortSignal,
+  reference?: string,
+): Promise<InvestmentContextResult> {
+  const requests = (
+    INVESTMENT_CONTEXT_PATHS as Partial<Record<string, readonly (readonly [string, string])[]>>
+  )[domain]
+  if (requests === undefined) throw new TypeError(`不支持的投研上下文领域：${domain}`)
+  const trimmedReference = reference?.trim()
+  if (trimmedReference !== undefined && trimmedReference !== '') {
+    if (domain !== 'reports') throw new TypeError('只有报告上下文支持资源引用')
+    if (!REPORT_ID_PATTERN.test(trimmedReference)) {
+      throw new TypeError('报告引用必须是 32 位小写十六进制报告 ID')
+    }
+  }
+  const selectedRequests = trimmedReference === undefined || trimmedReference === ''
+    ? requests
+    : [...requests, ['report_detail', `/reports/${trimmedReference}`] as const]
+  const entries = await Promise.all(selectedRequests.map(async ([name, path]) => [
+    name,
+    await httpJson(baseUrl, path, 'GET', undefined, signal) as JsonValue,
+  ] as const))
+  return { domain, resources: Object.fromEntries(entries) }
 }
 
 /**

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   consumeSse,
   getLatestBrief,
+  getInvestmentContext,
   getRiskProfile,
   getWatchlist,
   httpJson,
@@ -74,6 +75,85 @@ describe('stock-analysis adapter client', () => {
       [`${BASE}/risk_profile`, 'POST', '{"risk_profile":"balanced"}'],
       [`${BASE}/holdings/save`, 'POST', '{"holdings":[{"ticker":"600519","quantity":1,"cost_price":100}]}'],
     ])
+  })
+
+  it('reads every investment context domain only through fixed trading-core routes', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url)
+      return response({ source: url })
+    }))
+    const signal = new AbortController().signal
+
+    const results = []
+    for (const domain of ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] as const) {
+      results.push(await getInvestmentContext(BASE, domain, signal))
+    }
+
+    expect(calls).toEqual([
+      `${BASE}/holdings`,
+      `${BASE}/risk/portfolio`,
+      `${BASE}/risk/alerts`,
+      `${BASE}/strategies?limit=50`,
+      `${BASE}/shadow/status`,
+      `${BASE}/shadow/positions`,
+      `${BASE}/shadow/equity?limit=30`,
+      `${BASE}/evolution/status`,
+      `${BASE}/evolution/attribution`,
+      `${BASE}/evolution/preview`,
+      `${BASE}/reports?limit=20`,
+      `${BASE}/personalized/impact?limit=20`,
+    ])
+    expect(results.map(result => [result.domain, Object.keys(result.resources)])).toEqual([
+      ['portfolio', ['holdings', 'portfolio_risk', 'risk_alerts']],
+      ['strategy', ['strategies']],
+      ['shadow', ['status', 'positions', 'equity']],
+      ['evolution', ['status', 'attribution', 'preview']],
+      ['reports', ['reports']],
+      ['industry', ['impact']],
+    ])
+    expect(await getInvestmentContext(BASE, 'reports', signal)).toMatchObject({
+      domain: 'reports',
+      resources: { reports: { source: `${BASE}/reports?limit=20` } },
+    })
+    await expect(getInvestmentContext(BASE, 'browser-state' as never, signal))
+      .rejects.toThrow('不支持的投研上下文领域')
+  })
+
+  it('reads a selected report detail through a validated fixed route', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url)
+      return response({ source: url })
+    }))
+    const reportId = 'a'.repeat(32)
+    const result = await getInvestmentContext(
+      BASE,
+      'reports',
+      new AbortController().signal,
+      reportId,
+    )
+
+    expect(calls).toEqual([
+      `${BASE}/reports?limit=20`,
+      `${BASE}/reports/${reportId}`,
+    ])
+    expect(result.resources).toEqual({
+      reports: { source: `${BASE}/reports?limit=20` },
+      report_detail: { source: `${BASE}/reports/${reportId}` },
+    })
+  })
+
+  it('rejects unsafe or cross-domain context references before network I/O', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const signal = new AbortController().signal
+
+    await expect(getInvestmentContext(BASE, 'reports', signal, '../risk_profile'))
+      .rejects.toThrow('32 位小写十六进制报告 ID')
+    await expect(getInvestmentContext(BASE, 'portfolio', signal, 'a'.repeat(32)))
+      .rejects.toThrow('只有报告上下文支持资源引用')
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('reports HTTP errors and missing task ids from the adapter', async () => {

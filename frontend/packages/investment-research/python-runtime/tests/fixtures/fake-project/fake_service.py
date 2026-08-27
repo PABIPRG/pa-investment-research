@@ -12,7 +12,11 @@ def argument(name: str) -> str:
 
 MODULE = sys.argv[1]
 PORT = int(argument("--port"))
-SERVICE = "trading-core" if MODULE == "adapter.app:app" else "market-watch"
+SERVICE = {
+    "adapter.app:app": "trading-core",
+    "market_watch.app:app": "market-watch",
+    "industry_chain.app:app": "industry-chain",
+}[MODULE]
 
 
 class Handler(BaseHTTPRequestHandler):

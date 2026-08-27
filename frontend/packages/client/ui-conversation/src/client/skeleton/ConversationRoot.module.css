@@ -84,7 +84,7 @@
 .crumbSep {
   /* figma: "/" separators are 14px caption gray (75:7903), one tint lighter than crumb text. */
   color: var(--dsw-alias-label-caption);
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 20px;
 }
 
@@ -95,7 +95,7 @@
   border: none;
   border-radius: 12px;
   background: transparent;
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
   text-overflow: ellipsis;
@@ -148,7 +148,7 @@
   padding: 0 0 11px;
   border: none;
   background: transparent;
-  font-size: 13px;
+  font-size: 0.9286rem;
   line-height: 16px;
   font-weight: 500;
   color: var(--dsw-alias-label-tertiary);
@@ -349,6 +349,19 @@
   /* figma drew px 8; nudged +12 so the chip's folder glyph lines up closer to
      the card's inner controls below. */
   padding-left: 20px;
+}
+
+.heroWorkspaceContext {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Profiles may hide the internal Workspace abstraction without coupling the
+ * shared conversation package to a profile name or visual theme. */
+:global(body[data-workspace-context-visibility='hidden']) .heroWorkspaceContext {
+  display: none;
 }
 
 /* Hero: the composer sits inside the session scroll body; center there so

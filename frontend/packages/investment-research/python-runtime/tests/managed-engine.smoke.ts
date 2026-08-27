@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -14,11 +16,25 @@ import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import InvestmentPythonRuntime from '../src/index.ts'
 import * as StockAnalysis from '../../stock-analysis/src/index.ts'
 import * as MarketWatch from '../../market-watch/src/index.ts'
+import * as IndustryChain from '../../industry-chain/src/index.ts'
 
 const enabled = process.env.DSH_INVESTMENT_ENGINE_SMOKE === '1'
 const frontendRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 let root: string | undefined
 let context: Context | undefined
+
+class SmokeCredentials extends CredentialProvider {
+  resolve(_ref: CredentialRef): Promise<ResolvedCredential> {
+    return Promise.resolve({ value: 'managed-engine-smoke-key', source: 'memory' })
+  }
+
+  describe(_ref: CredentialRef): Promise<CredentialInfo> {
+    return Promise.resolve({ configured: true, source: 'memory', writable: true })
+  }
+
+  set(): Promise<void> { return Promise.resolve() }
+  unset(): Promise<void> { return Promise.resolve() }
+}
 
 afterEach(async () => {
   await context?.fiber.dispose()
@@ -43,24 +59,26 @@ async function freePort(): Promise<number> {
 }
 
 describe.skipIf(!enabled)('managed investment engines', () => {
-  it('boots both real backends through the managed Profile and disposes without business requests', async () => {
+  it('boots all three real backends through the managed Profile and disposes without business requests', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh investment engine '))
-    const [tradingPort, marketPort] = await Promise.all([freePort(), freePort()])
+    const [tradingPort, marketPort, industryPort] = await Promise.all([freePort(), freePort(), freePort()])
     const base = [{ insert: [
       { id: 'agent', name: '@deepseek-ai/dsh-agent' },
       { id: 'system-prompt', name: '@deepseek-ai/dsh-system-prompt' },
       { id: 'tools', name: '@deepseek-ai/dsh-tools' },
+      { id: 'credentials', name: 'smoke-credentials' },
       { id: 'subprocess', name: '@deepseek-ai/dsh-subprocess-local' },
     ] }]
     const bundleFiles = [
       '../../../bundle/investment-runtime/cordis.patch.yml',
       '../../../bundle/investment-stock-analysis/cordis.patch.yml',
       '../../../bundle/investment-market-watch/cordis.patch.yml',
+      '../../../bundle/investment-industry-chain/cordis.patch.yml',
     ]
     const rows = composeEntries([
       base,
       ...bundleFiles.map(file => loadOverlayPatches('dsh-investment-engine-smoke', fileURLToPath(new URL(file, import.meta.url)))),
-    ])
+    ]).filter(row => !row.id.startsWith('client-'))
     const byId = new Map(rows.map(row => [row.id, row]))
     Object.assign(byId.get('investment-python-runtime')!, { config: {
       dshHome: join(root, 'home'),
@@ -78,6 +96,11 @@ describe.skipIf(!enabled)('managed investment engines', () => {
       backendBaseUrl: `http://127.0.0.1:${marketPort}`,
       backendProjectDir: join(frontendRoot, '..', 'backend', 'market-watch'),
     } })
+    Object.assign(byId.get('investment-industry-chain')!, { config: {
+      backendMode: 'managed',
+      backendBaseUrl: `http://127.0.0.1:${industryPort}`,
+      backendProjectDir: join(frontendRoot, '..', 'backend', 'industry-chain'),
+    } })
     const configPath = join(root, 'cordis.yml')
     await writeFile(configPath, JSON.stringify(rows))
 
@@ -90,10 +113,12 @@ describe.skipIf(!enabled)('managed investment engines', () => {
       ['@deepseek-ai/dsh-agent', AgentRegistry],
       ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
       ['@deepseek-ai/dsh-tools', ToolRuntime],
+      ['smoke-credentials', SmokeCredentials],
       ['@deepseek-ai/dsh-subprocess-local', LocalSubprocessRuntime],
       ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],
       ['@deepseek-ai/dsh-investment-stock-analysis', StockAnalysis],
       ['@deepseek-ai/dsh-investment-market-watch', MarketWatch],
+      ['@deepseek-ai/dsh-investment-industry-chain', IndustryChain],
     ])
     context.loader.internal = {
       version: 'v2',
@@ -105,7 +130,7 @@ describe.skipIf(!enabled)('managed investment engines', () => {
     } as unknown as NonNullable<typeof context.loader.internal>
     await context.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await context.loader.await()
-    expect(context.tools.schemas()).toHaveLength(20)
-    expect(context.investmentPythonRuntime.invariantSnapshot().active).toHaveLength(2)
+    expect(context.tools.schemas()).toHaveLength(21)
+    expect(context.investmentPythonRuntime.invariantSnapshot().active).toHaveLength(3)
   }, 120_000)
 })

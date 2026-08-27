@@ -692,6 +692,10 @@ describe('headless stream-json snapshots', () => {
         expect(logs).toHaveLength(1)
         const actual = logs[0]
         if (actual === undefined) throw new Error('investment snapshot did not persist its session')
+        expect(actual.content).toContain('"name":"investment_context"')
+        expect(actual.content).toContain('arguments":"{\\"domain\\":\\"portfolio\\"}"')
+        expect(actual.content).toContain('已读取组合与风险上下文')
+        expect(actual.content).toContain('单一持仓集中度偏高')
         expect(actual.content).toContain('"name":"analyze_stock"')
         expect(actual.content).toContain('quick=仅市场、最低延迟；basic=市场+基本面')
         expect(actual.content).toContain('deep 模式对每只股票并行跑引擎 standard 深度（四分析师')

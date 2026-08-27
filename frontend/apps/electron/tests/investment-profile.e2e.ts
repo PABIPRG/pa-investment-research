@@ -14,6 +14,7 @@ import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import InvestmentPythonRuntime from '../../../packages/investment-research/python-runtime/src/index.ts'
 import * as StockAnalysis from '../../../packages/investment-research/stock-analysis/src/index.ts'
 import * as MarketWatch from '../../../packages/investment-research/market-watch/src/index.ts'
+import * as IndustryChain from '../../../packages/investment-research/industry-chain/src/index.ts'
 
 const roots: string[] = []
 const contexts: Context[] = []
@@ -41,7 +42,7 @@ async function importLocalRuntime(): Promise<typeof import('../../../packages/su
   }
 }
 
-async function adapter(service: 'trading-core' | 'market-watch'): Promise<string> {
+async function adapter(service: 'trading-core' | 'market-watch' | 'industry-chain'): Promise<string> {
   const server = createServer((request, response) => {
     const payload = request.url === '/health'
       ? service === 'trading-core' ? { service, status: 'ok' } : { service, ok: true }
@@ -66,6 +67,7 @@ function shippedRows() {
     '../../../packages/bundle/investment-runtime/cordis.patch.yml',
     '../../../packages/bundle/investment-stock-analysis/cordis.patch.yml',
     '../../../packages/bundle/investment-market-watch/cordis.patch.yml',
+    '../../../packages/bundle/investment-industry-chain/cordis.patch.yml',
     '../electron.patch.yml',
   ]
   return composeEntries(files.map(file => loadOverlayPatches(
@@ -94,7 +96,7 @@ class KeylessCredentials extends Service {
 }
 
 describe('Electron investment Profile composition', () => {
-  it('replaces every browser carrier and keeps the runtime plus twenty investment tools without opening a window', async () => {
+  it('replaces every browser carrier and keeps three backends plus twenty-one investment tools without opening a window', async () => {
     const effective = shippedRows()
     const byId = new Map(effective.map(row => [row.id, row]))
     for (const id of ['web-startup', 'webserver', 'web-runtime', 'directory-picker', 'connection']) {
@@ -109,10 +111,16 @@ describe('Electron investment Profile composition', () => {
       .toBe('@deepseek-ai/dsh-client-ui-investment-research')
     expect(byId.get('client-ui-settings-investment-research')?.name)
       .toBe('@deepseek-ai/dsh-client-ui-settings-investment-research')
+    expect(byId.get('investment-industry-chain')?.name)
+      .toBe('@deepseek-ai/dsh-investment-industry-chain')
 
     const root = await mkdtemp(join(tmpdir(), 'dsh electron investment '))
     roots.push(root)
-    const [tradingUrl, marketUrl] = await Promise.all([adapter('trading-core'), adapter('market-watch')])
+    const [tradingUrl, marketUrl, industryUrl] = await Promise.all([
+      adapter('trading-core'),
+      adapter('market-watch'),
+      adapter('industry-chain'),
+    ])
     const configPath = join(root, 'cordis.yml')
     const rows = [
       { name: '@deepseek-ai/dsh-agent' },
@@ -123,6 +131,7 @@ describe('Electron investment Profile composition', () => {
       { id: 'investment-python-runtime', name: byId.get('investment-python-runtime')?.name, config: { dshHome: join(root, 'home') } },
       { id: 'investment-stock-analysis', name: byId.get('investment-stock-analysis')?.name, config: { backendMode: 'external', backendBaseUrl: tradingUrl } },
       { id: 'investment-market-watch', name: byId.get('investment-market-watch')?.name, config: { backendMode: 'external', backendBaseUrl: marketUrl } },
+      { id: 'investment-industry-chain', name: byId.get('investment-industry-chain')?.name, config: { backendMode: 'external', backendBaseUrl: industryUrl } },
       byId.get('directory-picker-native'),
       byId.get('ui-directory-picker-native'),
       byId.get('electron-connection'),
@@ -144,6 +153,7 @@ describe('Electron investment Profile composition', () => {
       ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],
       ['@deepseek-ai/dsh-investment-stock-analysis', StockAnalysis],
       ['@deepseek-ai/dsh-investment-market-watch', MarketWatch],
+      ['@deepseek-ai/dsh-investment-industry-chain', IndustryChain],
       ['@deepseek-ai/dsh-host-directory-picker-native', NativeMarker],
       ['@deepseek-ai/dsh-client-ui-directory-picker-native', NativeMarker],
       ['@deepseek-ai/dsh-electron', NativeMarker],
@@ -160,13 +170,19 @@ describe('Electron investment Profile composition', () => {
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await ctx.loader.await()
 
-    expect(ctx.tools.schemas()).toHaveLength(20)
+    expect(ctx.tools.schemas()).toHaveLength(21)
+    const industryReadiness = ctx.investmentPythonRuntime.readiness().backends.find(
+      backend => backend.backendId === 'industry-chain',
+    )
+    expect(industryReadiness?.capability?.toolCount).toBe(0)
+    expect(industryReadiness?.capability?.llm).toBe('none')
     expect((ctx.credentials as unknown as KeylessCredentials).resolveCalls).toEqual([])
     expect((ctx.credentials as unknown as KeylessCredentials).describeCalls).toEqual([])
     expect(imported).toEqual(expect.arrayContaining([
       '@deepseek-ai/dsh-investment-python-runtime',
       '@deepseek-ai/dsh-investment-stock-analysis',
       '@deepseek-ai/dsh-investment-market-watch',
+      '@deepseek-ai/dsh-investment-industry-chain',
       '@test/credentials',
       '@deepseek-ai/dsh-host-directory-picker-native',
       '@deepseek-ai/dsh-client-ui-directory-picker-native',

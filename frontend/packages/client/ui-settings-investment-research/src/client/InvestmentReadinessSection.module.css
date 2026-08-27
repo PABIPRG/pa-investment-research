@@ -6,6 +6,47 @@
   color: var(--dsw-alias-label-primary);
 }
 
+.dataBackup {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.dataBackupCopy {
+  min-width: 0;
+}
+
+.dataBackup h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.dataBackup p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dataBackupAction {
+  display: flex;
+  max-width: 310px;
+  flex: none;
+  align-items: flex-end;
+  flex-direction: column;
+}
+
+.dataBackupAction p {
+  text-align: right;
+}
+
 .heading {
   display: flex;
   align-items: flex-start;
@@ -111,6 +152,10 @@
 }
 
 .backend {
+  /* Runtime log paths can scroll inside this elevated card. Keep the thumb on
+     the same elevation rung in both light and dark palettes. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
   min-width: 0;
   padding: 14px;
   border: 1px solid var(--dsw-alias-border-l2);
@@ -218,8 +263,18 @@
 }
 
 @media (max-width: 720px) {
+  .dataBackup,
   .heading {
     flex-direction: column;
+  }
+
+  .dataBackupAction {
+    max-width: none;
+    align-items: flex-start;
+  }
+
+  .dataBackupAction p {
+    text-align: left;
   }
 
   .runtimeAsset {

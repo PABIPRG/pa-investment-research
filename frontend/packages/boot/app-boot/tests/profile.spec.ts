@@ -249,7 +249,7 @@ describe('loadProfile', () => {
     ])
   })
 
-  it('normalizes only exact installation-owned bundle tuples', () => {
+  it('normalizes only exact installation-owned legacy bundle tuples', () => {
     const anchor = stageInstallation({
       '@deepseek-ai/dsh-base': { patch: '[]\n' },
       '@deepseek-ai/dsh-web-app': { patch: '[]\n' },
@@ -290,6 +290,7 @@ describe('loadProfile', () => {
     expect(readProfileManifest('t', custom).dsh?.profile?.bundles).toEqual([
       '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-headless', 'custom-bundle',
     ])
+
   })
 
   it('fails loud when a listed bundle declares no dsh.bundle', () => {

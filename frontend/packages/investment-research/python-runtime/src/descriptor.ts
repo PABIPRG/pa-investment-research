@@ -8,7 +8,7 @@ const BACKEND_MODULES = {
   'trading-core': 'adapter.app:app',
   'market-watch': 'market_watch.app:app',
   'industry-chain': 'industry_chain.app:app',
-} as const
+} as const satisfies Readonly<Record<InvestmentBackendId, string>>
 
 /** One immutable file entry verified before a bundled Runtime is used. */
 export interface InvestmentRuntimeFileDescriptor {
@@ -150,7 +150,7 @@ function parseDescriptor(value: unknown): InvestmentRuntimeDescriptor {
   if (typeof value.python.platform !== 'string' || typeof value.python.arch !== 'string') throw invalid('Python target')
   const executable = parseRelativePath(value.python.executable, 'python executable')
   const sitePackages = parseRelativePath(value.sitePackages, 'sitePackages')
-  if (!isRecord(value.backends) || !exactKeys(value.backends, ['trading-core', 'market-watch', 'industry-chain'])) {
+  if (!isRecord(value.backends) || !exactKeys(value.backends, Object.keys(BACKEND_MODULES))) {
     throw invalid('backends')
   }
   if (!Array.isArray(value.files) || value.files.length === 0) throw invalid('files')
@@ -161,10 +161,11 @@ function parseDescriptor(value: unknown): InvestmentRuntimeDescriptor {
     return Object.freeze({ path: filePath, sha256: entry.sha256 })
   })
   const filePaths = files.map(entry => entry.path)
-  if (new Set(filePaths).size !== filePaths.length || filePaths.some((entry, index) => {
-    const previous = filePaths[index - 1]
+  const filesOutOfOrder = filePaths.some((entry, index) => {
+    const previous = index === 0 ? undefined : filePaths[index - 1]
     return previous !== undefined && previous >= entry
-  })) {
+  })
+  if (new Set(filePaths).size !== filePaths.length || filesOutOfOrder) {
     throw invalid('files order')
   }
   if (!filePaths.includes(executable)) throw invalid('unhashed Python executable')

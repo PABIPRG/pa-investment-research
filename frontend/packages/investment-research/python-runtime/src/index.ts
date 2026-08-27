@@ -98,7 +98,7 @@ export class InvestmentPythonRuntime extends Service {
       resolveCredential: ctx.credentials.resolve.bind(ctx.credentials),
       describeCredential: ctx.credentials.describe.bind(ctx.credentials),
     })
-    ctx.on('credentials/updated', ref => this.manager.credentialUpdated(ref))
+    ctx.on('credentials/updated', (ref) => { this.manager.credentialUpdated(ref) })
     ctx.effect(() => async () => this.manager.dispose(), 'investment Python runtime teardown')
   }
 
@@ -165,11 +165,12 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('request-restart')
   requestRestart(): InvestmentRestartResult {
-    const appRestart = this.ctx.get('appRestart')
-    if (typeof appRestart !== 'function') {
+    const appRestartValue: unknown = this.ctx.get('appRestart')
+    if (typeof appRestartValue !== 'function') {
       return { status: 'unavailable', reason: 'Application restart is unavailable from this launcher.' }
     }
-    setImmediate(appRestart)
+    const appRestart = appRestartValue as () => void
+    setImmediate(() => { appRestart() })
     return { status: 'accepted' }
   }
 

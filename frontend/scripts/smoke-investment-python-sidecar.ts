@@ -5,6 +5,8 @@ import { isAbsolute, join, posix, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 
+const BACKENDS = ['trading-core', 'market-watch', 'industry-chain'] as const
+
 interface RuntimeDescriptor {
   readonly python: { readonly executable: string }
   readonly sitePackages: string
@@ -40,7 +42,7 @@ async function defaultRunCommand(
   return await new Promise<number>((resolveExit, reject) => {
     const child = spawn(command, [...args], { cwd, env: { ...process.env, ...env }, stdio: 'inherit' })
     child.once('error', reject)
-    child.once('exit', code => { resolveExit(code ?? 1) })
+    child.once('exit', (code) => { resolveExit(code ?? 1) })
   })
 }
 
@@ -85,7 +87,13 @@ export async function smokeInvestmentPythonSidecar(
   const descriptor = JSON.parse(await readFile(join(root, 'runtime.json'), 'utf8')) as RuntimeDescriptor
   const executable = safePath(descriptor.python.executable)
   const sitePackages = safePath(descriptor.sitePackages)
-  const modules = ['trading-core', 'market-watch', 'industry-chain'].map((id) => {
+  const backendIds = Object.keys(descriptor.backends).sort()
+  const expectedBackendIds = [...BACKENDS].sort()
+  if (backendIds.length !== expectedBackendIds.length
+    || backendIds.some((id, index) => id !== expectedBackendIds[index])) {
+    throw new Error('sidecar descriptor must contain exactly the three investment backends')
+  }
+  const modules = BACKENDS.map((id) => {
     const backend = descriptor.backends[id]
     if (backend === undefined) throw new Error(`missing backend descriptor: ${id}`)
     return { projectDir: safePath(backend.projectDir), module: backend.module }
@@ -100,7 +108,11 @@ export async function smokeInvestmentPythonSidecar(
     'for spec in modules:',
     '    module_name, app_name = spec.split(":", 1)',
     '    app = getattr(importlib.import_module(module_name), app_name)',
-    '    assert any(getattr(route, "path", None) == "/health" for route in app.routes)',
+    '    routes = {getattr(route, "path", None): getattr(route, "methods", set()) for route in app.routes}',
+    '    assert "GET" in routes.get("/health", set())',
+    '    if spec == "industry_chain.app:app":',
+    '        assert "GET" in routes.get("/data/status", set())',
+    '        assert "POST" in routes.get("/data/bootstrap", set())',
   ].join('\n')
   try {
     const exitCode = await (dependencies.runCommand ?? defaultRunCommand)(

@@ -82,8 +82,10 @@ function setupTools(ctx: Context, base: string): () => void {
     const disposers = toolDisposers.reverse()
     const disposeFrom = (index: number): void => {
       if (index === disposers.length) return
+      const dispose = disposers[index]
+      if (dispose === undefined) return
       try {
-        disposers[index]!()
+        dispose()
       } finally {
         disposeFrom(index + 1)
       }
@@ -119,7 +121,7 @@ function setupTools(ctx: Context, base: string): () => void {
           ],
         },
         ...present('加入自选'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
           return watchAdd(base, { code: args.code, ...(args.name === undefined ? {} : { name: args.name }) })
         },
@@ -144,7 +146,7 @@ function setupTools(ctx: Context, base: string): () => void {
           ],
         },
         ...present('移除自选'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
           return watchRemove(base, { code: args.code })
         },
@@ -204,7 +206,7 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: `✅ 规则已创建：${(value as { id: string }).id}` }],
         },
         ...present('新建盯盘规则'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
           return addAlert(base, {
             name: args.name,
@@ -257,7 +259,7 @@ function setupTools(ctx: Context, base: string): () => void {
           ],
         },
         ...present('删除规则'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
           return removeAlert(base, args.id)
         },
@@ -290,12 +292,12 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderScan(value as Record<string, unknown>) }],
         },
         ...present('异动扫描'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
           return scanMovers(base, {
-          kind: args.kind ?? 'gainers',
-          top_n: args.top_n ?? 10,
-          ...(args.min_amount_yi === undefined ? {} : { min_amount_yi: args.min_amount_yi }),
+            kind: args.kind ?? 'gainers',
+            top_n: args.top_n ?? 10,
+            ...(args.min_amount_yi === undefined ? {} : { min_amount_yi: args.min_amount_yi }),
           })
         },
       }),
@@ -352,11 +354,11 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderTechSignal(value as Record<string, unknown>) }],
         },
         ...present('技术信号'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'non-llm')
           return techSignal(base, {
-          code: args.code,
-          ...(args.lookback === undefined ? {} : { lookback: args.lookback }),
+            code: args.code,
+            ...(args.lookback === undefined ? {} : { lookback: args.lookback }),
           })
         },
       }),
@@ -413,7 +415,7 @@ function setupTools(ctx: Context, base: string): () => void {
           render: (_args, value) => [{ type: 'text' as const, text: renderBrief(value as Record<string, unknown>) }],
         },
         ...present('简报'),
-        execute: args => {
+        execute: (args) => {
           ctx.investmentPythonRuntime.assertCapability('market-watch', 'llm-enhancement')
           return dailyBrief(base, { period: args.period ?? 'pre', manual: args.manual ?? false })
         },
@@ -478,3 +480,5 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     }
   }, 'investment market-watch runtime lifecycle')
 }
+
+export default Object.assign(apply, { Config, inject })

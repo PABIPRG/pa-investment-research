@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import {
+  createSnapshotStore, type SessionId, type SessionListState,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
+import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
 import { createInvestmentReadinessStore } from '../src/client/store.ts'
 import type { InvestmentReadinessSnapshot, InvestmentRestartResult } from '../src/client/store.ts'
-import { zh } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 import type { InvestmentReadinessKey } from '../src/client/locales.ts'
 
 afterEach(cleanup)
@@ -15,6 +18,7 @@ const SOURCE_LOG = '/Users/example/DeepSeek Harness/.dsh/investment-research/tra
 const WINDOWS_LOG = 'C:\\Users\\Example User\\.dsh\\investment-research\\market-watch\\backend.log'
 type CredentialRef = InvestmentReadinessSnapshot['backends'][number]['credentials'][number]['ref']
 const DEEPSEEK_REF = 'DEEPSEEK_API_KEY' as CredentialRef
+const CURRENT_SESSION = 'session-investment-settings' as SessionId
 
 const MISSING: InvestmentReadinessSnapshot = {
   runtimeAsset: { status: 'source-env-ready' },
@@ -67,36 +71,132 @@ const RESTART_REQUIRED: InvestmentReadinessSnapshot = {
   })),
 }
 
+const INDUSTRY_READY: InvestmentReadinessSnapshot = {
+  runtimeAsset: { status: 'source-env-ready' },
+  backends: [{
+    backendId: 'industry-chain',
+    ownership: 'owned',
+    backendStatus: 'healthy-owned',
+    credentials: [],
+    capability: { llm: 'none', toolCount: 0, status: 'industry-full' },
+    restartRequired: false,
+    runtimeLogPath: '/Users/example/.dsh/investment-research/industry-chain/backend.log',
+  }],
+}
+
 function mount(
   snapshot: InvestmentReadinessSnapshot,
   overrides: {
     openSection?: (id: string) => void
     requestRestart?: () => Promise<{ status: 'accepted' } | { status: 'unavailable'; reason: string }>
     refresh?: () => Promise<void>
+    downloadSession?: (sessionId: SessionId) => Promise<void>
+    currentSession?: SessionId
+    noCurrentSession?: boolean
+    downloadState?: SessionLogDownloadState
+    locale?: 'zh' | 'en'
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
+  const currentSession = overrides.noCurrentSession ? undefined : overrides.currentSession ?? CURRENT_SESSION
+  const sessions = createSnapshotStore({ current: currentSession } as SessionListState)
+  const sessionLogDownload = createSnapshotStore<SessionLogDownloadState>(
+    overrides.downloadState ?? { bySession: {} },
+  )
   const restart = createInvestmentReadinessStore().create()
   const openSection = vi.fn(overrides.openSection)
   const requestRestart = vi.fn(overrides.requestRestart ?? (() => Promise.resolve({ status: 'accepted' as const })))
   const refresh = vi.fn(overrides.refresh ?? (() => Promise.resolve()))
+  const downloadSession = vi.fn(overrides.downloadSession ?? (() => Promise.resolve()))
+  const dictionary = overrides.locale === 'en' ? en : zh
   const unusedHook = (() => { throw new Error('unused standing hook') }) as never
   const view = render(<InvestmentReadinessSection
     close={() => {}}
     openSection={openSection}
-    useSessions={unusedHook}
+    useSessions={bindSnapshotSelector(sessions)}
     useWorkspaces={unusedHook}
     useInvestmentReadiness={bindSnapshotSelector(readiness)}
+    useSessionLogDownload={bindSnapshotSelector(sessionLogDownload)}
     useStore={bindSnapshotSelector(restart)}
     actions={restart.actions}
+    downloadSession={downloadSession}
     requestRestart={requestRestart}
     refresh={refresh}
-    t={key => zh[key as InvestmentReadinessKey]}
+    t={key => dictionary[key as InvestmentReadinessKey]}
   />)
-  return { ...view, readiness, restart, openSection, requestRestart, refresh }
+  return {
+    ...view,
+    readiness,
+    sessionLogDownload,
+    restart,
+    openSection,
+    downloadSession,
+    requestRestart,
+    refresh,
+  }
 }
 
 describe('InvestmentReadinessSection', () => {
+  it('presents honest bilingual data-and-backup copy without internal storage concepts', () => {
+    const chinese = mount(CONFIGURED)
+
+    expect(screen.getByRole('heading', { name: '数据与备份' })).toBeTruthy()
+    expect(screen.getByText('已发送的对话与附件会自动保存在运行本应用的设备上。')).toBeTruthy()
+    expect(screen.getByText('导出内容仅包含当前对话、关联对话与附件。')).toBeTruthy()
+    expect(chinese.container.textContent).not.toContain('工作区')
+    expect(chinese.container.textContent).not.toContain('存储位置')
+    expect(screen.queryByRole('combobox')).toBeNull()
+    chinese.unmount()
+
+    const english = mount(CONFIGURED, { locale: 'en' })
+    expect(screen.getByRole('heading', { name: 'Data & backup' })).toBeTruthy()
+    expect(screen.getByText(
+      'Sent conversations and attachments are automatically saved on the device running this app.',
+    )).toBeTruthy()
+    expect(screen.getByText(
+      'The export contains only the current conversation, related conversations, and attachments.',
+    )).toBeTruthy()
+    expect(english.container.textContent?.toLowerCase()).not.toContain('workspace')
+    expect(english.container.textContent?.toLowerCase()).not.toContain('storage location')
+  })
+
+  it('disables current-conversation export when no Session is selected', () => {
+    const { downloadSession } = mount(CONFIGURED, { noCurrentSession: true })
+
+    const button = screen.getByRole('button', { name: '导出当前对话' })
+    expect(button.hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('当前没有可导出的对话。')).toBeTruthy()
+    fireEvent.click(button)
+    expect(downloadSession).not.toHaveBeenCalled()
+  })
+
+  it('exports the exact current Session through the shared controller action', () => {
+    const sessionId = 'session-selected-for-export' as SessionId
+    const { downloadSession } = mount(CONFIGURED, { currentSession: sessionId })
+
+    const button = screen.getByRole('button', { name: '导出当前对话' })
+    expect(button.hasAttribute('disabled')).toBe(false)
+    fireEvent.click(button)
+    expect(downloadSession).toHaveBeenCalledOnce()
+    expect(downloadSession).toHaveBeenCalledWith(sessionId)
+  })
+
+  it('marks the shared download busy and prevents a duplicate request', () => {
+    const { downloadSession } = mount(CONFIGURED, {
+      downloadState: {
+        bySession: {
+          [CURRENT_SESSION]: { open: true, status: 'downloading', error: null },
+        },
+      },
+    })
+
+    const button = screen.getByRole('button', { name: '正在导出…' })
+    expect(button.hasAttribute('disabled')).toBe(true)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    fireEvent.click(button)
+    expect(downloadSession).not.toHaveBeenCalled()
+  })
+
   it('shows source-owned keyless readiness and routes the only credential action to Models', () => {
     const { container, openSection, requestRestart, refresh } = mount(MISSING)
 
@@ -160,6 +260,15 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.getAllByText('DeepSeek API Key 已配置')).toHaveLength(2)
     expect(screen.getByText('完整股票分析可用')).toBeTruthy()
     expect(screen.getByText('完整盯盘解读可用')).toBeTruthy()
+  })
+
+  it('presents the industry backend without a credential repair action', () => {
+    mount(INDUSTRY_READY)
+
+    expect(screen.getByText('产业链')).toBeTruthy()
+    expect(screen.getByText('无需模型凭据')).toBeTruthy()
+    expect(screen.getByText('产业链查询服务已就绪，首次使用时检查数据')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '打开模型设置' })).toBeNull()
   })
 
   const restartCases: readonly {
@@ -297,7 +406,7 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.getByRole('heading', { name: '验收清单' })).toBeTruthy()
     expect(screen.getByText('请在对话中显式执行以下步骤；此页面不会自动运行任何工具。')).toBeTruthy()
     for (const text of [
-      '检查两个后端均为健康状态',
+      '检查三个后端均为健康状态',
       '运行 watch_list',
       '运行 watch_add 后再次运行 watch_list',
       '运行 get_watchlist',

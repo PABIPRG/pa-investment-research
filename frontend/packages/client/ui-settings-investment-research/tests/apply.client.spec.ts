@@ -1,8 +1,9 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
-import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore, SlotRegistry, type SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
+import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
 import { apply, inject } from '../src/client/index.ts'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
 import type { InvestmentReadinessSnapshot } from '../src/client/store.ts'
@@ -21,7 +22,12 @@ async function bench() {
     requestRestart: vi.fn(() => Promise.resolve({ status: 'accepted' as const })),
   }
   ctx.provide('investmentResearchRuntimeClient', facade)
-  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, facade }
+  const sessionLogDownload = {
+    store: createSnapshotStore<SessionLogDownloadState>({ bySession: {} }),
+    download: vi.fn(() => Promise.resolve()),
+  }
+  ctx.provide('sessionLogDownload', sessionLogDownload as never)
+  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, facade, sessionLogDownload }
 }
 
 function declare(slots: SlotRegistry): () => void {
@@ -32,8 +38,10 @@ function declare(slots: SlotRegistry): () => void {
 }
 
 describe('ui-settings-investment-research apply', () => {
-  it('declares only its three required services', () => {
-    expect(inject).toEqual(['slots', 'locale', 'investmentResearchRuntimeClient'])
+  it('declares only its four required services', () => {
+    expect(inject).toEqual([
+      'slots', 'locale', 'investmentResearchRuntimeClient', 'sessionLogDownload',
+    ])
   })
 
   it('waits for the section declaration and injects the facade through the hooks channel', async () => {
@@ -46,13 +54,19 @@ describe('ui-settings-investment-research apply', () => {
     expect(resolveSlotLabel(entry.options.label)).toBe('投研')
     expect(entry.store).toBeDefined()
     const face = (entry.inject as unknown as (actions: unknown) => {
-      hooks: { investmentReadiness: unknown }
+      hooks: { investmentReadiness: unknown; sessionLogDownload: unknown }
+      downloadSession: (sessionId: SessionId) => Promise<void>
       requestRestart: () => Promise<unknown>
       refresh: () => Promise<void>
     })({})
     expect(face.hooks.investmentReadiness).toBe(before.facade)
+    expect(face.hooks.sessionLogDownload).toBe(before.sessionLogDownload.store)
+    const sessionId = 'session-settings-export' as SessionId
+    await face.downloadSession(sessionId)
     await face.requestRestart()
     await face.refresh()
+    expect(before.sessionLogDownload.download).toHaveBeenCalledOnce()
+    expect(before.sessionLogDownload.download).toHaveBeenCalledWith(sessionId)
     expect(before.facade.requestRestart).toHaveBeenCalledOnce()
     expect(before.facade.refresh).toHaveBeenCalledOnce()
 
@@ -92,5 +106,6 @@ describe('ui-settings-investment-research apply', () => {
     expect(b.facade.subscribe).not.toHaveBeenCalled()
     expect(b.facade.refresh).not.toHaveBeenCalled()
     expect(b.facade.requestRestart).not.toHaveBeenCalled()
+    expect(b.sessionLogDownload.download).not.toHaveBeenCalled()
   })
 })

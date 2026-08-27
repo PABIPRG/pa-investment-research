@@ -43,7 +43,7 @@
   border-radius: 8px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+  font-size: 0.8571rem;
   line-height: 18px;
 }
 
@@ -70,8 +70,8 @@
   border-radius: 22px;
   background: var(--dsw-specific-input-major);
   box-shadow: var(--dsw-shadow-lv2);
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 1rem;
+  line-height: 1.5;
   /* Elevated surface in dark, same as the menus: the draft scrollport inside
      scrolls once the composer hits its height cap, so the thumb takes the l2
      pair. Declared on the card because the elevation belongs to the surface,
@@ -361,7 +361,7 @@
   background-position: right 4px center;
   background-size: 12px 12px;
   color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
+  font-size: 0.9286rem;
   line-height: 20px;
   font-weight: 500;
   white-space: nowrap;
@@ -417,7 +417,7 @@
   border-radius: 4px;
   background: transparent;
   color: inherit;
-  font-size: 12px;
+  font-size: 0.8571rem;
   cursor: pointer;
 }
 

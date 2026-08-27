@@ -6,24 +6,42 @@
 依赖：adapter.evolution / adapter.store / adapter.strategies（无网络、无 LLM）。
 """
 
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("ADAPTER_RUNNER", "fake")
+os.environ.setdefault("BRIEF_SCHEDULE_ENABLED", "false")
+
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from adapter.behavior_profile import compute_behavior_profile
+from adapter.app import create_app
 from adapter.evolution import (
+    EvolutionPreviewConflict,
     attribution,
+    current_preview,
     decision_outcome,
     evolve,
     status,
 )
 from adapter.personalize import _active_strategies
+from adapter.schemas import EvolutionRunRequest
 from adapter.store import JsonStore
 
 
 def _store() -> JsonStore:
     return JsonStore(Path(tempfile.mkdtemp()))
+
+
+def _preview_and_apply(store: JsonStore) -> tuple[dict, dict]:
+    preview = evolve(store, apply=False)
+    applied = evolve(store, apply=True, preview_token=preview["preview_token"])
+    return preview, applied
 
 
 def _plant(store: JsonStore, days: int = 5) -> None:
@@ -89,10 +107,41 @@ class AttributionTests(unittest.TestCase):
 
 
 class EvolveTests(unittest.TestCase):
+    def test_apply_request_requires_well_formed_preview_token(self):
+        with self.assertRaises(ValidationError):
+            EvolutionRunRequest(apply=True)
+        with self.assertRaises(ValidationError):
+            EvolutionRunRequest(apply=True, preview_token="not-a-token")
+        with self.assertRaises(ValidationError):
+            EvolutionRunRequest(apply=False, preview_token="1" * 32)
+        request = EvolutionRunRequest(apply=True, preview_token="1" * 32)
+        self.assertEqual(request.preview_token, "1" * 32)
+
+    def test_http_contract_exposes_preview_and_maps_drift_to_conflict(self):
+        app = create_app()
+        with TestClient(app) as client:
+            with patch("adapter.evolution.current_preview", return_value={
+                "preview_status": "pending", "preview_token": "1" * 32, "actions": [],
+            }):
+                response = client.get("/evolution/preview")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json()["preview_token"], "1" * 32)
+            with patch(
+                "adapter.evolution.evolve",
+                side_effect=EvolutionPreviewConflict("策略或影子证据已变化"),
+            ):
+                response = client.post("/evolution/run", json={
+                    "apply": True, "preview_token": "1" * 32,
+                })
+                self.assertEqual(response.status_code, 409)
+                self.assertIn("证据已变化", response.json()["detail"])
+
     def test_waiting_data_guardrail_never_writes(self):
         store = _store()
         _plant(store, days=1)
-        plan = evolve(store, apply=True)
+        preview, plan = _preview_and_apply(store)
+        self.assertRegex(preview["preview_token"], r"^[0-9a-f]{32}$")
+        self.assertEqual(preview["state_version"], plan["state_version"])
         self.assertEqual(plan["status"], "waiting_data")
         self.assertEqual(plan["count"], 0)
         # 未写任何动作（好策略未被升级、坏策略未被淘汰）
@@ -107,30 +156,67 @@ class EvolveTests(unittest.TestCase):
         self.assertIn("retire", types)
         self.assertIn("mutate", types)
 
-        applied = evolve(store, apply=True)
+        applied = evolve(store, apply=True, preview_token=plan["preview_token"])
+        self.assertTrue(applied["applied"])
+        self.assertEqual(applied["preview_status"], "applied")
         good = store.get("strategies", "strat-good")
         bad = store.get("strategies", "strat-bad")
         self.assertEqual(good["evolve"]["tier"], 2)
         self.assertEqual(bad["status"], "retired")
+        self.assertEqual(bad["verification_status"], "archived")
         kids = [k for k, v in store.all("strategies").items()
                 if isinstance(v, dict) and v.get("source") == "evolution"]
         self.assertEqual(len(kids), 2)
         for kid in kids:
             rec = store.get("strategies", kid)
             self.assertEqual(rec["status"], "candidate")
+            self.assertEqual(rec["verification_status"], "pending")
             self.assertEqual(rec["mutated_from"], "strat-good")
 
-    def test_evolve_is_idempotent_second_apply(self):
+    def test_preview_token_rejects_duplicate_apply(self):
         store = _store()
         _plant(store)
-        evolve(store, apply=True)
-        again = evolve(store, apply=True)
-        self.assertEqual(again["count"], 0)
+        preview, _ = _preview_and_apply(store)
+        with self.assertRaisesRegex(EvolutionPreviewConflict, "不能重复提交"):
+            evolve(store, apply=True, preview_token=preview["preview_token"])
+
+    def test_state_drift_rejects_old_preview_without_writing_actions(self):
+        store = _store()
+        _plant(store)
+        preview = evolve(store, apply=False)
+        store.update("strategies", "strat-good", name="人工更新后的策略")
+
+        with self.assertRaisesRegex(EvolutionPreviewConflict, "证据已变化"):
+            evolve(store, apply=True, preview_token=preview["preview_token"])
+
+        self.assertEqual(store.get("strategies", "strat-good")["evolve"]["tier"], 1)
+        self.assertEqual(store.get("strategies", "strat-bad")["status"], "active")
+
+    def test_new_preview_supersedes_previous_token(self):
+        store = _store()
+        _plant(store)
+        first = evolve(store, apply=False)
+        second = evolve(store, apply=False)
+        with self.assertRaisesRegex(EvolutionPreviewConflict, "不能重复提交"):
+            evolve(store, apply=True, preview_token=first["preview_token"])
+        applied = evolve(store, apply=True, preview_token=second["preview_token"])
+        self.assertTrue(applied["applied"])
+
+    def test_current_preview_exposes_exact_pending_actions_only(self):
+        store = _store()
+        _plant(store)
+        preview = evolve(store, apply=False)
+        context = current_preview(store)
+        self.assertTrue(context["valid"])
+        self.assertEqual(context["preview_token"], preview["preview_token"])
+        self.assertEqual(context["actions"], preview["actions"])
+        evolve(store, apply=True, preview_token=preview["preview_token"])
+        self.assertEqual(current_preview(store)["preview_status"], "none")
 
     def test_recommendation_side_excludes_watch_and_retired(self):
         store = _store()
         _plant(store)
-        evolve(store, apply=True)
+        _preview_and_apply(store)
         actives = [s.get("id") for s in _active_strategies(store)]
         self.assertIn("strat-good", actives)
         self.assertNotIn("strat-bad", actives)
@@ -141,7 +227,7 @@ class OutcomeTests(unittest.TestCase):
         # 淘汰 strat-bad（亏损策略）后，存活参与策略均为盈利 → 正修正
         store = _store()
         _plant(store)
-        evolve(store, apply=True)
+        _preview_and_apply(store)
         od = decision_outcome(store)
         self.assertGreater(od["samples"], 0)
         self.assertGreater(od["delta"], 0.0)
@@ -149,7 +235,7 @@ class OutcomeTests(unittest.TestCase):
     def test_outcome_flows_into_behavior_profile(self):
         store = _store()
         _plant(store)
-        evolve(store, apply=True)
+        _preview_and_apply(store)
         beh = compute_behavior_profile(store)
         self.assertEqual(beh["outcome"]["delta"], 0.003)
         self.assertEqual(beh["outcome_delta"], 0.003)
@@ -167,7 +253,7 @@ class StatusTests(unittest.TestCase):
     def test_status_counts_lifecycle(self):
         store = _store()
         _plant(store)
-        evolve(store, apply=True)
+        _preview_and_apply(store)
         st = status(store)
         self.assertTrue(st["ready"])
         self.assertGreaterEqual(st["counts"]["mutated"], 2)

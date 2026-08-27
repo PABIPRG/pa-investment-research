@@ -12,7 +12,8 @@ Profile bundles: npm packages whose manifest declares `"dsh": { "bundle": { "pat
 | [`investment-runtime/`](investment-runtime/README.md) | Shared investment Python Runtime; must precede the capability bundles | mounts `investment-python-runtime` |
 | [`investment-stock-analysis/`](investment-stock-analysis/README.md) | Independently removable stock-analysis capability | mounts `investment-stock-analysis` |
 | [`investment-market-watch/`](investment-market-watch/README.md) | Independently removable market-watch capability | mounts `investment-market-watch` |
+| [`investment-industry-chain/`](investment-industry-chain/README.md) | Independently removable industry-chain data capability | mounts `investment-industry-chain` |
 
 In-box bundles resolve from the dsh installation; out-of-tree bundles install into a profile through `dsh plugin --profile <name> add <package>`.
 
-The shipped `investment-research` profile applies `base`, `web-app`, `investment-runtime`, `investment-stock-analysis`, then `investment-market-watch`. The last two bundles contain no process or business implementation; each business plugin acquires its backend from the preceding Runtime layer.
+The shipped `investment-research` profile applies `base`, `web-app`, `investment-runtime`, `investment-stock-analysis`, `investment-market-watch`, then `investment-industry-chain`. The last three bundles contain no process implementation; each business plugin acquires its backend from the preceding Runtime layer.

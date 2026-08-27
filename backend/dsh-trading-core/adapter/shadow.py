@@ -27,6 +27,7 @@ from datetime import date, timedelta
 from .config import settings
 from .store import JsonStore
 from .strategies import _make_df, pd_notna, signal_series
+from .task_report_render import render_shadow_report
 
 logger = logging.getLogger("adapter.shadow")
 
@@ -112,7 +113,7 @@ class ShadowRunner:
             s = self.store.get("strategies", strategy_id)
             if not s:
                 raise ValueError(f"策略不存在: {strategy_id}")
-            return [s]
+            return [s] if s.get("status") == "active" else []
         all_s = self.store.all("strategies") or {}
         return [s for s in all_s.values() if s.get("status") == "active"]
 
@@ -175,9 +176,29 @@ class ShadowRunner:
                 {},
             )
         progress_cb("🏁 影子记账完成")
-        return {"skipped": False, "trade_date": trade_date,
-                "strategies": {sid: _snapshot(r) for sid, r in strategy_results.items()},
-                "overall_nav": overall, "strategy_errors": strategy_errors}
+        snapshots = {sid: _snapshot(r) for sid, r in strategy_results.items()}
+        return {
+            "skipped": False,
+            "trade_date": trade_date,
+            "strategies": snapshots,
+            "overall_nav": overall,
+            "strategy_errors": strategy_errors,
+            "signal": {
+                "signal_type": "shadow_validation",
+                "strategy_id": strategy_id,
+                "strategy_name": (
+                    snapshots.get(strategy_id, {}).get("name") if strategy_id else None
+                ),
+                "strategy_count": len(snapshots),
+                "trade_date": trade_date,
+                "overall_nav": overall,
+            },
+            "reports": {
+                "shadow": render_shadow_report(
+                    trade_date, snapshots, overall, strategy_errors
+                )
+            },
+        }
 
     def _run_strategy(self, s: dict, trade_date: str, history_start: str,
                       meta: dict, progress_cb) -> dict:

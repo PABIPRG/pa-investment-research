@@ -74,7 +74,7 @@ const definitions: Record<InvestmentBackendId, PythonBackendDefinition> = {
     repositoryPath: ['backend', 'industry-chain'],
     module: 'industry_chain.app:app',
     healthPath: '/health',
-    healthOk: { ok: true },
+    healthOk: { ok: true, service: 'industry-chain' },
     initCommand: { posix: './init.sh', windows: 'init.bat' },
   },
 }
@@ -132,13 +132,13 @@ async function pendingCredentialHarness(): Promise<PendingCredentialHarness> {
   const handle = fakeHandle()
   handle.autoExitOnTerminate = true
   const spawn = vi.fn(() => handle)
-  const firstResolveEntered = Promise.withResolvers<void>()
+  const firstResolveEntered = Promise.withResolvers<undefined>()
   const firstResolve = Promise.withResolvers<ResolvedCredential | undefined>()
   let resolveCalls = 0
   const resolveCredential = vi.fn(async () => {
     resolveCalls += 1
     if (resolveCalls === 1) {
-      firstResolveEntered.resolve()
+      firstResolveEntered.resolve(undefined)
       return firstResolve.promise
     }
     return { value: NEW_SECRET, source: 'file' }
@@ -265,14 +265,18 @@ describe('investment readiness and capability preflight', () => {
     const pythonExecutable = join(projectDir, 'env', 'bin', 'python')
     await mkdir(join(projectDir, 'env', 'bin'), { recursive: true })
     const handle = fakeHandle()
-    const spawn = vi.fn(() => handle)
-    const firstResolveEntered = Promise.withResolvers<void>()
+    const spawnSpecs: SubprocessSpawnSpec[] = []
+    const spawn = vi.fn((spec: SubprocessSpawnSpec) => {
+      spawnSpecs.push(spec)
+      return handle
+    })
+    const firstResolveEntered = Promise.withResolvers<undefined>()
     const firstResolve = Promise.withResolvers<ResolvedCredential | undefined>()
     let resolveCalls = 0
     const resolveCredential = vi.fn(async () => {
       resolveCalls += 1
       if (resolveCalls === 1) {
-        firstResolveEntered.resolve()
+        firstResolveEntered.resolve(undefined)
         return firstResolve.promise
       }
       return { value: NEW_SECRET, source: 'file' }
@@ -299,14 +303,12 @@ describe('investment readiness and capability preflight', () => {
 
     expect(resolveCredential).toHaveBeenCalledTimes(2)
     expect(describeCredential).toHaveBeenCalledTimes(2)
-    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
-      env: expect.objectContaining({
-        DEEPSEEK_API_KEY: NEW_SECRET,
-        OPENAI_API_KEY: NEW_SECRET,
-      }),
-    }))
+    expect(spawnSpecs.at(0)?.env).toMatchObject({
+      DEEPSEEK_API_KEY: NEW_SECRET,
+      OPENAI_API_KEY: NEW_SECRET,
+    })
     expect(manager.readiness().backends[0]?.restartRequired).toBe(false)
-    expect(() => manager.assertCapability('trading-core', 'llm-required')).not.toThrow()
+    expect(() => { manager.assertCapability('trading-core', 'llm-required') }).not.toThrow()
     const serialized = JSON.stringify(manager.readiness())
     expect(serialized).not.toContain(OLD_SECRET)
     expect(serialized).not.toContain(NEW_SECRET)
@@ -344,8 +346,8 @@ describe('investment readiness and capability preflight', () => {
     registerCapability(manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
 
     expect(manager.readiness().backends[0]?.restartRequired).toBe(true)
-    expect(() => manager.assertCapability('trading-core', 'llm-required')).toThrow(/restart/i)
-    expect(() => manager.assertCapability('trading-core', 'llm-enhancement')).toThrow(/restart/i)
+    expect(() => { manager.assertCapability('trading-core', 'llm-required') }).toThrow(/restart/i)
+    expect(() => { manager.assertCapability('trading-core', 'llm-enhancement') }).toThrow(/restart/i)
     expect(JSON.stringify(manager.readiness())).not.toContain(SECRET)
 
     handle.exit()
@@ -376,7 +378,7 @@ describe('investment readiness and capability preflight', () => {
 
     expect(resolveCredential).toHaveBeenCalledOnce()
     expect(manager.readiness().backends[0]?.restartRequired).toBe(false)
-    expect(() => manager.assertCapability('trading-core', 'llm-required')).not.toThrow()
+    expect(() => { manager.assertCapability('trading-core', 'llm-required') }).not.toThrow()
 
     handle.exit()
     await lease.release()
@@ -466,7 +468,7 @@ describe('investment readiness and capability preflight', () => {
       capability: { status: 'unavailable' },
     })
     for (const use of ['llm-required', 'llm-enhancement', 'non-llm'] as const) {
-      expect(() => manager.assertCapability('trading-core', use)).toThrow(/health/i)
+      expect(() => { manager.assertCapability('trading-core', use) }).toThrow(/health/i)
     }
     expect(JSON.stringify({ snapshot, active: manager.invariantSnapshot() })).not.toContain(SECRET)
   })
@@ -509,9 +511,9 @@ describe('investment readiness and capability preflight', () => {
       ],
       capability: { status: 'unavailable' },
     })
-    expect(() => manager.assertCapability('trading-core', 'llm-required')).toThrow(SECOND_API_KEY)
-    expect(() => manager.assertCapability('trading-core', 'llm-enhancement')).not.toThrow()
-    expect(() => manager.assertCapability('trading-core', 'non-llm')).not.toThrow()
+    expect(() => { manager.assertCapability('trading-core', 'llm-required') }).toThrow(SECOND_API_KEY)
+    expect(() => { manager.assertCapability('trading-core', 'llm-enhancement') }).not.toThrow()
+    expect(() => { manager.assertCapability('trading-core', 'non-llm') }).not.toThrow()
     expect(JSON.stringify(snapshot)).not.toContain(SECRET)
 
     handle.exit()
@@ -579,6 +581,25 @@ describe('investment readiness and capability preflight', () => {
     await market.lease.release()
   })
 
+  it('projects the keyless industry backend as a complete non-LLM capability', async () => {
+    const industry = await managedHarness('industry-chain', undefined, { configured: false, writable: false })
+    registerCapability(industry.manager, { backendId: 'industry-chain', toolCount: 0, llm: 'none' })
+
+    expect(industry.manager.readiness().backends[0]).toMatchObject({
+      backendId: 'industry-chain',
+      backendStatus: 'healthy-owned',
+      credentials: [],
+      capability: { llm: 'none', toolCount: 0, status: 'industry-full' },
+      restartRequired: false,
+    })
+    expect(industry.resolveCredential).not.toHaveBeenCalled()
+    expect(industry.describeCredential).not.toHaveBeenCalled()
+    expect(() => { industry.manager.assertCapability('industry-chain', 'non-llm') }).not.toThrow()
+
+    industry.handle.exit()
+    await industry.lease.release()
+  })
+
   it('marks only active owned backends that used the updated ref and blocks new LLM-dependent calls', async () => {
     const stock = await managedHarness('trading-core', { value: SECRET, source: 'file' }, {
       configured: true,
@@ -595,9 +616,9 @@ describe('investment readiness and capability preflight', () => {
       credentials: [{ ref: DEEPSEEK_API_KEY, status: 'restart-required' }],
       capability: { status: 'unavailable' },
     })
-    expect(() => stock.manager.assertCapability('trading-core', 'llm-required')).toThrow(/restart/i)
-    expect(() => stock.manager.assertCapability('trading-core', 'llm-enhancement')).toThrow(/restart/i)
-    expect(() => stock.manager.assertCapability('trading-core', 'non-llm')).not.toThrow()
+    expect(() => { stock.manager.assertCapability('trading-core', 'llm-required') }).toThrow(/restart/i)
+    expect(() => { stock.manager.assertCapability('trading-core', 'llm-enhancement') }).toThrow(/restart/i)
+    expect(() => { stock.manager.assertCapability('trading-core', 'non-llm') }).not.toThrow()
 
     stock.handle.exit()
     await stock.lease.release()
@@ -609,9 +630,9 @@ describe('investment readiness and capability preflight', () => {
     registerCapability(stock.manager, { backendId: 'trading-core', toolCount: 9, llm: 'required' })
     registerCapability(market.manager, { backendId: 'market-watch', toolCount: 11, llm: 'enhancement' })
 
-    expect(() => stock.manager.assertCapability('trading-core', 'llm-required')).toThrow(/DEEPSEEK_API_KEY/)
-    expect(() => market.manager.assertCapability('market-watch', 'llm-enhancement')).not.toThrow()
-    expect(() => stock.manager.assertCapability('trading-core', 'non-llm')).not.toThrow()
+    expect(() => { stock.manager.assertCapability('trading-core', 'llm-required') }).toThrow(/DEEPSEEK_API_KEY/)
+    expect(() => { market.manager.assertCapability('market-watch', 'llm-enhancement') }).not.toThrow()
+    expect(() => { stock.manager.assertCapability('trading-core', 'non-llm') }).not.toThrow()
 
     stock.handle.exit()
     market.handle.exit()
@@ -648,7 +669,7 @@ describe('investment readiness and capability preflight', () => {
     expect(describeCredential).not.toHaveBeenCalled()
     manager.credentialUpdated(DEEPSEEK_API_KEY)
     expect(manager.readiness().backends[0]?.restartRequired).toBe(false)
-    expect(() => manager.assertCapability('trading-core', 'llm-required')).not.toThrow()
+    expect(() => { manager.assertCapability('trading-core', 'llm-required') }).not.toThrow()
     await lease.release()
   })
 

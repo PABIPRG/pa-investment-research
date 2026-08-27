@@ -46,7 +46,7 @@ profile 默认通过 `watchUserPatches` 持续应用 `cordis.patch.yml` 的变�
 
 ### 投研 profile
 
-随附投研 profile 固定包含五个有序组合包层：`@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@deepseek-ai/dsh-investment-runtime-bundle`、`@deepseek-ai/dsh-investment-stock-analysis-bundle`、`@deepseek-ai/dsh-investment-market-watch-bundle`。`web-app` 提供现有 renderer 与 Host 组合；Electron 应用只在这五层之后应用原生 patch，禁用 Web carrier（载体）并替换其 connection 与 directory-picker 行。唯一产品入口是 `dsh electron --profile investment-research`；`dsh electron` 仍默认选择 `web`。可用 `dsh --profile investment-research --dump-default-config` 检查不运行 Python、也不读取用户 patch 的可移植组合包树。
+随附投研 profile 固定包含六个有序组合包层：`@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@deepseek-ai/dsh-investment-runtime-bundle`、`@deepseek-ai/dsh-investment-stock-analysis-bundle`、`@deepseek-ai/dsh-investment-market-watch-bundle`、`@deepseek-ai/dsh-investment-industry-chain-bundle`。`web-app` 提供现有 renderer 与 Host 组合；Electron 应用只在这六层之后应用原生 patch，禁用 Web carrier（载体）并替换其 connection 与 directory-picker 行。唯一产品入口是 `dsh electron --profile investment-research`；`dsh electron` 仍默认选择 `web`。可用 `dsh --profile investment-research --dump-default-config` 检查不运行 Python、也不读取用户 patch 的可移植组合包树。
 
 ## 模型体验
 

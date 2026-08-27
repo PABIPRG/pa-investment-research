@@ -2,7 +2,7 @@
 setlocal
 rem ============================================================
 rem  industry-chain verify script (Windows)
-rem   1. adapter health check + key endpoint smoke
+rem   1. adapter health check + read-only data status
 rem   2. plugin smoke test (4 tools registered = pass)
 rem ============================================================
 set "ROOT=%~dp0"
@@ -27,6 +27,10 @@ if errorlevel 1 (
     echo   [ERROR] adapter not running. Start with start_all.bat
     exit /b 1
 )
+echo.
+echo   /data/status response (does not download data):
+curl -s http://127.0.0.1:8200/data/status
+if errorlevel 1 exit /b 1
 echo.
 echo [2/2] plugin smoke test ...
 if exist "dsh-plugin\package.json" (
