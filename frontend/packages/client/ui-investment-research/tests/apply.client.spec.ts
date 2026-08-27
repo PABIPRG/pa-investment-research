@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
-import packageManifest from '../package.json' with { type: 'json' }
+import packageManifest from '@deepseek-ai/dsh-client-ui-investment-research/package.json' with { type: 'json' }
 import { apply, inject } from '../src/client/index.ts'
 import {
   InvestmentBrand,
@@ -121,7 +121,7 @@ describe('ui-investment-research apply', () => {
       compact: false,
       label: '投研智能体',
       startSession: vi.fn(),
-    }))
+    } as never))
 
     expect(screen.getByText(`v${packageManifest.version} · 智能投研系统`)).toBeTruthy()
   })

@@ -493,6 +493,9 @@ def graph_chain(
                     if key in visited:
                         continue
                     visited.add(key)
+                    resolved_code = _resolve_code(key)
+                    node["code"] = resolved_code
+                    node["expandable"] = bool(resolved_code)
                     node["parent_id"] = pid
                     node["depth"] = d
                     nxt.append(node)
@@ -502,7 +505,7 @@ def graph_chain(
             # 下一层标识：能解析为核心公司则用 code（可继续展开），否则 name（叶子）
             current = []
             for n in nxt:
-                rc = _resolve_code(n.get("id") or n.get("name"))
+                rc = n.get("code")
                 current.append(rc if rc else (n.get("name") or ""))
             current = [x for x in current if x]
         return levels

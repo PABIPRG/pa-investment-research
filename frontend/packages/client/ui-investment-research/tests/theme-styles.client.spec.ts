@@ -48,6 +48,18 @@ describe('投研工作台主题样式', () => {
     expect(styles).toContain(':global(body[data-investment-research-ui]) :global([data-access-mode-trigger]) { display: none; }')
   })
 
+  it('让展开的投研导航容器贴齐侧栏左边缘且不叠加左侧内边距', () => {
+    expect(styles).toContain(
+      '.sidebarRegion:not(.sidebarRegionCompact) { margin-left: calc(-1 * var(--dsh-sidebar-inline-padding));',
+    )
+    expect(styles).not.toContain('padding-left: calc(8px + var(--dsh-sidebar-inline-padding));')
+  })
+
+  it('不使用左侧深色竖条表达选中、错误或警告状态', () => {
+    expect(styles).not.toMatch(/box-shadow:\s*inset\s+3px\s+0\s+0/)
+    expect(styles).not.toMatch(/border-left:\s*[2-9]px/)
+  })
+
   it('以 14px 根字号和 rem 统一投研及输入框字号', () => {
     expect(baseStyles).toMatch(/html\s*\{\s*font-size:\s*14px;/)
     expect(baseStyles).toContain('font-size: inherit;')

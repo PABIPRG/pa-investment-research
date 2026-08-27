@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import packageManifest from '../../package.json' with { type: 'json' }
+import packageManifest from '@deepseek-ai/dsh-client-ui-investment-research/package.json' with { type: 'json' }
 import type {
   SessionId, SessionSearchResultItem,
 } from '@deepseek-ai/dsh-client-runtime/client'
@@ -873,6 +873,7 @@ export function InvestmentShell({
             query={snapshot.chainQuery}
             onQuery={(query) => { setModuleDraft('chainQuery', query) }}
             onAnalyze={prepareAssistant}
+            onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
           />
         )}
       </main>
@@ -1376,6 +1377,32 @@ function AddHoldingDialog({
   )
 }
 
+function StockDetailLoading({ code }: { code: string }) {
+  return (
+    <div className={css.stockLoading} role="status" aria-live="polite">
+      <div className={css.stockLoadingLead}>
+        <span className={css.stockLoadingMark} aria-hidden="true"><i /></span>
+        <div>
+          <strong>正在准备 {code} 的个股研究视图</strong>
+          <p>同步实时行情、技术位置与个股资讯，完成后会自动展示。</p>
+        </div>
+      </div>
+      <div className={css.stockLoadingGrid} aria-hidden="true">
+        <section className={css.stockLoadingHero}>
+          <div className={css.stockLoadingIdentity}><i /><i /></div>
+          <div className={css.stockLoadingMetrics}>
+            {Array.from({ length: 8 }, (_, index) => <span key={index}><i /><b /></span>)}
+          </div>
+        </section>
+        <div className={css.stockLoadingSide}>
+          <section className={css.stockLoadingPanel}><i /><b /><b /></section>
+          <section className={css.stockLoadingPanel}><i /><b /><b /><b /></section>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StockDetailPage({
   requestData, code, onBack, onAnalyze,
 }: { requestData: RequestData; code: string; onBack: () => void; onAnalyze: (intent: AssistantIntent) => void }) {
@@ -1495,7 +1522,7 @@ function StockDetailPage({
 
   return (
     <div className={css.pageScroll}>
-      <PageHeader title={loading ? '个股详情' : `${name} · ${resolvedCode}`} description="实时行情、技术位置、资金与个股资讯的统一研究视图">
+      <PageHeader title={loading ? `${code} · 个股详情` : `${name} · ${resolvedCode}`} description="实时行情、技术位置、资金与个股资讯的统一研究视图">
         <button type="button" className={css.secondaryButton} onClick={onBack}>返回实时盯盘</button>
         <button type="button" className={css.secondaryButton} onClick={() => { setNonce(value => value + 1) }}>刷新详情</button>
         {!loading && error === '' && (
@@ -1526,7 +1553,7 @@ function StockDetailPage({
       </PageHeader>
       {actionNotice !== '' && <div className={css.importNotice} role="status">{actionNotice}</div>}
       {error !== '' && <ErrorCard title="个股详情暂不可用" message={error} retry={() => { setNonce(value => value + 1) }} />}
-      {loading && <div className={css.loadingCard}>正在加载 {code} 的真实行情与研究数据…</div>}
+      {loading && <StockDetailLoading code={code} />}
       {!loading && error === '' && (
         <div className={css.stockDetailGrid}>
           <section className={css.stockHeroCard}>
