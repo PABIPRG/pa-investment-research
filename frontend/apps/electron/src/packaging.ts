@@ -1,10 +1,10 @@
 /** Assemble a production deployment into a native Electron application and optional Forge artifacts. */
 
 import { spawn } from 'node:child_process'
-import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, opendir, readFile, rm } from 'node:fs/promises'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, opendir, readFile, readlink, rm, symlink } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
@@ -22,19 +22,20 @@ interface CommandSpec {
   cwd: string
 }
 
-interface PackagingLinkTarget {
-  sourceDir: string
-  targetDir: string
-}
-
 interface PackagingPlan {
+  appSourceDir: string
   deploy: CommandSpec
-  linkTargets: PackagingLinkTarget[]
   rootDir: string
   sidecar: CommandSpec
   sidecarCacheDir: string
   sidecarDir: string
   stagingDir: string
+  workspaceDir: string
+}
+
+interface PackagingWorkspaceLink {
+  linkPath: string
+  sourceDir: string
 }
 
 interface PackagerOptionsInput {
@@ -45,10 +46,6 @@ interface PackagerOptionsInput {
   platform: NonNullable<PackagerOptions['platform']>
   sidecarDir: string
   stagingDir: string
-}
-
-type PackagerOsxSignOptions = Exclude<PackagerOptions['osxSign'], true | undefined> & {
-  continueOnError: boolean
 }
 
 /**
@@ -74,6 +71,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
   const sidecarCacheDir = join(rootDir, 'sidecar-cache')
   const pnpmCommand = platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   return {
+    appSourceDir: appDir,
     deploy: {
       args: [
         '--filter',
@@ -86,12 +84,6 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
       command: pnpmCommand,
       cwd: workspaceDir,
     },
-    // Legacy pnpm deploy preserves this override as a workspace-relative link.
-    // Electron Packager cannot safely copy that link after relocating the app tree.
-    linkTargets: platform === 'darwin' ? [{
-      sourceDir: join(workspaceDir, 'vendor/cosmokit'),
-      targetDir: join(stagingDir, 'node_modules/.pnpm/node_modules/@deepseek-ai/cosmokit'),
-    }] : [],
     rootDir,
     sidecar: {
       args: [
@@ -111,15 +103,85 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
     sidecarCacheDir,
     sidecarDir,
     stagingDir,
+    workspaceDir,
   }
 }
 
-/** Replace workspace-relative deploy links with self-contained package directories. */
-export async function materializePackagingLinkTargets(linkTargets: PackagingLinkTarget[]): Promise<void> {
-  await Promise.all(linkTargets.map(async ({ sourceDir, targetDir }) => {
+function workspaceSourceFromLinkTarget(linkTarget: string, workspaceDir: string): string | undefined {
+  const normalizedWorkspaceDir = workspaceDir.split(sep).join('/').replace(/^\/+/, '')
+  const normalizedLinkTarget = linkTarget.split(sep).join('/')
+  const workspaceIndex = normalizedLinkTarget.indexOf(normalizedWorkspaceDir)
+  if (workspaceIndex === -1) return undefined
+
+  const sourceDir = resolve('/', normalizedLinkTarget.slice(workspaceIndex))
+  const sourceRelativePath = relative(workspaceDir, sourceDir)
+  if (sourceRelativePath === '' || sourceRelativePath === '..'
+    || sourceRelativePath.startsWith(`..${sep}`) || isAbsolute(sourceRelativePath)) {
+    return undefined
+  }
+  return sourceDir
+}
+
+async function collectPackagingWorkspaceLinks(
+  rootDir: string,
+  workspaceDir: string,
+): Promise<PackagingWorkspaceLink[]> {
+  const links: PackagingWorkspaceLink[] = []
+  const pendingDirectories = [rootDir]
+  while (pendingDirectories.length > 0) {
+    const directoryPath = pendingDirectories.pop()
+    if (directoryPath === undefined) break
+    const directory = await opendir(directoryPath)
+    for await (const entry of directory) {
+      const entryPath = join(directoryPath, entry.name)
+      if (entry.isDirectory()) {
+        pendingDirectories.push(entryPath)
+        continue
+      }
+      if (!entry.isSymbolicLink()) continue
+      const sourceDir = workspaceSourceFromLinkTarget(await readlink(entryPath), workspaceDir)
+      if (sourceDir !== undefined) links.push({ linkPath: entryPath, sourceDir })
+    }
+  }
+  return links
+}
+
+/** Replace legacy pnpm workspace links with relocatable links inside the staged application. */
+export async function materializePackagingWorkspaceLinks(
+  stagingDir: string,
+  workspaceDir: string,
+  appSourceDir: string,
+): Promise<number> {
+  const links = await collectPackagingWorkspaceLinks(stagingDir, workspaceDir)
+  const materializedRoot = join(stagingDir, 'node_modules/.dsh-workspace-links')
+  const canonicalTargets = new Map<string, string>()
+
+  for (const { sourceDir } of links) {
+    if (canonicalTargets.has(sourceDir)) continue
+    const sourceRelativePath = relative(workspaceDir, sourceDir)
+    const targetDir = join(materializedRoot, sourceRelativePath)
+    const excludedTopLevelEntries = sourceDir === appSourceDir
+      ? new Set(['node_modules', 'out'])
+      : new Set(['node_modules'])
     await rm(targetDir, { force: true, recursive: true })
-    await cp(sourceDir, targetDir, { recursive: true })
+    await cp(sourceDir, targetDir, {
+      filter: (candidatePath) => {
+        const candidateRelativePath = relative(sourceDir, candidatePath)
+        const [topLevelEntry] = candidateRelativePath.split(sep)
+        return topLevelEntry === undefined || !excludedTopLevelEntries.has(topLevelEntry)
+      },
+      recursive: true,
+    })
+    canonicalTargets.set(sourceDir, targetDir)
+  }
+
+  await Promise.all(links.map(async ({ linkPath, sourceDir }) => {
+    const targetDir = canonicalTargets.get(sourceDir)
+    if (targetDir === undefined) throw new Error(`missing materialized workspace target for ${sourceDir}`)
+    await rm(linkPath, { force: true, recursive: true })
+    await symlink(relative(dirname(linkPath), targetDir), linkPath, 'dir')
   }))
+  return links.length
 }
 
 /** Remove the temporary package tree with Node's built-in descriptor exhaustion retries. */
@@ -160,12 +222,6 @@ async function copySidecarTree(source: string, destination: string): Promise<voi
  * @returns Options for the existing Electron packager and signing pipeline.
  */
 export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
-  const osxSign = {
-    continueOnError: false,
-    identity: '-',
-    identityValidation: false,
-  } satisfies PackagerOsxSignOptions
-
   return {
     appBundleId: 'com.deepseek.harness',
     arch: input.arch,
@@ -184,9 +240,6 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     name: APP_NAME,
     out: input.outDir,
     overwrite: true,
-    ...(input.platform === 'darwin' ? {
-      osxSign,
-    } : {}),
     platform: input.platform,
     prune: false,
   }
@@ -211,12 +264,32 @@ async function run(command: string, args: string[], cwd: string): Promise<void> 
   })
 }
 
+type RunCommand = (command: string, args: string[], cwd: string) => Promise<void>
+
+/**
+ * Ad-hoc sign packaged macOS applications without recursively opening the app's
+ * entire pnpm tree in Node. The system codesign traversal keeps descriptor use bounded.
+ */
+export async function signPackagedMacApplications(
+  packagePaths: readonly string[],
+  platform: NodeJS.Platform,
+  runCommand: RunCommand = run,
+): Promise<void> {
+  if (platform !== 'darwin') return
+  for (const packagePath of packagePaths) {
+    const appPath = join(packagePath, `${APP_NAME}.app`)
+    await runCommand('codesign', ['--force', '--deep', '--sign', '-', appPath], dirname(appPath))
+  }
+}
+
 async function packageApplication(): Promise<void> {
   const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-'))
   const plan = createPackagingPlan(rootDir, process.platform, process.arch)
   try {
     await run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd)
-    await materializePackagingLinkTargets(plan.linkTargets)
+    if (process.platform === 'darwin') {
+      await materializePackagingWorkspaceLinks(plan.stagingDir, plan.workspaceDir, plan.appSourceDir)
+    }
     await run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd)
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
     if (typeof electronPackage !== 'object' || electronPackage === null
@@ -232,7 +305,7 @@ async function packageApplication(): Promise<void> {
       platform: process.platform,
       version: electronVersion,
     })
-    await packager(createPackagerOptions({
+    const appPaths = await packager(createPackagerOptions({
       arch: process.arch,
       electronVersion,
       electronZipDir: dirname(electronZip),
@@ -241,6 +314,7 @@ async function packageApplication(): Promise<void> {
       stagingDir: plan.stagingDir,
       outDir: join(appDir, 'out'),
     }))
+    await signPackagedMacApplications(appPaths, process.platform)
   } finally {
     await removePackagingRoot(plan.rootDir)
   }
