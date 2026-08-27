@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import packageManifest from '../package.json' with { type: 'json' }
 import { apply, inject } from '../src/client/index.ts'
 import {
   InvestmentBrand,
@@ -115,6 +116,16 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
 }
 
 describe('ui-investment-research apply', () => {
+  it('shows the shared package version in the product brand', () => {
+    render(createElement(InvestmentBrand, {
+      compact: false,
+      label: '投研智能体',
+      startSession: vi.fn(),
+    }))
+
+    expect(screen.getByText(`v${packageManifest.version} · 智能投研系统`)).toBeTruthy()
+  })
+
   it('keeps the business workbench mounted while the global assistant changes display mode', () => {
     const props = {
       requestData: vi.fn(async () => ({ items: [] })),

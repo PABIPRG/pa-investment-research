@@ -1,7 +1,8 @@
 /** Assemble a production deployment into a native Electron application and optional Forge artifacts. */
 
 import { spawn } from 'node:child_process'
-import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, opendir, readFile, readlink, rm, symlink } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -9,10 +10,11 @@ import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
 import type { Options as PackagerOptions } from '@electron/packager'
+import { appIdentity, electronAppDir } from './app-identity.ts'
 
-const APP_NAME = 'DeepSeek Harness'
-const appDir = dirname(dirname(fileURLToPath(import.meta.url)))
+const appDir = electronAppDir
 const workspaceDir = resolve(appDir, '../..')
+const macEntitlementsPath = join(appDir, 'entitlements.mac.plist')
 const require = createRequire(import.meta.url)
 const electronPackagePath = require.resolve('electron/package.json')
 
@@ -35,6 +37,15 @@ interface PackagingPlan {
 
 interface PackagingWorkspaceLink {
   linkPath: string
+  sourceDir: string
+}
+
+interface WorkspacePackage {
+  manifest: {
+    dependencies?: Record<string, string>
+    name: string
+    peerDependencies?: Record<string, string>
+  }
   sourceDir: string
 }
 
@@ -146,6 +157,96 @@ async function collectPackagingWorkspaceLinks(
   return links
 }
 
+async function collectWorkspacePackages(workspaceDir: string): Promise<Map<string, WorkspacePackage>> {
+  const packages = new Map<string, WorkspacePackage>()
+  const canonicalWorkspaceDir = await realpath(workspaceDir)
+  const virtualRoot = join(workspaceDir, 'node_modules/.pnpm/node_modules')
+  const packagePaths: string[] = []
+  const root = await opendir(virtualRoot)
+  for await (const entry of root) {
+    const entryPath = join(virtualRoot, entry.name)
+    if (!entry.name.startsWith('@') || !entry.isDirectory()) {
+      packagePaths.push(entryPath)
+      continue
+    }
+    const scope = await opendir(entryPath)
+    for await (const scopedEntry of scope) packagePaths.push(join(entryPath, scopedEntry.name))
+  }
+
+  for (const packagePath of packagePaths) {
+    let sourceDir: string
+    let canonicalSourceDir: string
+    try {
+      const packageStat = await lstat(packagePath)
+      sourceDir = packageStat.isSymbolicLink()
+        ? resolve(dirname(packagePath), await readlink(packagePath))
+        : await realpath(packagePath)
+      canonicalSourceDir = await realpath(packagePath)
+    } catch {
+      continue
+    }
+    const sourceRelativePath = relative(canonicalWorkspaceDir, canonicalSourceDir)
+    if (sourceRelativePath === '' || sourceRelativePath === '..'
+      || sourceRelativePath.startsWith(`..${sep}`) || isAbsolute(sourceRelativePath)
+      || sourceRelativePath === 'node_modules' || sourceRelativePath.startsWith(`node_modules${sep}`)) {
+      continue
+    }
+    try {
+      const manifest = JSON.parse(await readFile(join(sourceDir, 'package.json'), 'utf8')) as WorkspacePackage['manifest']
+      if (typeof manifest.name === 'string' && manifest.name !== '') {
+        packages.set(manifest.name, { manifest, sourceDir })
+      }
+    } catch {
+      // Ignore virtual-store entries that are not package roots.
+    }
+  }
+  return packages
+}
+
+async function pathResolves(path: string): Promise<boolean> {
+  try {
+    await realpath(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function runtimeWorkspaceDependencies(
+  workspacePackage: WorkspacePackage,
+  workspacePackages: ReadonlyMap<string, WorkspacePackage>,
+): string[] {
+  const names = new Set<string>()
+  for (const dependencies of [
+    workspacePackage.manifest.dependencies,
+    workspacePackage.manifest.peerDependencies,
+  ]) {
+    for (const name of Object.keys(dependencies ?? {})) {
+      if (workspacePackages.has(name)) names.add(name)
+    }
+  }
+  return [...names].sort()
+}
+
+async function copyWorkspacePackage(
+  sourceDir: string,
+  targetDir: string,
+  appSourceDir: string,
+): Promise<void> {
+  const excludedTopLevelEntries = sourceDir === appSourceDir
+    ? new Set(['node_modules', 'out'])
+    : new Set(['node_modules'])
+  await rm(targetDir, { force: true, recursive: true })
+  await cp(sourceDir, targetDir, {
+    filter: (candidatePath) => {
+      const candidateRelativePath = relative(sourceDir, candidatePath)
+      const [topLevelEntry] = candidateRelativePath.split(sep)
+      return topLevelEntry === undefined || !excludedTopLevelEntries.has(topLevelEntry)
+    },
+    recursive: true,
+  })
+}
+
 /** Replace legacy pnpm workspace links with relocatable links inside the staged application. */
 export async function materializePackagingWorkspaceLinks(
   stagingDir: string,
@@ -154,26 +255,20 @@ export async function materializePackagingWorkspaceLinks(
 ): Promise<number> {
   const links = await collectPackagingWorkspaceLinks(stagingDir, workspaceDir)
   const materializedRoot = join(stagingDir, 'node_modules/.dsh-workspace-links')
+  const deployedModules = join(stagingDir, 'node_modules/.pnpm/node_modules')
   const canonicalTargets = new Map<string, string>()
 
   for (const { sourceDir } of links) {
     if (canonicalTargets.has(sourceDir)) continue
     const sourceRelativePath = relative(workspaceDir, sourceDir)
     const targetDir = join(materializedRoot, sourceRelativePath)
-    const excludedTopLevelEntries = sourceDir === appSourceDir
-      ? new Set(['node_modules', 'out'])
-      : new Set(['node_modules'])
-    await rm(targetDir, { force: true, recursive: true })
-    await cp(sourceDir, targetDir, {
-      filter: (candidatePath) => {
-        const candidateRelativePath = relative(sourceDir, candidatePath)
-        const [topLevelEntry] = candidateRelativePath.split(sep)
-        return topLevelEntry === undefined || !excludedTopLevelEntries.has(topLevelEntry)
-      },
-      recursive: true,
-    })
+    await copyWorkspacePackage(sourceDir, targetDir, appSourceDir)
     canonicalTargets.set(sourceDir, targetDir)
   }
+
+  const sharedModules = join(materializedRoot, 'node_modules')
+  await rm(sharedModules, { force: true, recursive: true })
+  await symlink(relative(materializedRoot, deployedModules), sharedModules, 'dir')
 
   await Promise.all(links.map(async ({ linkPath, sourceDir }) => {
     const targetDir = canonicalTargets.get(sourceDir)
@@ -181,6 +276,37 @@ export async function materializePackagingWorkspaceLinks(
     await rm(linkPath, { force: true, recursive: true })
     await symlink(relative(dirname(linkPath), targetDir), linkPath, 'dir')
   }))
+
+  const workspacePackages = await collectWorkspacePackages(workspaceDir)
+  const pending: string[] = []
+  for (const name of workspacePackages.keys()) {
+    if (await pathResolves(join(deployedModules, ...name.split('/')))) pending.push(name)
+  }
+  const visited = new Set<string>()
+  while (pending.length > 0) {
+    const name = pending.pop()
+    if (name === undefined || visited.has(name)) continue
+    visited.add(name)
+    const workspacePackage = workspacePackages.get(name)
+    if (workspacePackage === undefined) continue
+    for (const dependencyName of runtimeWorkspaceDependencies(workspacePackage, workspacePackages)) {
+      const dependency = workspacePackages.get(dependencyName)
+      if (dependency === undefined) continue
+      const deployedDependency = join(deployedModules, ...dependencyName.split('/'))
+      if (!await pathResolves(deployedDependency)) {
+        let targetDir = canonicalTargets.get(dependency.sourceDir)
+        if (targetDir === undefined) {
+          targetDir = join(materializedRoot, relative(workspaceDir, dependency.sourceDir))
+          await copyWorkspacePackage(dependency.sourceDir, targetDir, appSourceDir)
+          canonicalTargets.set(dependency.sourceDir, targetDir)
+        }
+        await mkdir(dirname(deployedDependency), { recursive: true })
+        await rm(deployedDependency, { force: true, recursive: true })
+        await symlink(relative(dirname(deployedDependency), targetDir), deployedDependency, 'dir')
+      }
+      pending.push(dependencyName)
+    }
+  }
   return links.length
 }
 
@@ -223,13 +349,14 @@ async function copySidecarTree(source: string, destination: string): Promise<voi
  */
 export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
   return {
-    appBundleId: 'com.deepseek.harness',
+    appBundleId: appIdentity.appBundleId,
     arch: input.arch,
     asar: false,
     dir: input.stagingDir,
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
-    executableName: 'deepseek-harness',
+    executableName: appIdentity.executableName,
+    icon: appIdentity.iconPath,
     afterCopy: [((buildPath, _electronVersion, _platform, _arch, callback) => {
       const destination = join(dirname(buildPath), basename(input.sidecarDir))
       copySidecarTree(input.sidecarDir, destination).then(
@@ -237,7 +364,7 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
         (reason: unknown) => { callback(reason instanceof Error ? reason : new Error(String(reason))) },
       )
     })],
-    name: APP_NAME,
+    name: appIdentity.name,
     out: input.outDir,
     overwrite: true,
     platform: input.platform,
@@ -265,6 +392,97 @@ async function run(command: string, args: string[], cwd: string): Promise<void> 
 }
 
 type RunCommand = (command: string, args: string[], cwd: string) => Promise<void>
+type RefreshDescriptor = (appPath: string) => Promise<void>
+type SignHelpers = (appPath: string, runCommand: RunCommand) => Promise<void>
+type SignSidecar = (appPath: string, runCommand: RunCommand) => Promise<void>
+
+const MACH_O_MAGICS = new Set([
+  'cafebabe', 'cafebabf', 'cefaedfe', 'cffaedfe',
+  'bebafeca', 'bfbafeca', 'feedface', 'feedfacf',
+])
+
+interface PackagedSidecarDescriptor {
+  readonly files: readonly { readonly path: string; readonly sha256: string }[]
+  readonly [key: string]: unknown
+}
+
+/** Refresh sidecar hashes after macOS recursively signs its nested Mach-O files. */
+export async function refreshPackagedSidecarDescriptor(appPath: string): Promise<void> {
+  const sidecarRoot = join(resolve(appPath), 'Contents', 'Resources', 'investment-python')
+  const descriptorPath = join(sidecarRoot, 'runtime.json')
+  const descriptor = JSON.parse(await readFile(descriptorPath, 'utf8')) as PackagedSidecarDescriptor
+  if (!Array.isArray(descriptor.files)) throw new TypeError('packaged sidecar descriptor has no files array')
+
+  const files = []
+  for (const file of descriptor.files) {
+    if (typeof file?.path !== 'string' || file.path === '' || file.path.includes('\\')) {
+      throw new TypeError('packaged sidecar descriptor contains an invalid file path')
+    }
+    const absolute = resolve(sidecarRoot, ...file.path.split('/'))
+    const relativePath = relative(sidecarRoot, absolute)
+    if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+      throw new TypeError(`packaged sidecar descriptor path escapes its root: ${file.path}`)
+    }
+    const fileStat = await lstat(absolute)
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+      throw new TypeError(`packaged sidecar descriptor path is not a file: ${file.path}`)
+    }
+    files.push({
+      path: file.path,
+      sha256: createHash('sha256').update(await readFile(absolute)).digest('hex'),
+    })
+  }
+  await writeFile(descriptorPath, `${JSON.stringify({ ...descriptor, files }, undefined, 2)}\n`, 'utf8')
+}
+
+async function isMachOFile(path: string): Promise<boolean> {
+  const handle = await open(path, 'r')
+  try {
+    const magic = Buffer.allocUnsafe(4)
+    const { bytesRead } = await handle.read(magic, 0, magic.length, 0)
+    return bytesRead === magic.length && MACH_O_MAGICS.has(magic.toString('hex'))
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Ad-hoc sign every native Python runtime or extension module with one identity. */
+export async function signPackagedSidecarMachO(appPath: string, runCommand: RunCommand = run): Promise<void> {
+  const sidecarRoot = join(resolve(appPath), 'Contents', 'Resources', 'investment-python')
+  const files: string[] = []
+  const pending = [sidecarRoot]
+  while (pending.length > 0) {
+    const directoryPath = pending.pop()
+    if (directoryPath === undefined) break
+    const directory = await opendir(directoryPath)
+    for await (const entry of directory) {
+      const entryPath = join(directoryPath, entry.name)
+      if (entry.isSymbolicLink()) throw new TypeError(`packaged sidecar contains a symbolic link: ${entryPath}`)
+      if (entry.isDirectory()) pending.push(entryPath)
+      else if (entry.isFile() && await isMachOFile(entryPath)) files.push(entryPath)
+    }
+  }
+  files.sort()
+  for (const file of files) {
+    await runCommand('codesign', ['--force', '--sign', '-', file], dirname(file))
+  }
+}
+
+/** Sign Electron helper processes with local-development library loading enabled. */
+export async function signPackagedElectronHelpers(appPath: string, runCommand: RunCommand = run): Promise<void> {
+  const frameworksDir = join(resolve(appPath), 'Contents', 'Frameworks')
+  const helpers: string[] = []
+  const frameworks = await opendir(frameworksDir)
+  for await (const entry of frameworks) {
+    if (entry.isDirectory() && entry.name.endsWith('.app')) helpers.push(join(frameworksDir, entry.name))
+  }
+  helpers.sort()
+  for (const helper of helpers) {
+    await runCommand('codesign', [
+      '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', '-', helper,
+    ], dirname(helper))
+  }
+}
 
 /**
  * Ad-hoc sign packaged macOS applications without recursively opening the app's
@@ -274,11 +492,20 @@ export async function signPackagedMacApplications(
   packagePaths: readonly string[],
   platform: NodeJS.Platform,
   runCommand: RunCommand = run,
+  refreshDescriptor: RefreshDescriptor = refreshPackagedSidecarDescriptor,
+  signSidecar: SignSidecar = signPackagedSidecarMachO,
+  signHelpers: SignHelpers = signPackagedElectronHelpers,
 ): Promise<void> {
   if (platform !== 'darwin') return
   for (const packagePath of packagePaths) {
-    const appPath = join(packagePath, `${APP_NAME}.app`)
+    const appPath = resolve(packagePath, `${appIdentity.name}.app`)
     await runCommand('codesign', ['--force', '--deep', '--sign', '-', appPath], dirname(appPath))
+    await signHelpers(appPath, runCommand)
+    await signSidecar(appPath, runCommand)
+    await refreshDescriptor(appPath)
+    await runCommand('codesign', [
+      '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', '-', appPath,
+    ], dirname(appPath))
   }
 }
 

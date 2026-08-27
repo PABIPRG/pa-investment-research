@@ -1,10 +1,12 @@
 import type { ForgeConfig } from '@electron-forge/shared-types'
+import { appIdentity } from './src/app-identity.ts'
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: false,
-    appBundleId: 'com.deepseek.harness',
-    executableName: 'deepseek-harness',
+    appBundleId: appIdentity.appBundleId,
+    executableName: appIdentity.executableName,
+    icon: appIdentity.iconPath,
     ignore: [
       /^\/(?:src|tests|out|lib\/types|\.cache|investment-python)(?:\/|$)/,
     ],

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import packageManifest from '../../package.json' with { type: 'json' }
 import type {
   SessionId, SessionSearchResultItem,
 } from '@deepseek-ai/dsh-client-runtime/client'
@@ -33,6 +34,8 @@ import type {
 import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
+
+export const INVESTMENT_APP_VERSION = packageManifest.version
 
 type ResourcePhase = 'idle' | 'loading' | 'refreshing' | 'success' | 'error'
 
@@ -287,7 +290,7 @@ export function InvestmentBrand({ compact }: InvestmentBrandProps) {
       <span className={css.brandMark}>✦</span>
       <span className={css.brandCopy}>
         <strong>投研智能体</strong>
-        <small>v2.4.0 · 智能投研系统</small>
+        <small>v{INVESTMENT_APP_VERSION} · 智能投研系统</small>
       </span>
     </div>
   )

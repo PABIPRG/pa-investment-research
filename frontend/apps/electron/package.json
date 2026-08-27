@@ -1,8 +1,8 @@
 {
   "name": "@deepseek-ai/dsh-electron",
-  "productName": "DeepSeek Harness",
-  "description": "Electron desktop application for DeepSeek Harness",
-  "version": "0.1.0-rc.5",
+  "productName": "投研智能体",
+  "description": "投研智能体 Electron 桌面应用",
+  "version": "0.1.0-rc.7",
   "author": "DeepSeek",
   "license": "MIT",
   "publishConfig": {
@@ -38,6 +38,10 @@
   },
   "config": {
     "forge": "./forge.config.ts"
+  },
+  "desktopIdentity": {
+    "appBundleId": "com.pa.investmentresearch",
+    "icon": "assets/app-icon.icns"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "workspace:^",

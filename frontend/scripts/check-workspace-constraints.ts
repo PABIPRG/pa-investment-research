@@ -308,6 +308,14 @@ function checkWorkspace({ dir, manifest }: WorkspaceManifest): string[] {
     }
   }
 
+  if (
+    (dir.startsWith('packages/') || dir.startsWith('apps/'))
+    && manifest.name?.startsWith('@deepseek-ai/dsh-')
+    && manifest.version !== repositoryVersion
+  ) {
+    errors.push(`${label}: package.json version must match root version ${repositoryVersion ?? '(missing)'}`)
+  }
+
   if (dir.startsWith('packages/') && manifest.name?.startsWith('@deepseek-ai/dsh-')) {
     const peer = manifest.peerDependencies?.['@deepseek-ai/cordis']
     const dev = manifest.devDependencies?.['@deepseek-ai/cordis']
@@ -316,9 +324,6 @@ function checkWorkspace({ dir, manifest }: WorkspaceManifest): string[] {
     if (!dev) errors.push(`${label}: @deepseek-ai/cordis must also be a devDependency`)
     if (peer && dev && peer !== dev) {
       errors.push(`${label}: @deepseek-ai/cordis peer (${peer}) and dev (${dev}) ranges must match`)
-    }
-    if (manifest.version !== repositoryVersion) {
-      errors.push(`${label}: package.json version must match root version ${repositoryVersion ?? '(missing)'}`)
     }
     if (manifest.type !== 'module') {
       errors.push(`${label}: package.json must set "type": "module"`)
