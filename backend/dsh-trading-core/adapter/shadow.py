@@ -106,7 +106,7 @@ class ShadowRunner:
     def _fetch_hist(self, sym: str, start: str, end: str) -> list:
         from .holdings_runner import _a_share_code, _bs_hist
 
-        return _bs_hist(_a_share_code(sym), start, end, fields="date,open,high,low,close")
+        return _bs_hist(_a_share_code(sym), start, end, fields="date,open,high,low,close,volume")
 
     def _active_strategies(self, strategy_id: str | None) -> list[dict]:
         if strategy_id:

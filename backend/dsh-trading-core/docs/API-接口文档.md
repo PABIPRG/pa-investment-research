@@ -367,7 +367,7 @@ POST /backtest/run
 
 ### 3.5 POST /strategies/run —— 策略历史+样本外回测
 
-对策略池一条候选（§4.14 生成）做**规则信号回测**：拉前复权日线 → 内联指标（ma/rsi/momentum，
+对策略池一条候选（§4.14 生成）做**规则信号回测**：拉前复权日线 → 内联指标（ma/rsi/momentum/breakout/bollinger/volume_breakout，
 纯 pandas）→ 全序列先算信号（因果、无 look-ahead）→ 按 `oos_frac` 切样本内(70%)/样本外(30%) →
 统一「bar t 信号 → bar t+1 开盘成交」状态机逐笔成交 → 样本内/外各聚合 + 合成组合等权净值曲线。
 
@@ -427,7 +427,7 @@ POST /strategies/run
 
 > `retired` 策略不会被回测擅自改回（退役优先）。
 > 成交约定：**bar t 信号 → bar t+1 开盘成交**（无 look-ahead）；序列末尾仍持仓按最后收盘强平
-> （`exit_reason="series_end"`）；系统只做多（利空事件强制 `rsi_reversal` 超跌反弹）。
+> （`exit_reason="series_end"`）；系统只做多（利空事件强制 `rsi_reversal`/`bollinger` 超跌反弹）。
 > 回测结果同时写回策略记录的 `backtest` 字段（§4.16 可查）。
 
 ### 3.6 POST /shadow/run —— 实时影子验证
@@ -713,7 +713,7 @@ POST /strategies/hypothesize
       "event_idx": 0,
       "symbols": ["600519", "000858"],
       "direction": "利好",
-      "kind": "momentum",                    // ma_cross | rsi_reversal | momentum
+      "kind": "momentum",                    // ma_cross | rsi_reversal | momentum | breakout | bollinger | volume_breakout
       "params": { "n": 10 },                 // 各 kind 默认参数（见 §6.8）
       "rationale": "事件因果一句话……",
       "holding_window_days": 20
@@ -725,8 +725,8 @@ POST /strategies/hypothesize
 { "candidates": [], "hypotheses": [], "note": "事件源暂无事件（market-watch 未开 / 无新事件）" }
 ```
 
-> **规则约束**：利好 → `ma_cross`（趋势跟随）或 `momentum`（动量）；利空 → 强制 `rsi_reversal`
-> （超跌反弹，系统只做多）；北交所 4/8 开头、B 股 2/9 开头代码被剔除；无 6 位可交易码的事件不生成。
+> **规则约束**：利好 → `ma_cross`（趋势跟随）/ `momentum`（动量）/ `breakout`（通道突破）/ `volume_breakout`（放量突破）；
+> 利空 → `rsi_reversal` 或 `bollinger`（超跌反弹，系统只做多）；北交所 4/8 开头、B 股 2/9 开头代码被剔除；无 6 位可交易码的事件不生成。
 > LLM 不可用/失败 → 规则降级（利好 momentum / 利空 rsi_reversal，rationale=事件摘要）。
 > 假设生成与候选入库走同一 `event_idx` 索引，校验失败的单条丢弃、其余继续。
 
@@ -1486,8 +1486,8 @@ type ProfileKey = 'conservative' | 'balanced' | 'aggressive'
 interface StrategyRecord {
   id: string                        // "strat-" + md5[:10]
   name: string                      // "利好·momentum·600519" / "利空·rsi_reversal·600519+2"
-  kind: 'ma_cross' | 'rsi_reversal' | 'momentum'
-  params: Record<string, number>    // ma_cross:{fast,slow} rsi_reversal:{n,oversold,overbought} momentum:{n}
+  kind: 'ma_cross' | 'rsi_reversal' | 'momentum' | 'breakout' | 'bollinger' | 'volume_breakout'
+  params: Record<string, number>    // ma_cross:{fast,slow} rsi_reversal:{n,oversold,overbought} momentum:{n} breakout:{n} bollinger:{n,k} volume_breakout:{n,vol_mult}
   symbols: string[]                 // 6 位 A 股代码（已剔北交所/B 股）
   direction: '利好' | '利空'
   hypothesis: string                // 假设因果一句话
@@ -1504,7 +1504,7 @@ interface StrategyHypothesis {      // hypothesize 的 hypotheses[]
   event_idx: number
   symbols: string[]
   direction: '利好' | '利空'
-  kind: 'ma_cross' | 'rsi_reversal' | 'momentum'
+  kind: 'ma_cross' | 'rsi_reversal' | 'momentum' | 'breakout' | 'bollinger' | 'volume_breakout'
   params: Record<string, number>
   rationale: string
   holding_window_days: number
