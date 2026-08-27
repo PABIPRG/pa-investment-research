@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { useState } from 'react'
+import { createElement, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { InvestmentShell } from '../src/client/InvestmentShell.tsx'
+import {
+  InvestmentAssistantModuleSelect, InvestmentShell,
+} from '../src/client/InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from '../src/client/assistant-intent.ts'
 import type {
   AssistantDisplayMode,
@@ -98,6 +100,12 @@ function renderHarness(
         prepareAssistant={openAssistant}
         toggleTheme={() => {}}
       />
+      {createElement(InvestmentAssistantModuleSelect, {
+        useInvestmentUi,
+        setAssistantModule: (assistantModule: AssistantModule) => {
+          setSnapshot(current => ({ ...current, assistantModule }))
+        },
+      } as never)}
       <textarea
         aria-label="模型输入框"
         value={composerDraft}
@@ -127,6 +135,11 @@ function assistantLauncher(): HTMLButtonElement {
   return launcher
 }
 
+function chooseAssistantModule(label: string): void {
+  fireEvent.click(screen.getByRole('button', { name: /^研究模块，当前：/ }))
+  fireEvent.click(screen.getByRole('menuitem', { name: label }))
+}
+
 describe('智能分析与全局 AI 助理回归', () => {
   it('始终保留结构化智能分析工作台，并在助理模式切换时保留两份业务输入', () => {
     renderHarness()
@@ -146,13 +159,16 @@ describe('智能分析与全局 AI 助理回归', () => {
     fireEvent.change(windowInput, { target: { value: '60' } })
 
     fireEvent.click(assistantLauncher())
-    expect(screen.getByTestId('assistant-panel').getAttribute('data-mode')).toBe('docked')
+    const docked = screen.getByTestId('assistant-panel')
+    expect(docked.getAttribute('data-mode')).toBe('docked')
+    expect(docked.querySelector('[data-icon="assistant-expand"]')).toBeTruthy()
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '近全屏展开 AI 助理' }))
     const expanded = screen.getByTestId('assistant-panel')
     expect(expanded.getAttribute('data-mode')).toBe('expanded')
     expect(expanded.getAttribute('role')).toBe('dialog')
+    expect(expanded.querySelector('[data-icon="assistant-collapse"]')).toBeTruthy()
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '收起 AI 助理' }))
@@ -234,16 +250,16 @@ describe('智能分析与全局 AI 助理回归', () => {
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
   })
 
-  it('模块下拉改变自然语言研究角色，但不覆盖用户已有草稿', () => {
+  it('输入框工具栏的模块选择改变研究角色，但不覆盖用户已有草稿', () => {
     renderHarness()
     fireEvent.click(assistantLauncher())
     const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' })
     fireEvent.change(composer, { target: { value: '请先比较供需拐点，再告诉我需要补充哪些证据。' } })
 
-    const moduleSelect = screen.getByRole<HTMLSelectElement>('combobox', { name: '选择 AI 研究模块' })
-    fireEvent.change(moduleSelect, { target: { value: 'industry' } })
+    chooseAssistantModule('产业链研究专家')
 
-    expect(moduleSelect.value).toBe('industry')
+    expect(screen.getByRole('button', { name: '研究模块，当前：产业链研究专家' })).toBeTruthy()
+    expect(screen.queryByText('上下文由工具按需读取，输入框不会写入业务 JSON。')).toBeNull()
     expect(screen.getByText('行业景气 · 上下游 · 影响传导')).toBeTruthy()
     expect(composer.value).toBe('请先比较供需拐点，再告诉我需要补充哪些证据。')
     expect(composer.value).not.toMatch(/[{}\[\]]/u)
@@ -254,16 +270,13 @@ describe('智能分析与全局 AI 助理回归', () => {
     fireEvent.click(assistantLauncher())
     const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' })
     fireEvent.change(composer, { target: { value: '这段内容不能进入新对话' } })
-    fireEvent.change(screen.getByRole('combobox', { name: '选择 AI 研究模块' }), {
-      target: { value: 'stock' },
-    })
+    chooseAssistantModule('个股研究专家')
 
     fireEvent.click(screen.getByRole('button', { name: '新对话' }))
 
     await waitFor(() => { expect(startSession).toHaveBeenCalledOnce() })
     expect(composer.value).toBe('')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '选择 AI 研究模块' }).value)
-      .toBe('general')
+    expect(screen.getByRole('button', { name: '研究模块，当前：通用研究' })).toBeTruthy()
   })
 
   it('持仓摘要不可用时禁止提交持仓分析任务', async () => {
@@ -305,9 +318,7 @@ describe('智能分析与全局 AI 助理回归', () => {
     expect(prepareAssistant).toHaveBeenCalledOnce()
     expect(prepareAssistant.mock.calls[0]?.[1]).toBe(assistantModule)
     expect(screen.getByTestId('assistant-panel').getAttribute('data-mode')).toBe('docked')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '选择 AI 研究模块' }).value)
-      .toBe(assistantModule)
-    expect(screen.getByRole('option', { name: assistantLabel }).getAttribute('value')).toBe(assistantModule)
+    expect(screen.getByRole('button', { name: `研究模块，当前：${assistantLabel}` })).toBeTruthy()
 
     const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' })
     expect(composer.value).not.toBe('')

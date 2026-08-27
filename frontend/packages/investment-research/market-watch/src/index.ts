@@ -480,3 +480,5 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     }
   }, 'investment market-watch runtime lifecycle')
 }
+
+export default Object.assign(apply, { Config, inject })

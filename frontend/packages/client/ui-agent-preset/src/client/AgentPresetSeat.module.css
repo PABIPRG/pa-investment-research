@@ -12,7 +12,7 @@
   border-radius: 16px;
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  font-size: 13px;
+  font-size: 0.9286rem;
   line-height: 20px;
   font-weight: 500;
   white-space: nowrap;
@@ -106,13 +106,13 @@
 }
 
 .itemName {
-  font-size: 13px;
+  font-size: 0.9286rem;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
 }
 
 .itemDesc {
-  font-size: 12px;
+  font-size: 0.8571rem;
   line-height: 16px;
   color: var(--dsw-alias-label-caption);
   white-space: normal;

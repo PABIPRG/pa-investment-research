@@ -668,6 +668,22 @@ def _normalize_symbol(code) -> str | None:
     return s
 
 
+def _strategy_tickers(event: dict, symbols: list[str]) -> list[dict[str, str]]:
+    """保留事件源返回的证券名称，未匹配的间接标的只保留代码。"""
+    names: dict[str, str] = {}
+    for item in event.get("tickers") or []:
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_symbol(item.get("code"))
+        name = str(item.get("name") or "").strip()
+        if code and name and name != code:
+            names[code] = name
+    return [
+        {"code": code, **({"name": names[code]} if code in names else {})}
+        for code in symbols
+    ]
+
+
 def _clamp_params(kind: str, params: dict) -> dict:
     default = dict(_DEFAULT_PARAMS.get(kind, {}))
     if kind == "ma_cross":
@@ -709,10 +725,12 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
             kind = "rsi_reversal"  # 系统只做多
         params = _clamp_params(kind, h.get("params") or {})
         sid = "strat-" + _str2md5(ev.get("id", "") + kind + "".join(sorted(symbols)))
-        name = f"{direction}·{kind}·{symbols[0]}{('+' + str(len(symbols) - 1)) if len(symbols) > 1 else ''}"
+        tickers = _strategy_tickers(ev, symbols)
+        display_names = [ticker.get("name") or ticker["code"] for ticker in tickers]
+        name = "、".join(display_names[:2]) + (f"等{len(display_names)}只" if len(display_names) > 2 else "")
         candidate = {
             "id": sid, "name": name, "kind": kind, "params": params,
-            "symbols": symbols, "direction": direction,
+            "symbols": symbols, "tickers": tickers, "direction": direction,
             "hypothesis": h.get("rationale") or ev.get("summary") or "",
             "source_event_id": ev.get("id", ""),
             "source_event_summary": ev.get("summary") or "",

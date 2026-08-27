@@ -5,12 +5,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import {
   InvestmentShell,
+  InvestmentAssistantModuleSelect,
   InvestmentBrand,
   InvestmentNewSession,
   InvestmentWelcome,
   InvestmentSidebar,
   assistantModulePrompt,
   type InvestmentShellInjected,
+  type InvestmentAssistantModuleInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
@@ -23,8 +25,13 @@ import {
   type InvestmentRoute,
 } from './state.ts'
 
-export { InvestmentBrand, InvestmentNewSession, InvestmentShell, InvestmentSidebar, InvestmentWelcome } from './InvestmentShell.tsx'
+export {
+  InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentNewSession,
+  InvestmentShell, InvestmentSidebar, InvestmentWelcome,
+} from './InvestmentShell.tsx'
 export type {
+  InvestmentAssistantModuleInjected,
+  InvestmentAssistantModuleProps,
   InvestmentBrandProps,
   InvestmentNewSessionProps,
   InvestmentWelcomeProps,
@@ -120,6 +127,11 @@ export function apply(ctx: ClientContext): void {
     if (prompt !== '') input.setDraft(prompt)
   }
 
+  const selectAssistantModule = (module: AssistantModule): void => {
+    state.setAssistantModule(module)
+    applyModulePromptToBlankDraft(module)
+  }
+
   const prepareAssistant = (intent: AssistantIntent, moduleOverride?: AssistantModule): void => {
     const prompt = assistantPrompt(intent)
     const module: AssistantModule = moduleOverride ?? (intent.kind === 'stock' ? 'stock'
@@ -172,10 +184,7 @@ export function apply(ctx: ClientContext): void {
     setHistory: (open) => { state.setHistory(open) },
     setReports: (open) => { state.setReports(open) },
     setAssistantMode: (mode: AssistantDisplayMode) => { state.setAssistantMode(mode) },
-    setAssistantModule: (module: AssistantModule) => {
-      state.setAssistantModule(module)
-      applyModulePromptToBlankDraft(module)
-    },
+    setAssistantModule: selectAssistantModule,
     setModuleDraft: (key: InvestmentDraftKey, value: string) => { state.setDraft(key, value) },
     selectStrategy: (strategyId) => { state.selectStrategy(strategyId) },
     startSession: async () => {
@@ -259,6 +268,16 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.hero.welcome',
     priority: -100,
   }, InvestmentWelcome))
+
+  ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
+    name: 'conversation.input.left',
+    id: 'investment-assistant-module',
+    order: -100,
+    inject: (): InvestmentAssistantModuleInjected => ({
+      hooks: { investmentUi: state },
+      setAssistantModule: selectAssistantModule,
+    }),
+  }, InvestmentAssistantModuleSelect))
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',

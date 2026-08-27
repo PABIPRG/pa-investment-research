@@ -7,6 +7,7 @@ import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { apply, inject } from '../src/client/index.ts'
 import {
   InvestmentBrand,
+  InvestmentAssistantModuleSelect,
   InvestmentNewSession,
   InvestmentWelcome,
   InvestmentShell,
@@ -19,6 +20,7 @@ afterEach(() => {
   cleanup()
   delete document.body.dataset.investmentWorkbenchActive
   delete document.body.dataset.investmentAssistantMode
+  document.body.removeAttribute('data-ds-dark-theme')
 })
 
 const UI_SNAPSHOT: InvestmentUiSnapshot = {
@@ -51,6 +53,7 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
       'sidebar.newSession': { kind: 'single', scope: 'root' },
       'sidebar.workspaces': { kind: 'single', scope: 'root' },
       'conversation.hero.welcome': { kind: 'single', scope: 'root' },
+      'conversation.input.left': { kind: 'list', scope: 'session' },
       'shell.overlay': { kind: 'list', scope: 'root' },
     },
   } as never, () => null)
@@ -154,7 +157,9 @@ describe('ui-investment-research apply', () => {
       toggleTheme,
     } as never))
 
-    fireEvent.click(view.getByRole('button', { name: '切换深色或浅色模式' }))
+    const themeButton = view.getByRole('button', { name: '当前浅色模式，切换为深色模式' })
+    expect(themeButton.querySelector('svg')?.dataset.icon).toBe('sun')
+    fireEvent.click(themeButton)
     expect(toggleTheme).toHaveBeenCalledOnce()
 
     const input = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
@@ -169,25 +174,104 @@ describe('ui-investment-research apply', () => {
     expect(navigate).toHaveBeenCalledWith('stock-detail', { stockCode: '600519' })
   })
 
+  it('根据当前主题显示太阳或月亮图标', async () => {
+    const view = render(createElement(InvestmentShell, {
+      useInvestmentUi: useUi(),
+      requestData: vi.fn(async () => ({ items: [] })),
+      navigate: vi.fn(),
+      setHistory: vi.fn(),
+      setReports: vi.fn(),
+      setAssistantMode: vi.fn(),
+      setModuleDraft: vi.fn(),
+      selectStrategy: vi.fn(),
+      startSession: vi.fn(),
+      openSession: vi.fn(),
+      searchSessions: vi.fn(),
+      renameSession: vi.fn(),
+      archiveSession: vi.fn(),
+      prepareAssistant: vi.fn(),
+      toggleTheme: vi.fn(),
+    } as never))
+
+    expect(view.getByRole('button', { name: '当前浅色模式，切换为深色模式' }).querySelector('svg')?.dataset.icon).toBe('sun')
+    document.body.setAttribute('data-ds-dark-theme', '')
+    await waitFor(() => {
+      expect(view.getByRole('button', { name: '当前深色模式，切换为浅色模式' }).querySelector('svg')?.dataset.icon).toBe('moon')
+    })
+  })
+
+  it('打开历史会话成功后自动收起历史面板', async () => {
+    const sessionId = 'history-session' as never
+    const setHistory = vi.fn()
+    const openSession = vi.fn(async () => {})
+    const sessionsSnapshot = {
+      ids: [sessionId],
+      byId: {
+        [sessionId]: {
+          id: sessionId,
+          displayTitle: '深度分析股票688835研究结论',
+          running: false,
+          blank: false,
+          updatedAt: Date.now(),
+        },
+      },
+      current: undefined,
+      phase: 'ready',
+      subagentsByParent: {},
+      jobsBySession: {},
+      currentAddress: undefined,
+    }
+    const workspacesSnapshot = { archivedSessionIds: [] }
+    const view = render(createElement(InvestmentShell, {
+      useInvestmentUi: useUi({ historyOpen: true, assistantMode: 'docked' }),
+      useSessions: (selector: (value: typeof sessionsSnapshot) => unknown) => selector(sessionsSnapshot),
+      useWorkspaces: (selector: (value: typeof workspacesSnapshot) => unknown) => selector(workspacesSnapshot),
+      requestData: vi.fn(async () => ({ items: [] })),
+      navigate: vi.fn(),
+      setHistory,
+      setReports: vi.fn(),
+      setAssistantMode: vi.fn(),
+      setModuleDraft: vi.fn(),
+      selectStrategy: vi.fn(),
+      startSession: vi.fn(),
+      openSession,
+      searchSessions: vi.fn(async () => []),
+      renameSession: vi.fn(async () => {}),
+      archiveSession: vi.fn(async () => {}),
+      prepareAssistant: vi.fn(),
+      toggleTheme: vi.fn(),
+    } as never))
+
+    fireEvent.click(view.getByRole('button', { name: /深度分析股票688835研究结论/ }))
+    expect(openSession).toHaveBeenCalledWith(sessionId)
+    await waitFor(() => { expect(setHistory).toHaveBeenCalledWith(false) }, { timeout: 1_500 })
+  })
+
   it('loads an independent stock detail page and hands the resolved security to the assistant', async () => {
     const prepareAssistant = vi.fn()
-    const requestData = vi.fn(async () => ({
-      code: '600519',
-      name: '贵州茅台',
-      as_of: '2026-08-25 09:30:00',
-      quote: { price: 1450, pct_change: 1.2, turnover: 0.5, volume_ratio: 1.1, amount_yi: 12.3 },
-      fund_flow_yi: 1.25,
-      technical: {
-        bars: 120,
-        last: { open: 1430, high: 1460, low: 1420, close: 1450 },
-        indicators: {
-          ma: { ma20: 1410, ma60: 1390 },
-          support_resistance: { support: 1380, resistance: 1480 },
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.holdings') return { items: [] }
+      if (request.operation === 'market-watch.watchlist') return { items: [] }
+      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
+      if (request.operation !== 'market-watch.security-detail') return { ok: true }
+      return {
+        code: '600519',
+        name: '贵州茅台',
+        as_of: '2026-08-25 09:30:00',
+        quote: { price: 1450, pct_change: 1.2, turnover: 0.5, volume_ratio: 1.1, amount_yi: 12.3 },
+        fund_flow_yi: 1.25,
+        technical: {
+          bars: 120,
+          last: { open: 1430, high: 1460, low: 1420, close: 1450 },
+          indicators: {
+            ma: { ma20: 1410, ma60: 1390 },
+            support_resistance: { support: 1380, resistance: 1480 },
+          },
+          signals: ['MA 多头排列'],
         },
-        signals: ['MA 多头排列'],
-      },
-      news: [{ title: '公司发布经营数据', source: '东财', time: '10:00' }],
-    }))
+        news: [{ title: '公司发布经营数据', source: '东财', time: '10:00' }],
+      }
+    })
     const view = render(createElement(InvestmentShell, {
       useInvestmentUi: useUi({ route: 'stock-detail', selectedStockCode: '600519' }),
       requestData,
@@ -209,6 +293,28 @@ describe('ui-investment-research apply', () => {
     expect(await view.findByRole('heading', { name: '贵州茅台 · 600519' })).toBeTruthy()
     expect(view.getByText('MA 多头排列')).toBeTruthy()
     expect(view.getByText('公司发布经营数据')).toBeTruthy()
+
+    await waitFor(() => { expect((view.getByRole('button', { name: '加入自选' }) as HTMLButtonElement).disabled).toBe(false) })
+    fireEvent.click(view.getByRole('button', { name: '加入自选' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'market-watch.watch-add', input: { code: '600519', name: '贵州茅台' },
+      })
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.watchlist-save', input: { tickers: ['600519'] },
+      })
+    })
+
+    await waitFor(() => { expect((view.getByRole('button', { name: '加入持仓' }) as HTMLButtonElement).disabled).toBe(false) })
+    fireEvent.click(view.getByRole('button', { name: '加入持仓' }))
+    expect(view.getByRole('dialog', { name: '加入持仓 · 贵州茅台' })).toBeTruthy()
+    fireEvent.click(view.getByRole('button', { name: '确认加入持仓' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-save',
+        input: { holdings: [{ ticker: '600519', quantity: 100, cost_price: 1450 }] },
+      })
+    })
 
     fireEvent.click(view.getByRole('button', { name: '带入智能分析' }))
     expect(prepareAssistant).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' })
@@ -372,6 +478,7 @@ describe('ui-investment-research apply', () => {
     const newSession = b.slots.entries('sidebar.newSession')[0]!
     const shell = b.slots.entries('shell.overlay')[0]!
     const welcome = b.slots.entries('conversation.hero.welcome')[0]!
+    const assistantModule = b.slots.entries('conversation.input.left')[0]!
     expect(sidebar.component).toBe(InvestmentSidebar)
     expect(brand.component).toBe(InvestmentBrand)
     expect(brand.options.priority).toBe(-100)
@@ -380,6 +487,8 @@ describe('ui-investment-research apply', () => {
     expect(sidebar.options.priority).toBe(-100)
     expect(shell.component).toBe(InvestmentShell)
     expect(welcome.component).toBe(InvestmentWelcome)
+    expect(assistantModule.component).toBe(InvestmentAssistantModuleSelect)
+    expect(assistantModule.options).toMatchObject({ id: 'investment-assistant-module', order: -100 })
     expect(welcome.options.priority).toBe(-100)
     expect(shell.options).toMatchObject({ id: 'investment-research-shell', order: -100 })
     expect(document.body.dataset.investmentResearchUi).toBe('')

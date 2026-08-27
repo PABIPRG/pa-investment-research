@@ -84,7 +84,7 @@
 .crumbSep {
   /* figma: "/" separators are 14px caption gray (75:7903), one tint lighter than crumb text. */
   color: var(--dsw-alias-label-caption);
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 20px;
 }
 
@@ -95,7 +95,7 @@
   border: none;
   border-radius: 12px;
   background: transparent;
-  font-size: 14px;
+  font-size: 1rem;
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
   text-overflow: ellipsis;
@@ -148,7 +148,7 @@
   padding: 0 0 11px;
   border: none;
   background: transparent;
-  font-size: 13px;
+  font-size: 0.9286rem;
   line-height: 16px;
   font-weight: 500;
   color: var(--dsw-alias-label-tertiary);

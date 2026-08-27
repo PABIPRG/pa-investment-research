@@ -474,14 +474,12 @@ function groupedDump(
 }
 
 function importHostOwnedModule(
-  loader: Loader,
   name: string,
   bareModuleBaseUrl: string,
   fallback: (specifier: string) => unknown,
 ): unknown {
   if (isAbsolute(name)) return fallback(pathToFileURL(name).href)
   if (name.startsWith('.') || name.startsWith('cordis:')) return fallback(name)
-  if (loader.internal !== undefined) return loader.internal.import(name, bareModuleBaseUrl, {})
   const resolved = createRequire(bareModuleBaseUrl).resolve(name)
   return fallback(pathToFileURL(resolved).href)
 }
@@ -508,7 +506,6 @@ export async function mountRootInclude(
     : class HostResolvedRootInclude extends Include {
       override import(name: string, getOuterStack?: () => string[]): unknown {
         return importHostOwnedModule(
-          this.ctx.loader,
           name,
           bareModuleBaseUrl,
           specifier => super.import(specifier, getOuterStack),
@@ -787,7 +784,6 @@ export async function boot(
       await ctx.plugin(class HostResolvedLoader extends Loader {
         override import(name: string, getOuterStack?: () => string[]): unknown {
           return importHostOwnedModule(
-            this,
             name,
             bareModuleBaseUrl,
             specifier => super.import(specifier, getOuterStack),

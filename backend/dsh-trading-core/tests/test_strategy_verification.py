@@ -29,7 +29,10 @@ from adapter.task_report_render import render_strategy_report
 
 class StrategyVerificationTests(unittest.TestCase):
     def test_new_candidate_starts_pending_without_changing_lifecycle(self):
-        event = {"id": "event-1", "summary": "产业订单改善"}
+        event = {
+            "id": "event-1", "summary": "产业订单改善",
+            "tickers": [{"code": "600519", "name": "贵州茅台"}],
+        }
         hypothesis = {
             "event_idx": 0,
             "kind": "momentum",
@@ -47,6 +50,8 @@ class StrategyVerificationTests(unittest.TestCase):
             strategy = store.get("strategies", strategy_ids[0])
             self.assertEqual(strategy["status"], "candidate")
             self.assertEqual(strategy["verification_status"], "pending")
+            self.assertEqual(strategy["name"], "贵州茅台")
+            self.assertEqual(strategy["tickers"], [{"code": "600519", "name": "贵州茅台"}])
 
     def test_latest_evidence_projects_verification_without_lifecycle_guessing(self):
         self.assertEqual(

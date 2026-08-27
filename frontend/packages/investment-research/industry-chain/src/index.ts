@@ -80,3 +80,5 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
     }
   }, 'investment industry-chain runtime lifecycle')
 }
+
+export default Object.assign(apply, { Config, inject })

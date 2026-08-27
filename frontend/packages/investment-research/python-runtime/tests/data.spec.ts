@@ -158,6 +158,8 @@ describe('investment data broker', () => {
     await requestInvestmentData({ operation: 'trading-core.reports', input: { limit: 12, task_type: 'strategy' } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.report', input: { report_id: '11111111111111111111111111111111' } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.strategies', input: { limit: 25 } }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.watchlist' }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.watchlist-save', input: { tickers: ['600519', '000858'] } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.strategies-hypothesize', input: { limit: 8, dry_run: true } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.strategy-transition', input: { strategy_id: 'strategy:alpha', action: 'activate' } }, acquire)
     await requestInvestmentData({
@@ -170,6 +172,7 @@ describe('investment data broker', () => {
     await requestInvestmentData({ operation: 'trading-core.shadow-run', input: { force: true, strategy_id: 'strategy:alpha' } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.evolution-status' }, acquire)
     await requestInvestmentData({ operation: 'trading-core.evolution-attribution' }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.evolution-preview' }, acquire)
     await requestInvestmentData({
       operation: 'trading-core.evolution-run',
       input: { apply: true, preview_token: '3'.repeat(32) },
@@ -184,6 +187,8 @@ describe('investment data broker', () => {
       ['http://127.0.0.1:8000/reports?limit=12&task_type=strategy', 'GET', undefined],
       ['http://127.0.0.1:8000/reports/11111111111111111111111111111111', 'GET', undefined],
       ['http://127.0.0.1:8000/strategies?limit=25', 'GET', undefined],
+      ['http://127.0.0.1:8000/watchlist', 'GET', undefined],
+      ['http://127.0.0.1:8000/watchlist', 'POST', '{"tickers":["600519","000858"]}'],
       ['http://127.0.0.1:8000/strategies/hypothesize', 'POST', '{"limit":8,"dry_run":true}'],
       ['http://127.0.0.1:8000/strategies/strategy%3Aalpha/activate', 'POST', undefined],
       ['http://127.0.0.1:8000/strategies/run', 'POST', '{"strategy_id":"strategy:alpha","lookback_years":3,"oos_frac":0.25,"initial_capital":100000,"min_oos_trades":5}'],
@@ -193,6 +198,7 @@ describe('investment data broker', () => {
       ['http://127.0.0.1:8000/shadow/run', 'POST', '{"force":true,"strategy_id":"strategy:alpha"}'],
       ['http://127.0.0.1:8000/evolution/status', 'GET', undefined],
       ['http://127.0.0.1:8000/evolution/attribution', 'GET', undefined],
+      ['http://127.0.0.1:8000/evolution/preview', 'GET', undefined],
       ['http://127.0.0.1:8000/evolution/run', 'POST', `{"apply":true,"preview_token":"${'3'.repeat(32)}"}`],
       ['http://127.0.0.1:8000/personalized/matches', 'GET', undefined],
       ['http://127.0.0.1:8000/personalized/impact?limit=9', 'GET', undefined],
@@ -200,8 +206,8 @@ describe('investment data broker', () => {
       ['http://127.0.0.1:8000/analyze/22222222222222222222222222222222', 'GET', undefined],
       ['http://127.0.0.1:8000/analyze/22222222222222222222222222222222/result', 'GET', undefined],
     ])
-    expect(acquire).toHaveBeenCalledTimes(18)
-    expect(release).toHaveBeenCalledTimes(18)
+    expect(acquire).toHaveBeenCalledTimes(21)
+    expect(release).toHaveBeenCalledTimes(21)
   })
 
   it('rejects unsafe path identifiers, unsupported transitions and unknown workflow keys before acquiring', async () => {

@@ -17,6 +17,31 @@ function renderStrategyPage(requestData: ReturnType<typeof vi.fn>) {
 }
 
 describe('策略研究产品事实与确认流程', () => {
+  it('候选卡以股票名称和涨跌色标签展示，不暴露机器策略名', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return {
+          items: [{
+            id: 'legacy-rsi', name: '利空·rsi_reversal·600519', kind: 'rsi_reversal',
+            status: 'candidate', verification_status: 'pending', direction: '利空',
+            symbols: ['600519'], hypothesis: '短期超卖后观察反弹。',
+          }],
+        }
+      }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: request.input?.query, name: '贵州茅台' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    expect(await screen.findByText('贵州茅台 · 600519')).toBeTruthy()
+    expect(screen.getByText('超跌反弹')).toBeTruthy()
+    const direction = screen.getByText('利空')
+    expect(direction.getAttribute('data-direction')).toBe('利空')
+    expect(screen.queryByText('利空·rsi_reversal·600519')).toBeNull()
+  })
+
   it('参数缺失时不补造默认规则，未知类型也不解释成动量策略', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.strategies') {

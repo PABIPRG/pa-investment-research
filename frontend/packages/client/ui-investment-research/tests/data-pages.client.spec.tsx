@@ -158,7 +158,7 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.getByText('浦发银行')).toBeTruthy()
     expect(screen.getByRole('status').textContent).toContain('正在更新持仓数据')
     fireEvent.click(busyButton)
-    expect(requestData).toHaveBeenCalledTimes(8)
+    expect(requestData).toHaveBeenCalledTimes(12)
 
     await act(async () => {
       nextHoldings.resolve({ items: [{ ticker: '000001', name: '平安银行', quantity: 200, cost_price: 11 }] })
@@ -173,7 +173,7 @@ describe('投研数据页慢请求状态', () => {
     const alert = screen.getByRole('alert')
     expect(alert.textContent).toContain('组合风险更新失败')
     expect(alert.textContent).toContain('risk engine unavailable')
-    expect(screen.getByRole('status').textContent).toContain('已显示 4/4 项')
+    expect(screen.getByRole('status').textContent).toContain('已显示 6/6 项')
   })
 
   it('筛选切换以新一代结果为准，晚到响应不会覆盖当前列表', async () => {
@@ -219,6 +219,8 @@ describe('投研数据页慢请求状态', () => {
       if (request.operation === 'trading-core.risk-portfolio') return risk.promise
       if (request.operation === 'trading-core.risk-alerts') return alerts.promise
       if (request.operation === 'trading-core.personalized-cards') return events.promise
+      if (request.operation === 'market-watch.watchlist') return Promise.resolve({ items: [] })
+      if (request.operation === 'trading-core.watchlist') return Promise.resolve({ tickers: [] })
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
@@ -228,11 +230,13 @@ describe('投研数据页慢请求状态', () => {
       </StrictMode>,
     )
 
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(4) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(6) })
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-portfolio')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-alerts')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.personalized-cards')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.watchlist')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.watchlist')).toHaveLength(1)
 
     await act(async () => {
       holdings.resolve({ items: [{ ticker: '600036', name: '招商银行', quantity: 100, cost_price: 40 }] })
@@ -243,7 +247,7 @@ describe('投研数据页慢请求状态', () => {
 
     await screen.findByText('招商银行')
     expect(screen.getByText('平衡')).toBeTruthy()
-    expect(screen.getByRole('status').textContent).toContain('共 4/4 项可用')
+    expect(screen.getByRole('status').textContent).toContain('共 6/6 项可用')
   })
 
   it('A-B-A 筛选复用仍未完成的 A flight，并由最后一次 A 选择接收结果', async () => {
@@ -289,10 +293,11 @@ describe('投研数据页慢请求状态', () => {
 
     render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
 
-    await waitFor(() => { expect(screen.getAllByRole('alert')).toHaveLength(4) })
+    await waitFor(() => { expect(screen.getAllByRole('alert')).toHaveLength(5) })
     expect(screen.getByRole('button', { name: '重试组合风险暂不可用' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '重试持仓暂不可用' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '重试风险预警暂不可用' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '重试研究事件暂不可用' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '重试自选股暂不可用' })).toBeTruthy()
   })
 })

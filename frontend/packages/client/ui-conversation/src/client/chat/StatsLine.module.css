@@ -11,7 +11,7 @@
   margin: 0 auto;
   box-sizing: border-box;
   padding: 4px calc(var(--dsh-composer-side-clearance) + 16px) 0px;
-  font-size: 12px;
+  font-size: 0.8571rem;
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
   white-space: nowrap;
