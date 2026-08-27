@@ -48,10 +48,6 @@ interface PackagerOptionsInput {
   stagingDir: string
 }
 
-type PackagerOsxSignOptions = Exclude<PackagerOptions['osxSign'], true | undefined> & {
-  continueOnError: boolean
-}
-
 /**
  * Report whether Node must invoke a command through the Windows command shell.
  * @param command - Executable or command-script path.
@@ -226,12 +222,6 @@ async function copySidecarTree(source: string, destination: string): Promise<voi
  * @returns Options for the existing Electron packager and signing pipeline.
  */
 export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
-  const osxSign = {
-    continueOnError: false,
-    identity: '-',
-    identityValidation: false,
-  } satisfies PackagerOsxSignOptions
-
   return {
     appBundleId: 'com.deepseek.harness',
     arch: input.arch,
@@ -250,9 +240,6 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     name: APP_NAME,
     out: input.outDir,
     overwrite: true,
-    ...(input.platform === 'darwin' ? {
-      osxSign,
-    } : {}),
     platform: input.platform,
     prune: false,
   }
@@ -275,6 +262,24 @@ async function run(command: string, args: string[], cwd: string): Promise<void> 
       reject(new Error(`${command} exited with ${signal ?? code}`))
     })
   })
+}
+
+type RunCommand = (command: string, args: string[], cwd: string) => Promise<void>
+
+/**
+ * Ad-hoc sign packaged macOS applications without recursively opening the app's
+ * entire pnpm tree in Node. The system codesign traversal keeps descriptor use bounded.
+ */
+export async function signPackagedMacApplications(
+  packagePaths: readonly string[],
+  platform: NodeJS.Platform,
+  runCommand: RunCommand = run,
+): Promise<void> {
+  if (platform !== 'darwin') return
+  for (const packagePath of packagePaths) {
+    const appPath = join(packagePath, `${APP_NAME}.app`)
+    await runCommand('codesign', ['--force', '--deep', '--sign', '-', appPath], dirname(appPath))
+  }
 }
 
 async function packageApplication(): Promise<void> {
@@ -300,7 +305,7 @@ async function packageApplication(): Promise<void> {
       platform: process.platform,
       version: electronVersion,
     })
-    await packager(createPackagerOptions({
+    const appPaths = await packager(createPackagerOptions({
       arch: process.arch,
       electronVersion,
       electronZipDir: dirname(electronZip),
@@ -309,6 +314,7 @@ async function packageApplication(): Promise<void> {
       stagingDir: plan.stagingDir,
       outDir: join(appDir, 'out'),
     }))
+    await signPackagedMacApplications(appPaths, process.platform)
   } finally {
     await removePackagingRoot(plan.rootDir)
   }
