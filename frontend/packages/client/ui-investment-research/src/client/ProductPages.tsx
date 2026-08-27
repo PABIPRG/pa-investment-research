@@ -79,6 +79,53 @@ function tickerLabels(value: unknown): string[] {
   })
 }
 
+interface StrategyTicker {
+  readonly code: string
+  readonly name: string
+}
+
+function strategyTickers(item: Record<string, unknown>): StrategyTicker[] {
+  const embedded = Array.isArray(item.tickers) ? item.tickers : []
+  const byCode = new Map<string, string>()
+  for (const value of embedded) {
+    const ticker = asRecord(value)
+    const code = text(ticker.code, '').trim()
+    const name = text(ticker.name, '').trim()
+    if (code !== '') byCode.set(code, name)
+  }
+  for (const code of strings(item.symbols)) {
+    if (!byCode.has(code)) byCode.set(code, '')
+  }
+  return [...byCode].map(([code, name]) => ({ code, name }))
+}
+
+function strategyKindLabel(value: unknown): string {
+  const kind = text(value, '')
+  return {
+    ma_cross: '均线趋势',
+    rsi_reversal: '超跌反弹',
+    momentum: '动量跟随',
+  }[kind] ?? (kind === '' ? '策略类型未返回' : '其他策略')
+}
+
+function strategyDirectionLabel(value: unknown): string {
+  const direction = text(value, '').trim()
+  const normalized = direction.toLowerCase()
+  if (['利好', 'long', 'bullish', 'positive', 'up'].includes(normalized)) return '利好'
+  if (['利空', 'short', 'bearish', 'negative', 'down'].includes(normalized)) return '利空'
+  return direction
+}
+
+function strategyTargetLabel(item: Record<string, unknown>, resolved: Readonly<Record<string, string>>): string {
+  const tickers = strategyTickers(item)
+  const labels = tickers.map((ticker) => {
+    const name = ticker.name || resolved[ticker.code] || ''
+    return name === '' || name === ticker.code ? ticker.code : `${name} · ${ticker.code}`
+  })
+  if (labels.length > 0) return labels.slice(0, 2).join('、') + (labels.length > 2 ? `等${labels.length}只` : '')
+  return text(item.name, text(item.id, '未命名策略'))
+}
+
 function useAliveRef() {
   const alive = useRef(true)
   useEffect(() => {
@@ -439,6 +486,37 @@ export function StrategyResearchPage({
   }, [strategies.run])
   useEffect(load, [load])
   const items = records(asRecord(strategies.state.value).items)
+  const unresolvedSymbolKey = [...new Set(items.flatMap(item => (
+    strategyTickers(item).filter(ticker => ticker.name === '').map(ticker => ticker.code)
+  )))].sort().join('|')
+  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const codes = unresolvedSymbolKey === '' ? [] : unresolvedSymbolKey.split('|')
+    if (codes.length === 0) return
+    const requestState = { cancelled: false }
+    void (async () => {
+      // The desktop bridge intentionally limits concurrent backend requests. Resolve
+      // legacy strategy symbols in small batches so one large strategy pool does not
+      // leave most cards stuck on machine codes after request saturation.
+      for (let start = 0; start < codes.length; start += 3) {
+        const batch = codes.slice(start, start + 3)
+        const resolved = await Promise.all(batch.map(async (code): Promise<readonly [string, string]> => {
+          try {
+            const result = asRecord(await requestData({
+              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
+            }))
+            const match = records(result.items).find(item => text(item.code, '').trim() === code)
+            return [code, text(match?.name, '').trim()] as const
+          } catch {
+            return [code, ''] as const
+          }
+        }))
+        if (requestState.cancelled) return
+        setSecurityNames(current => ({ ...current, ...Object.fromEntries(resolved) }))
+      }
+    })()
+    return () => { requestState.cancelled = true }
+  }, [requestData, unresolvedSymbolKey])
   const filteredItems = filter === 'all' ? items : items.filter(item => strategyCategory(item) === filter)
   const categoryCounts = items.reduce<Record<StrategyCategory, number>>((counts, item) => {
     const category = strategyCategory(item)
@@ -598,10 +676,16 @@ export function StrategyResearchPage({
             const outOfSample = asRecord(backtest.out_of_sample)
             const outOfSampleTrades = number(outOfSample.trades) ?? number(outOfSample.n_evaluated)
             const selected = selectedStrategyId === id
+            const direction = strategyDirectionLabel(item.direction)
+            const holdingWindow = number(item.holding_window_days)?.toFixed(0)
             return (
               <article key={id} className={`${css.moduleCard} ${css.strategyCard} ${selected ? css.reportItemActive : ''}`}>
                 <div className={css.sectionHeading}>
-                  <div><strong>{text(item.name, id)}</strong><small>{text(item.kind, '未标注策略类型')}</small></div>
+                  <div className={css.strategyCardTitle}>
+                    {direction !== '' && <span data-direction={direction}>{direction}</span>}
+                    <strong>{strategyTargetLabel(item, securityNames)}</strong>
+                    <small>{strategyKindLabel(item.kind)}</small>
+                  </div>
                   <div className={css.strategyCardBadges}>
                     <span>{STRATEGY_CATEGORY_LABELS[category]}</span>
                     <StatusBadge value={status} />
@@ -609,8 +693,8 @@ export function StrategyResearchPage({
                 </div>
                 <p>{text(item.hypothesis, text(item.thesis, '后端未返回策略假设。'))}</p>
                 <dl className={css.reportMeta}>
-                  <div><dt>方向</dt><dd>{text(item.direction, '未返回')}</dd></div>
                   <div><dt>标的数</dt><dd>{strings(item.symbols).length || '—'}</dd></div>
+                  <div><dt>建议观察</dt><dd>{holdingWindow === undefined ? '—' : `${holdingWindow} 天`}</dd></div>
                   <div><dt>样本外胜率</dt><dd>{compactMetric(outOfSample.win_rate_pct, '%')}</dd></div>
                   <div><dt>样本外交易</dt><dd>{outOfSampleTrades?.toFixed(0) ?? '—'}</dd></div>
                 </dl>
@@ -833,21 +917,29 @@ export function ShadowValidationPage({
 interface EvolutionPageProps {
   readonly requestData: InvestmentRequestData
   readonly onAnalyze: (intent: AssistantIntent) => void
+  readonly onOpenStock?: (code: string) => void
 }
 
 /** Preview-first evolution workflow with a deliberate write confirmation. */
-export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
+export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }: EvolutionPageProps) {
   const status = useDataResource(requestData)
   const alive = useAliveRef()
   const attribution = useDataResource(requestData)
+  const pendingPreview = useDataResource(requestData)
   const [preview, setPreview] = useState<Record<string, unknown>>()
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const load = useCallback(() => {
     status.run({ operation: 'trading-core.evolution-status' })
     attribution.run({ operation: 'trading-core.evolution-attribution' })
-  }, [attribution.run, status.run])
+    pendingPreview.run({ operation: 'trading-core.evolution-preview' })
+  }, [attribution.run, pendingPreview.run, status.run])
   useEffect(load, [load])
+  useEffect(() => {
+    if (pendingPreview.state.phase !== 'success') return
+    const current = asRecord(pendingPreview.state.value)
+    if (text(current.preview_status, '') === 'pending') setPreview(current)
+  }, [pendingPreview.state.phase, pendingPreview.state.value])
 
   const evolve = async (apply: boolean): Promise<void> => {
     if (busy) return
@@ -881,6 +973,31 @@ export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
   const attributionRecord = asRecord(attribution.state.value)
   const overall = asRecord(attributionRecord.overall)
   const strategyRows = records(attributionRecord.strategies)
+  const unresolvedSymbolKey = [...new Set(strategyRows.flatMap(item => strings(item.symbols)))].sort().join('|')
+  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const codes = unresolvedSymbolKey === '' ? [] : unresolvedSymbolKey.split('|')
+    if (codes.length === 0) return
+    const requestState = { cancelled: false }
+    void (async () => {
+      for (let start = 0; start < codes.length; start += 3) {
+        const resolved = await Promise.all(codes.slice(start, start + 3).map(async (code): Promise<readonly [string, string]> => {
+          try {
+            const result = asRecord(await requestData({
+              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
+            }))
+            const match = records(result.items).find(item => text(item.code, '').trim() === code)
+            return [code, text(match?.name, '').trim()] as const
+          } catch {
+            return [code, ''] as const
+          }
+        }))
+        if (requestState.cancelled) return
+        setSecurityNames(current => ({ ...current, ...Object.fromEntries(resolved) }))
+      }
+    })()
+    return () => { requestState.cancelled = true }
+  }, [requestData, unresolvedSymbolKey])
   const actions = records(preview?.actions)
   const previewStatus = text(preview?.preview_status, '')
   const previewApplied = preview?.applied === true || previewStatus === 'applied'
@@ -890,6 +1007,10 @@ export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
     && text(preview.status, '') !== 'waiting_data'
     && actions.length > 0
   const firstError = [status.state, attribution.state].find(item => item.phase === 'error')
+  const days = number(statusRecord.days_of_data) ?? 0
+  const minDays = number(statusRecord.min_days) ?? 0
+  const readiness = minDays <= 0 ? 0 : Math.min(100, (days / minDays) * 100)
+  const previewAvailable = preview !== undefined && previewStatus === 'pending'
 
   return (
     <div className={css.pageScroll}>
@@ -897,7 +1018,12 @@ export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
         <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
         <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void evolve(false) }}>{busy ? '计算中…' : '生成进化预案'}</button>
       </PageHeading>
-      <div className={css.contextHint}>AI 只负责解释证据和建议；实际写入必须在本页查看预案后由你确认。</div>
+      <section className={css.evolutionFlow} aria-label="自进化流程">
+        <div data-state={days > 0 ? 'completed' : 'active'}><span>1</span><strong>累积影子数据</strong><small>{days}/{minDays || '—'} 个交易日</small></div>
+        <div data-state={strategyRows.length > 0 ? 'completed' : days > 0 ? 'active' : undefined}><span>2</span><strong>查看策略归因</strong><small>{strategyRows.length} 条策略证据</small></div>
+        <div data-state={previewAvailable || previewApplied ? 'completed' : statusRecord.ready === true ? 'active' : undefined}><span>3</span><strong>生成只读预案</strong><small>升降级、淘汰或变异</small></div>
+        <div data-state={previewApplied ? 'completed' : previewAvailable ? 'active' : undefined}><span>4</span><strong>人工确认应用</strong><small>确认后才写入策略库</small></div>
+      </section>
       {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
       {status.state.phase === 'loading' && status.state.value === undefined
@@ -905,6 +1031,11 @@ export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
       <section className={css.moduleGrid} aria-label="进化状态与归因">
         <article className={css.moduleCard}>
           <div className={css.sectionHeading}><strong>闭环就绪状态</strong><StatusBadge value={statusRecord.ready === true ? 'done' : 'waiting_data'} /></div>
+          <div className={css.evolutionReadiness}>
+            <div><span>数据完成度</span><strong>{Math.round(readiness)}%</strong></div>
+            <progress max="100" value={readiness} aria-label="自进化数据完成度" />
+            <small>{text(statusRecord.note, statusRecord.ready === true ? '数据门槛已满足，可以生成只读预案。' : '继续运行影子验证以累积真实数据。')}</small>
+          </div>
           <dl className={css.reportMeta}>
             <div><dt>数据天数</dt><dd>{number(statusRecord.days_of_data)?.toFixed(0) ?? '—'}</dd></div>
             <div><dt>生效策略</dt><dd>{number(counts.active)?.toFixed(0) ?? '—'}</dd></div>
@@ -922,15 +1053,28 @@ export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
           </dl>
           {text(attributionRecord.data_note, '') !== '' && <p>{text(attributionRecord.data_note)}</p>}
         </article>
-        <article className={css.moduleCard}>
+        <article className={`${css.moduleCard} ${css.evolutionEvidenceCard}`}>
           <div className={css.sectionHeading}><strong>分策略证据</strong><span>{strategyRows.length} 项</span></div>
           <div className={css.dataList}>
-            {strategyRows.slice(0, 10).map((item, index) => (
-              <div className={css.dataRow} key={`${text(item.strategy_id)}-${index}`}>
-                <div><strong>{text(item.name, text(item.strategy_id))}</strong><small>回撤 {compactMetric(item.max_drawdown_pct, '%')}</small></div>
-                <strong>{compactMetric(item.return_pct, '%')}</strong>
-              </div>
-            ))}
+            {strategyRows.slice(0, 10).map((item, index) => {
+              const symbols = strings(item.symbols)
+              const primaryCode = symbols[0]
+              return (
+                <button
+                  type="button"
+                  className={css.dataRow}
+                  disabled={primaryCode === undefined}
+                  key={`${text(item.strategy_id)}-${index}`}
+                  onClick={() => { if (primaryCode !== undefined) onOpenStock(primaryCode) }}
+                >
+                  <div>
+                    <strong>{strategyTargetLabel(item, securityNames)}</strong>
+                    <small>{strategyKindLabel(item.kind)} · 回撤 {compactMetric(item.max_drawdown_pct, '%')} · 平仓胜率 {compactMetric(item.closed_win_rate_pct, '%')}</small>
+                  </div>
+                  <span className={css.evolutionEvidenceMeta}><strong>{compactMetric(item.return_pct, '%')}</strong><small>{primaryCode === undefined ? '暂无股票标的' : '查看个股 →'}</small></span>
+                </button>
+              )
+            })}
             {strategyRows.length === 0 && attribution.state.phase === 'success' && <Empty>影子证据不足，暂不能归因。</Empty>}
           </div>
         </article>
@@ -944,12 +1088,23 @@ export function EvolutionPage({ requestData, onAnalyze }: EvolutionPageProps) {
               : previewApplied ? `已按确认预案应用 ${actions.length} 项动作。` : `共 ${actions.length} 项；确认后将写入策略库。`}</p>
           </div>
           <div className={css.dataList}>
-            {actions.map((item, index) => (
-              <div className={css.dataRow} key={`${text(item.sid)}-${text(item.type)}-${index}`}>
-                <div><strong>{text(item.strategy_name, text(item.sid))}</strong><small>{text(item.reason)}</small></div>
-                <StatusBadge value={text(item.type)} />
-              </div>
-            ))}
+            {actions.map((item, index) => {
+              const source = strategyRows.find(strategy => text(strategy.strategy_id, '') === text(item.parent, text(item.sid, '')))
+              const actionSymbols = strings(item.symbols)
+              const primaryCode = actionSymbols[0] ?? strings(source?.symbols)[0]
+              const target = source === undefined
+                ? (primaryCode === undefined ? strategyKindLabel(item.kind) : `${securityNames[primaryCode] || '股票'} · ${primaryCode}`)
+                : strategyTargetLabel(source, securityNames)
+              return (
+                <div className={css.dataRow} key={`${text(item.sid)}-${text(item.type)}-${index}`}>
+                  <div><strong>{target}</strong><small>{text(item.reason)}</small></div>
+                  <div className={css.evolutionActionMeta}>
+                    <StatusBadge value={text(item.type)} />
+                    {primaryCode !== undefined && <button type="button" onClick={() => { onOpenStock(primaryCode) }}>查看个股</button>}
+                  </div>
+                </div>
+              )
+            })}
           </div>
           <div className={css.moduleToolbar}>
             <button type="button" className={css.secondaryButton} disabled={previewStatus !== 'pending'} onClick={() => { onAnalyze({ kind: 'evolution' }) }}>AI 复核预案</button>

@@ -301,6 +301,19 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       }
     },
   },
+  'trading-core.watchlist': noInput('/watchlist', 'trading-core'),
+  'trading-core.watchlist-save': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/watchlist',
+    body: (input) => {
+      knownKeys(input, ['tickers'])
+      if (!Array.isArray(input.tickers) || input.tickers.some(ticker => typeof ticker !== 'string')) {
+        throw new TypeError('investment data: tickers must be an array of strings')
+      }
+      return { tickers: input.tickers }
+    },
+  },
   'trading-core.holdings': noInput('/holdings', 'trading-core'),
   'trading-core.holdings-save': {
     backendId: 'trading-core',
@@ -625,6 +638,7 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   },
   'trading-core.evolution-status': noInput('/evolution/status', 'trading-core'),
   'trading-core.evolution-attribution': noInput('/evolution/attribution', 'trading-core'),
+  'trading-core.evolution-preview': noInput('/evolution/preview', 'trading-core'),
   'trading-core.evolution-run': {
     backendId: 'trading-core',
     method: 'POST',

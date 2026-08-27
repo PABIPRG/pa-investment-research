@@ -138,6 +138,7 @@ export function PermissionSelect({ value, locked, command, t }: PermissionSelect
           <button
             type="button"
             className={css.trigger}
+            data-access-mode-trigger=""
             aria-label={t('input.accessMode', { name: current === undefined ? displayName(currentValue) : optionLabel(current) })}
             title={current?.description}
             disabled={locked || busy}

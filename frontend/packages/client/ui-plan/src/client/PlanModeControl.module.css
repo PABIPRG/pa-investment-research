@@ -16,7 +16,7 @@
   border-radius: 999px;
   background: var(--dsw-alias-state-warn-tertiary);
   color: var(--dsw-alias-state-warn-label);
-  font-size: 13px;
+  font-size: 0.9286rem;
   font-weight: 500;
   line-height: 20px;
   cursor: pointer;
@@ -44,6 +44,6 @@
 
 .error {
   color: var(--dsw-alias-state-error-primary);
-  font-size: 12px;
+  font-size: 0.8571rem;
   line-height: 18px;
 }

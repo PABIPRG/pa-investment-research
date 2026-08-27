@@ -118,6 +118,23 @@ function strategyFromCard(card: Record<string, unknown>): string {
   return first === undefined ? '' : text(first.id, '')
 }
 
+function strategySymbols(item: Record<string, unknown>): string[] {
+  const symbols = stringItems(item.symbols).map(value => value.trim()).filter(Boolean)
+  if (symbols.length > 0) return [...new Set(symbols)]
+  const inferred = text(item.name, '').match(/(?:^|\D)(\d{6})(?:\D|$)/)?.[1]
+  return inferred === undefined ? [] : [inferred]
+}
+
+function strategyDisplayName(item: Record<string, unknown>, securityNames: Readonly<Record<string, string>>): string {
+  const symbols = strategySymbols(item)
+  if (symbols.length === 0) return text(item.name, '未命名策略')
+  const labels = symbols.slice(0, 2).map((code) => {
+    const name = securityNames[code]?.trim() ?? ''
+    return name === '' || name === code ? code : `${name} · ${code}`
+  })
+  return labels.join('、') + (symbols.length > 2 ? `等${symbols.length}只` : '')
+}
+
 function RegionError({
   title, message, retained, retry,
 }: { title: string; message: string; retained: boolean; retry: () => void }) {
@@ -204,6 +221,31 @@ export function ResearchWorkbenchPage({
   const allCards = records(cardValue.cards)
   const strategyValue = asRecord(matches.state.value)
   const strategyItems = records(strategyValue.items)
+  const unresolvedStrategySymbols = [...new Set(strategyItems.flatMap(strategySymbols))].sort().join('|')
+  const [strategySecurityNames, setStrategySecurityNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const codes = unresolvedStrategySymbols === '' ? [] : unresolvedStrategySymbols.split('|')
+    if (codes.length === 0) return
+    const requestState = { cancelled: false }
+    void (async () => {
+      for (let start = 0; start < codes.length; start += 3) {
+        const resolved = await Promise.all(codes.slice(start, start + 3).map(async (code): Promise<readonly [string, string]> => {
+          try {
+            const result = asRecord(await requestData({
+              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
+            }))
+            const match = records(result.items).find(item => text(item.code, '').trim() === code)
+            return [code, text(match?.name, '').trim()] as const
+          } catch {
+            return [code, ''] as const
+          }
+        }))
+        if (requestState.cancelled) return
+        setStrategySecurityNames(current => ({ ...current, ...Object.fromEntries(resolved) }))
+      }
+    })()
+    return () => { requestState.cancelled = true }
+  }, [requestData, unresolvedStrategySymbols])
   const visibleCards = useMemo(() => (
     bucket === 'all' ? allCards : allCards.filter(item => text(item.bucket, '') === bucket)
   ), [allCards, bucket])
@@ -436,7 +478,7 @@ export function ResearchWorkbenchPage({
               const reason = records(item.match_reasons)[0]
               return (
                 <button key={id || String(index)} type="button" className={css.dashboardStrategy} onClick={() => { navigate('framework', { strategyId: id }) }}>
-                  <span><strong>{text(item.name, '未命名策略')}</strong><small>{reason === undefined ? text(item.caution, '查看匹配依据') : text(reason.text, '查看匹配依据')}</small></span>
+                  <span><strong>{strategyDisplayName(item, strategySecurityNames)}</strong><small>{reason === undefined ? text(item.caution, '查看匹配依据') : text(reason.text, '查看匹配依据')}</small></span>
                   <b>{number(item.match_score)?.toFixed(0) ?? '—'}</b>
                 </button>
               )

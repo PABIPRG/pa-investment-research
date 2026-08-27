@@ -32,6 +32,7 @@ describe('投研产品闭环', () => {
             hypothesis: '产业催化会提高订单可见度',
             direction: 'long',
             symbols: ['600519'],
+            tickers: [{ code: '600519', name: '贵州茅台' }],
             backtest: {
               out_of_sample: { win_rate_pct: 62.5, n_evaluated: 12 },
               reason: '样本外胜率/均收益达标',
@@ -51,7 +52,8 @@ describe('投研产品闭环', () => {
       onAnalyze={() => {}}
     />)
 
-    expect(await screen.findByText('事件驱动策略')).toBeTruthy()
+    expect(await screen.findByText('贵州茅台 · 600519')).toBeTruthy()
+    expect(screen.getByText('利好').getAttribute('data-direction')).toBe('利好')
     expect(screen.getByText('12')).toBeTruthy()
     expect(screen.getByText('回测结论：样本外胜率/均收益达标')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '进入影子验证' }))
@@ -194,6 +196,7 @@ describe('投研产品闭环', () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: {} }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
       if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
         return {
           status: 'ready', preview_status: 'pending', preview_token: '1'.repeat(32),
@@ -204,7 +207,7 @@ describe('投研产品闭环', () => {
     })
 
     render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
     expect(screen.queryByRole('button', { name: '确认并应用' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '生成进化预案' }))
@@ -224,6 +227,7 @@ describe('投研产品闭环', () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: { active: 1 } }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
       if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
         return {
           status: 'ready', preview_status: 'pending', preview_token: '2'.repeat(32),
@@ -241,7 +245,7 @@ describe('投研产品闭环', () => {
     })
 
     render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
     fireEvent.click(screen.getByRole('button', { name: '生成进化预案' }))
 
     const confirm = await screen.findByRole<HTMLButtonElement>('button', { name: '确认并应用' })
@@ -276,6 +280,7 @@ describe('投研产品闭环', () => {
         return { ready: true, counts: { active: 1 } }
       }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
@@ -287,10 +292,40 @@ describe('投研产品闭环', () => {
     await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
   })
 
+  it('分策略证据展示股票名称并可进入个股详情', async () => {
+    const onOpenStock = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
+        return { ready: true, days_of_data: 5, min_days: 5, counts: { active: 1 } }
+      }
+      if (request.operation === 'trading-core.evolution-attribution') {
+        return {
+          overall: { return_pct: 2.1 },
+          strategies: [{
+            strategy_id: 'strat-1', name: '利空·rsi_reversal·600519', kind: 'rsi_reversal',
+            symbols: ['600519'], return_pct: 1.2, max_drawdown_pct: 0.4, closed_win_rate_pct: 66.7,
+          }],
+        }
+      }
+      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '600519', name: '贵州茅台' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} onOpenStock={onOpenStock} />)
+    const stock = await screen.findByRole('button', { name: /贵州茅台.*600519/ })
+    expect(screen.queryByText(/rsi_reversal/)).toBeNull()
+    fireEvent.click(stock)
+    expect(onOpenStock).toHaveBeenCalledWith('600519')
+  })
+
   it('服务端拒绝失效预案后不允许继续确认', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: { active: 1 } }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
       if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
         return {
           status: 'ready', preview_status: 'pending', preview_token: '3'.repeat(32),
