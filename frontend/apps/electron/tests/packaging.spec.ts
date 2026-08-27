@@ -1,15 +1,15 @@
 /** Electron packaging keeps the Python sidecar outside the application staging tree. */
 
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import {
   commandRequiresShell,
   createPackagerOptions,
   createPackagingPlan,
-  materializePackagingLinkTargets,
+  materializePackagingWorkspaceLinks,
   removePackagingRoot,
 } from '../src/packaging.ts'
 
@@ -67,32 +67,50 @@ describe('Electron investment sidecar packaging', () => {
     expect(isAbsolute(plan.sidecarDir)).toBe(true)
     expect(relative(plan.stagingDir, plan.sidecarDir)).toMatch(/^\.\./)
     expect(relative(plan.stagingDir, plan.sidecarCacheDir)).toMatch(/^\.\./)
-    expect(plan.linkTargets).toEqual([])
-
     const darwinPlan = createPackagingPlan('/tmp/dsh-electron-darwin-test', 'darwin', 'arm64')
-    expect(darwinPlan.linkTargets).toEqual([{
-      sourceDir: resolve(darwinPlan.deploy.cwd, 'vendor/cosmokit'),
-      targetDir: join(
-        darwinPlan.stagingDir,
-        'node_modules/.pnpm/node_modules/@deepseek-ai/cosmokit',
-      ),
-    }])
+    expect(darwinPlan.appSourceDir).toBe(resolve(darwinPlan.deploy.cwd, 'apps/electron'))
+    expect(darwinPlan.workspaceDir).toBe(darwinPlan.deploy.cwd)
   })
 
-  it('replaces a deployed workspace link with its vendored package contents', async () => {
+  it('replaces deployed workspace links with one relocatable package copy', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-link-test-'))
-    const sourceDir = join(rootDir, 'source', 'cosmokit')
-    const targetDir = join(rootDir, 'app', 'node_modules', 'cosmokit')
+    const workspaceDir = join(rootDir, 'workspace')
+    const sourceDir = join(workspaceDir, 'vendor', 'schemastery')
+    const appSourceDir = join(workspaceDir, 'apps', 'electron')
+    const stagingDir = join(rootDir, 'app')
+    const firstLink = join(stagingDir, 'node_modules', 'first', 'schemastery')
+    const secondLink = join(stagingDir, 'node_modules', 'second', 'schemastery')
+    const selfLink = join(stagingDir, 'node_modules', '.pnpm', 'node_modules', '@deepseek-ai', 'dsh-electron')
     try {
       await mkdir(sourceDir, { recursive: true })
-      await mkdir(targetDir, { recursive: true })
-      await writeFile(join(sourceDir, 'package.json'), '{"name":"@deepseek-ai/cosmokit"}')
-      await writeFile(join(targetDir, 'stale-workspace-link'), 'remove me')
+      await mkdir(appSourceDir, { recursive: true })
+      await mkdir(join(appSourceDir, 'out'), { recursive: true })
+      await mkdir(join(sourceDir, 'node_modules', 'ignored'), { recursive: true })
+      await mkdir(dirname(firstLink), { recursive: true })
+      await mkdir(dirname(secondLink), { recursive: true })
+      await mkdir(dirname(selfLink), { recursive: true })
+      await writeFile(join(sourceDir, 'package.json'), '{"name":"@deepseek-ai/schemastery"}')
+      await writeFile(join(appSourceDir, 'package.json'), '{"name":"@deepseek-ai/dsh-electron"}')
+      await writeFile(join(appSourceDir, 'out', 'marker'), 'exclude me')
+      await writeFile(join(sourceDir, 'node_modules', 'ignored', 'marker'), 'exclude me')
+      await writeFile(join(stagingDir, 'package.json'), '{"name":"@deepseek-ai/dsh-electron"}')
 
-      await materializePackagingLinkTargets([{ sourceDir, targetDir }])
+      const brokenPrefix = '../../../../../../..'
+      const workspacePathWithoutRoot = workspaceDir.replace(/^\/+/, '')
+      await symlink(`${brokenPrefix}/${workspacePathWithoutRoot}/vendor/schemastery`, firstLink, 'dir')
+      await symlink(`${brokenPrefix}/${workspacePathWithoutRoot}/vendor/schemastery`, secondLink, 'dir')
+      await symlink(`${brokenPrefix}/${workspacePathWithoutRoot}/apps/electron`, selfLink, 'dir')
 
-      expect(await readFile(join(targetDir, 'package.json'), 'utf8')).toBe('{"name":"@deepseek-ai/cosmokit"}')
-      await expect(readFile(join(targetDir, 'stale-workspace-link'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await materializePackagingWorkspaceLinks(stagingDir, workspaceDir, appSourceDir)).toBe(3)
+
+      expect(await readFile(join(firstLink, 'package.json'), 'utf8')).toBe('{"name":"@deepseek-ai/schemastery"}')
+      expect(await realpath(firstLink)).toBe(await realpath(secondLink))
+      await expect(readFile(join(firstLink, 'node_modules', 'ignored', 'marker'), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readFile(join(selfLink, 'package.json'), 'utf8')).toBe('{"name":"@deepseek-ai/dsh-electron"}')
+      expect(await realpath(selfLink)).not.toBe(await realpath(stagingDir))
+      await expect(stat(join(selfLink, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(stat(join(selfLink, 'out'))).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
