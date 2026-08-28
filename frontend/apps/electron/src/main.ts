@@ -1,7 +1,7 @@
 /** Electron application main process: boots the Host tree, binds IPC, and opens the local renderer. */
 
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, ipcMain, net, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
 import type { IpcMainEvent, WebContents } from 'electron'
 import { loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
 import { runProfile } from '@deepseek-ai/dsh/profile-boot'
@@ -33,6 +33,27 @@ interface StreamOpenRequest {
 
 interface IpcBinding {
   dispose(): Promise<void>
+}
+
+function instanceSurfaceName(mode: 'web' | 'electron'): string {
+  return mode === 'web' ? 'Web 版' : 'Electron 版'
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+    ? error.code
+    : undefined
+}
+
+function startupFailureMessage(error: unknown): string {
+  const detail = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error)
+  if (detail.includes('has a healthy process left by a previous managed runtime')) {
+    return '检测到之前的投研实例仍占用后台。请先关闭旧的 Web 或 Electron 实例，然后重试。'
+  }
+  if (errorCode(error) === 'DSH_INVESTMENT_INSTANCE_STOP_FAILED') {
+    return '旧实例未能正常停止。请先关闭旧的 Web 或 Electron 实例，然后重试。'
+  }
+  return '投研组件加载失败。请查看启动终端中的具体错误后重试。'
 }
 
 // Privilege registration is a pre-readiness call, so it belongs to module
@@ -119,6 +140,25 @@ async function runApplication(): Promise<void> {
       installAnchor: APP_MANIFEST,
       restart: requestRestart,
       watchPatches: false,
+      ...(PROFILE === 'investment-research'
+        ? {
+          instanceMode: 'electron' as const,
+          onInstanceConflict: async (owner: { mode: 'web' | 'electron'; pid: number }) => {
+            const current = instanceSurfaceName(owner.mode)
+            const result = await dialog.showMessageBox({
+              type: 'question',
+              title: '切换投研应用',
+              message: `检测到${current}投研正在运行`,
+              detail: `Web 与 Electron 共用投研后台，当前不能同时运行。是否停止${current}并启动 Electron？`,
+              buttons: [`停止${current}并启动 Electron`, '取消'],
+              defaultId: 0,
+              cancelId: 1,
+              noLink: true,
+            })
+            return result.response === 0 ? 'replace' as const : 'cancel' as const
+          },
+        }
+        : {}),
     })
     profileShutdown = shutdown
     const connection = ctx.get('connection')
@@ -160,6 +200,20 @@ async function runApplication(): Promise<void> {
     lifecycleReady.resolve()
   } catch (error) {
     lifecycleReady.reject(error)
+    if (errorCode(error) === 'DSH_INVESTMENT_INSTANCE_CONFLICT') {
+      quitCommitted = true
+      app.quit()
+      return
+    }
+    await dialog.showMessageBox({
+      type: 'error',
+      title: '投研智能体启动失败',
+      message: startupFailureMessage(error),
+      detail: error instanceof Error ? error.message : String(error),
+      buttons: ['关闭'],
+      defaultId: 0,
+      noLink: true,
+    })
     throw error
   }
 }

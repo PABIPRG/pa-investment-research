@@ -18,6 +18,8 @@ interface StartupOptions {
   readonly patchFiles: readonly string[]
   readonly restart: () => Promise<void>
   readonly watchPatches: boolean
+  readonly instanceMode?: string
+  readonly onInstanceConflict?: (owner: { mode: 'web' | 'electron'; pid: number }) => Promise<string>
 }
 
 afterEach(() => {
@@ -30,6 +32,7 @@ const mocks = vi.hoisted(() => {
     ready,
     requestSingleInstanceLock: vi.fn(() => true),
     registerSchemesAsPrivileged: vi.fn(),
+    showMessageBox: vi.fn(async () => ({ response: 0 })),
     runProfile: vi.fn((_options: StartupOptions) => new Promise<never>(() => {})),
   }
 })
@@ -42,6 +45,7 @@ vi.mock('electron', () => ({
     whenReady: () => mocks.ready.promise,
   },
   BrowserWindow: vi.fn(),
+  dialog: { showMessageBox: mocks.showMessageBox },
   ipcMain: {},
   net: { fetch: vi.fn() },
   protocol: { registerSchemesAsPrivileged: mocks.registerSchemesAsPrivileged, handle: vi.fn() },
@@ -85,7 +89,15 @@ describe('Electron main startup', () => {
       profile: 'investment-research',
       patchFiles: [expect.stringMatching(/electron\.patch\.yml$/u)],
       watchPatches: false,
+      instanceMode: 'electron',
     })
     expect(startupOptions?.restart).toEqual(expect.any(Function))
+    await expect(startupOptions?.onInstanceConflict?.({ mode: 'web', pid: 123 })).resolves.toBe('replace')
+    expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({
+      message: '检测到Web 版投研正在运行',
+      buttons: ['停止Web 版并启动 Electron', '取消'],
+    }))
+    mocks.showMessageBox.mockResolvedValueOnce({ response: 1 })
+    await expect(startupOptions?.onInstanceConflict?.({ mode: 'web', pid: 123 })).resolves.toBe('cancel')
   })
 })

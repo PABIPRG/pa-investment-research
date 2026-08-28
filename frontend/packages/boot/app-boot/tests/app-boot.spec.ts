@@ -807,6 +807,25 @@ describe('boot', () => {
     ].join('')))
   })
 
+  it('appends every actionable branch of a concurrent Loader failure', async () => {
+    const dir = tmp()
+    writeFileSync(join(dir, 'first.mjs'), 'export function apply() { throw new Error("first backend occupied") }\n')
+    writeFileSync(join(dir, 'second.mjs'), 'export function apply() { throw new Error("second backend occupied") }\n')
+    writeFileSync(join(dir, 'cordis.yml'), [
+      '- id: first',
+      '  name: ./first.mjs',
+      '- id: second',
+      '  name: ./second.mjs',
+      '',
+    ].join('\n'))
+
+    await expect(boot(NAME, join(dir, 'cordis.yml'))).rejects.toThrow(new RegExp([
+      String.raw`loader entries failed to apply`,
+      String.raw`failed to apply loader entry first \(\./first\.mjs\): first backend occupied`,
+      String.raw`failed to apply loader entry second \(\./second\.mjs\): second backend occupied`,
+    ].join(String.raw`[\s\S]*`)))
+  })
+
   it('falls back to the deepest cause message when its stack was erased', async () => {
     const dir = tmp()
     const deepest = new Error('stackless deep failure')

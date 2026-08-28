@@ -114,6 +114,7 @@ async function start(): Promise<RestartHarness> {
   vi.doMock('electron', () => ({
     app,
     BrowserWindow,
+    dialog: { showMessageBox: vi.fn(async () => ({ response: 0 })) },
     ipcMain,
     net: { fetch: vi.fn() },
     protocol: { handle: vi.fn(), registerSchemesAsPrivileged: vi.fn() },

@@ -37,6 +37,12 @@ const SHIPPED_PRESET_ROOT = fileURLToPath(new URL('../config/agent-presets/', im
 import { DSH_LAUNCH_ENVIRONMENT_KEY, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import { provideCmdline, type AppRestart } from '@deepseek-ai/dsh-cmdline'
 import { createProcessShutdown, type ProcessShutdown } from './process-shutdown.ts'
+import {
+  coordinateInvestmentInstance,
+  type InvestmentInstanceConflictDecision,
+  type InvestmentInstanceMode,
+  type InvestmentInstanceOwner,
+} from './investment-instance.ts'
 
 const NAME = 'dsh'
 
@@ -193,6 +199,12 @@ export interface RunProfileOptions {
   installAnchor?: string
   /** Whether profile and home patch files stay live after startup; defaults to true. */
   watchPatches?: boolean
+  /** Cross-surface ownership for the investment product; omitted by non-product profiles and tests. */
+  instanceMode?: InvestmentInstanceMode
+  /** User-facing decision when the other investment surface already owns the product runtime. */
+  onInstanceConflict?: (
+    owner: InvestmentInstanceOwner,
+  ) => Promise<InvestmentInstanceConflictDecision> | InvestmentInstanceConflictDecision
 }
 
 /**
@@ -218,9 +230,29 @@ function suppressShutdownError(ctx: Context, signal: AbortSignal, error: unknown
  * @returns the settled root context and the shutdown controller.
  */
 export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Context; shutdown: ProcessShutdown }> {
-  const composed = composeProfile(options.profile, options.patchFiles, options.installAnchor ?? INSTALL_ANCHOR)
+  const instance = options.instanceMode === undefined
+    ? undefined
+    : await coordinateInvestmentInstance({
+      mode: options.instanceMode,
+      ...(options.onInstanceConflict === undefined ? {} : { onConflict: options.onInstanceConflict }),
+    })
+  let composed: ComposedProfile
+  try {
+    composed = composeProfile(options.profile, options.patchFiles, options.installAnchor ?? INSTALL_ANCHOR)
+  } catch (error) {
+    await instance?.release()
+    throw error
+  }
   const app: { current?: Context } = {}
-  const shutdown = createProcessShutdown(async () => { await app.current?.fiber.dispose() })
+  const disposeApplication = async (): Promise<void> => {
+    try {
+      await app.current?.fiber.dispose()
+    } finally {
+      await instance?.release()
+    }
+  }
+  const shutdown = createProcessShutdown(disposeApplication)
+  instance?.onStopRequested(() => { shutdown.interrupt(0) })
   const signalShutdown = new AbortController()
   const interrupt = (code: number): void => {
     signalShutdown.abort()
@@ -235,9 +267,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   process.on('SIGTERM', () => { interrupt(0) })
   process.on('SIGHUP', () => { interrupt(0) })
   process.on('SIGINT', () => { interrupt(130) })
-  installFailLoud(NAME, process, async () => {
-    await app.current?.fiber.dispose()
-  })
+  installFailLoud(NAME, process, disposeApplication)
 
   const rootConfig = join(composed.profile.dir, PROFILE_ROOT_FILENAME)
   // Recomposition for the live user layers: bundle layers below, overlays
@@ -260,58 +290,63 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   ])
   // Cloned for the same insert-aliasing reason as composeLive: the boot
   // application must not mutate the objects later reloads recompose from.
-  const ctx = await boot(NAME, rootConfig, structuredClone(allPatches(composed)), (hostCtx) => {
-    app.current = hostCtx
-    // Before any config-tree entry mounts, so plugins resolve all launch-time
-    // environment values from the same immutable provenance snapshot.
-    hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
-    // The command line and bounded exit request are launcher facts available
-    // to every app plugin that injects the argument snapshot.
-    provideCmdline(hostCtx, {
-      args: options.args,
-      exit: code => void shutdown.shutdown(code),
-      ...(options.restart === undefined ? {} : { restart: options.restart }),
-    })
-  }, pathToFileURL(rootConfig).href)
-  app.current = ctx
-  // A surface can dispose the whole tree while boot or this post-boot watcher
-  // setup is still in flight — a signal, or a fast one-shot's appExit. Loader
-  // presence and fiber state own liveness; the initial check skips a tree
-  // that already exited, and the catch below re-checks for an exit that
-  // landed mid-setup. Long-lived profile launches watch by default; runtimes
-  // without the Node loader internals required by Cordis HMR opt out. A
-  // one-shot exits through bounded shutdown, which disposes the watchers.
-  if ((options.watchPatches ?? true)
-    && !signalShutdown.signal.aborted
-    && ctx.fiber.state === FiberState.ACTIVE
-    && ctx.get('loader') !== undefined) {
-    try {
-      // Config-only HMR for the live profile patch layer: the web bundle
-      // disables the shared module-reload `hmr` row (its reload lifecycle is
-      // untested), so when the composition leaves no HMR service, mount a
-      // watch-only instance with no module roots — cordis.patch.yml edits stay
-      // live on every long-lived surface. A silent skip would break the
-      // documented hot-reload contract. HMR injects the timer service, which a
-      // bare custom profile may not mount either.
-      if (ctx.get('hmr') === undefined) {
-        if (ctx.get('timer') === undefined) {
-          await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-timer' })
+  try {
+    const ctx = await boot(NAME, rootConfig, structuredClone(allPatches(composed)), (hostCtx) => {
+      app.current = hostCtx
+      // Before any config-tree entry mounts, so plugins resolve all launch-time
+      // environment values from the same immutable provenance snapshot.
+      hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
+      // The command line and bounded exit request are launcher facts available
+      // to every app plugin that injects the argument snapshot.
+      provideCmdline(hostCtx, {
+        args: options.args,
+        exit: code => void shutdown.shutdown(code),
+        ...(options.restart === undefined ? {} : { restart: options.restart }),
+      })
+    }, pathToFileURL(rootConfig).href)
+    app.current = ctx
+    // A surface can dispose the whole tree while boot or this post-boot watcher
+    // setup is still in flight — a signal, or a fast one-shot's appExit. Loader
+    // presence and fiber state own liveness; the initial check skips a tree
+    // that already exited, and the catch below re-checks for an exit that
+    // landed mid-setup. Long-lived profile launches watch by default; runtimes
+    // without the Node loader internals required by Cordis HMR opt out. A
+    // one-shot exits through bounded shutdown, which disposes the watchers.
+    if ((options.watchPatches ?? true)
+      && !signalShutdown.signal.aborted
+      && ctx.fiber.state === FiberState.ACTIVE
+      && ctx.get('loader') !== undefined) {
+      try {
+        // Config-only HMR for the live profile patch layer: the web bundle
+        // disables the shared module-reload `hmr` row (its reload lifecycle is
+        // untested), so when the composition leaves no HMR service, mount a
+        // watch-only instance with no module roots — cordis.patch.yml edits stay
+        // live on every long-lived surface. A silent skip would break the
+        // documented hot-reload contract. HMR injects the timer service, which a
+        // bare custom profile may not mount either.
+        if (ctx.get('hmr') === undefined) {
+          if (ctx.get('timer') === undefined) {
+            await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-timer' })
+          }
+          await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr', config: { root: [] } })
         }
-        await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr', config: { root: [] } })
+        await watchUserPatches(ctx, {
+          binName: NAME,
+          filename: composed.profile.patchPath,
+          compose: composeLive,
+        })
+        await watchUserPatches(ctx, {
+          binName: NAME,
+          filename: homePatchPath(),
+          compose: composeLive,
+        })
+      } catch (error) {
+        suppressShutdownError(ctx, signalShutdown.signal, error)
       }
-      await watchUserPatches(ctx, {
-        binName: NAME,
-        filename: composed.profile.patchPath,
-        compose: composeLive,
-      })
-      await watchUserPatches(ctx, {
-        binName: NAME,
-        filename: homePatchPath(),
-        compose: composeLive,
-      })
-    } catch (error) {
-      suppressShutdownError(ctx, signalShutdown.signal, error)
     }
+    return { ctx, shutdown }
+  } catch (error) {
+    await instance?.release()
+    throw error
   }
-  return { ctx, shutdown }
 }
