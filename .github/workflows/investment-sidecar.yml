@@ -50,16 +50,24 @@ jobs:
       - name: Install frontend
         run: pnpm install --frozen-lockfile
 
-      - name: Build packaged application and sidecar (macOS)
+      - name: Verify shared application version
+        id: app_version
+        shell: bash
+        run: |
+          pnpm run constraints
+          app_version=$(node -p "require('./package.json').version")
+          echo "value=$app_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build test application and sidecar (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           ulimit -n 10240
-          pnpm run package:electron
+          pnpm run make:electron
 
-      - name: Build packaged application and sidecar (Windows)
+      - name: Build test application and sidecar (Windows)
         if: runner.os == 'Windows'
-        run: pnpm run package:electron
+        run: pnpm run make:electron
 
       - name: Smoke packaged sidecar (macOS)
         if: runner.os == 'macOS'
@@ -83,3 +91,12 @@ jobs:
             Select-Object -First 1
           if ($null -eq $descriptor) { throw 'packaged investment sidecar not found' }
           node scripts/smoke-investment-python-sidecar.ts --root $descriptor.Directory.FullName
+
+      - name: Upload downloadable test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: investment-agent-${{ steps.app_version.outputs.value }}-${{ matrix.target }}
+          path: frontend/apps/electron/out/make/**
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

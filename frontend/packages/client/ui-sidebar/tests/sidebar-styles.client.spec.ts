@@ -30,8 +30,10 @@ describe('SidebarRoot.module.css', () => {
     const root = declarations('.root')
     expect(root?.get('--dsh-sidebar-inline-padding')).toBe('12px')
     expect(root?.get('padding')).toBe('6px var(--dsh-sidebar-inline-padding)')
-    expect(declarations('.regionArea')?.get('margin-left')).toBe('-4px')
-    expect(declarations('.regionArea')?.get('padding-left')).toBe('4px')
+    expect(declarations('.regionArea')?.get('margin-left')).toBe(
+      'calc(-1 * var(--dsh-sidebar-inline-padding))',
+    )
+    expect(declarations('.regionArea')?.get('padding-left')).toBe('var(--dsh-sidebar-inline-padding)')
     expect(declarations('.regionArea')?.get('margin-right')).toBe(
       'calc(-1 * var(--dsh-sidebar-inline-padding))',
     )

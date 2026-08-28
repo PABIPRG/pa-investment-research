@@ -77,6 +77,11 @@ describe('client bundle purity gate', () => {
     expect(resolveId('@deepseek-ai/dsh-brand')).toBeNull()
   })
 
+  it('lets a plugin inline only its own manifest metadata', () => {
+    expect(resolveId('@deepseek-ai/dsh-client-test/package.json')).toBeNull()
+    expect(() => resolveId('@deepseek-ai/dsh-client-other/package.json')).toThrow(/purity/)
+  })
+
   it('lets exact generated Remote contributions inline without admitting their package implementation', () => {
     expect(resolveId('@deepseek-ai/dsh-goal/remote')).toBeNull()
     expect(() => resolveId('@deepseek-ai/dsh-goal')).toThrow(/purity/)

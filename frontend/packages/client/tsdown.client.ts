@@ -215,6 +215,10 @@ function clientConfig(id: string, entry: string): UserConfig {
       name: 'dsh-client-bundle-purity',
       resolveId(source: string) {
         if (!source.startsWith('@deepseek-ai/')) return null
+        // A plugin may inline its own published manifest metadata (for example,
+        // its display version). This keeps the value inside the bundle without
+        // creating a runtime edge to another plugin package.
+        if (source === `${id}/package.json`) return null
         if (CLIENT_EXTERNALS.includes(source)) return null // platform module: external wins
         if (VENDORED_LIBRARY.test(source)) return null // vendored library: inline, no shared identity
         if (INLINE_SAFE.test(source) || GENERATED_REMOTE.test(source)) return null // wire contribution: inline is the point

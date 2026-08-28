@@ -21,7 +21,7 @@ describe('投研产品闭环', () => {
   it('从策略列表选择 active 策略并把同一标识传给影子验证', async () => {
     const onSelectStrategy = vi.fn()
     const onOpenShadow = vi.fn()
-    const requestData = vi.fn(async (request: { operation: string }) => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.strategies') {
         return {
           items: [{
@@ -65,7 +65,7 @@ describe('投研产品闭环', () => {
 
   it('策略回测只有在任务结果含正式正文时才提示已进入报告中心', async () => {
     const onOpenReports = vi.fn()
-    const requestData = vi.fn(async (request: { operation: string }) => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.strategies') {
         return {
           items: [{
@@ -380,6 +380,47 @@ describe('投研产品闭环', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
+  it('把历史策略报告中的代码标识转换为可读标题与中文状态', async () => {
+    const reportId = 'a840c24ccbe34c4b9b02ff3038e82146'
+    const rawTitle = '策略研究报告 · 利空·rsi_reversal·600101（strat-63955a2386）'
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.reports') {
+        return { items: [{ id: reportId, title: rawTitle, summary: '利空·rsi_reversal·600101（strat-63955a2386）', kind: 'strategy' }] }
+      }
+      if (request.operation === 'trading-core.report') {
+        return {
+          id: reportId,
+          title: rawTitle,
+          summary: '利空·rsi_reversal·600101（strat-63955a2386）',
+          kind: 'strategy',
+          sections: [{
+            key: 'strategy',
+            title: '策略样本外回测',
+            content: '# 策略样本外回测报告\n\n- 策略：利空·rsi_reversal·600101\n- 策略标识：strat-63955a2386\n- 规则类型：rsi_reversal\n- 标的：600101\n- 生命周期状态：candidate',
+          }],
+        }
+      }
+      if (request.operation === 'market-watch.security-search') {
+        expect(request.input).toEqual({ query: '600101', limit: 5 })
+        return { items: [{ code: '600101', name: '明星电力' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ReportCenter requestData={requestData as never} onClose={() => {}} onAnalyze={() => {}} />)
+
+    expect(await screen.findByRole('heading', { name: '策略研究报告 · 明星电力 · 600101 · 超跌反弹 · 利空' })).toBeTruthy()
+    const reportBody = screen.getByRole('article')
+    expect(reportBody.textContent).toContain('策略：明星电力 · 600101 · 超跌反弹 · 利空')
+    expect(reportBody.textContent).toContain('策略编号：63955a2386')
+    expect(reportBody.textContent).toContain('规则类型：超跌反弹')
+    expect(reportBody.textContent).toContain('标的：明星电力 · 600101')
+    expect(reportBody.textContent).toContain('生命周期状态：候选')
+    expect(reportBody.textContent).not.toContain('rsi_reversal')
+    expect(reportBody.textContent).not.toContain('candidate')
+    expect(screen.getByTitle(reportId).textContent).toBe('a840c24c…e82146')
+  })
+
   it('刷新报告列表后会收敛到仍存在的报告，不保留旧正文', async () => {
     const firstId = 'a'.repeat(32)
     const removedId = 'b'.repeat(32)
@@ -428,7 +469,7 @@ describe('投研产品闭环', () => {
       return Promise.reject(new Error(`unexpected operation ${request.operation}`))
     })
 
-    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} />)
+    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
 
     expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
     expect(screen.getByText(/约 25 MB/)).toBeTruthy()
@@ -464,7 +505,7 @@ describe('投研产品闭环', () => {
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
-    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} />)
+    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
     expect(await screen.findByText('1,297 家')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '刷新' }))
@@ -563,6 +604,7 @@ describe('投研产品闭环', () => {
 
   it('按真实 DTO 检索公司、逐层展示上下游并只向 AI 传短意图', async () => {
     const onAnalyze = vi.fn<(intent: AssistantIntent) => void>()
+    const onOpenStock = vi.fn<(code: string) => void>()
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'industry-chain.data-status') {
         return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
@@ -581,11 +623,11 @@ describe('投研产品闭环', () => {
           },
           up_levels: [{
             level: -1,
-            nodes: [{ id: 'supplier-1', name: '高粱供应商', share: 18, type: 'direct', via: '高粱', note: '核心原料供应' }],
+            nodes: [{ id: 'supplier-1', code: '600000', expandable: true, name: '高粱供应商', share: 18, type: 'direct', via: '高粱', note: '核心原料供应' }],
           }],
           down_levels: [{
             level: 1,
-            nodes: [{ id: 'customer-1', name: '经销渠道', share: 12, type: 'direct', via: '高端白酒', note: null }],
+            nodes: [{ id: 'customer-1', code: null, expandable: false, name: '经销渠道', share: 12, type: 'direct', via: '高端白酒', note: null }],
           }],
         }
       }
@@ -596,11 +638,14 @@ describe('投研产品闭环', () => {
             summary: '白酒消费复苏',
             tickers: [{ code: '600519', name: '贵州茅台' }],
             industries: ['白酒'],
-            impact_codes: [],
-            impact_industries: [],
-            impact_by: [],
+            impact_codes: ['603079', '301335'],
+            impact_industries: ['食品'],
+            impact_by: ['行业「食品」：圣达生物(603079)'],
           }],
         }
+      }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: request.input?.query, name: '天元宠物' }] }
       }
       if (request.operation === 'trading-core.shadow-status') {
         return { trade_date: '2026-08-26', ran_at: '2026-08-26 15:30:00', strategy_count: 1, overall_nav: 1.05 }
@@ -617,6 +662,7 @@ describe('投研产品闭环', () => {
       query="600519"
       onQuery={() => {}}
       onAnalyze={onAnalyze}
+      onOpenStock={onOpenStock}
     />)
     expect(await screen.findByText('1,297 家')).toBeTruthy()
     await waitFor(() => {
@@ -624,7 +670,7 @@ describe('投研产品闭环', () => {
         operation: 'industry-chain.companies', input: { keyword: '600519', limit: 20 },
       })
     })
-    fireEvent.click(await screen.findByRole('button', { name: /贵州茅台/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^贵州茅台/ }))
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.chain', input: { code: '600519' } })
     })
@@ -632,8 +678,21 @@ describe('投研产品闭环', () => {
     expect(screen.getByText('经销渠道')).toBeTruthy()
     expect(screen.getByText('高端白酒')).toBeTruthy()
     expect(screen.getByText('上游第 1 层')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '放大查看' }))
+    expect(screen.getByRole('dialog', { name: '贵州茅台 · 600519' })).toBeTruthy()
+    expect(screen.getByLabelText('可缩放、可拖动节点的产业链物理图谱')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /高粱供应商上游 · 600000/ }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.chain', input: { code: '600000' } })
+    })
+    expect(screen.getByRole('button', { name: '高粱供应商' }).getAttribute('aria-current')).toBe('page')
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    expect(screen.queryByRole('dialog', { name: '贵州茅台 · 600519' })).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: '查看圣达生物 · 603079个股详情' }))
+    expect(onOpenStock).toHaveBeenCalledWith('603079')
+    expect(await screen.findByRole('button', { name: '查看天元宠物 · 301335个股详情' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'AI 解读所选公司' }))
-    expect(onAnalyze).toHaveBeenCalledWith({ kind: 'industry', reference: '600519 贵州茅台' })
+    expect(onAnalyze).toHaveBeenCalledWith({ kind: 'industry', reference: '600000 高粱供应商' })
     const intent = onAnalyze.mock.calls[0]?.[0]
     expect(intent?.kind).toBe('industry')
     if (intent?.kind === 'industry') expect(intent.reference).not.toContain('{')

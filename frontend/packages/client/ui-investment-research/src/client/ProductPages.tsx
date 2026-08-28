@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -67,16 +67,38 @@ function strings(value: unknown): string[] {
     : []
 }
 
-function tickerLabels(value: unknown): string[] {
+interface TickerDisplay {
+  readonly code: string
+  readonly name: string
+}
+
+function tickerItems(value: unknown): TickerDisplay[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((item) => {
-    if (typeof item === 'string') return item.trim() === '' ? [] : [item.trim()]
+    if (typeof item === 'string') {
+      const raw = item.trim()
+      if (raw === '') return []
+      const labelled = raw.match(/^(.+?)\s*[（(](\d{6})[）)]$/u)
+      if (labelled !== null) return [{ code: labelled[2] ?? '', name: labelled[1]?.trim() ?? '' }]
+      return /^\d{6}$/u.test(raw) ? [{ code: raw, name: '' }] : []
+    }
     const ticker = asRecord(item)
     const code = text(ticker.code, '').trim()
     const name = text(ticker.name, '').trim()
-    if (code !== '' && name !== '') return [`${name}（${code}）`]
-    return code !== '' ? [code] : name !== '' ? [name] : []
+    return code === '' ? [] : [{ code, name }]
   })
+}
+
+function impactSourceSecurityNames(value: unknown): Record<string, string> {
+  const names: Record<string, string> = {}
+  for (const source of strings(value)) {
+    for (const match of source.matchAll(/(?:^|[：:、/])\s*([^（）(),，、/:：]+?)\s*[（(](\d{6})[）)]/gu)) {
+      const name = match[1]?.trim() ?? ''
+      const code = match[2] ?? ''
+      if (name !== '' && code !== '') names[code] = name
+    }
+  }
+  return names
 }
 
 interface StrategyTicker {
@@ -189,6 +211,78 @@ function reportKindLabel(value: unknown): string {
     stock: '个股分析', holdings: '持仓分析', brief: '市场简报',
     backtest: '历史回测', strategy: '策略研究', shadow: '策略研究 · 影子验证',
   }[kind] ?? (kind === '' ? '投研分析' : kind)
+}
+
+const REPORT_TITLE_LABELS: Readonly<Record<string, string>> = {
+  stock: '个股分析报告',
+  holdings: '持仓分析报告',
+  brief: '市场简报',
+  backtest: '策略回测报告',
+  strategy: '策略研究报告',
+  shadow: '影子验证报告',
+}
+
+const STRATEGY_KINDS = new Set(['ma_cross', 'rsi_reversal', 'momentum'])
+
+function strategySubjectLabel(value: unknown, securityNames: Readonly<Record<string, string>> = {}): string {
+  const raw = text(value, '').trim()
+  if (raw === '') return ''
+  const withoutId = raw.replace(/\s*（strat-[^）]+）\s*$/u, '').trim()
+  const segments = withoutId.split('·').map(segment => segment.trim()).filter(Boolean)
+  const kindIndex = segments.findIndex(segment => STRATEGY_KINDS.has(segment))
+  if (kindIndex < 0) return withoutId.startsWith('strat-') ? '' : withoutId
+  const direction = strategyDirectionLabel(segments.slice(0, kindIndex).join(' · '))
+  const targetCode = segments.slice(kindIndex + 1).join(' · ')
+  const securityName = securityNames[targetCode] ?? ''
+  const target = securityName === '' || securityName === targetCode ? targetCode : `${securityName} · ${targetCode}`
+  return [target, strategyKindLabel(segments[kindIndex]), direction].filter(Boolean).join(' · ')
+}
+
+function reportSubjectLabel(item: Record<string, unknown>, securityNames: Readonly<Record<string, string>> = {}): string {
+  const raw = text(item.summary, '')
+  const kind = text(item.kind, '')
+  return kind === 'strategy' || kind === 'shadow' ? strategySubjectLabel(raw, securityNames) : raw
+}
+
+function reportTitleLabel(item: Record<string, unknown>, securityNames: Readonly<Record<string, string>> = {}): string {
+  const raw = text(item.title, '投研报告')
+  const kind = text(item.kind, '')
+  if (kind !== 'strategy' && kind !== 'shadow') return raw
+  const subject = reportSubjectLabel(item, securityNames)
+  return subject === '' ? (REPORT_TITLE_LABELS[kind] ?? raw) : `${REPORT_TITLE_LABELS[kind]} · ${subject}`
+}
+
+function reportSecurityCodes(items: readonly Record<string, unknown>[]): string[] {
+  const codes = new Set<string>()
+  for (const item of items) {
+    if (!['strategy', 'shadow'].includes(text(item.kind, ''))) continue
+    const matches = `${text(item.title, '')}\n${text(item.summary, '')}`.match(/\d{6}/gu) ?? []
+    for (const code of matches) codes.add(code)
+  }
+  return [...codes].sort()
+}
+
+function humanizeReportMarkdown(value: unknown, securityNames: Readonly<Record<string, string>> = {}): string {
+  return text(value).split('\n').map((line) => {
+    const strategy = line.match(/^(\s*-\s*策略：\s*)(.+)$/u)
+    if (strategy !== null) return `${strategy[1]}${strategySubjectLabel(strategy[2], securityNames) || strategy[2]}`
+    const identifier = line.match(/^(\s*-\s*)策略标识：(\s*)(strat-)?(.+)$/u)
+    if (identifier !== null) return `${identifier[1]}策略编号：${identifier[2]}${identifier[4]}`
+    const kind = line.match(/^(\s*-\s*规则类型：\s*)(\S+)\s*$/u)
+    if (kind !== null) return `${kind[1]}${strategyKindLabel(kind[2])}`
+    const lifecycle = line.match(/^(\s*-\s*生命周期状态：\s*)(\S+)\s*$/u)
+    if (lifecycle !== null) return `${lifecycle[1]}${statusLabel(lifecycle[2] ?? '')}`
+    const target = line.match(/^(\s*-\s*标的：\s*)(\d{6})\s*$/u)
+    if (target !== null) {
+      const securityName = securityNames[target[2] ?? ''] ?? ''
+      if (securityName !== '') return `${target[1]}${securityName} · ${target[2]}`
+    }
+    return line
+  }).join('\n')
+}
+
+function compactIdentifier(value: string): string {
+  return value.length <= 16 ? value : `${value.slice(0, 8)}…${value.slice(-6)}`
 }
 
 function reportTimeLabel(value: unknown): string {
@@ -1121,6 +1215,7 @@ interface IndustryChainPageProps {
   readonly query: string
   readonly onQuery: (query: string) => void
   readonly onAnalyze: (intent: AssistantIntent) => void
+  readonly onOpenStock: (code: string) => void
 }
 
 type IndustryDataStatus = 'missing' | 'downloading' | 'ready' | 'error'
@@ -1171,8 +1266,371 @@ function IndustryResourceFeedback({
   )
 }
 
+type IndustryGraphDirection = 'center' | 'up' | 'down'
+
+interface IndustryGraphNodeData {
+  readonly id: string
+  readonly name: string
+  readonly code: string
+  readonly label: string
+  readonly direction: IndustryGraphDirection
+  readonly depth: number
+  readonly expandable: boolean
+  readonly share: number | undefined
+  readonly x: number
+  readonly y: number
+}
+
+interface IndustryGraphEdgeData {
+  readonly id: string
+  readonly source: string
+  readonly target: string
+  readonly direction: 'up' | 'down'
+}
+
+interface IndustryGraphData {
+  readonly nodes: readonly IndustryGraphNodeData[]
+  readonly edges: readonly IndustryGraphEdgeData[]
+}
+
+interface IndustryGraphParticle {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  readonly targetX: number
+  readonly targetY: number
+  readonly direction: IndustryGraphDirection
+}
+
+function industryGraphData(
+  center: Record<string, unknown>,
+  upLevels: readonly Record<string, unknown>[],
+  downLevels: readonly Record<string, unknown>[],
+): IndustryGraphData {
+  const nodes: IndustryGraphNodeData[] = []
+  const edges: IndustryGraphEdgeData[] = []
+  const centerCode = text(center.code, '')
+  const centerName = text(center.name, '未命名公司')
+  const centerId = `center-${centerCode || text(center.id, 'company')}`
+  nodes.push({
+    id: centerId,
+    name: centerName,
+    code: centerCode,
+    label: centerCode === '' ? centerName : `${centerName}\n${centerCode}`,
+    direction: 'center',
+    depth: 0,
+    expandable: true,
+    share: undefined,
+    x: 0,
+    y: 0,
+  })
+
+  const appendLevels = (levels: readonly Record<string, unknown>[], direction: 'up' | 'down'): void => {
+    const identifiers = new Map<string, string>()
+    for (const value of [centerCode, text(center.id, ''), centerName]) {
+      if (value !== '') identifiers.set(value, centerId)
+    }
+    for (const [levelIndex, level] of levels.entries()) {
+      const levelNodes = records(level.nodes)
+      const rawDepth = number(level.level)
+      const depth = rawDepth === undefined ? levelIndex + 1 : Math.abs(rawDepth)
+      const levelIds: Array<readonly [Record<string, unknown>, string]> = []
+      for (const [nodeIndex, node] of levelNodes.entries()) {
+        const rawId = text(node.id, text(node.name, `node-${nodeIndex}`))
+        const nodeId = `${direction}-${depth}-${nodeIndex}-${rawId}`
+        levelIds.push([node, nodeId])
+        for (const value of [rawId, text(node.name, ''), text(node.code, '')]) {
+          if (value !== '') identifiers.set(value, nodeId)
+        }
+      }
+      for (const [nodeIndex, [node, nodeId]] of levelIds.entries()) {
+        const name = text(node.name, '未命名环节')
+        const code = text(node.code, '')
+        const parentId = identifiers.get(text(node.parent_id, '')) ?? centerId
+        const count = Math.max(levelIds.length, 1)
+        const y = (nodeIndex - (count - 1) / 2) * 116
+        const x = (direction === 'up' ? -1 : 1) * depth * 260
+        nodes.push({
+          id: nodeId,
+          name,
+          code,
+          label: code === '' ? name : `${name}\n${code}`,
+          direction,
+          depth,
+          expandable: code !== '',
+          share: number(node.share),
+          x,
+          y,
+        })
+        edges.push({
+          id: `edge-${direction}-${depth}-${nodeIndex}`,
+          source: direction === 'up' ? nodeId : parentId,
+          target: direction === 'up' ? parentId : nodeId,
+          direction,
+        })
+      }
+    }
+  }
+
+  appendLevels(upLevels, 'up')
+  appendLevels(downLevels, 'down')
+  return { nodes, edges }
+}
+
+function IndustryPhysicsGraph({
+  center, upLevels, downLevels, onDrill, onLeaf, onReady,
+}: {
+  readonly center: Record<string, unknown>
+  readonly upLevels: readonly Record<string, unknown>[]
+  readonly downLevels: readonly Record<string, unknown>[]
+  readonly onDrill: (company: IndustryCompanySelection) => void
+  readonly onLeaf: (name: string) => void
+  readonly onReady: (reset: (() => void) | undefined) => void
+}) {
+  const graph = useMemo(() => industryGraphData(center, upLevels, downLevels), [center, downLevels, upLevels])
+  const particles = useRef(new Map<string, IndustryGraphParticle>())
+  const frame = useRef<number>()
+  const activeUntil = useRef(0)
+  const interaction = useRef<{
+    readonly kind: 'node' | 'pan'
+    readonly pointerId: number
+    readonly nodeId: string
+    clientX: number
+    clientY: number
+    readonly panX: number
+    readonly panY: number
+    moved: boolean
+  }>()
+  const [positions, setPositions] = useState<Record<string, { readonly x: number; readonly y: number }>>({})
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
+
+  const renderParticles = useCallback(() => {
+    setPositions(Object.fromEntries([...particles.current].map(([id, value]) => [id, { x: value.x, y: value.y }])))
+  }, [])
+
+  const runPhysics = useCallback((duration = 760) => {
+    activeUntil.current = Math.max(activeUntil.current, performance.now() + duration)
+    if (frame.current !== undefined) return
+    const tick = (): void => {
+      const values = [...particles.current.entries()]
+      const draggedId = interaction.current?.kind === 'node' ? interaction.current.nodeId : ''
+      for (const [id, particle] of values) {
+        if (particle.direction === 'center' || id === draggedId) continue
+        particle.vx += (particle.targetX - particle.x) * 0.012
+        particle.vy += (particle.targetY - particle.y) * 0.006
+      }
+      for (let left = 0; left < values.length; left += 1) {
+        for (let right = left + 1; right < values.length; right += 1) {
+          const aEntry = values[left]
+          const bEntry = values[right]
+          if (aEntry === undefined || bEntry === undefined) continue
+          const [, a] = aEntry
+          const [, b] = bEntry
+          const dx = b.x - a.x || 0.1
+          const dy = b.y - a.y || 0.1
+          const distanceSquared = Math.max(dx * dx + dy * dy, 900)
+          if (distanceSquared > 90_000) continue
+          const distance = Math.sqrt(distanceSquared)
+          const force = 680 / distanceSquared
+          const fx = dx / distance * force * 38
+          const fy = dy / distance * force * 38
+          if (a.direction !== 'center') { a.vx -= fx; a.vy -= fy }
+          if (b.direction !== 'center') { b.vx += fx; b.vy += fy }
+        }
+      }
+      for (const edge of graph.edges) {
+        const source = particles.current.get(edge.source)
+        const target = particles.current.get(edge.target)
+        if (source === undefined || target === undefined) continue
+        const dx = target.x - source.x
+        const dy = target.y - source.y
+        const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1)
+        const stretch = (distance - 218) * 0.0028
+        const fx = dx / distance * stretch
+        const fy = dy / distance * stretch
+        if (source.direction !== 'center' && edge.source !== draggedId) { source.vx += fx; source.vy += fy }
+        if (target.direction !== 'center' && edge.target !== draggedId) { target.vx -= fx; target.vy -= fy }
+      }
+      let movement = 0
+      for (const [id, particle] of values) {
+        if (particle.direction === 'center') {
+          particle.x = 0
+          particle.y = 0
+          particle.vx = 0
+          particle.vy = 0
+          continue
+        }
+        if (id === draggedId) continue
+        particle.vx *= 0.82
+        particle.vy *= 0.82
+        particle.x += particle.vx
+        particle.y += particle.vy
+        movement += Math.abs(particle.vx) + Math.abs(particle.vy)
+      }
+      renderParticles()
+      if (performance.now() < activeUntil.current || movement > 0.16) frame.current = window.requestAnimationFrame(tick)
+      else frame.current = undefined
+    }
+    frame.current = window.requestAnimationFrame(tick)
+  }, [graph.edges, renderParticles])
+
+  useEffect(() => {
+    const next = new Map<string, IndustryGraphParticle>()
+    for (const node of graph.nodes) {
+      next.set(node.id, {
+        x: node.x * 0.86,
+        y: node.y * 0.82,
+        vx: 0,
+        vy: 0,
+        targetX: node.x,
+        targetY: node.y,
+        direction: node.direction,
+      })
+    }
+    particles.current = next
+    renderParticles()
+    const reduceMotion = typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (!reduceMotion) runPhysics(620)
+    return () => {
+      if (frame.current !== undefined) window.cancelAnimationFrame(frame.current)
+      frame.current = undefined
+    }
+  }, [graph.nodes, renderParticles, runPhysics])
+
+  useEffect(() => {
+    onReady(() => {
+      setPan({ x: 0, y: 0 })
+      setZoom(1)
+      runPhysics(420)
+    })
+    return () => { onReady(undefined) }
+  }, [onReady, runPhysics])
+
+  const startNodeDrag = (event: ReactPointerEvent<SVGGElement>, node: IndustryGraphNodeData): void => {
+    if (node.direction === 'center' || event.button !== 0) return
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    interaction.current = {
+      kind: 'node', pointerId: event.pointerId, nodeId: node.id,
+      clientX: event.clientX, clientY: event.clientY, panX: pan.x, panY: pan.y, moved: false,
+    }
+    runPhysics(1_200)
+  }
+  const startPan = (event: ReactPointerEvent<SVGSVGElement>): void => {
+    if (event.button !== 0) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    interaction.current = {
+      kind: 'pan', pointerId: event.pointerId, nodeId: '',
+      clientX: event.clientX, clientY: event.clientY, panX: pan.x, panY: pan.y, moved: false,
+    }
+  }
+  const movePointer = (event: ReactPointerEvent<SVGSVGElement>): void => {
+    const active = interaction.current
+    if (active === undefined || active.pointerId !== event.pointerId) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const scale = rect.width === 0 ? 1 : 1_280 / rect.width
+    const dx = (event.clientX - active.clientX) * scale / zoom
+    const dy = (event.clientY - active.clientY) * scale / zoom
+    if (Math.abs(dx) + Math.abs(dy) > 3) active.moved = true
+    if (active.kind === 'pan') {
+      setPan({ x: active.panX + dx * zoom, y: active.panY + dy * zoom })
+      return
+    }
+    const particle = particles.current.get(active.nodeId)
+    if (particle === undefined) return
+    particle.x += dx
+    particle.y += dy
+    active.clientX = event.clientX
+    active.clientY = event.clientY
+    renderParticles()
+  }
+  const stopPointer = (event: ReactPointerEvent<SVGSVGElement>): void => {
+    const active = interaction.current
+    if (active === undefined || active.pointerId !== event.pointerId) return
+    interaction.current = undefined
+    if (active.kind === 'node') {
+      const node = graph.nodes.find(item => item.id === active.nodeId)
+      if (!active.moved && node !== undefined) {
+        if (node.code === '') onLeaf(node.name)
+        else onDrill({ code: node.code, name: node.name })
+      } else {
+        runPhysics(900)
+      }
+    }
+  }
+  const zoomGraph = (event: ReactWheelEvent<SVGSVGElement>): void => {
+    event.preventDefault()
+    setZoom(current => Math.min(2.2, Math.max(0.42, current * Math.exp(-event.deltaY * 0.0012))))
+  }
+
+  return (
+    <svg
+      className={css.industryPhysicsGraph}
+      viewBox="-640 -400 1280 800"
+      role="img"
+      aria-label="可缩放、可拖动节点的产业链物理图谱"
+      onPointerDown={startPan}
+      onPointerMove={movePointer}
+      onPointerUp={stopPointer}
+      onPointerCancel={stopPointer}
+      onWheel={zoomGraph}
+    >
+      <defs>
+        <marker id="industry-graph-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+          <path d="M0,0 L7,3.5 L0,7 Z" />
+        </marker>
+      </defs>
+      <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
+        <g className={css.industryPhysicsEdges}>
+          {graph.edges.map((edge) => {
+            const source = positions[edge.source]
+            const target = positions[edge.target]
+            if (source === undefined || target === undefined) return null
+            return <line key={edge.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} />
+          })}
+        </g>
+        <g className={css.industryPhysicsNodes}>
+          {graph.nodes.map((node) => {
+            const position = positions[node.id] ?? { x: node.x, y: node.y }
+            return (
+              <g
+                key={node.id}
+                data-graph-node
+                data-direction={node.direction}
+                data-expandable={node.expandable || undefined}
+                role={node.direction === 'center' ? undefined : 'button'}
+                tabIndex={node.direction === 'center' ? undefined : 0}
+                aria-label={node.direction === 'center'
+                  ? `中心公司 ${node.name} ${node.code}`
+                  : `${node.name}${node.code === '' ? '，叶子节点' : `，点击钻取 ${node.code}`}`}
+                transform={`translate(${position.x} ${position.y})`}
+                onPointerDown={(event) => { startNodeDrag(event, node) }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  if (node.code === '') onLeaf(node.name)
+                  else onDrill({ code: node.code, name: node.name })
+                }}
+              >
+                <rect x={node.direction === 'center' ? -92 : -79} y={node.direction === 'center' ? -36 : -29} width={node.direction === 'center' ? 184 : 158} height={node.direction === 'center' ? 72 : 58} rx="12" />
+                <text textAnchor="middle" dominantBaseline="middle">
+                  <tspan x="0" dy={node.code === '' ? '0' : '-0.55em'}>{node.name}</tspan>
+                  {node.code !== '' && <tspan x="0" dy="1.5em">{node.code}</tspan>}
+                </text>
+              </g>
+            )
+          })}
+        </g>
+      </g>
+    </svg>
+  )
+}
+
 /** Industry graph, company lookup and event transmission backed by two registered services. */
-export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: IndustryChainPageProps) {
+export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOpenStock }: IndustryChainPageProps) {
   const dataStatus = useDataResource(requestData)
   const stats = useDataResource(requestData)
   const companies = useDataResource(requestData)
@@ -1182,12 +1640,32 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
   const bootstrapPoll = useRef<number>()
   const initialQuery = useRef(query.trim())
   const initialSearchPending = useRef(initialQuery.current !== '')
+  const chainExpandButtonRef = useRef<HTMLButtonElement>(null)
+  const chainCloseButtonRef = useRef<HTMLButtonElement>(null)
+  const chainGraphResetRef = useRef<() => void>()
   const [searchedKeyword, setSearchedKeyword] = useState('')
   const [searchAttempted, setSearchAttempted] = useState(false)
   const [searchValidation, setSearchValidation] = useState('')
   const [selectedCompany, setSelectedCompany] = useState<IndustryCompanySelection>()
+  const [chainPath, setChainPath] = useState<readonly IndustryCompanySelection[]>([])
+  const [chainLeafNotice, setChainLeafNotice] = useState('')
+  const [impactSecurityNames, setImpactSecurityNames] = useState<Record<string, string>>({})
+  const [chainExpanded, setChainExpanded] = useState(false)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [bootstrapFailed, setBootstrapFailed] = useState(false)
+  const closeExpandedChain = useCallback(() => {
+    setChainExpanded(false)
+    window.setTimeout(() => { chainExpandButtonRef.current?.focus() }, 0)
+  }, [])
+  useEffect(() => {
+    if (!chainExpanded) return
+    chainCloseButtonRef.current?.focus()
+    const keydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeExpandedChain()
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.removeEventListener('keydown', keydown) }
+  }, [chainExpanded, closeExpandedChain])
   const stopBootstrapPoll = useCallback(() => {
     const timer = bootstrapPoll.current
     bootstrapPoll.current = undefined
@@ -1215,8 +1693,28 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
     companies.run({ operation: 'industry-chain.companies', input: { keyword: cleanKeyword, limit: 20 } })
   }, [companies.run])
   const loadChain = useCallback((company: IndustryCompanySelection) => {
+    setChainLeafNotice('')
     chain.run({ operation: 'industry-chain.chain', input: { code: company.code } })
   }, [chain.run])
+  const selectChainCompany = useCallback((company: IndustryCompanySelection, path?: readonly IndustryCompanySelection[]) => {
+    setSelectedCompany(company)
+    setChainPath(current => path ?? [...current, company])
+    loadChain(company)
+  }, [loadChain])
+  const drillChainNode = useCallback((company: IndustryCompanySelection) => {
+    setChainPath((current) => {
+      const existing = current.findIndex(item => item.code === company.code)
+      return existing >= 0 ? current.slice(0, existing + 1) : [...current, company]
+    })
+    setSelectedCompany(company)
+    loadChain(company)
+  }, [loadChain])
+  const showChainLeaf = useCallback((name: string) => {
+    setChainLeafNotice(`${name} 当前没有可继续展开的上市公司链路。`)
+  }, [])
+  const receiveChainGraphReset = useCallback((reset: (() => void) | undefined) => {
+    chainGraphResetRef.current = reset
+  }, [])
 
   useEffect(loadDataStatus, [loadDataStatus])
   useEffect(loadImpact, [loadImpact])
@@ -1274,6 +1772,44 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
   const upLevels = records(chainValue.up_levels)
   const downLevels = records(chainValue.down_levels)
   const events = records(asRecord(impact.state.value).events)
+  const seededImpactNames: Record<string, string> = {}
+  const impactCodes = new Set<string>()
+  for (const event of events) {
+    for (const ticker of tickerItems(event.tickers)) {
+      impactCodes.add(ticker.code)
+      if (ticker.name !== '') seededImpactNames[ticker.code] = ticker.name
+    }
+    for (const code of strings(event.impact_codes)) impactCodes.add(code)
+    Object.assign(seededImpactNames, impactSourceSecurityNames(event.impact_by))
+  }
+  const unresolvedImpactCodeKey = [...impactCodes]
+    .filter(code => (impactSecurityNames[code] ?? seededImpactNames[code] ?? '') === '')
+    .sort()
+    .join('|')
+  useEffect(() => {
+    const codes = unresolvedImpactCodeKey === '' ? [] : unresolvedImpactCodeKey.split('|')
+    if (codes.length === 0) return
+    const requestState = { cancelled: false }
+    void (async () => {
+      for (let start = 0; start < codes.length; start += 4) {
+        const batch = codes.slice(start, start + 4)
+        const resolved = await Promise.all(batch.map(async (code): Promise<readonly [string, string]> => {
+          try {
+            const result = asRecord(await requestData({
+              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
+            }))
+            const match = records(result.items).find(item => text(item.code, '').trim() === code)
+            return [code, text(match?.name, '').trim()] as const
+          } catch {
+            return [code, ''] as const
+          }
+        }))
+        if (requestState.cancelled) return
+        setImpactSecurityNames(current => ({ ...current, ...Object.fromEntries(resolved) }))
+      }
+    })()
+    return () => { requestState.cancelled = true }
+  }, [requestData, unresolvedImpactCodeKey])
   const statsValue = asRecord(stats.state.value)
   const statusValue = asRecord(dataStatus.state.value)
   const filesCompleted = number(statusValue.files_completed) ?? 0
@@ -1284,6 +1820,31 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
   const selectedReference = selectedCompany === undefined
     ? ''
     : `${selectedCompany.code} ${selectedCompany.name}`.trim()
+  const securityNames = { ...seededImpactNames, ...impactSecurityNames }
+  const chainNavigationNodes = [
+    ...upLevels.flatMap(level => records(level.nodes).map(node => ({ node, direction: '上游' }))),
+    ...downLevels.flatMap(level => records(level.nodes).map(node => ({ node, direction: '下游' }))),
+  ]
+  const renderStockLinks = (codes: readonly string[], empty: string): ReactNode => {
+    if (codes.length === 0) return empty
+    return (
+      <span className={css.securityLinkList}>
+        {codes.map((code) => {
+          const name = securityNames[code] ?? ''
+          const label = name === '' ? code : `${name} · ${code}`
+          return (
+            <button
+              type="button"
+              className={css.codeButton}
+              key={code}
+              aria-label={`查看${label}个股详情`}
+              onClick={() => { onOpenStock(code) }}
+            >{label}</button>
+          )
+        })}
+      </span>
+    )
+  }
 
   const renderLevels = (levels: readonly Record<string, unknown>[], direction: 'up' | 'down'): ReactNode => {
     if (levels.length === 0) {
@@ -1318,6 +1879,116 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
       )
     })
   }
+
+  const renderChainLayout = (expanded = false): ReactNode => (
+    <div className={`${css.industryChainLayout} ${expanded ? css.industryChainLayoutExpanded : ''}`}>
+      <div className={css.industryDirection} aria-label="上游分层关系">
+        <h3>上游</h3>
+        {renderLevels(upLevels, 'up')}
+      </div>
+      <article className={css.industryCenter}>
+        <span>中心公司</span>
+        <h3>{text(center.name, selectedCompany?.name ?? '未命名公司')}</h3>
+        <strong>{text(center.code, selectedCompany?.code ?? '')}</strong>
+        <p>{text(center.industry, '行业未标注')}</p>
+        <dl className={css.reportMeta}>
+          <div><dt>原材料</dt><dd>{industryCount(center.material_count, ' 项')}</dd></div>
+          <div><dt>供应关系</dt><dd>{industryCount(center.supplier_count, ' 条')}</dd></div>
+          <div><dt>主营产品</dt><dd>{industryCount(center.product_count, ' 项')}</dd></div>
+          <div><dt>客户关系</dt><dd>{industryCount(center.customer_count, ' 条')}</dd></div>
+        </dl>
+      </article>
+      <div className={css.industryDirection} aria-label="下游分层关系">
+        <h3>下游</h3>
+        {renderLevels(downLevels, 'down')}
+      </div>
+    </div>
+  )
+
+  const expandedChainDialog = chainExpanded && (
+    <div className={css.industryGraphBackdrop} role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) closeExpandedChain()
+    }}>
+      <section
+        className={css.industryGraphDialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="industry-graph-dialog-title"
+        aria-describedby="industry-graph-dialog-hint"
+      >
+        <header className={css.industryGraphHeader}>
+          <div>
+            <span>产业链图谱</span>
+            <h2 id="industry-graph-dialog-title">
+              {text(center.name, selectedCompany?.name ?? '未命名公司')} · {text(center.code, selectedCompany?.code ?? '')}
+            </h2>
+            <p id="industry-graph-dialog-hint">拖动画布平移、滚轮缩放；拖动节点可感受关系回弹，点击带代码的节点继续上下钻。</p>
+          </div>
+          <div className={css.moduleToolbar}>
+            <button type="button" className={css.secondaryButton} onClick={() => {
+              chainGraphResetRef.current?.()
+            }}>适应画布</button>
+            <button ref={chainCloseButtonRef} type="button" className={css.secondaryButton} onClick={closeExpandedChain}>关闭</button>
+          </div>
+        </header>
+        <nav className={css.industryGraphBreadcrumbs} aria-label="产业链钻取路径">
+          {chainPath.map((company, index) => (
+            <span key={`${company.code}-${index}`}>
+              {index > 0 && <i aria-hidden="true">›</i>}
+              <button
+                type="button"
+                aria-current={index === chainPath.length - 1 ? 'page' : undefined}
+                onClick={() => { selectChainCompany(company, chainPath.slice(0, index + 1)) }}
+              >{company.name || company.code}</button>
+            </span>
+          ))}
+        </nav>
+        <div className={css.industryGraphViewport}>
+          <IndustryPhysicsGraph
+            center={center}
+            upLevels={upLevels}
+            downLevels={downLevels}
+            onDrill={drillChainNode}
+            onLeaf={showChainLeaf}
+            onReady={receiveChainGraphReset}
+          />
+          <aside className={css.industryGraphNavigator} aria-label="可钻取公司节点">
+            <strong>继续钻取</strong>
+            {chainNavigationNodes.map(({ node, direction }, index) => {
+              const name = text(node.name, '未命名环节')
+              const code = text(node.code, '')
+              return (
+                <button
+                  type="button"
+                  disabled={code === ''}
+                  key={`${direction}-${text(node.id, name)}-${index}`}
+                  onClick={() => {
+                    if (code === '') setChainLeafNotice(`${name} 当前没有可继续展开的上市公司链路。`)
+                    else drillChainNode({ code, name })
+                  }}
+                >
+                  <span>{name}</span>
+                  <small>{code === '' ? '叶子节点' : `${direction} · ${code}`}</small>
+                </button>
+              )
+            })}
+          </aside>
+          <div className={css.industryGraphLegend} aria-hidden="true">
+            <span data-direction="up">上游</span>
+            <span data-direction="center">中心公司</span>
+            <span data-direction="down">下游</span>
+            <small>虚线节点暂无可钻取公司</small>
+          </div>
+          {chainLeafNotice !== '' && (
+            <div className={css.industryGraphNotice} role="status">
+              <span>{chainLeafNotice}</span>
+              <button type="button" onClick={() => { setChainLeafNotice('') }} aria-label="关闭提示">×</button>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  )
 
   return (
     <div className={css.pageScroll}>
@@ -1444,8 +2115,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
                       key={`${code}-${index}`}
                       onClick={() => {
                         const selection = { code, name }
-                        setSelectedCompany(selection)
-                        loadChain(selection)
+                        selectChainCompany(selection, [selection])
                       }}
                     >
                       <span><strong>{name || '未命名公司'}</strong><small>{text(company.industry, '行业未标注')}</small></span>
@@ -1462,7 +2132,19 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
           <section className={css.industryChainPanel} aria-labelledby="industry-chain-title">
             <div className={css.sectionHeading}>
               <div><h2 id="industry-chain-title">上下游链路</h2><small>按服务端返回的层级与传导字段展示，不补画缺失关系</small></div>
-              {selectedCompany !== undefined && <span>{selectedCompany.name}（{selectedCompany.code}）</span>}
+              {selectedCompany !== undefined && (
+                <div className={css.industryChainActions}>
+                  <span>{selectedCompany.name}（{selectedCompany.code}）</span>
+                  {Object.keys(center).length > 0 && (
+                    <button
+                      ref={chainExpandButtonRef}
+                      type="button"
+                      className={css.secondaryButton}
+                      onClick={() => { setChainExpanded(true) }}
+                    >放大查看</button>
+                  )}
+                </div>
+              )}
             </div>
             {selectedCompany === undefined && <Empty>请先从公司检索结果中选择一家公司。</Empty>}
             {selectedCompany !== undefined && chain.state.phase === 'loading' && chain.state.value === undefined && <BusyRows />}
@@ -1477,30 +2159,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
             {selectedCompany !== undefined && chain.state.value !== undefined && Object.keys(center).length === 0 && chain.state.phase === 'success' && (
               <Empty>该公司当前没有可展示的产业链数据。</Empty>
             )}
-            {Object.keys(center).length > 0 && (
-              <div className={css.industryChainLayout}>
-                <div className={css.industryDirection} aria-label="上游分层关系">
-                  <h3>上游</h3>
-                  {renderLevels(upLevels, 'up')}
-                </div>
-                <article className={css.industryCenter}>
-                  <span>中心公司</span>
-                  <h3>{text(center.name, selectedCompany?.name ?? '未命名公司')}</h3>
-                  <strong>{text(center.code, selectedCompany?.code ?? '')}</strong>
-                  <p>{text(center.industry, '行业未标注')}</p>
-                  <dl className={css.reportMeta}>
-                    <div><dt>原材料</dt><dd>{industryCount(center.material_count, ' 项')}</dd></div>
-                    <div><dt>供应关系</dt><dd>{industryCount(center.supplier_count, ' 条')}</dd></div>
-                    <div><dt>主营产品</dt><dd>{industryCount(center.product_count, ' 项')}</dd></div>
-                    <div><dt>客户关系</dt><dd>{industryCount(center.customer_count, ' 条')}</dd></div>
-                  </dl>
-                </article>
-                <div className={css.industryDirection} aria-label="下游分层关系">
-                  <h3>下游</h3>
-                  {renderLevels(downLevels, 'down')}
-                </div>
-              </div>
-            )}
+            {Object.keys(center).length > 0 && renderChainLayout()}
           </section>
         </>
       )}
@@ -1519,15 +2178,16 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
         <div className={css.moduleGrid} aria-label="事件产业链影响">
           {events.map((event, index) => {
             const codes = strings(event.impact_codes)
+            const directCodes = tickerItems(event.tickers).map(ticker => ticker.code)
             const industries = strings(event.impact_industries)
             const sources = strings(event.impact_by)
             return (
               <article className={css.moduleCard} key={`${text(event.id)}-${index}`}>
                 <div className={css.sectionHeading}><strong>{text(event.summary, '未命名事件')}</strong><StatusBadge value={text(event.direction)} /></div>
                 <dl className={css.reportMeta}>
-                  <div><dt>直接标的</dt><dd>{tickerLabels(event.tickers).join('、') || '—'}</dd></div>
+                  <div><dt>直接标的</dt><dd>{renderStockLinks(directCodes, '—')}</dd></div>
                   <div><dt>直接行业</dt><dd>{strings(event.industries).join('、') || '—'}</dd></div>
-                  <div><dt>扩展标的</dt><dd>{codes.join('、') || '图谱暂无扩展'}</dd></div>
+                  <div><dt>扩展标的</dt><dd>{renderStockLinks(codes, '图谱暂无扩展')}</dd></div>
                   <div><dt>扩展行业</dt><dd>{industries.join('、') || '图谱暂无扩展'}</dd></div>
                 </dl>
                 <small>传导来源：{sources.join('、') || '未返回；当前保持事件原样'}</small>
@@ -1537,6 +2197,9 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze }: In
         </div>
         {impact.state.phase === 'success' && events.length === 0 && <Empty>当前事件源没有可展示的产业链事件。</Empty>}
       </section>
+      {expandedChainDialog && (typeof document === 'undefined'
+        ? expandedChainDialog
+        : createPortal(expandedChainDialog, document.body))}
     </div>
   )
 }
@@ -1558,6 +2221,32 @@ export function ReportCenter({ requestData, onClose, onAnalyze }: ReportCenterPr
   const load = useCallback(() => { list.run({ operation: 'trading-core.reports', input: { limit: 100 } }) }, [list.run])
   useEffect(load, [load])
   const items = records(asRecord(list.state.value).items)
+  const securityCodeKey = reportSecurityCodes(items).join('|')
+  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    const codes = securityCodeKey === '' ? [] : securityCodeKey.split('|')
+    if (codes.length === 0) return
+    const requestState = { cancelled: false }
+    void (async () => {
+      for (let start = 0; start < codes.length; start += 3) {
+        const batch = codes.slice(start, start + 3)
+        const resolved = await Promise.all(batch.map(async (code): Promise<readonly [string, string]> => {
+          try {
+            const result = asRecord(await requestData({
+              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
+            }))
+            const match = records(result.items).find(item => text(item.code, '').trim() === code)
+            return [code, text(match?.name, '').trim()] as const
+          } catch {
+            return [code, ''] as const
+          }
+        }))
+        if (requestState.cancelled) return
+        setSecurityNames(current => ({ ...current, ...Object.fromEntries(resolved) }))
+      }
+    })()
+    return () => { requestState.cancelled = true }
+  }, [requestData, securityCodeKey])
 
   const selectedListItem = items.find(item => text(item.id, '') === selectedId)
   useEffect(() => {
@@ -1592,7 +2281,7 @@ export function ReportCenter({ requestData, onClose, onAnalyze }: ReportCenterPr
   const fallbackReports = asRecord(report.reports)
   const fallbackSections = Object.entries(fallbackReports).map(([key, value]) => ({ key, title: key, content: value }))
   const visibleSections = sections.length > 0 ? sections : fallbackSections
-  const title = text(report.title, text(selectedListItem?.title, '投研报告'))
+  const title = reportTitleLabel(Object.keys(report).length > 0 ? report : asRecord(selectedListItem), securityNames)
   const detailMatchesSelection = selectedListItem !== undefined && detailFor === selectedId
 
   const dialog = (
@@ -1611,7 +2300,7 @@ export function ReportCenter({ requestData, onClose, onAnalyze }: ReportCenterPr
               const id = text(item.id, `report-${index}`)
               return (
                 <button key={id} type="button" className={`${css.reportItem} ${selectedId === id ? css.reportItemActive : ''}`} aria-pressed={selectedId === id} onClick={() => { setSelectedId(id) }}>
-                  <strong>{text(item.title, '未命名报告')}</strong>
+                  <strong>{reportTitleLabel(item, securityNames)}</strong>
                   <span>{reportKindLabel(item.kind)} · {reportTimeLabel(item.created_at)}</span>
                 </button>
               )
@@ -1625,19 +2314,25 @@ export function ReportCenter({ requestData, onClose, onAnalyze }: ReportCenterPr
             {detailMatchesSelection && detail.state.value !== undefined && (
               <>
                 <div className={css.sectionHeading}>
-                  <div><h2>{title}</h2><p>{text(report.summary, text(selectedListItem.summary, ''))}</p></div>
+                  <div>
+                    <h2>{title}</h2>
+                    <p>{reportSubjectLabel(report, securityNames)
+                      || reportSubjectLabel(asRecord(selectedListItem), securityNames)}</p>
+                  </div>
                   <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'reports', reportId: selectedId }); onClose() }}>AI 复核</button>
                 </div>
                 <dl className={css.reportMeta}>
                   <div><dt>类型</dt><dd>{reportKindLabel(report.kind ?? selectedListItem.kind)}</dd></div>
                   <div><dt>生成时间</dt><dd>{reportTimeLabel(report.created_at ?? selectedListItem.created_at)}</dd></div>
-                  <div><dt>报告编号</dt><dd>{selectedId}</dd></div>
+                  <div><dt>报告编号</dt><dd title={selectedId}>{compactIdentifier(selectedId)}</dd></div>
                 </dl>
                 <div className={css.reportSections}>
                   {visibleSections.map((section, index) => (
                     <section key={`${text(section.key)}-${index}`}>
                       <h3>{text(section.title, text(section.key, `章节 ${index + 1}`))}</h3>
-                      <div className={css.reportMarkdown}><MarkdownText text={text(section.content)} /></div>
+                      <div className={css.reportMarkdown}>
+                        <MarkdownText text={humanizeReportMarkdown(section.content, securityNames)} />
+                      </div>
                     </section>
                   ))}
                   {visibleSections.length === 0 && <Empty>这份报告没有可展示的正文。</Empty>}

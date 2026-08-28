@@ -39,6 +39,7 @@ async function fixture() {
   await write(join(root, 'backend/dsh-trading-core/.env'), 'SECRET_CANARY')
   await write(join(root, 'backend/dsh-trading-core/env/private.py'), 'SECRET_CANARY')
   await write(join(root, 'backend/dsh-trading-core/data/cache.json'), 'SECRET_CANARY')
+  await write(join(root, 'backend/industry-chain/dsh-plugin/node_modules/cordis/index.js'), 'SECRET_CANARY')
   await write(join(root, 'backend/dsh-trading-core/tests/test_app.py'), 'SECRET_CANARY')
   await write(join(root, 'backend/market-watch/market_watch/__pycache__/app.pyc'), 'SECRET_CANARY')
   await write(join(root, 'backend/market-watch/logs/runtime.log'), 'SECRET_CANARY')
@@ -133,7 +134,7 @@ describe('investment Python sidecar builder', () => {
     ]))
     expect(firstJson).not.toContain('SECRET_CANARY')
     expect(first.files.some(
-      entry => /(?:^|\/)(?:env|data|logs|tests|__pycache__)(?:\/|$)|\.env$|\.pyc$|\.log$/u.test(entry.path),
+      entry => /(?:^|\/)(?:env|data|logs|node_modules|tests|__pycache__)(?:\/|$)|\.env$|\.pyc$|\.log$/u.test(entry.path),
     )).toBe(false)
     expect(setup.runCommand).toHaveBeenCalledWith(
       expect.stringContaining(join('runtime', 'bin', 'python3')),

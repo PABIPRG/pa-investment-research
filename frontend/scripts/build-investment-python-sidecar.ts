@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile)
 const TARGETS = ['darwin-arm64', 'darwin-x64', 'win32-x64'] as const
 const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
-const EXCLUDED_SEGMENTS = new Set(['.git', '__pycache__', 'data', 'env', 'logs', 'tests'])
+const EXCLUDED_SEGMENTS = new Set(['.git', '__pycache__', 'data', 'env', 'logs', 'node_modules', 'tests'])
 
 export type InvestmentSidecarTarget = typeof TARGETS[number]
 

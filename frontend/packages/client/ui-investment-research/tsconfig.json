@@ -1,6 +1,10 @@
 {
   "extends": "../../../tsconfig.base.client.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "resolveJsonModule": true
+  },
   "include": ["src"],
   "references": [
     { "path": "../../../vendor/cordis" },
