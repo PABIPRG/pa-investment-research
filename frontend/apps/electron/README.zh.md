@@ -15,7 +15,7 @@ pnpm dsh electron
 pnpm dsh electron --profile investment-research
 ```
 
-`electron` 是应用选择器，不是 profile 名称：`dsh --profile electron` 会查找用户 profile，不会启动桌面 runtime。`pnpm dsh electron` 检查已构建的主进程、沙箱化 preload 与 renderer，再通过应用本地的 Electron executable 启动默认 `web` profile，并且不会重新构建。`pnpm dsh electron --profile investment-research` 是五层投研 profile 的产品入口；配置诊断应单独使用 `pnpm dsh --profile investment-research --dump-default-config`。`pnpm run start:electron` 仍是构建后启动的便捷命令；`pnpm --filter @deepseek-ai/dsh-electron run start` 可直接启动现有产物。
+`electron` 是应用选择器，不是 profile 名称：`dsh --profile electron` 会查找用户 profile，不会启动桌面 runtime。`pnpm dsh electron` 检查已构建的主进程、沙箱化 preload 与 renderer，再通过应用本地的 Electron executable 启动默认 `web` profile，并且不会重新构建。源码启动会把产品 PNG 应用于 macOS Dock 和原生窗口，打包应用则使用 manifest 持有的 ICNS。`pnpm dsh electron --profile investment-research` 是五层投研 profile 的产品入口；配置诊断应单独使用 `pnpm dsh --profile investment-research --dump-default-config`。`pnpm run start:electron` 仍是构建后启动的便捷命令；`pnpm --filter @deepseek-ai/dsh-electron run start` 可直接启动现有产物。
 
 ## 投研 backend 部署
 

@@ -796,7 +796,7 @@ export function StrategyResearchPage({
                   <p className={css.contextHint}>回测结论：{text(backtest.reason)}</p>
                 )}
                 <div className={css.moduleToolbar}>
-                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { onSelectStrategy(id); setDetailItem(item) }}>查看详情</button>
+                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>查看详情</button>
                   <button type="button" className={css.secondaryButton} disabled={busyAction !== '' || category === 'archived'} onClick={() => { onSelectStrategy(id); void runStrategy(id) }}>
                     {busyAction === `run:${id}` ? '回测中…' : '运行回测'}
                   </button>

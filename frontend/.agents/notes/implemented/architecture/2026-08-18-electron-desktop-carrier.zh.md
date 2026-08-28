@@ -20,7 +20,7 @@ Connection 协议保持单一实现。renderer 通过[应用自有的 URL scheme
 
 客户端模块注册表可以在有或没有 Web server 时运行。Web server 存在时，可选注入会安装 `/plugins` 与 index manifest tap。其他载体可通过 `additionalPackages` 配置某个 Host 载体配置行已被禁用的客户端包，再直接读取 `graph()` 与 `bundleFile()`。Electron 以此加入 Connection 客户端 bundle，并从自有 scheme 提供同样的相对 bundle URL 与注入后的 index 文档。renderer 是 `apps/web` 的第二份 Vite 构建，资源路径为相对路径；没有分叉任何 UI 代码。
 
-Preload 只暴露 `openStream` 与 `closeStream`。`BrowserWindow` 启用 context isolation、Chromium sandbox 与 Web security，并禁用 Node integration。主进程只接受该窗口主 frame 的 IPC，验证每个请求，拒绝权限请求和窗口内导航，并且只把 HTTP(S) 链接交给外部打开。Electron readiness 发生在初始模块求值之后，因此 ESM main 模块会调度异步启动，而不会在顶层等待 `app.whenReady()`，并在同一段就绪前窗口内注册该 scheme 的特权。应用持有单实例锁，并在退出时排空 IPC 与 Cordis 配置树。
+Preload 只暴露 `openStream` 与 `closeStream`。`BrowserWindow` 启用 context isolation、Chromium sandbox 与 Web security，禁用 Node integration，并把 manifest 持有的运行态 PNG 用作原生窗口图标。主进程在 readiness 之后还会把这张 PNG 应用于 macOS Dock；打包流程继续使用 manifest 持有的 ICNS。主进程只接受该窗口主 frame 的 IPC，验证每个请求，拒绝权限请求和窗口内导航，并且只把 HTTP(S) 链接交给外部打开。Electron readiness 发生在初始模块求值之后，因此 ESM main 模块会调度异步启动，而不会在顶层等待 `app.whenReady()`，并在同一段就绪前窗口内注册该 scheme 的特权。应用持有单实例锁，并在退出时排空 IPC 与 Cordis 配置树。
 
 打包先通过 `pnpm deploy` 创建自包含的生产部署，再调用 Electron Packager，并关闭依赖裁剪，因为该部署已经包含生产依赖闭包。这样可以避免 Electron Packager 的依赖遍历器把 pnpm 隔离的工作区链接当作 npm 布局，而不必把仓库切换到 `node-linker=hoisted`。Electron Forge 7.8.3 在已打包应用上运行 maker；当前配置的 maker 是未签名的逐平台 ZIP，签名、公证与 installer maker 保留为分发配置。打包保持禁用 `asar`，因为客户端模块系统按文件系统路径读取独立构建的插件 bundle。工作区显式记录 pnpm 常规的 hidden-hoist 默认值（`hoistPattern: ['*']`），因为 Forge 要求可见的磁盘 hoist 策略。Forge 的 `@electron/rebuild@3.7.2` 通过 git 依赖指定 Electron 的 node-gyp fork，pnpm 的 `blockExoticSubdeps` 会正确拒绝它；父级定向 override 改为选择 Electron 已发布到 registry 的 `@electron/node-gyp@10.2.0-electron.2`，而不是削弱工作区策略。
 
@@ -37,4 +37,4 @@ Preload 只暴露 `openStream` 与 `closeStream`。`BrowserWindow` 启用 contex
 - `pnpm dsh electron` 启动已有桌面产物而不重新构建。`pnpm run start:electron` 构建并启动这些产物；`pnpm run package:electron` 创建未压缩应用，`pnpm run make:electron` 在 `apps/electron/out/` 下创建当前平台的 ZIP。
 - 桌面与 Web 使用相同的 profile、`$DSH_HOME`、Host 服务、客户端插件与会话数据。载体差异保留在 Connection 和应用组装中。
 - Electron 禁用 client HMR 与 profile patch 实时监视。客户端 bundle 变更需要重新构建并重启；profile patch 变更需要重启。
-- 无密钥证明覆盖事件流生命周期、进程内 RPC 分发、无 Web server 的客户端模块组合、ESM 生命周期调度、公开裸包回退路径、两个 aggregate TypeScript program、完整工作区构建、真实 Electron renderer DOM 与 Forge 打包。
+- 无密钥证明覆盖事件流生命周期、进程内 RPC 分发、无 Web server 的客户端模块组合、ESM 生命周期调度、运行态 Dock 与窗口图标、公开裸包回退路径、两个 aggregate TypeScript program、完整工作区构建、真实 Electron renderer DOM 与 Forge 打包。

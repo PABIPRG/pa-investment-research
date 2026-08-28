@@ -8,6 +8,7 @@ interface ElectronPackageManifest {
   desktopIdentity?: {
     appBundleId?: string
     icon?: string
+    runtimeIcon?: string
   }
   productName?: string
 }
@@ -31,4 +32,8 @@ export const appIdentity = Object.freeze({
   executableName: productName,
   iconPath: resolve(electronAppDir, required(manifest.desktopIdentity?.icon, 'desktopIdentity.icon')),
   name: productName,
+  runtimeIconPath: resolve(
+    electronAppDir,
+    required(manifest.desktopIdentity?.runtimeIcon, 'desktopIdentity.runtimeIcon'),
+  ),
 })

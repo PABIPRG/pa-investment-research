@@ -10,8 +10,9 @@ import type {
   ElectronStreamKind,
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
-import { ElectronConnectionService } from './index.ts'
+import { appIdentity } from './app-identity.ts'
 import { resolveElectronProfile } from './args.ts'
+import { ElectronConnectionService } from './index.ts'
 import { APP_INDEX_URL, APP_SCHEME, createAppProtocolHandler } from './protocol.ts'
 import {
   STREAM_CLOSE_CHANNEL,
@@ -109,6 +110,7 @@ async function runApplication(): Promise<void> {
   app.on('window-all-closed', () => { consume(quitOnce()) })
   try {
     await app.whenReady()
+    app.dock?.setIcon(appIdentity.runtimeIconPath)
     const { ctx, shutdown } = await runProfile({
       environment: loadLayeredEnv('dsh'),
       profile: PROFILE,
@@ -135,6 +137,7 @@ async function runApplication(): Promise<void> {
       minWidth: 900,
       minHeight: 640,
       show: false,
+      icon: appIdentity.runtimeIconPath,
       backgroundColor: '#111827',
       webPreferences: {
         preload: PRELOAD,

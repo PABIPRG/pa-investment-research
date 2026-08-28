@@ -15,7 +15,7 @@ pnpm dsh electron
 pnpm dsh electron --profile investment-research
 ```
 
-`electron` is an application selector, not a profile name: `dsh --profile electron` looks for a user profile and does not launch the desktop runtime. `pnpm dsh electron` checks the built main process, sandboxed preload, and renderer, then starts the default `web` profile through its local Electron executable without rebuilding. `pnpm dsh electron --profile investment-research` is the product entry for the five-layer investment profile; use `pnpm dsh --profile investment-research --dump-default-config` separately for configuration diagnostics. `pnpm run start:electron` remains the build-and-launch convenience command; `pnpm --filter @deepseek-ai/dsh-electron run start` launches existing artifacts directly.
+`electron` is an application selector, not a profile name: `dsh --profile electron` looks for a user profile and does not launch the desktop runtime. `pnpm dsh electron` checks the built main process, sandboxed preload, and renderer, then starts the default `web` profile through its local Electron executable without rebuilding. Source launches apply the product PNG to the macOS Dock and native window, while packaged applications use the manifest-owned ICNS. `pnpm dsh electron --profile investment-research` is the product entry for the five-layer investment profile; use `pnpm dsh --profile investment-research --dump-default-config` separately for configuration diagnostics. `pnpm run start:electron` remains the build-and-launch convenience command; `pnpm --filter @deepseek-ai/dsh-electron run start` launches existing artifacts directly.
 
 ## Investment backend deployment
 

@@ -5,11 +5,14 @@ import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
 
 afterEach(cleanup)
 
-function renderStrategyPage(requestData: ReturnType<typeof vi.fn>) {
+function renderStrategyPage(
+  requestData: ReturnType<typeof vi.fn>,
+  onSelectStrategy: (strategyId: string) => void = () => {},
+) {
   return render(<StrategyResearchPage
     requestData={requestData as never}
     selectedStrategyId=""
-    onSelectStrategy={() => {}}
+    onSelectStrategy={onSelectStrategy}
     onOpenShadow={() => {}}
     onOpenReports={() => {}}
     onAnalyze={() => {}}
@@ -17,6 +20,28 @@ function renderStrategyPage(requestData: ReturnType<typeof vi.fn>) {
 }
 
 describe('策略研究产品事实与确认流程', () => {
+  it('查看详情只打开临时内容，后续策略动作才选择工作对象', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return { items: [{ id: 'strategy-1', name: '详情浏览策略', status: 'active' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+    const onSelectStrategy = vi.fn()
+
+    renderStrategyPage(requestData, onSelectStrategy)
+    const card = (await screen.findByText('详情浏览策略')).closest('article')
+    expect(card).not.toBeNull()
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '查看详情' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '详情浏览策略' })
+    expect(onSelectStrategy).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'AI 评审' }))
+    expect(onSelectStrategy).toHaveBeenCalledWith('strategy-1')
+  })
+
   it('候选卡以股票名称和涨跌色标签展示，不暴露机器策略名', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.strategies') {
