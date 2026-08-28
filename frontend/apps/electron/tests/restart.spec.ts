@@ -21,7 +21,13 @@ interface Deferred {
 }
 
 interface RestartHarness {
-  app: { exit: ReturnType<typeof vi.fn>; quit: ReturnType<typeof vi.fn>; relaunch: ReturnType<typeof vi.fn> }
+  app: {
+    dock: { setIcon: ReturnType<typeof vi.fn> }
+    exit: ReturnType<typeof vi.fn>
+    quit: ReturnType<typeof vi.fn>
+    relaunch: ReturnType<typeof vi.fn>
+  }
+  browserWindowOptions: () => Record<string, unknown> | undefined
   contents: { mainFrame: object }
   emit(name: string, ...args: unknown[]): void
   events: string[]
@@ -67,6 +73,7 @@ async function start(): Promise<RestartHarness> {
     webContents: contents,
   }
   const app = {
+    dock: { setIcon: vi.fn() },
     exit: vi.fn((code: number) => { events.push(`fail-loud-exit:${code}`) }),
     on: vi.fn((name: string, listener: (...args: unknown[]) => void) => { handlers.set(name, listener) }),
     quit: vi.fn(() => { events.push('quit') }),
@@ -103,9 +110,10 @@ async function start(): Promise<RestartHarness> {
     ...{ restart: options.restart },
   }))
 
+  const BrowserWindow = vi.fn(function BrowserWindow(_options: Record<string, unknown>) { return window })
   vi.doMock('electron', () => ({
     app,
-    BrowserWindow: vi.fn(function BrowserWindow() { return window }),
+    BrowserWindow,
     ipcMain,
     net: { fetch: vi.fn() },
     protocol: { handle: vi.fn(), registerSchemesAsPrivileged: vi.fn() },
@@ -125,6 +133,7 @@ async function start(): Promise<RestartHarness> {
   const emit = (name: string, ...args: unknown[]): void => { handlers.get(name)?.(...args) }
   return {
     app,
+    browserWindowOptions: () => BrowserWindow.mock.calls[0]?.[0],
     contents,
     emit,
     events,
@@ -153,6 +162,18 @@ afterEach(() => {
 })
 
 describe('Electron restart', () => {
+  it('applies the product icon to the runtime Dock and native window', async () => {
+    const harness = await start()
+    await finishStartup(harness)
+
+    await vi.waitFor(() => {
+      const runtimeIcon = harness.browserWindowOptions()?.icon
+      expect(runtimeIcon).toBeTypeOf('string')
+      expect(runtimeIcon).toMatch(/assets[/\\]app-icon\.png$/u)
+      expect(harness.app.dock.setIcon).toHaveBeenCalledWith(runtimeIcon)
+    })
+  })
+
   it('registers ordinary quit handlers before readiness and joins them to lifecycle teardown', async () => {
     const harness = await start()
     const beforeQuit = { preventDefault: vi.fn() }
