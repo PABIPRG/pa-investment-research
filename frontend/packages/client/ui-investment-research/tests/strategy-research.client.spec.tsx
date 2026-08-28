@@ -125,6 +125,51 @@ describe('策略研究产品事实与确认流程', () => {
     expect(dialog.textContent).not.toContain('动量条件失效')
   })
 
+  it('后端新增的通道突破/布林超跌/放量突破类型有可解释的触发与退出规则', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return {
+          items: [
+            { id: 's-breakout', name: '通道突破候选', kind: 'breakout', status: 'active', params: { n: 20 }, backtest: null },
+            { id: 's-bollinger', name: '布林超跌候选', kind: 'bollinger', status: 'active', params: { n: 20, k: 2 }, backtest: null },
+            { id: 's-volume', name: '放量突破候选', kind: 'volume_breakout', status: 'active', params: { n: 20, vol_mult: 1.5 }, backtest: null },
+          ],
+        }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    const breakoutCard = (await screen.findByText('通道突破候选')).closest('article')
+    expect(breakoutCard).not.toBeNull()
+    fireEvent.click(within(breakoutCard as HTMLElement).getByRole('button', { name: '查看详情' }))
+    let dialog = await screen.findByRole('dialog', { name: '通道突破候选' })
+    expect(dialog.textContent).toContain('收盘价突破前 20 日最高价后，按下一交易日开盘价进入纸面持仓。')
+    expect(dialog.textContent).toContain('收盘价跌破前 20 日最低价后，按下一交易日开盘价退出。')
+    expect(dialog.textContent).toContain('突破窗口 20 日')
+    expect(dialog.textContent).not.toContain('暂不支持解释')
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+
+    const bollingerCard = screen.getByText('布林超跌候选').closest('article')
+    expect(bollingerCard).not.toBeNull()
+    fireEvent.click(within(bollingerCard as HTMLElement).getByRole('button', { name: '查看详情' }))
+    dialog = await screen.findByRole('dialog', { name: '布林超跌候选' })
+    expect(dialog.textContent).toContain('收盘价跌破 20 日布林带下轨（中轨 − 2 倍标准差）后')
+    expect(dialog.textContent).toContain('收盘价回升至 20 日中轨上方后')
+    expect(dialog.textContent).toContain('带宽系数 2')
+    expect(dialog.textContent).not.toContain('暂不支持解释')
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+
+    const volumeCard = screen.getByText('放量突破候选').closest('article')
+    expect(volumeCard).not.toBeNull()
+    fireEvent.click(within(volumeCard as HTMLElement).getByRole('button', { name: '查看详情' }))
+    dialog = await screen.findByRole('dialog', { name: '放量突破候选' })
+    expect(dialog.textContent).toContain('收盘价突破前 20 日最高价，且成交量达到前 20 日均量 1.5 倍以上后')
+    expect(dialog.textContent).toContain('收盘价跌破前 20 日最低价后')
+    expect(dialog.textContent).toContain('放量倍数 1.5 倍')
+    expect(dialog.textContent).not.toContain('暂不支持解释')
+  })
+
   it('先以 dry_run 预览假设，只有用户确认后才写入候选池', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.strategies') return { items: [] }
