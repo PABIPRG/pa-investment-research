@@ -167,8 +167,9 @@ def _fetch_spot_em() -> dict[str, dict]:
 
 
 def _secid(code: str) -> str:
-    """A 股代码 → 东财 secid（600519→1.600519，000858→0.000858）。"""
-    return ("1." if code.startswith("6") else "0.") + code
+    """A 股代码 → 东财 secid（600519→1.600519，000858→0.000858，513050→1.513050）。
+    沪市：6 开头股票、5/9 开头基金与 B 股；其余（0/1/2/3）归深市。"""
+    return ("1." if code.startswith(("6", "5", "9")) else "0.") + code
 
 
 def _row_from_diff(d: dict) -> dict | None:
@@ -246,8 +247,9 @@ def _clist_top(fid: str, top_n: int, po: int = 1, page_size: int | None = None) 
 
 
 def _sina_sym(code: str) -> str:
-    """A 股代码 → 新浪 symbol（600519→sh600519，000858→sz000858）。"""
-    if code.startswith("6"):
+    """A 股代码 → 新浪 symbol（600519→sh600519，000858→sz000858，513050→sh513050）。
+    沪市：6 开头股票、5/9 开头基金与 B 股；其余归深市。"""
+    if code.startswith(("6", "5", "9")):
         return "sh" + code
     if code.startswith(("4", "8", "92")):
         return "bj" + code
@@ -529,7 +531,21 @@ def search_securities(query: str, limit: int = 8) -> list[dict[str, str]]:
         ranked.append((rank, code, item))
 
     ranked.sort(key=lambda candidate: (candidate[0], candidate[1]))
-    return [item for _, _, item in ranked[:limit]]
+    if ranked:
+        return [item for _, _, item in ranked[:limit]]
+
+    # 目录未命中（ETF/基金/新股等非 A 股名录范围）：精确 6 位代码用实时行情缓存反查名称。
+    # 行情快照（ulist/新浪 hq）覆盖沪深基金，无需扩展目录 TTL 即可补名。
+    if len(keyword) == 6 and keyword.isdigit():
+        quote = cache().get_quote(keyword)
+        name = str((quote or {}).get("name") or "").strip()
+        if name:
+            market = (
+                "沪市" if keyword.startswith(("6", "5", "9"))
+                else "深市" if keyword.startswith(("0", "1", "2", "3")) else "北交所"
+            )
+            return [{"code": keyword, "name": name, "market": market}]
+    return []
 
 
 def resolve_company_codes(name: str, limit: int = 3) -> list[str]:

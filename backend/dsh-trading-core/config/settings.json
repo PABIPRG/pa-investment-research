@@ -3,6 +3,7 @@
   "results_dir": "./results",
   "data_dir": "./data",
   "data_cache_dir": "./tradingagents/dataflows/data_cache",
+  "eval_results_dir": "eval_results",
   "llm_provider": "deepseek",
   "deep_think_llm": "deepseek-chat",
   "quick_think_llm": "deepseek-chat",
@@ -13,6 +14,12 @@
   "online_tools": true,
   "online_news": false,
   "realtime_data": false,
-  "use_memory": false,
-  "risk_profile": "balanced"
+  "selected_analysts": [
+    "market",
+    "social",
+    "news",
+    "fundamentals"
+  ],
+  "risk_profile": "balanced",
+  "memory_enabled": false
 }

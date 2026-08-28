@@ -104,6 +104,32 @@ describe('研究工作台', () => {
     expect(view.getByText('集中度超预算')).toBeTruthy()
   })
 
+  it('持仓 name 为空时经 security-search 反查中文名，与代码一起展示', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [{ ticker: '513050', name: '', quantity: 6800, cost_price: 1.0115 }] }
+      }
+      if (request.operation === 'trading-core.risk-portfolio') {
+        return { as_of: '2026-08-26 09:31:00', profile_label: '稳健型', summary: { n_positions: 1, equal_weight: 1, hhi: 1 }, breaches: [] }
+      }
+      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
+      if (request.operation === 'trading-core.personalized-cards') return { cards: [] }
+      if (request.operation === 'trading-core.personalized-matches') return { items: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: request.input?.query, name: '中概互联网ETF易方达', market: '沪市' }] }
+      }
+      return {}
+    })
+
+    const view = renderWorkbench(requestData)
+    await view.findByText('513050')
+    expect(await view.findByText('中概互联网ETF易方达')).toBeTruthy()
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'market-watch.security-search',
+      input: { query: '513050', limit: 5 },
+    })
+  })
+
   it('空持仓不把成本口径展示成伪造的零资产值', async () => {
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
       if (request.operation === 'trading-core.holdings') return { items: [] }

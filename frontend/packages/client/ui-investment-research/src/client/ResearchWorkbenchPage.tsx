@@ -329,10 +329,21 @@ export function ResearchWorkbenchPage({
   const allCards = records(cardValue.cards)
   const strategyValue = asRecord(matches.state.value)
   const strategyItems = records(strategyValue.items)
-  const unresolvedStrategySymbols = [...new Set(strategyItems.flatMap(strategySymbols))].sort().join('|')
-  const [strategySecurityNames, setStrategySecurityNames] = useState<Record<string, string>>({})
+  // 名称解析覆盖策略标的 + 持仓标的：/holdings 的 name 恒空（后端故意留白让消费方补），
+  // 持仓代码和策略代码一样经 security-search 反查中文名后展示。
+  const strategyCodes = [...new Set(strategyItems.flatMap(strategySymbols))]
+  const holdingCodes = [...new Set(positions.map(item => text(item.ticker, '').trim()).filter(Boolean))]
+  const namedHoldingCodes = new Set(
+    positions.filter(item => text(item.name, '').trim() !== '').map(item => text(item.ticker, '').trim()),
+  )
+  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
+  const unresolvedSecurityCodes = [...new Set(
+    [...strategyCodes, ...holdingCodes].filter(code => (
+      !namedHoldingCodes.has(code) && (securityNames[code]?.trim() ?? '') === ''
+    )),
+  )].sort().join('|')
   useEffect(() => {
-    const codes = unresolvedStrategySymbols === '' ? [] : unresolvedStrategySymbols.split('|')
+    const codes = unresolvedSecurityCodes === '' ? [] : unresolvedSecurityCodes.split('|')
     if (codes.length === 0) return
     const requestState = { cancelled: false }
     void (async () => {
@@ -349,11 +360,14 @@ export function ResearchWorkbenchPage({
           }
         }))
         if (requestState.cancelled) return
-        setStrategySecurityNames(current => ({ ...current, ...Object.fromEntries(resolved) }))
+        const named = Object.fromEntries(resolved.filter(([, name]) => name !== ''))
+        if (Object.keys(named).length > 0) {
+          setSecurityNames(current => ({ ...current, ...named }))
+        }
       }
     })()
     return () => { requestState.cancelled = true }
-  }, [requestData, unresolvedStrategySymbols])
+  }, [requestData, unresolvedSecurityCodes])
   const visibleCards = useMemo(() => (
     bucket === 'all' ? allCards : allCards.filter(item => text(item.bucket, '') === bucket)
   ), [allCards, bucket])
@@ -453,9 +467,10 @@ export function ResearchWorkbenchPage({
               <div className={css.dashboardHoldingList}>
                 {positions.slice(0, 6).map((item, index) => {
                   const code = text(item.ticker, '')
+                  const name = securityNames[code]?.trim() || text(item.name, '').trim()
                   return (
                     <button key={`${code}-${index}`} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
-                      <span><strong>{text(item.name, code)}</strong><small>{code}</small></span>
+                      <span><strong>{name === '' || name === code ? code : name}</strong><small>{code}</small></span>
                       <span><b>{number(item.quantity)?.toLocaleString('zh-CN') ?? '—'} 股</b><small>成本 {money(item.cost_price)}</small></span>
                     </button>
                   )
@@ -644,7 +659,7 @@ export function ResearchWorkbenchPage({
                   }
                   navigate('framework', { strategyId: id })
                 }}>
-                  <span><strong>{strategyDisplayName(item, strategySecurityNames)}</strong><small>{reason === undefined ? text(item.caution, '查看匹配依据') : text(reason.text, '查看匹配依据')}</small></span>
+                  <span><strong>{strategyDisplayName(item, securityNames)}</strong><small>{reason === undefined ? text(item.caution, '查看匹配依据') : text(reason.text, '查看匹配依据')}</small></span>
                   <b>{number(item.match_score)?.toFixed(0) ?? '—'}</b>
                 </button>
               )

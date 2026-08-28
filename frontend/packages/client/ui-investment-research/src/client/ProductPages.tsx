@@ -127,6 +127,9 @@ function strategyKindLabel(value: unknown): string {
     ma_cross: '均线趋势',
     rsi_reversal: '超跌反弹',
     momentum: '动量跟随',
+    breakout: '通道突破',
+    bollinger: '布林超跌',
+    volume_breakout: '放量突破',
   }[kind] ?? (kind === '' ? '策略类型未返回' : '其他策略')
 }
 
@@ -222,7 +225,7 @@ const REPORT_TITLE_LABELS: Readonly<Record<string, string>> = {
   shadow: '影子验证报告',
 }
 
-const STRATEGY_KINDS = new Set(['ma_cross', 'rsi_reversal', 'momentum'])
+const STRATEGY_KINDS = new Set(['ma_cross', 'rsi_reversal', 'momentum', 'breakout', 'bollinger', 'volume_breakout'])
 
 function strategySubjectLabel(value: unknown, securityNames: Readonly<Record<string, string>> = {}): string {
   const raw = text(value, '').trim()
@@ -372,6 +375,50 @@ function strategyRule(item: Record<string, unknown>): { trigger: string; exit: s
       params: [`动量窗口 ${period === undefined ? '未返回' : `${period} 日`}`],
     }
   }
+  if (kind === 'breakout') {
+    const n = number(params.n)?.toFixed(0)
+    return {
+      trigger: n === undefined
+        ? '数据不足：后端未返回突破窗口，无法还原触发规则。'
+        : `收盘价突破前 ${n} 日最高价后，按下一交易日开盘价进入纸面持仓。`,
+      exit: n === undefined
+        ? '数据不足：后端未返回突破窗口，无法还原退出规则。'
+        : `收盘价跌破前 ${n} 日最低价后，按下一交易日开盘价退出。`,
+      params: [`突破窗口 ${n === undefined ? '未返回' : `${n} 日`}`],
+    }
+  }
+  if (kind === 'bollinger') {
+    const n = number(params.n)?.toFixed(0)
+    const k = number(params.k)
+    return {
+      trigger: n !== undefined && k !== undefined
+        ? `收盘价跌破 ${n} 日布林带下轨（中轨 − ${k} 倍标准差）后，按下一交易日开盘价进入纸面持仓。`
+        : '数据不足：后端未返回完整的布林窗口和带宽系数，无法还原触发规则。',
+      exit: n === undefined
+        ? '数据不足：后端未返回布林窗口，无法还原退出规则。'
+        : `收盘价回升至 ${n} 日中轨上方后，按下一交易日开盘价退出。`,
+      params: [
+        `布林窗口 ${n === undefined ? '未返回' : `${n} 日`}`,
+        `带宽系数 ${k === undefined ? '未返回' : k}`,
+      ],
+    }
+  }
+  if (kind === 'volume_breakout') {
+    const n = number(params.n)?.toFixed(0)
+    const mult = number(params.vol_mult)
+    return {
+      trigger: n !== undefined && mult !== undefined
+        ? `收盘价突破前 ${n} 日最高价，且成交量达到前 ${n} 日均量 ${mult} 倍以上后，按下一交易日开盘价进入纸面持仓。`
+        : '数据不足：后端未返回完整的突破窗口和放量倍数，无法还原触发规则。',
+      exit: n === undefined
+        ? '数据不足：后端未返回突破窗口，无法还原退出规则。'
+        : `收盘价跌破前 ${n} 日最低价后，按下一交易日开盘价退出。`,
+      params: [
+        `突破窗口 ${n === undefined ? '未返回' : `${n} 日`}`,
+        `放量倍数 ${mult === undefined ? '未返回' : `${mult} 倍`}`,
+      ],
+    }
+  }
   const kindReason = kind === '' ? '后端未返回策略类型' : `后端返回了暂不支持解释的策略类型“${kind}”`
   return {
     trigger: `数据不足：${kindReason}，无法解释触发规则。`,
@@ -430,7 +477,7 @@ function HypothesisPreviewDialog({
         const holdingWindow = number(hypothesis.holding_window_days)?.toFixed(0)
         return (
           <section key={`${text(hypothesis.kind, 'unknown')}-${index}`} className={css.detailSection}>
-            <h3>假设 {index + 1} · {text(hypothesis.kind, '策略类型未返回')}</h3>
+            <h3>假设 {index + 1} · {strategyKindLabel(hypothesis.kind)}</h3>
             <p><strong>假设依据：</strong>{text(hypothesis.rationale, '后端未返回假设说明。')}</p>
             <p><strong>触发规则：</strong>{rule.trigger}</p>
             <p><strong>退出规则：</strong>{rule.exit}</p>
