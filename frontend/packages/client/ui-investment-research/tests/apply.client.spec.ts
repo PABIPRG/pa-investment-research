@@ -123,7 +123,7 @@ describe('ui-investment-research apply', () => {
       startSession: vi.fn(),
     } as never))
 
-    expect(screen.getByText(`v${packageManifest.version} · 智能投研系统`)).toBeTruthy()
+    expect(screen.getByText(`${packageManifest.version} · 智能投研系统`)).toBeTruthy()
   })
 
   it('keeps the business workbench mounted while the global assistant changes display mode', () => {

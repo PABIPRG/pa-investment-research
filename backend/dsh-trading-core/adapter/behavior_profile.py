@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""K 画像增强 L→K：行为反馈（R 埋点 + 显式反馈）进风险画像，驱动 O/P/Q 微调。
+"""本地行为兴趣画像：支持内容排序与复盘，不修改显式风险画像。
 
 读 behavior.json 近 N 小时（config.personalized_behavior_hours，默认 168）的四类输入：
-  - 阅读行为：view/click → focus_tickers / direction_skew / strategy_affinity /
-    industry_affinity；方向偏差 → aggression_delta（与四期一致）；
-  - 显式反馈：useful/useless → feedback_delta（利空有用/利好没用=风险耐受），
-    合并进 aggression_delta；并产出 interest_tickers / interest_industries /
-    ignored_tickers 供 R→V→D 卡片排序归因；
+  - 阅读行为：view/click 及新版 impression/open/analyze → focus_tickers /
+    direction_skew / strategy_affinity / industry_affinity；
+  - 显式反馈：useful/useless → interest_tickers / interest_industries /
+    ignored_tickers，供 R→V→D 卡片软排序归因；
   - 关注：当前 watchlist_tickers；
   - 交易代理：影子验证中策略的标的 trading_affinity。
 
-effective_aggression 把画像基础激进度叠上行为 delta（clamp [0,1]），O 打分用；
-behavior_boosts/behavior_funnel 供 R→V 效果归因（D 排序 boost、Q 预警灵敏度）。
+aggression_delta 始终为 0，effective_aggression 始终等于显式画像基础值；
+behavior_boosts/behavior_funnel 只供 R→V 效果归因和非关键内容软排序。
 失败全部降级（按空/零值处理），绝不阻塞主路径。
 
 避免循环依赖：effective_aggression 内延迟 import personalize 的 PROFILE_AGGRESSION，
@@ -26,17 +25,21 @@ from .config import settings
 
 logger = logging.getLogger("adapter.behavior_profile")
 
-DELTA_MAX = 0.15  # 行为对激进度最大修正量
-_DIRECTION_BONUS = 0.3
-
-
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
 def _parse_ts(ts) -> float | None:
+    from datetime import datetime, timezone
+
+    raw = str(ts or "").strip()
+    if raw.endswith("Z"):
+        try:
+            return datetime.fromisoformat(raw[:-1] + "+00:00").astimezone(timezone.utc).timestamp()
+        except ValueError:
+            return None
     try:
-        return time.mktime(time.strptime(str(ts or "").strip(), "%Y-%m-%d %H:%M:%S"))
+        return time.mktime(time.strptime(raw, "%Y-%m-%d %H:%M:%S"))
     except (ValueError, TypeError):
         return None
 
@@ -64,10 +67,10 @@ def _trading_affinity(store) -> list[str]:
 
 
 def compute_behavior_profile(store=None) -> dict:
-    """近 N 小时 点击 + 反馈 → 画像微调信号（L→K，四类输入）。
+    """近 N 小时交互 + 反馈 → 独立兴趣信号（四类输入）。
 
     阅读行为：view/click（方向、行业、策略亲和）；
-    显式反馈：useful/useless（进 feedback_delta 与 interest/ignored 集合）；
+    显式反馈：useful/useless（进入 interest/ignored 集合）；
     关注：当前 watchlist；交易代理：影子验证中的策略标的。
     """
     from .store import JsonStore
@@ -77,7 +80,7 @@ def compute_behavior_profile(store=None) -> dict:
     now = time.time()
     window = hours * 3600
 
-    views = clicks = 0
+    views = clicks = analyses = 0
     useful = useless = 0
     tk_counts: Counter = Counter()
     sid_counts: Counter = Counter()
@@ -86,11 +89,16 @@ def compute_behavior_profile(store=None) -> dict:
     useful_ind: Counter = Counter()
     useless_tk: Counter = Counter()
     good = bad = 0
-    fb_good_useful = fb_good_useless = fb_bad_useful = fb_bad_useless = 0
-    for r in store.get("behavior", "default") or []:
+    legacy_rows = [r for r in (store.get("behavior", "default") or []) if isinstance(r, dict)]
+    legacy_rows.sort(
+        key=lambda row: _parse_ts(row.get("server_ts") or row.get("ts")) or float("-inf"),
+        reverse=True,
+    )
+    seen_feedback: set[str] = set()
+    for r in legacy_rows:
         if not isinstance(r, dict):
             continue
-        ts = _parse_ts(r.get("ts"))
+        ts = _parse_ts(r.get("server_ts") or r.get("ts"))
         if ts is None or (now - ts) > window:
             continue
         action = r.get("action")
@@ -116,6 +124,11 @@ def compute_behavior_profile(store=None) -> dict:
                 ind_counts[i] += 1
             continue
         if action == "feedback":
+            card_id = str(r.get("card_id") or "").strip()
+            if card_id and card_id in seen_feedback:
+                continue
+            if card_id:
+                seen_feedback.add(card_id)
             sent = r.get("sentiment")
             if sent == "useful":
                 useful += 1
@@ -125,72 +138,95 @@ def compute_behavior_profile(store=None) -> dict:
                 continue
             tk = str(meta.get("ticker") or "").strip()
             d = str(meta.get("direction") or "").strip()
-            for i in inds:
-                ind_counts[i] += 1
             if sent == "useful":
                 if tk:
                     useful_tk[tk] += 1
                 for i in inds:
+                    ind_counts[i] += 1
                     useful_ind[i] += 1
-                if d == "利好":
-                    fb_good_useful += 1
-                elif d == "利空":
-                    fb_bad_useful += 1
             else:
                 if tk:
                     useless_tk[tk] += 1
-                if d == "利好":
-                    fb_good_useless += 1
-                elif d == "利空":
-                    fb_bad_useless += 1
 
-    focus_tickers = [{"ticker": tk, "count": n} for tk, n in tk_counts.most_common(5)]
+    # 新版统一事件与旧行为事实并行兼容；曝光只计漏斗，打开/分析才计兴趣。
+    for r in store.get("behavior", "events") or []:
+        if not isinstance(r, dict):
+            continue
+        ts = _parse_ts(r.get("occurred_at"))
+        if ts is None or (now - ts) > window:
+            continue
+        action = r.get("action")
+        meta = r.get("context") or {}
+        if action == "impression":
+            views += 1
+            continue
+        if action not in {"open", "analyze", "follow", "unfollow"}:
+            continue
+        if action == "analyze":
+            analyses += 1
+        if action in {"open", "analyze", "follow"}:
+            clicks += 1
+        weight = 2 if action == "analyze" else (3 if action == "follow" else 1)
+        if action == "unfollow":
+            weight = -3
+        tk = str(meta.get("ticker") or "").strip()
+        if tk:
+            tk_counts[tk] += weight
+        sid = str(meta.get("strategy_id") or "").strip()
+        if sid:
+            sid_counts[sid] += weight
+        if action != "unfollow":
+            d = str(meta.get("direction") or "").strip()
+            if d == "利好":
+                good += 1
+            elif d == "利空":
+                bad += 1
+        for industry in (meta.get("industries") or []):
+            industry = str(industry or "").strip()
+            if industry:
+                ind_counts[industry] += weight
 
-    # 点击方向偏差（阅读行为）
+    focus_tickers = [
+        {"ticker": tk, "count": n} for tk, n in tk_counts.most_common(5) if n > 0
+    ]
+
+    # 方向分布只解释阅读兴趣，绝不换算成风险承受能力。
     direction_skew = None
-    click_delta = 0.0
     if good + bad > 0:
         good_pct = good / (good + bad)
         bad_pct = bad / (good + bad)
-        click_delta = round(
-            _clamp(_DIRECTION_BONUS * (bad_pct - good_pct), -DELTA_MAX, DELTA_MAX), 3)
         direction_skew = {
             "利好": good, "利空": bad,
             "good_pct": round(good_pct, 3), "bad_pct": round(bad_pct, 3),
-            "delta": click_delta,
+            "delta": 0.0,
         }
 
-    # 显式反馈方向偏差（R→U→K）：利空标记有用/利好标记没用 → 风险耐受；反之厌恶
     fb_total = useful + useless
     feedback_delta = 0.0
-    if fb_total:
-        sig = (fb_bad_useful - fb_bad_useless) + (fb_good_useless - fb_good_useful)
-        feedback_delta = round(_clamp(0.15 * sig / fb_total, -DELTA_MAX, DELTA_MAX), 3)
 
-    # 自进化 outcome 版（R→S→U→K）：用户参与/激活策略的影子 outcome → outcome_delta
-    # （决策被验证→轻微上调激进度；决策受挫→轻微下调）。数据不足/无样本 → delta=0。
+    # 策略结果作为参与度背景展示，不回写用户风险承受能力。
     outcome = None
     outcome_delta = 0.0
     try:
         from .evolution import decision_outcome
         outcome = decision_outcome(store)
-        outcome_delta = float(outcome.get("delta") or 0.0)
     except Exception as exc:  # noqa: BLE001 — outcome 归因失败不阻塞画像
         logger.debug("outcome 归因失败（按 0 处理）: %s", exc)
 
-    aggression_delta = round(
-        _clamp(click_delta + feedback_delta + outcome_delta, -DELTA_MAX, DELTA_MAX), 3)
+    aggression_delta = 0.0
 
     interest_tickers = [{"ticker": t, "count": n} for t, n in useful_tk.most_common(5)]
     interest_industries = [{"industry": i, "count": n} for i, n in useful_ind.most_common(5)]
     ignored_tickers = [{"ticker": t, "count": n} for t, n in useless_tk.most_common(5)]
-    industry_affinity = [{"industry": i, "count": n} for i, n in ind_counts.most_common(8)]
+    industry_affinity = [
+        {"industry": i, "count": n} for i, n in ind_counts.most_common(8) if n > 0
+    ]
 
     strats = {str(k): (v or {}) for k, v in (store.all("strategies") or {}).items()}
     strategy_affinity = [
         {"strategy_id": sid, "kind": strats.get(sid, {}).get("kind"),
          "name": strats.get(sid, {}).get("name"), "count": n}
-        for sid, n in sid_counts.most_common(5)
+        for sid, n in sid_counts.most_common(5) if n > 0
     ]
     watchlist_tickers = [str(w or "").strip()
                          for w in (store.get("watchlist", "default") or []) if w][:10]
@@ -198,21 +234,17 @@ def compute_behavior_profile(store=None) -> dict:
 
     notes = []
     if not clicks and not fb_total:
-        notes.append("暂无足够行为，未推断画像调整")
-    elif not direction_skew and not fb_total:
-        notes.append("行为记录缺少方向/反馈标记，激进度仅部分调整")
+        notes.append("暂无足够行为，未生成兴趣结论；显式风险画像保持不变")
     else:
-        parts = [f"近{hours:.0f}小时 {clicks} 次点击、{fb_total} 次反馈"]
+        parts = [f"近{hours:.0f}小时 {clicks} 个研究信号、{fb_total} 次反馈"]
         if direction_skew:
             parts.append(f"利空占比 {direction_skew['bad_pct']*100:.0f}%")
         if fb_total:
             parts.append(f"有用{useful}/没用{useless}")
-        if outcome and outcome.get("samples"):
-            parts.append(outcome.get("note") or "")
-        notes.append("；".join(parts) + f"，行为画像激进度{aggression_delta:+.2f}")
+        notes.append("；".join(parts) + "；这些证据只表示研究兴趣，不修改显式风险画像")
 
     return {
-        "window_hours": hours, "views": views, "clicks": clicks,
+        "window_hours": hours, "views": views, "clicks": clicks, "analyses": analyses,
         "focus_tickers": focus_tickers, "direction_skew": direction_skew,
         "aggression_delta": aggression_delta,
         "feedback": {"useful": useful, "useless": useless, "total": fb_total,
@@ -248,7 +280,7 @@ def behavior_boosts(store=None) -> dict:
 
 
 def behavior_funnel(store=None) -> dict:
-    """R→V 效果漏斗：近 N 小时 曝光/点击/有用/没用 → CTR。失败返回零值块。"""
+    """R→V 效果漏斗：近 N 小时曝光、打开、分析和反馈。"""
     from .store import JsonStore
 
     try:
@@ -258,25 +290,26 @@ def behavior_funnel(store=None) -> dict:
         clicks = int(beh.get("clicks") or 0)
         useful = int((beh.get("feedback") or {}).get("useful") or 0)
         useless = int((beh.get("feedback") or {}).get("useless") or 0)
+        analyses = int(beh.get("analyses") or 0)
         return {
             "window_hours": beh.get("window_hours"),
             "views": views, "clicks": clicks,
-            "useful": useful, "useless": useless,
-            "ctr": round(clicks / views, 3) if views else None,
+            "analyses": analyses, "useful": useful, "useless": useless,
+            "ctr": round(clicks / views, 3) if views >= 3 else None,
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning("行为漏斗统计失败（按零值处理）: %s", exc)
         return {"window_hours": settings.personalized_behavior_hours,
-                "views": 0, "clicks": 0, "useful": 0, "useless": 0, "ctr": None}
+                "views": 0, "clicks": 0, "analyses": 0,
+                "useful": 0, "useless": 0, "ctr": None}
 
 
 def effective_aggression(store=None, profile_key: str = "balanced") -> float:
-    """画像基础激进度 + 行为 delta（clamp [0,1]）。O 打分用。"""
+    """返回显式画像基础激进度；行为兴趣不得修改该值。"""
     from .personalize import PROFILE_AGGRESSION
 
     base = PROFILE_AGGRESSION.get(profile_key, 0.5)
-    delta = float(compute_behavior_profile(store).get("aggression_delta") or 0.0)
-    return round(_clamp(base + delta, 0.0, 1.0), 3)
+    return round(_clamp(base, 0.0, 1.0), 3)
 
 
 def profile_view(store=None) -> dict:
@@ -291,14 +324,22 @@ def profile_view(store=None) -> dict:
     key = get_risk_profile()
     base = PROFILE_AGGRESSION.get(key, 0.5)
     beh = compute_behavior_profile(store)
-    delta = float(beh.get("aggression_delta") or 0.0)
-    eff = round(_clamp(base + delta, 0.0, 1.0), 3)
+    eff = round(_clamp(base, 0.0, 1.0), 3)
+    try:
+        from .local_telemetry import preference_snapshot_id
+
+        snapshot_id = preference_snapshot_id(store)
+    except Exception as exc:  # noqa: BLE001 — 快照失败不阻塞画像展示
+        logger.debug("偏好快照生成失败: %s", exc)
+        snapshot_id = None
     return {
         "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
         "base_profile": key,
         "profile_label": _profile(key)["label"],
         "base_aggression": base,
         "effective_aggression": eff,
+        "risk_source": "explicit",
+        "preference_snapshot_id": snapshot_id,
         "behavior": beh,
         "notes": beh.get("notes") or [],
     }

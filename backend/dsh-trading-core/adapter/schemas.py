@@ -3,7 +3,7 @@
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AnalyzeRequest(BaseModel):
@@ -196,7 +196,12 @@ class KycParseRequest(BaseModel):
 class PersonalizedInteractionRequest(BaseModel):
     """POST /personalized/interactions 请求体：个性化卡片阅读行为埋点。"""
 
-    card_id: str = Field(min_length=1, description="资讯卡片 id（渲染后回传，跨刷新稳定）")
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    card_id: str = Field(
+        min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$",
+        description="资讯卡片结构化 id（渲染后回传，跨刷新稳定）",
+    )
     action: Literal["view", "click"] = Field(
         description="view=曝光（每卡每会话一次），click=点击打开（每次记）"
     )
@@ -207,15 +212,27 @@ class PersonalizedInteractionRequest(BaseModel):
         default=None, description="上下文：strategy_id/ticker/bucket 等"
     )
 
+    @field_validator("meta")
+    @classmethod
+    def validate_meta(cls, value):
+        from .local_telemetry import sanitize_context
+
+        return sanitize_context(value)
+
 
 class PersonalizedFeedbackRequest(BaseModel):
     """POST /personalized/feedback 请求体：卡片/预警显式反馈（P→R 决策信号）。
 
-    落行为库（action=feedback），服务端据此做 R→U→K 画像修正与 R→V 效果归因
-    （卡片排序 boost / 事件预警灵敏度校准）。
+    落行为库（action=feedback），服务端据此做 R→U 研究兴趣归因与 R→V 效果归因。
+    反馈可以参与非关键内容软排序，但不修改风险画像或预警严重度。
     """
 
-    card_id: str = Field(min_length=1, description="卡片或预警 id（预警用 /risk/alerts 的 id）")
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    card_id: str = Field(
+        min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$",
+        description="卡片或预警结构化 id（预警用 /risk/alerts 的 id）",
+    )
     sentiment: Literal["useful", "useless"] = Field(
         description="useful=有用/值得看，useless=没用/噪音"
     )
@@ -223,8 +240,63 @@ class PersonalizedFeedbackRequest(BaseModel):
         default=None, description="客户端时间戳 %Y-%m-%d %H:%M:%S；缺省服务端记"
     )
     meta: Optional[dict] = Field(
-        default=None, description="上下文：source/codes/ticker/strategy_id/direction/industries"
+        default=None, description="白名单上下文：ticker/strategy_id/risk_source/direction/industries 等"
     )
+
+    @field_validator("meta")
+    @classmethod
+    def validate_meta(cls, value):
+        from .local_telemetry import sanitize_context
+
+        return sanitize_context(value)
+
+
+class LocalLearningEvent(BaseModel):
+    """本地学习事件；自由文本和客户端时间不属于协议。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    event_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")
+    schema_version: Literal[1] = 1
+    action: Literal["page_view", "impression", "open", "analyze", "follow", "unfollow"]
+    surface: Literal[
+        "dashboard", "search", "opportunity", "stock_detail", "portfolio",
+        "strategy", "evolution", "industry", "reports", "assistant",
+    ]
+    target_type: Literal[
+        "page", "event", "risk", "strategy", "security", "portfolio",
+        "industry", "report",
+    ]
+    target_id: str = Field(
+        min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$",
+    )
+    session_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$")
+    context: dict = Field(default_factory=dict)
+
+    @field_validator("context")
+    @classmethod
+    def validate_context(cls, value):
+        from .local_telemetry import sanitize_context
+
+        return sanitize_context(value)
+
+
+class LocalLearningEventsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    events: list[LocalLearningEvent] = Field(min_length=1, max_length=50)
+
+
+class LocalLearningSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool
+
+
+class LocalLearningClearRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    confirm: Literal[True]
 
 
 class EvolutionRunRequest(BaseModel):

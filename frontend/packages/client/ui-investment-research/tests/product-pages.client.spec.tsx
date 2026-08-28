@@ -550,6 +550,7 @@ describe('投研产品闭环', () => {
           useSessions={neverGlobalHook}
           useWorkspaces={neverGlobalHook}
           requestData={requestData}
+          trackTelemetry={vi.fn(async () => {})}
           navigate={navigate}
           setHistory={() => {}}
           setReports={() => {}}

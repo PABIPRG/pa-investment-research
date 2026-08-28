@@ -53,6 +53,8 @@ Host 的 `request-data` Remote 只接受编译期列举的 operation（操作）
 
 白名单覆盖 `market-watch` 的市场观测；`trading-core` 的个人投研数据、分析、简报、回测、统一报告列表／详情、策略假设／状态迁移／运行、影子状态／持仓／净值／运行、自进化状态／归因／运行、个性化匹配／产业影响与后台任务状态／结果；以及 `industry-chain` 的无输入 `GET /data/status`、`POST /data/bootstrap` 数据生命周期路由、图谱统计、公司搜索／详情、实体档案、单公司视图、多层产业链与筛选后的全局网络。两条生命周期 operation 都返回 `{ status, files_completed, files_total, downloaded_bytes, current_file, error }`；bootstrap 是一次非流式长请求，界面可同时轮询 status 展示进度。实体业务名称可以包含 `/`，Host 会把整段编码成一个参数，同时拒绝类似路径穿越的分段和不安全标识符。浏览器不能传入下载 URL 或请求 body。其他写操作的 JSON body 只由 Host 根据已知键构造；报告列表与所有只读状态通过固定 GET 路由读取；系统既不开放任意 backend 访问，也不生成虚构结果。
 
+个性化反馈与五个 `trading-core.local-learning-*` operation 仅限本机。它们只接受不透明对象 id、枚举化动作与表层，以及固定的结构化上下文投影；搜索词、提示词、标题、报告正文、持仓数量与成本、URL、路径和类似凭据的字段在协议中没有入口。非法值会在获取租约前失败。若经过验证的租约属于 `external`，Host 会释放租约并在 `fetch` 前拒绝 operation，因此本地偏好事实不会转发到配置的远程交易服务。`owned` 或 `attached` 本地服务负责生成权威时间并执行保留策略。
+
 ## 模型体验
 
 无，因为该 Host 生命周期服务不注册 prompt（提示词）、工具 schema、会话事件或结果。

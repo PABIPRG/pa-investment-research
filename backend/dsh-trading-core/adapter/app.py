@@ -35,6 +35,9 @@ from .schemas import (
     KycAdjustRequest,
     KycParseRequest,
     KycQuestionnaireRequest,
+    LocalLearningClearRequest,
+    LocalLearningEventsRequest,
+    LocalLearningSettingsRequest,
     PersonalizedFeedbackRequest,
     PersonalizedInteractionRequest,
     EvolutionRunRequest,
@@ -572,8 +575,8 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     def personalized_feedback_post(req: PersonalizedFeedbackRequest):
         """R 显式反馈（P→R 决策信号）：卡片/预警 有用/没用。
 
-        落行为库 action=feedback，供 R→U→K 画像修正与 R→V 效果归因
-        （卡片排序 boost / 事件预警灵敏度校准）。
+        落行为库 action=feedback，供 R→U 研究兴趣归因与 R→V 效果归因。
+        反馈不修改显式风险画像或预警严重度。
         """
         from . import personalize
 
@@ -581,9 +584,50 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             JsonStore(), req.card_id, req.sentiment, req.ts, req.meta,
         )
 
+    @app.post("/personalized/local-learning/events", response_model=dict)
+    def local_learning_events_post(req: LocalLearningEventsRequest):
+        """写入本地、白名单化的产品交互事件。"""
+        from .local_telemetry import record_events
+
+        return record_events(
+            JsonStore(), [event.model_dump() for event in req.events],
+        )
+
+    @app.get("/personalized/local-learning/status", response_model=dict)
+    def local_learning_status_get():
+        """读取本地学习开关、保留规则和记录量。"""
+        from .local_telemetry import local_learning_status
+
+        return local_learning_status(JsonStore())
+
+    @app.post("/personalized/local-learning/settings", response_model=dict)
+    def local_learning_settings_post(req: LocalLearningSettingsRequest):
+        """暂停或恢复本地学习。"""
+        from .local_telemetry import update_local_learning
+
+        return update_local_learning(JsonStore(), req.enabled)
+
+    @app.post("/personalized/local-learning/clear", response_model=dict)
+    def local_learning_clear_post(req: LocalLearningClearRequest):
+        """清空本地行为与反馈；显式风险、持仓和研究成果保持不变。"""
+        from .local_telemetry import clear_local_learning
+
+        if req.confirm is not True:
+            raise HTTPException(status_code=422, detail="清空操作必须显式确认")
+        return clear_local_learning(JsonStore())
+
+    @app.get("/personalized/review", response_model=dict)
+    def personalized_review(days: int = Query(default=7)):
+        """返回确定性偏好复盘；结论只描述研究兴趣。"""
+        from .local_telemetry import build_preference_review
+
+        if days not in {7, 30, 90}:
+            raise HTTPException(status_code=422, detail="days 必须是 7、30 或 90")
+        return build_preference_review(JsonStore(), days=days)
+
     @app.get("/personalized/profile", response_model=dict)
     def personalized_profile():
-        """K 画像增强 L→K：基础画像 + 行为推断（effective_aggression + 关注/方向/策略亲和）。"""
+        """K 画像视图：显式风险画像与独立的行为兴趣证据。"""
         from . import behavior_profile
 
         return behavior_profile.profile_view()

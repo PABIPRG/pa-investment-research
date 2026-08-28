@@ -348,6 +348,15 @@
 .dashboardAlert button:hover:not(:disabled) { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); }
 .dashboardAlert button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 
+.preferenceFeedback { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; color: var(--dsw-alias-label-tertiary); font-size: 0.7143rem; }
+.dashboardAlert > .preferenceFeedback { grid-column: 1 / -1; margin-top: 0; padding-left: 37px; }
+.preferenceFeedback button, .dashboardAlert .preferenceFeedback button { min-height: 30px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); cursor: pointer; }
+.preferenceFeedback button[aria-pressed='true'], .dashboardAlert .preferenceFeedback button[aria-pressed='true'] { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--investment-selected-surface); font-weight: 700; }
+.preferenceFeedback button:hover:not(:disabled), .dashboardAlert .preferenceFeedback button:hover:not(:disabled) { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--dsw-alias-interactive-bg-hover); }
+.preferenceFeedback button:focus-visible, .dashboardAlert .preferenceFeedback button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.preferenceFeedback button:disabled { color: var(--dsw-alias-label-dimmed); cursor: wait; }
+.preferenceFeedback small { flex-basis: 100%; margin-top: 0; color: var(--dsw-alias-state-error-primary); }
+
 .dashboardStrategy { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 58px; padding: 9px 10px; border: 0; border-top: 1px solid var(--dsw-alias-border-l1); color: inherit; background: transparent; text-align: left; cursor: pointer; transition: background 140ms ease, color 140ms ease, transform 140ms ease; }
 .dashboardStrategy:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .dashboardStrategy:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--investment-primary); outline-offset: -2px; }
@@ -1228,7 +1237,7 @@
 
 /* Global AI assistant: one Host conversation, two display modes, no route replacement. */
 .assistantLauncher { position: fixed; right: 24px; bottom: 24px; z-index: 900; display: grid; width: 50px; height: 50px; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--investment-primary) 72%, transparent); border-radius: 15px; color: var(--dsw-alias-label-primary-foreground); background: var(--investment-primary); box-shadow: var(--dsw-shadow-lv3); cursor: pointer; pointer-events: auto; transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
-.assistantLauncher:hover:not(:disabled) { background: var(--investment-primary-hover); box-shadow: var(--dsw-shadow-lv4); transform: translateY(-2px); }
+.assistantLauncher:hover:not(:disabled) { background: var(--investment-primary-hover); box-shadow: var(--dsw-shadow-lv3); transform: translateY(-2px); }
 .assistantLauncher:active:not(:disabled) { transform: translateY(0); }
 .assistantLauncher:focus-visible { outline: 3px solid var(--investment-primary); outline-offset: 3px; }
 .assistantLauncher span { font-size: 0.9286rem; font-weight: 800; letter-spacing: .04em; }
@@ -1317,6 +1326,55 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 .deferred p { max-width: 540px; margin: 0; color: var(--dsw-alias-label-secondary); line-height: 1.7; }
 .deferred strong { margin-top: 16px; padding: 5px 10px; border-radius: 99px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); font-size: 0.7143rem; }
 
+.backTextButton { display: block; min-height: 30px; margin: -4px 0 7px; padding: 0; border: 0; color: var(--investment-primary); background: transparent; font-size: 0.7857rem; cursor: pointer; }
+.backTextButton:hover { text-decoration: underline; text-underline-offset: 3px; }
+.backTextButton:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; border-radius: 4px; }
+.preferenceBoundary { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 14px 16px; border: 1px solid var(--dsw-alias-state-business-primary); border-radius: 12px; background: var(--dsw-alias-state-business-tertiary); }
+.preferenceBoundary strong, .preferenceBoundary p { display: block; }
+.preferenceBoundary p { margin: 4px 0 0; color: var(--dsw-alias-label-secondary); font-size: 0.7857rem; line-height: 1.55; }
+.preferenceBoundary > span { flex: none; padding: 5px 9px; border-radius: 99px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: 0.7143rem; font-weight: 700; }
+.preferenceBoundary > span[data-enabled='false'] { color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); }
+.preferenceMetrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.preferenceMetrics > div { min-width: 0; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 11px; background: var(--dsw-alias-bg-base); }
+.preferenceMetrics span, .preferenceMetrics strong, .preferenceMetrics small { display: block; }
+.preferenceMetrics span { color: var(--dsw-alias-label-tertiary); font-size: 0.7143rem; }
+.preferenceMetrics strong { margin-top: 7px; font-size: 1.2857rem; overflow-wrap: anywhere; }
+.preferenceMetrics small { margin-top: 5px; color: var(--dsw-alias-label-caption); font-size: 0.6429rem; }
+.preferencePanel { margin-bottom: 14px; padding: 15px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-bg-base); }
+.preferencePanel .sectionHeading > div strong, .preferencePanel .sectionHeading > div small { display: block; }
+.preferencePanel .sectionHeading small { margin-top: 4px; color: var(--dsw-alias-label-caption); font-size: 0.6429rem; font-weight: 400; overflow-wrap: anywhere; }
+.preferenceEmpty { padding: 20px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 10px; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-1); text-align: center; }
+.preferenceEmpty p { margin: 6px 0 0; font-size: 0.7857rem; line-height: 1.55; }
+.preferenceInsightList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.preferenceInsightList article { min-width: 0; padding: 13px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
+.preferenceInsightList article > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.preferenceInsightList article span { flex: none; padding: 3px 7px; border-radius: 99px; color: var(--investment-primary); background: var(--investment-selected-surface); font-size: 0.6429rem; }
+.preferenceInsightList article p { margin: 8px 0; color: var(--dsw-alias-label-secondary); font-size: 0.7857rem; line-height: 1.55; }
+.preferenceInsightList article small { display: block; margin-top: 4px; color: var(--dsw-alias-label-tertiary); font-size: 0.6429rem; line-height: 1.5; }
+.preferenceGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.preferenceFunnel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 10px 0 0; }
+.preferenceFunnel div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border-radius: 8px; background: var(--dsw-alias-bg-layer-1); }
+.preferenceFunnel dt { color: var(--dsw-alias-label-secondary); font-size: 0.7143rem; }
+.preferenceFunnel dd { margin: 0; font-size: 0.8571rem; font-weight: 700; }
+.explicitRisk { margin-top: 10px; padding: 14px; border: 1px solid var(--dsw-alias-state-business-secondary); border-radius: 8px; background: var(--investment-selected-surface); }
+.explicitRisk span, .explicitRisk strong, .explicitRisk small { display: block; }
+.explicitRisk span, .explicitRisk small { color: var(--dsw-alias-label-tertiary); font-size: 0.7143rem; }
+.explicitRisk strong { margin-top: 6px; font-size: 1.2143rem; }
+.explicitRisk p { margin: 8px 0; color: var(--dsw-alias-label-secondary); font-size: 0.7857rem; line-height: 1.55; }
+.preferenceActivity { margin-top: 9px; }
+.preferenceActivity > div:not(.preferenceEmpty) { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 0; border-top: 1px solid var(--dsw-alias-border-l1); font-size: 0.7857rem; }
+.preferenceActivity > div:first-child { border-top: 0; }
+.preferenceActivity time { flex: none; color: var(--dsw-alias-label-caption); font-size: 0.7143rem; }
+.preferenceControls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-bottom: 14px; padding: 16px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-bg-base); }
+.preferenceControls p { margin: 5px 0 0; color: var(--dsw-alias-label-secondary); font-size: 0.7857rem; }
+.preferenceControls > div:nth-child(2), .clearConfirmation > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.dangerButton { display: inline-flex; align-items: center; justify-content: center; height: var(--investment-control-height); padding: 0 12px; border: 1px solid var(--dsw-alias-state-error-secondary); border-radius: 8px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-bg-base); font-size: 0.8571rem; font-weight: 600; cursor: pointer; }
+.dangerButton:hover:not(:disabled) { border-color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
+.dangerButton:focus-visible { outline: 2px solid var(--dsw-alias-state-error-primary); outline-offset: 2px; }
+.dangerButton:disabled { color: var(--dsw-alias-label-dimmed); cursor: not-allowed; }
+.clearConfirmation { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid var(--dsw-alias-state-error-secondary); border-radius: 9px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
+.clearConfirmation p { margin: 0; color: inherit; }
+
 @keyframes investment-session-progress {
   0% { transform: translateX(-110%); }
   55% { transform: translateX(120%); }
@@ -1377,7 +1435,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .globalSearch { grid-column: 1; }
   .topActions { grid-column: 2; }
   :global(body[data-investment-assistant-mode='expanded']) .historyDrawer { width: min(88vw, 360px); }
-  .dashboardSummary, .signalGrid, .metricRow, .stockLoadingMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboardSummary, .signalGrid, .metricRow, .stockLoadingMetrics, .preferenceMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .watchlistGrid, .evolutionFlow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboardHoldingList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .reportLayout { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); }
@@ -1403,6 +1461,11 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .pageHeader { flex-direction: column; gap: 12px; }
   .pageHeader > div:last-child { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   .pageHeader > div:last-child .primaryButton, .pageHeader > div:last-child .secondaryButton { min-height: var(--investment-touch-target); height: auto; padding: 10px 13px; }
+  .preferenceBoundary, .preferenceControls, .clearConfirmation { align-items: stretch; flex-direction: column; }
+  .preferenceGrid, .preferenceInsightList { grid-template-columns: 1fr; }
+  .preferenceControls { grid-template-columns: 1fr; }
+  .preferenceControls > div:nth-child(2) { width: 100%; }
+  .preferenceControls .secondaryButton, .preferenceControls .dangerButton, .clearConfirmation button { min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
   .segmented button { flex: none; min-height: var(--investment-touch-target); }
   .dashboardTaskNotice { align-items: stretch; flex-direction: column; }
   .dashboardTaskNotice button, .dashboardTextButton { min-height: var(--investment-touch-target); }
@@ -1494,5 +1557,5 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .analysisModuleCard, .analysisPipeline { padding: 13px; }
   .assistantToolbar { gap: 6px; }
   .assistantToolbar button { width: 31px; justify-content: center; overflow: hidden; color: transparent; font-size: 0; }
-  .assistantToolbar button .actionIcon { color: var(--dsw-alias-label-secondary); }
+.assistantToolbar button .actionIcon { color: var(--dsw-alias-label-secondary); }
 }

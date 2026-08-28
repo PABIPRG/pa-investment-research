@@ -27,6 +27,8 @@ import {
   StrategyResearchPage,
 } from './ProductPages.tsx'
 import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
+import { PreferenceReviewPage } from './PreferenceReviewPage.tsx'
+import type { LocalTelemetrySurface, TrackLocalTelemetry } from './telemetry.ts'
 import type {
   AssistantDisplayMode, AssistantModule, InvestmentDraftKey, InvestmentNavigationContext,
   InvestmentRoute, InvestmentUiSnapshot,
@@ -135,6 +137,8 @@ interface UiInjected {
   navigate: (route: InvestmentRoute, context?: InvestmentNavigationContext) => void
 }
 
+const NOOP_TELEMETRY: TrackLocalTelemetry = async () => {}
+
 export type InvestmentSidebarInjected = UiInjected
 
 export type InvestmentSidebarProps = PropsRuntime<'sidebar.workspaces'>
@@ -143,6 +147,7 @@ export type InvestmentSidebarProps = PropsRuntime<'sidebar.workspaces'>
 
 export interface InvestmentShellInjected extends UiInjected {
   requestData: RequestData
+  trackTelemetry?: TrackLocalTelemetry
   setHistory: (open: boolean) => void
   setReports: (open: boolean) => void
   setAssistantMode: (mode: AssistantDisplayMode) => void
@@ -290,7 +295,7 @@ export function InvestmentBrand({ compact }: InvestmentBrandProps) {
       <span className={css.brandMark}>✦</span>
       <span className={css.brandCopy}>
         <strong>投研智能体</strong>
-        <small>v{INVESTMENT_APP_VERSION} · 智能投研系统</small>
+        <small>{INVESTMENT_APP_VERSION} · 智能投研系统</small>
       </span>
     </div>
   )
@@ -414,8 +419,8 @@ function securitySearchItems(value: unknown): SecuritySearchItem[] {
 }
 
 function GlobalStockSearch({
-  requestData, navigate,
-}: { requestData: RequestData; navigate: UiInjected['navigate'] }) {
+  requestData, navigate, trackTelemetry,
+}: { requestData: RequestData; navigate: UiInjected['navigate']; trackTelemetry: TrackLocalTelemetry }) {
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<SecuritySearchItem[]>([])
   const [focused, setFocused] = useState(false)
@@ -448,6 +453,10 @@ function GlobalStockSearch({
   const select = (item: SecuritySearchItem): void => {
     setQuery(`${item.name} ${item.code}`)
     setFocused(false)
+    void trackTelemetry({
+      action: 'open', surface: 'search', targetType: 'security', targetId: item.code,
+      context: { ticker: item.code },
+    })
     navigate('stock-detail', { stockCode: item.code })
   }
 
@@ -457,6 +466,10 @@ function GlobalStockSearch({
     if (item !== undefined) { select(item); return }
     if (/^\d{6}$/.test(keyword)) {
       setFocused(false)
+      void trackTelemetry({
+        action: 'open', surface: 'search', targetType: 'security', targetId: keyword,
+        context: { ticker: keyword },
+      })
       navigate('stock-detail', { stockCode: keyword })
       return
     }
@@ -662,7 +675,8 @@ function AssistantFloatingSurface({
 }
 
 export function InvestmentShell({
-  useInvestmentUi, useSessions, useWorkspaces, requestData, navigate, setHistory, setReports,
+  useInvestmentUi, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
+  navigate, setHistory, setReports,
   setAssistantMode, setModuleDraft, selectStrategy, startSession, openSession, searchSessions, renameSession,
   archiveSession, prepareAssistant, toggleTheme,
 }: InvestmentShellProps) {
@@ -681,6 +695,27 @@ export function InvestmentShell({
   const assistantMode = snapshot.assistantMode
   const assistantModule = snapshot.assistantModule
   const colorScheme = useActiveColorScheme()
+
+  useEffect(() => {
+    const surface: LocalTelemetrySurface = snapshot.route === 'stock-detail'
+      ? 'stock_detail'
+      : snapshot.route === 'framework' || snapshot.route === 'projects'
+        ? 'strategy'
+        : snapshot.route === 'tasks'
+          ? 'evolution'
+          : snapshot.route === 'knowledge'
+            ? 'industry'
+            : snapshot.route === 'opportunity'
+              ? 'opportunity'
+              : snapshot.route === 'portfolio'
+                ? 'portfolio'
+                : snapshot.route === 'dashboard'
+                  ? 'dashboard'
+                  : 'assistant'
+    void trackTelemetry({
+      action: 'page_view', surface, targetType: 'page', targetId: snapshot.route, dedupe: 'moment',
+    })
+  }, [snapshot.route, trackTelemetry])
 
   useEffect(() => {
     if (isAnalysisRoute) setAnalysisVisited(true)
@@ -769,7 +804,7 @@ export function InvestmentShell({
   return (
     <>
       <header className={css.topbar}>
-        <GlobalStockSearch requestData={requestData} navigate={navigate} />
+        <GlobalStockSearch requestData={requestData} navigate={navigate} trackTelemetry={trackTelemetry} />
         <div className={css.topActions} role="group" aria-label="页面操作">
           <button
             ref={reportTriggerRef}
@@ -823,6 +858,7 @@ export function InvestmentShell({
             navigate={navigate}
             onAnalyze={prepareAssistant}
             onOpenReports={() => { setReports(true) }}
+            trackTelemetry={trackTelemetry}
           />
         )}
         {snapshot.route === 'opportunity' && (
@@ -846,6 +882,7 @@ export function InvestmentShell({
             requestData={requestData}
             onAnalyze={prepareAssistant}
             onViewStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
+            trackTelemetry={trackTelemetry}
           />
         )}
         {(snapshot.route === 'framework' || snapshot.route === 'projects') && (
@@ -1761,11 +1798,43 @@ function HoldingsImportDialog({
   return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body)
 }
 
-/** Portfolio workbench with independently settling holdings, risk, and alert regions. */
-export function PortfolioPage({ requestData, onAnalyze, onViewStock = () => {} }: {
+/** My Research owns both the portfolio overview and the local preference review. */
+export function PortfolioPage({
+  requestData, onAnalyze, onViewStock = () => {}, trackTelemetry = NOOP_TELEMETRY,
+}: {
   requestData: RequestData
   onAnalyze: (intent: AssistantIntent) => void
   onViewStock?: (code: string) => void
+  trackTelemetry?: TrackLocalTelemetry
+}) {
+  const [view, setView] = useState<'portfolio' | 'preferences'>('portfolio')
+  if (view === 'preferences') {
+    return (
+      <PreferenceReviewPage
+        requestData={requestData}
+        trackTelemetry={trackTelemetry}
+        onBack={() => { setView('portfolio') }}
+      />
+    )
+  }
+  return (
+    <PortfolioOverviewPage
+      requestData={requestData}
+      onAnalyze={onAnalyze}
+      onViewStock={onViewStock}
+      trackTelemetry={trackTelemetry}
+      onOpenPreferences={() => { setView('preferences') }}
+    />
+  )
+}
+
+/** Portfolio workbench with independently settling holdings, risk, and alert regions. */
+function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelemetry, onOpenPreferences }: {
+  requestData: RequestData
+  onAnalyze: (intent: AssistantIntent) => void
+  onViewStock: (code: string) => void
+  trackTelemetry: TrackLocalTelemetry
+  onOpenPreferences: () => void
 }) {
   const [nonce, setNonce] = useState(0)
   const [importOpen, setImportOpen] = useState(false)
@@ -1830,6 +1899,7 @@ export function PortfolioPage({ requestData, onAnalyze, onViewStock = () => {} }
   return (
     <div className={css.pageScroll}>
       <PageHeader title="我的投研" description="汇总后端已保存的持仓、风险预算与真实预警结果，承接研究到组合决策">
+        <button type="button" className={css.secondaryButton} onClick={onOpenPreferences}>偏好复盘</button>
         <button type="button" className={css.secondaryButton} onClick={() => { setNotice(''); setImportOpen(true) }}>
           <ImportIcon /><span className={css.actionLabel}>导入持仓</span>
         </button>
@@ -1969,7 +2039,14 @@ export function PortfolioPage({ requestData, onAnalyze, onViewStock = () => {} }
                   <RiskRow
                     key={text(item.indicator, String(index))}
                     item={item}
-                    onOpen={() => { setSelectedRisk({ ...item, source: text(item.source, 'portfolio') }) }}
+                    onOpen={() => {
+                      const riskId = text(item.id, text(item.indicator, `portfolio-risk-${index}`))
+                      void trackTelemetry({
+                        action: 'open', surface: 'portfolio', targetType: 'risk', targetId: riskId,
+                        context: { risk_source: text(item.source, 'portfolio'), risk_severity: text(item.severity, '低') },
+                      })
+                      setSelectedRisk({ ...item, source: text(item.source, 'portfolio') })
+                    }}
                   />
                 ))}
                 {breaches.length === 0 && <div className={css.goodState}>当前没有检测到风险预算突破</div>}
@@ -1997,6 +2074,18 @@ export function PortfolioPage({ requestData, onAnalyze, onViewStock = () => {} }
                     key={text(item.id, String(index))}
                     item={item}
                     onOpen={() => {
+                      const riskId = text(item.id, text(item.indicator, `alert-${index}`))
+                      const codes = Array.isArray(item.codes)
+                        ? item.codes.filter((code): code is string => typeof code === 'string' && code.trim() !== '')
+                        : []
+                      void trackTelemetry({
+                        action: 'open', surface: 'portfolio', targetType: 'risk', targetId: riskId,
+                        context: {
+                          ...(codes[0] === undefined ? {} : { ticker: codes[0] }),
+                          risk_source: text(item.source, 'portfolio'),
+                          risk_severity: text(item.severity, '低'),
+                        },
+                      })
                       setSelectedRisk({
                         ...item,
                         degraded: alertRecord.degraded === true,
@@ -2038,7 +2127,19 @@ export function PortfolioPage({ requestData, onAnalyze, onViewStock = () => {} }
                   data-event-id={eventId === '' ? undefined : eventId}
                   data-action="event-report-open"
                   aria-haspopup="dialog"
-                  onClick={() => { setSelectedEvent(item) }}
+                  onClick={() => {
+                    const cardId = text(item.card_id, `portfolio-event-${index}`)
+                    const ticker = eventPrimaryTicker(item)
+                    void trackTelemetry({
+                      action: 'open', surface: 'portfolio', targetType: 'event', targetId: cardId,
+                      context: {
+                        ...(ticker === undefined ? {} : { ticker: ticker.code }),
+                        ...(text(item.direction, '') === '' ? {} : { direction: text(item.direction) }),
+                        ...(text(item.bucket, '') === '' ? {} : { bucket: text(item.bucket) }),
+                      },
+                    })
+                    setSelectedEvent(item)
+                  }}
                 >
                   <span>
                     <strong>{text(item.title, '市场事件')}</strong>

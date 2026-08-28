@@ -125,6 +125,20 @@ class JsonStore:
             self._write(collection, data)
             return value
 
+    def mutate_document(
+        self,
+        collection: str,
+        transform: Callable[[dict], dict],
+    ) -> dict:
+        """在单次文件锁内变换整个集合文档，并返回已提交的新文档。"""
+        with self._lock(collection):
+            current = self._read(collection)
+            value = transform(dict(current))
+            if not isinstance(value, dict):
+                raise TypeError("集合变换必须返回 dict")
+            self._write(collection, value)
+            return value
+
     def update(self, collection: str, key: str, **fields: Any) -> None:
         with self._lock(collection):
             data = self._read(collection)

@@ -72,12 +72,14 @@ class Settings:
         self.shadow_initial_capital = float(os.getenv("SHADOW_INITIAL_CAPITAL", "100000"))
         # 三期：个性化右链（O 策略匹配 + D/P 资讯卡片 + R 行为捕获）
         self.personalized_limit = int(os.getenv("PERSONALIZED_LIMIT", "30"))
-        self.personalized_behavior_cap = int(os.getenv("PERSONALIZED_BEHAVIOR_CAP", "500"))
+        self.personalized_behavior_cap = int(os.getenv("PERSONALIZED_BEHAVIOR_CAP", "2000"))
         self.personalized_comment_enabled = os.getenv("PERSONALIZED_LLM_COMMENT", "true").lower() == "true"
         self.personalized_comment_ttl = float(os.getenv("PERSONALIZED_LLM_COMMENT_TTL", "1800"))
         # 四期：事件影响图谱 + 画像增强
         self.ic_url = os.getenv("IC_URL", "http://127.0.0.1:8200")          # 产业链图谱（C 扩展源）
         self.personalized_behavior_hours = float(os.getenv("PERSONALIZED_BEHAVIOR_HOURS", "168"))
+        self.local_learning_retention_days = int(os.getenv("LOCAL_LEARNING_RETENTION_DAYS", "90"))
+        self.local_learning_event_cap = int(os.getenv("LOCAL_LEARNING_EVENT_CAP", "2000"))
         # 自进化闭环（S_shadow 替身 → T 归因 → W 升降级/变异 → W→H 回流）
         self.evolve_min_days = int(os.getenv("EVOLVE_MIN_DAYS", "5"))            # 影子净值≥N 日才动作
         self.evolve_promote_nav = float(os.getenv("EVOLVE_PROMOTE_NAV", "1.03"))  # nav≥ 升级线

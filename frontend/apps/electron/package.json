@@ -2,7 +2,7 @@
   "name": "@deepseek-ai/dsh-electron",
   "productName": "投研智能体",
   "description": "投研智能体 Electron 桌面应用",
-  "version": "0.1.0-rc.7",
+  "version": "0.1.0-rc.8",
   "author": "DeepSeek",
   "license": "MIT",
   "publishConfig": {

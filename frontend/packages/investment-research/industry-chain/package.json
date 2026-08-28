@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-investment-industry-chain",
   "description": "Industry-chain Python backend registration for the investment Profile",
-  "version": "0.1.0-rc.7",
+  "version": "0.1.0-rc.8",
   "publishConfig": {
     "access": "public"
   },

@@ -98,7 +98,7 @@ def _profile_ctx(store) -> dict:
 
 
 def _behavior_ctx(store, profile_key: str) -> tuple[dict, float]:
-    """L→K：近 N 小时行为 → (behavior 块, 有效激进度)。失败降级为无调整。"""
+    """近 N 小时行为 → (兴趣证据, 显式画像基础激进度)。"""
     try:
         from .behavior_profile import compute_behavior_profile
 
@@ -109,8 +109,7 @@ def _behavior_ctx(store, profile_key: str) -> tuple[dict, float]:
                "views": 0, "clicks": 0, "focus_tickers": [], "direction_skew": None,
                "aggression_delta": 0.0, "strategy_affinity": [],
                "notes": ["行为画像暂不可用"]}
-    delta = float(beh.get("aggression_delta") or 0.0)
-    eff = round(_clamp(PROFILE_AGGRESSION.get(profile_key, 0.5) + delta, 0, 1), 3)
+    eff = round(_clamp(PROFILE_AGGRESSION.get(profile_key, 0.5), 0, 1), 3)
     return beh, eff
 
 
@@ -169,8 +168,8 @@ def score_strategy(s: dict, ctx: dict) -> dict:
     kind = s.get("kind")
     direction = s.get("direction") or "中性"
     profile_key = ctx["profile_key"]
-    bdelta = float(ctx.get("behavior_delta") or 0.0)
-    a = _clamp(PROFILE_AGGRESSION.get(profile_key, 0.5) + bdelta, 0, 1)
+    bdelta = 0.0
+    a = _clamp(PROFILE_AGGRESSION.get(profile_key, 0.5), 0, 1)
     demand = min(1.0, KIND_AGGRESSION.get(kind, 0.5)
                  + DIRECTION_ADJUST.get(direction, 0.05))
 
@@ -193,12 +192,6 @@ def score_strategy(s: dict, ctx: dict) -> dict:
         f"{ctx['profile_label']}画像(激进度{a}) vs {direction}{kind}(需求{demand})，"
         f"契合度{round(fit_ratio * 100)}%"
     ]
-    if bdelta:  # L→K 行为画像修正（有方向数据才出现）
-        bad_pct = ctx.get("behavior_bad_pct")
-        if bad_pct is not None:
-            pf_notes.append(f"行为画像{bdelta:+.2f}：你近期利空事件点击占比 {bad_pct*100:.0f}%")
-        else:
-            pf_notes.append(f"行为画像{bdelta:+.2f}：行为方向修正")
     answers = ctx["answers"]
     try:
         if answers.get("drawdown_reaction") is not None and int(answers["drawdown_reaction"]) <= 2 and kind in ("rsi_reversal", "bollinger"):
@@ -306,16 +299,23 @@ def match_strategies(store=None) -> dict:
            "watchlist": set(_watchlist_codes(store)),
            "shadow": _shadow_snapshot(store),
            "concentration": _portfolio_concentration(store, pctx["profile_key"]),
-           "behavior_delta": beh["aggression_delta"],
-           "behavior_bad_pct": (beh["direction_skew"] or {}).get("bad_pct")
-                               if beh["direction_skew"] else None,
+           "behavior_delta": 0.0,
+           "behavior_bad_pct": None,
            }
     items = [score_strategy(s, ctx) for s in _active_strategies(store)]
     items.sort(key=lambda x: (not x["fits_profile"], -x["match_score"]))
+    try:
+        from .local_telemetry import preference_snapshot_id
+
+        snapshot_id = preference_snapshot_id(store)
+    except Exception as exc:  # noqa: BLE001 — 快照失败不阻塞推荐
+        logger.debug("偏好快照生成失败: %s", exc)
+        snapshot_id = None
     return {
         "as_of": _now(),
         "profile": pctx["profile_key"], "profile_label": pctx["profile_label"],
         "effective_aggression": eff,
+        "preference_snapshot_id": snapshot_id,
         "behavior": beh,
         "portfolio_concentration": ctx["concentration"],
         "count": len(items), "items": items,
@@ -494,6 +494,14 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
     actives = _active_strategies(store)
     shadow = _shadow_snapshot(store)
     recent_codes = _recent_clicks(store, hours=24)
+    current_feedback: dict[str, str] = {}
+    for row in store.get("behavior", "default") or []:
+        if not isinstance(row, dict) or row.get("action") != "feedback":
+            continue
+        card_id = str(row.get("card_id") or "").strip()
+        sentiment = str(row.get("sentiment") or "")
+        if card_id and card_id not in current_feedback and sentiment in {"useful", "useless"}:
+            current_feedback[card_id] = sentiment
     # V→D 效果归因信号：你反馈有用/无用的个股与行业（读行为库，失败置空）
     try:
         from .behavior_profile import behavior_boosts
@@ -531,8 +539,9 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
         if bk != "fresh" and (ev.get("impact_by") or []):  # C 间接波及（命中才展示）
             reasons.append("间接波及：" + "、".join(str(x) for x in ev["impact_by"])[:80])
         reasons.extend(rel["reasons"])
+        card_id = "card-" + _str2md5(str(ev.get("id") or ""))
         cards.append({
-            "card_id": "card-" + _str2md5(str(ev.get("id") or "")),
+            "card_id": card_id,
             "event_id": ev.get("id"), "item_id": ev.get("item_id"),
             "bucket": bk, "relevance_score": rel["score"],
             "type": ev.get("type"), "direction": ev.get("direction"),
@@ -546,6 +555,7 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
             "risk": _risk_level(ev, profile_key),
             "reasons": reasons[:3],
             "llm_comment": None,
+            "feedback_sentiment": current_feedback.get(card_id),
             "event": ev,
         })
 
@@ -556,10 +566,18 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
         _attach_llm_comments(cards, profile_key)
 
     limit = max(1, min(int(limit), 100))
+    try:
+        from .local_telemetry import preference_snapshot_id
+
+        snapshot_id = preference_snapshot_id(store)
+    except Exception as exc:  # noqa: BLE001 — 快照失败不阻塞卡片流
+        logger.debug("偏好快照生成失败: %s", exc)
+        snapshot_id = None
     return {
         "as_of": _now(),
         "profile": profile_key, "profile_label": pctx["profile_label"],
         "effective_aggression": eff,
+        "preference_snapshot_id": snapshot_id,
         "behavior": beh,
         "count": len(cards[:limit]), "cards": cards[:limit],
     }
@@ -570,55 +588,46 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
 
 def record_interaction(store, card_id: str, action: str, ts: str | None = None,
                        meta: dict | None = None) -> dict:
-    """R：写 view/click 记录，插头部 + 截断 cap。"""
-    rec = {"card_id": card_id, "action": action, "ts": ts or _now(),
-           "meta": meta or {}, "server_ts": _now()}
-    store.mutate(
-        "behavior",
-        "default",
-        lambda current: ([rec] + list(current or []))[
-            : settings.personalized_behavior_cap
-        ],
-        [],
-    )
-    return {"ok": True, "stored": True, "action": action, "card_id": card_id}
+    """兼容旧 view/click 接口；客户端时间不作为本地事实时间。"""
+    from .local_telemetry import record_legacy_interaction
+
+    return record_legacy_interaction(store, card_id, action, meta)
 
 
 def record_feedback(store, card_id: str, sentiment: str, ts: str | None = None,
                     meta: dict | None = None) -> dict:
-    """R 显式反馈（P→R 决策信号）：卡片/预警 有用/没用，落行为库。
+    """R 显式反馈：同对象最后值覆盖，只驱动内容兴趣与效果归因。"""
+    from .local_telemetry import record_feedback as record_local_feedback
 
-    供 R→U→K 画像修正（feedback_delta / interest_tickers）与 R→V 效果归因
-    （卡片排序 boost、事件预警灵敏度校准）。
-    """
-    rec = {"card_id": card_id, "action": "feedback", "sentiment": sentiment,
-           "ts": ts or _now(), "meta": meta or {}, "server_ts": _now()}
-    store.mutate(
-        "behavior",
-        "default",
-        lambda current: ([rec] + list(current or []))[
-            : settings.personalized_behavior_cap
-        ],
-        [],
-    )
-    return {"ok": True, "stored": True, "sentiment": sentiment, "card_id": card_id}
+    return record_local_feedback(store, card_id, sentiment, meta)
 
 
 def _recent_clicks(store, hours: float = 24.0) -> set[str]:
     """近 N 小时 click 记录涉及的 ticker 集合（供 P 排序 behavior_bonus）。"""
+    from .local_telemetry import _parse_ts
+
     now = time.time()
     codes: set[str] = set()
     for r in (store.get("behavior", "default") or []):
         if not isinstance(r, dict) or r.get("action") != "click":
             continue
-        ts = str(r.get("ts") or "").strip()
-        try:
-            t = time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M:%S"))
-        except (ValueError, TypeError):
+        parsed = _parse_ts(r.get("server_ts") or r.get("ts"))
+        if parsed is None:
             continue
-        if (now - t) > hours * 3600:
+        if (now - parsed.timestamp()) > hours * 3600:
             continue
         tk = str((r.get("meta") or {}).get("ticker") or "").strip()
+        if tk:
+            codes.add(tk)
+    for r in (store.get("behavior", "events") or []):
+        if not isinstance(r, dict) or r.get("action") not in {"open", "analyze"}:
+            continue
+        parsed = _parse_ts(r.get("occurred_at"))
+        if parsed is None:
+            continue
+        if (now - parsed.timestamp()) > hours * 3600:
+            continue
+        tk = str((r.get("context") or {}).get("ticker") or "").strip()
         if tk:
             codes.add(tk)
     return codes
