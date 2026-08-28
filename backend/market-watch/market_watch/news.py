@@ -12,6 +12,7 @@ import html
 import json
 import logging
 import os
+import re
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -169,6 +170,11 @@ _FLASH_HEADERS = {
     ),
     "Referer": "https://finance.sina.com.cn/7x24/",
 }
+# 东财搜索 JSONP 接口（定向个股新闻）用东财自己的域做 Referer
+_EM_HEADERS = {
+    "User-Agent": _FLASH_HEADERS["User-Agent"],
+    "Referer": "https://so.eastmoney.com/",
+}
 _FLASH_CACHE: dict[str, tuple[float, dict]] = {}
 
 
@@ -183,6 +189,10 @@ _FLASH_LOCK = threading.RLock()
 _FLASH_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="flash-refresh")
 _FLASH_SOURCE_EXECUTOR = ThreadPoolExecutor(
     max_workers=max(1, settings.flash_source_workers), thread_name_prefix="flash-source"
+)
+# 定向个股新闻独立池，避免排到后台 flash flight 后面；容量由 MW_DIRECTED_NEWS_WORKERS 控制
+_DIRECTED_NEWS_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(1, settings.directed_news_workers), thread_name_prefix="directed-news"
 )
 _FLASH_CLOCK = time.monotonic
 
@@ -561,7 +571,68 @@ def fetch_flash(limit: int = 30, *, include_slow: bool = False) -> dict:
     }
 
 
+# ---- 定向个股新闻（东财搜索 JSONP，已实测直连可用）-------------------------------
+
+
+def fetch_directed_news(keyword: str, top: int = 3) -> list[dict]:
+    """按 code/name 定向拉东财搜索相关文章，返回统一 item（id/time/tag/title/content/source/url）。
+    JSONP → 解析 result.cmsArticleWebOld；失败返回空，不抛异常。
+    注意：东财 search-api-web 对标准 requests 的 TLS 指纹会拖慢到超时（curl 秒回），须用
+    curl_cffi 模拟浏览器指纹（akshare 新版同款方案）。verify=False 因本机 venv 在中文路径，
+    libcurl 加载 certifi 失败（curl:77），对国内新闻源可接受。"""
+    from curl_cffi import requests as creq  # 本地导入，避免顶部新增重型依赖
+
+    items: list[dict] = []
+    try:
+        param = {
+            "uid": "", "keyword": keyword, "type": ["cmsArticleWebOld"],
+            "client": "web", "clientType": "web", "clientVersion": "curr",
+            "param": {"cmsArticleWebOld": {
+                "searchScope": "default", "sort": "time",
+                "pageIndex": 1, "pageSize": top}},
+        }
+        r = creq.get(
+            "https://search-api-web.eastmoney.com/search/jsonp",
+            params={"cb": "x", "param": json.dumps(param, ensure_ascii=False)},
+            timeout=settings.directed_news_timeout,
+            proxies={},
+            headers=_EM_HEADERS,
+            impersonate="chrome",
+            verify=False,
+        )
+        r.raise_for_status()
+        # 关键：响应可能无 charset，requests 会按 ISO-8859-1 猜导致中文乱码，强制 UTF-8 解码
+        text = r.content.decode("utf-8", errors="replace")
+        m = re.search(r"^[^(]*\((.*)\)\s*$", text, re.S)
+        data = json.loads(m.group(1)) if m else {}
+        rows = ((data.get("result") or {}).get("cmsArticleWebOld") or [])[:top]
+        seen_url: set[str] = set()
+        for row in rows:
+            url = str(row.get("url") or "").strip()
+            if url and url in seen_url:
+                continue
+            if url:
+                seen_url.add(url)
+            title = _strip_html(str(row.get("title") or "")).strip()
+            if not title and not url:
+                continue
+            content = _strip_html(str(row.get("content") or "")).strip()
+            items.append({
+                "id": "em-" + hashlib.md5((url or title).encode()).hexdigest()[:10],
+                "time": str(row.get("date") or "").strip(),
+                "tag": "东财",
+                "title": title,
+                "content": content or title,
+                "source": str(row.get("mediaName") or "东财"),
+                "url": url,
+            })
+    except Exception as exc:
+        logger.warning("定向新闻 %s 拉取失败: %s", keyword, exc)
+    return items
+
+
 def shutdown_background_workers() -> None:
     """应用退出时停止接收 refresh，并等待真实 provider 线程收敛。"""
     _FLASH_REFRESH_EXECUTOR.shutdown(wait=True, cancel_futures=True)
     _FLASH_SOURCE_EXECUTOR.shutdown(wait=True, cancel_futures=True)
+    _DIRECTED_NEWS_EXECUTOR.shutdown(wait=True, cancel_futures=True)

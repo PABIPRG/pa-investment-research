@@ -12,6 +12,7 @@ import hashlib
 import logging
 import re
 import time
+from concurrent.futures import wait
 
 import requests
 
@@ -120,6 +121,41 @@ def _extract_llm(items: list[dict]) -> list[dict]:
     return out
 
 
+# 定向新闻：direction/type 关键词（与 _extract_rule 同风格；_extract_rule 只复用核心价格正则，行为不变）
+_DIR_UP = re.compile(r"涨停|大涨|涨超|上涨|飙升|升逾")
+_DIR_DOWN = re.compile(r"跌停|大跌|跌超|下跌|重挫|暴跌|挫逾")
+_DIRECTED_UP = re.compile(
+    r"涨停|大涨|涨超|上涨|飙升|升逾|预增|净流入|增持|回购|中标|签约|利好|扭亏")
+_DIRECTED_DOWN = re.compile(
+    r"跌停|大跌|跌超|下跌|重挫|暴跌|挫逾|预减|净流出|减持|解禁|利空|亏损|违规|处罚|风险提示")
+_DIRECTED_TYPE_RULES = (
+    ("业绩", ("业绩", "净利润", "营收", "财报", "中报", "年报", "季报", "业绩预告", "分红", "派息", "预增", "预减")),
+    ("公告", ("公告", "预案", "回购", "增持", "减持", "定增", "重组", "停牌", "复牌", "解禁", "披露")),
+    ("评级", ("评级", "研报", "目标价", "买入", "增持评级")),
+    ("价格异动", ("涨停", "跌停", "大涨", "大跌", "异动", "涨超", "跌超", "封板", "龙虎榜", "换手")),
+    ("政策", ("政策", "监管", "证监会", "央行", "发改委", "财政部", "国务院", "新规", "征求意见")),
+    ("合作", ("合作", "签约", "中标", "订单", "合同", "战略合作", "联手")),
+    ("产业", ("行业", "板块", "产业链", "供需", "产能", "涨价", "降价", "出口")),
+    ("宏观", ("GDP", "CPI", "PMI", "降准", "降息", "通胀", "利率", "经济")),
+    ("相关", ("资金", "净流入", "净流出", "主力", "北向", "融资", "机构", "上榜")),
+)
+
+
+def _directed_direction(txt: str) -> str:
+    if _DIRECTED_UP.search(txt):
+        return "利好"
+    if _DIRECTED_DOWN.search(txt):
+        return "利空"
+    return "中性"
+
+
+def _classify_directed(txt: str) -> str:
+    for ev_type, kws in _DIRECTED_TYPE_RULES:
+        if any(k in txt for k in kws):
+            return ev_type
+    return "其他"
+
+
 def _extract_rule(it: dict, names: dict[str, str]) -> dict | None:
     """无 LLM 时的规则降级：
     - 含价格百分比 / 涨停跌停关键词 → 价格异动事件；
@@ -132,9 +168,9 @@ def _extract_rule(it: dict, names: dict[str, str]) -> dict | None:
         return None
     direction = "中性"
     if is_price:
-        if re.search(r"涨停|大涨|涨超|上涨|飙升|升逾", txt):
+        if _DIR_UP.search(txt):
             direction = "利好"
-        if re.search(r"跌停|大跌|跌超|下跌|重挫|暴跌|挫逾", txt):
+        if _DIR_DOWN.search(txt):
             direction = "利空"
     ev_type = "价格异动" if is_price else "相关"
     return {
@@ -187,7 +223,12 @@ def extract_events(limit: int = 30) -> list[dict]:
             )
 
     events = _dedup(list(JsonStore().get("events", "latest") or []), "item_id")
-    events.sort(key=lambda e: e["time"], reverse=True)
+    directed = directed_events()
+    if directed:
+        events = _dedup(directed + events, "item_id")  # 定向版本优先（_dedup 保首次出现）
+    # 定向事件（ev-stock-*）恒排最前，组内按 time 倒序——否则其东财新闻日期偏旧，
+    # 会被 [:limit] 截断导致个性化面板定向卡片消失；LLM 事件在其后仍按新→旧。
+    events.sort(key=lambda e: (str(e.get("id", "")).startswith("ev-stock"), e.get("time", "")), reverse=True)
     _EVENT_CACHE["events"] = (now, events)
     return events[:limit]
 
@@ -242,6 +283,78 @@ def _watch_hold_names() -> dict[str, str]:
             _add(base, m[nm])
     _WATCH_NAMES_CACHE["names"] = (now, m)
     return m
+
+
+# ---- 定向个股新闻（按持仓+自选逐只拉东财搜索，直接标注已知 code，不走 LLM）-------
+
+
+def _directed_code_names(watchlist: list[dict], hold_codes: list[str]) -> dict[str, str]:
+    """code → 展示名：自选用自选名，持仓用行情名兜底，再兜底 code。"""
+    m: dict[str, str] = {}
+    for w in watchlist:
+        if w.get("code"):
+            m[str(w["code"])] = str(w.get("name") or "").strip() or str(w["code"])
+    for c in hold_codes:
+        if c and c not in m:
+            q = quotes.cache().get_quote(c) or {}
+            m[c] = str(q.get("name") or "").strip() or c
+    return m
+
+
+def _fetch_directed_for(code: str, name: str, top: int) -> list[dict]:
+    """单只标的：先按 code，空结果（如 ETF）再按名称兜底。"""
+    items = news.fetch_directed_news(code, top)
+    if not items and name and name != code:
+        items = news.fetch_directed_news(name, top)
+    return items
+
+
+def directed_events() -> list[dict]:
+    """按持仓+自选每只标的定向拉个股新闻 → 直接标注已知 code 的事件（不走 LLM）。
+    单只失败跳过；整体 deadline 内返回部分结果。"""
+    if not settings.directed_news_enabled:
+        return []
+    watchlist = JsonStore().get("watchlist", "default") or []
+    watch_codes = [str(w["code"]) for w in watchlist if w.get("code")]
+    hold_codes = [c for c in _holdings_codes() if c]
+    codes = list(dict.fromkeys(watch_codes + hold_codes))  # 去重保序
+    if not codes:
+        return []
+    code_names = _directed_code_names(watchlist, hold_codes)
+    per = max(1, settings.directed_news_per_stock)
+    futures = {
+        news._DIRECTED_NEWS_EXECUTOR.submit(
+            _fetch_directed_for, c, code_names.get(c, c), per
+        ): c
+        for c in codes
+    }
+    done, _ = wait(futures, timeout=settings.directed_news_deadline)
+    events: list[dict] = []
+    for fut in done:
+        code = futures[fut]
+        try:
+            items = fut.result() or []
+        except Exception as exc:
+            logger.warning("定向新闻任务 %s 异常: %s", code, exc)
+            continue
+        name = code_names.get(code, code)
+        for it in items:
+            txt = f"{it.get('title') or ''} {it.get('content') or ''}"
+            events.append({
+                "id": f"ev-stock-{code}-"
+                      f"{hashlib.md5((it.get('url') or it.get('title') or '').encode()).hexdigest()[:8]}",
+                "item_id": it.get("id") or "",
+                "type": _classify_directed(txt),
+                "tickers": [{"name": name, "code": code}],
+                "industries": [],
+                "direction": _directed_direction(txt),
+                "summary": (it.get("title") or it.get("content") or "")[:120],
+                "title": it.get("title") or "",
+                "time": it.get("time") or "",
+                "source": it.get("source") or "东财",
+                "url": it.get("url") or "",
+            })
+    return events
 
 
 def _event_match_flags(ev: dict | None, watch: set[str], hold: set[str]) -> set[str]:

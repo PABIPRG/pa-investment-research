@@ -37,6 +37,13 @@ The service reads `MW_` settings from `.env`. `MW_SCHEDULE_ENABLED` defaults to 
 | `MW_PUSH_ENABLED` | `false` | Enables outbound Server酱 or WeCom notifications when the corresponding credential is present. `MW_PUSH_CHANNELS` is optional: leave it empty to enable every credentialed channel, or set it to restrict delivery to `serverchan` and/or `wecom`. |
 | `MW_POLL_INTERVAL` | `30` | Intraday rule-evaluation interval in seconds. |
 | `MW_NEWS_ENABLED` | `false` | Enables news job; `MW_NEWS_INTERVAL_MIN` defaults to `60`. |
+| `MW_EVENT_ENABLED` | `true` | Enables structured-event extraction from flash news (`/news/events`, `/news/event-alerts`, personalized cards). |
+| `MW_EVENT_TTL` | `60` | Structured-event cache lifetime in seconds; also bounds how often per-stock directed news is re-fetched. |
+| `MW_DIRECTED_NEWS_ENABLED` | `true` | For every holding + watchlist stock, pulls its own news from the Eastmoney search API and tags the known code directly into `/news/events` (100% match, no LLM). |
+| `MW_DIRECTED_NEWS_PER_STOCK` | `3` | Top-N articles per target stock per directed pull. |
+| `MW_DIRECTED_NEWS_WORKERS` | `4` | Concurrent workers for the directed per-stock pulls. |
+| `MW_DIRECTED_NEWS_TIMEOUT` | `2` | Per-request HTTP timeout (seconds) for the Eastmoney search API. |
+| `MW_DIRECTED_NEWS_DEADLINE` | `8` | Total budget (seconds) for one round of directed pulls; during a cold extract the full-flash and LLM steps compete for network, so 3s was too tight to finish all target stocks. 8s still fits well inside trading-core's 15s deadline. |
 | `MW_PRE_BRIEF_ENABLED` / `MW_POST_BRIEF_ENABLED` | `false` / `false` | Enables the 08:50 pre-market or 15:30 post-market brief respectively; times are configurable. |
 | `MW_QUOTE_CACHE_TTL` | `60` | Whole-market snapshot cache duration in seconds. |
 | `MW_FLASH_FIRST_PAINT_DEADLINE` / `MW_FLASH_FULL_DEADLINE` | `1.5` / `10` | Total wait budget for base first-paint news or the explicit full-source path. |
@@ -52,6 +59,8 @@ The default `_poll_job()` only calls `in_trading_session()`: it skips weekends a
 ## Market-data limits and units
 
 The Eastmoney snapshot is paginated across the whole market (55+ requests). A short `MW_QUOTE_CACHE_TTL` can trigger push2 rate limiting, so keep the default 60 seconds unless the data-source cost is understood. When Eastmoney is rate limited or unavailable, the service falls back to Sina snapshots; Sina does not provide volume ratio or turnover, so those fields may be `null`.
+
+`GET /news/events` is the structured-event stream consumed by trading-core: it merges full-market flash extraction with per-stock directed news, so every holding/watchlist stock appears with `tickers[].code` tagged directly (id prefix `ev-stock-`, no LLM). The directed pull is bounded by `MW_DIRECTED_NEWS_DEADLINE` and cached under `MW_EVENT_TTL`, so it adds at most ~3s to a cold `/news/events` and does not consume the LLM `event_batch` quota.
 
 Base `GET /news/flash` reads only Sina Finance and direct, timeout-bounded CLS within the first-paint deadline. Completed sources return as a partial result, while the same refresh flight continues until every bounded provider settles; an incomplete refresh never replaces a more complete stale cache. `enrich=1` explicitly selects all configured sources plus event extraction and may invoke the optional LLM. K-line retrieval uses Sina and Eastmoney plus a baostock fallback isolated in a killable child process. Per-code single-flight and bounded admission prevent an unavailable provider from creating an unbounded work queue; fresh or stale cache returns immediately, while an uncached foreground wait ends at `MW_KLINE_COLD_DEADLINE` and leaves an admitted background refresh running.
 
