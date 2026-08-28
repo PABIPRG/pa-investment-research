@@ -352,6 +352,10 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     appBundleId: appIdentity.appBundleId,
     arch: input.arch,
     asar: false,
+    // Windows pnpm links are directory junctions with absolute targets inside
+    // the temporary deploy tree. Materialize them while Electron Packager
+    // copies the app so Forge can zip the durable output after that tree is removed.
+    derefSymlinks: input.platform === 'win32',
     dir: input.stagingDir,
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
