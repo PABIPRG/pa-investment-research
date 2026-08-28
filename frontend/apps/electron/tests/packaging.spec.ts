@@ -197,6 +197,7 @@ describe('Electron investment sidecar packaging', () => {
       })
 
       expect(options).toEqual(expect.objectContaining({
+        derefSymlinks: false,
         dir: plan.stagingDir,
       }))
       expect(options.osxSign).toBeUndefined()
@@ -215,6 +216,22 @@ describe('Electron investment sidecar packaging', () => {
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
+  })
+
+  it('dereferences Windows pnpm junctions before the temporary deploy tree is removed', () => {
+    const plan = createPackagingPlan('/tmp/dsh-electron-win32-test', 'win32', 'x64')
+
+    const options = createPackagerOptions({
+      arch: 'x64',
+      electronVersion: '43.2.0',
+      electronZipDir: '/tmp/electron',
+      outDir: '/tmp/out',
+      platform: 'win32',
+      sidecarDir: plan.sidecarDir,
+      stagingDir: plan.stagingDir,
+    })
+
+    expect(options.derefSymlinks).toBe(true)
   })
 
   it('ad-hoc signs macOS packages sequentially without the Node signing walker', async () => {
