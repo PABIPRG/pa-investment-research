@@ -32,8 +32,6 @@ _BREACH_LABELS = {
     "hhi": "集中度 HHI",
     "portfolio_vol": "组合波动率",
 }
-# V→Q：用户反馈校准只作用于事件源（软信号），组合/影子/画像永不抑制
-_DOWNGRADE = {"高": "中", "中": "低", "低": "低"}
 _PORTFOLIO_CACHE: dict[tuple, tuple[float, dict]] = {}
 
 
@@ -53,28 +51,33 @@ _PORTFOLIO_CACHE_LOCK = threading.Lock()
 def _feedback_counts(store) -> dict:
     """近 N 小时反馈记录 → {card_id(预警/卡片 id): {useful, useless}}（V→Q 归因）。"""
     from .config import settings
+    from .local_telemetry import _parse_ts
 
     now = time.time()
     win = float(settings.personalized_behavior_hours) * 3600
     out: dict[str, dict] = {}
+    seen: set[str] = set()
     for r in store.get("behavior", "default") or []:
         if not isinstance(r, dict) or r.get("action") != "feedback":
             continue
-        try:
-            t = time.mktime(time.strptime(str(r.get("ts") or "").strip(), "%Y-%m-%d %H:%M:%S"))
-        except (ValueError, TypeError):
+        parsed = _parse_ts(r.get("server_ts") or r.get("ts"))
+        if parsed is None:
             continue
+        t = parsed.timestamp()
         if (now - t) > win:
             continue
         cid = str(r.get("card_id") or "").strip()
-        if not cid:
+        if not cid or cid in seen:
             continue
-        d = out.setdefault(cid, {"useful": 0, "useless": 0})
+        seen.add(cid)
+        d = out.setdefault(cid, {"useful": 0, "useless": 0, "current": None})
         sent = r.get("sentiment")
         if sent == "useful":
             d["useful"] += 1
+            d["current"] = "useful"
         elif sent == "useless":
             d["useless"] += 1
+            d["current"] = "useless"
     return out
 
 
@@ -423,17 +426,9 @@ def risk_alerts(store=None) -> dict:
         "ts": _now(),
     })
 
-    # V→Q：每项附反馈计数；事件源灵敏度按反馈校准（组合/影子/画像永不抑制）
+    # V→Q：反馈只用于效果归因；任何来源的风险严重度都不受内容偏好影响。
     for it in items:
-        it["feedback"] = fb_counts.get(it["id"]) or {"useful": 0, "useless": 0}
-    for it in items:
-        if it["source"] != "event":
-            continue
-        fb = it["feedback"]
-        if fb["useless"] >= 2 and fb["useless"] >= fb["useful"]:
-            it["severity"] = _DOWNGRADE.get(it["severity"], it["severity"])
-            it["detail"] = str(it["detail"]) + \
-                f"（你近期标记此类预警无用 {fb['useless']} 次，灵敏度已下调）"
+        it["feedback"] = fb_counts.get(it["id"]) or {"useful": 0, "useless": 0, "current": None}
 
     # R→V 效果漏斗（曝光→点击→有用/没用，观察整体归因）
     from .behavior_profile import behavior_funnel

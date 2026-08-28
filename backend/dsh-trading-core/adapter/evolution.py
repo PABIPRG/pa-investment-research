@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""自进化闭环：S_shadow → T 归因 → W 升降级/变异 → W→H 回流 + R→S→U→K outcome 版。
+"""自进化闭环：S_shadow → T 归因 → W 升降级/变异 → W→H 回流 + R→S→U outcome 版。
 
 架构图里自进化链是 S(真实组合) → T(策略归因) → W(升级/降级/变异) → H(策略池回流) → I 再验证，
 以及 R→U→K 的行为→画像增强。真实 S 依赖用户实盘组合，这里用**影子组合替身**：
@@ -14,9 +14,8 @@
       ├─W─H── 变异回流（mutate）：对升级策略做参数轻变异 + 标的子集 → 新 candidate
       │       写回 strategies 池（H），走既有 E→G→H→I 再验证。W→H 闭环成立。
       │
-      └─R→S→U→K  outcome 版（decision_outcome）：用户参与/激活的策略影子 outcome
-              → outcome_delta 并入行为画像 aggression_delta（决策被验证则强化，
-              决策受挫则纠正）。R→U→K 在 U 上补了 outcome 证据。
+      └─R→S→U  outcome 版（decision_outcome）：用户参与/激活的策略影子 outcome
+              → 形成策略归因证据。兼容字段 delta 不得并入风险画像或预警严重度。
 
 三道护栏（设计保证）：
   1. 数据不足（shadow_equity < EVOLVE_MIN_DAYS，默认 5）→ 只出归因报告，不产生动作；
@@ -611,16 +610,16 @@ def status(store: JsonStore | None = None) -> dict:
     }
 
 
-# ---- R→S→U→K outcome 版（决策受验证/受挫 → 行为画像修正）---------------
+# ---- R→S→U outcome 版（决策受验证/受挫 → 策略归因证据）-------------------
 
 
 def decision_outcome(store: JsonStore | None = None) -> dict:
-    """R→S→U→K outcome 归因：用户参与（点击/反馈）或激活的策略 → 影子 outcome → outcome_delta。
+    """R→S→U outcome 归因：用户参与（点击/反馈）或激活的策略 → 影子 outcome。
 
     - 参与 = 近 N 小时 behavior 里带 strategy_id 的 click/feedback + 所有 active 策略（激活=决策）。
     - 只有「仍在 active」的策略参与计算（watch 算 active，retired 不参与）。
-    - delta = clamp(0.08 × 参与策略平均影子收益, ±0.05)：决策被验证（盈利）→ 轻微上调行为激进度；
-      决策受挫（亏损）→ 轻微下调。数据不足（<2 日影子）或无样本 → delta=0 + note。
+    - delta 是兼容旧消费者的归因强度，不得流入用户风险参数；数据不足（<2 日影子）
+      或无样本时 delta=0 + note。
     """
     store = store or JsonStore()
     days, n = _shadow_series(store)
@@ -674,6 +673,6 @@ def decision_outcome(store: JsonStore | None = None) -> dict:
         "avg_return_pct": round(avg * 100, 2),
         "note": (
             f"参与 {len(engaged)} 个 active 策略影子均收益 {avg * 100:.1f}%，"
-            f"outcome 修正激进度 {delta:+.3f}"
+            f"outcome 归因强度 {delta:+.3f}（不修改风险画像）"
         ),
     }

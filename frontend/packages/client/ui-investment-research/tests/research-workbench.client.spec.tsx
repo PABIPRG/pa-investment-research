@@ -4,7 +4,11 @@ import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/re
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { ResearchWorkbenchPage } from '../src/client/ResearchWorkbenchPage.tsx'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 function completeResponse(operation: InvestmentDataRequest['operation']): unknown {
   if (operation === 'trading-core.holdings') {
@@ -61,15 +65,17 @@ function renderWorkbench(requestData = vi.fn(async (request: InvestmentDataReque
   const navigate = vi.fn()
   const onAnalyze = vi.fn()
   const onOpenReports = vi.fn()
+  const trackTelemetry = vi.fn(async () => {})
   const view = render(
     <ResearchWorkbenchPage
       requestData={requestData}
       navigate={navigate}
       onAnalyze={onAnalyze}
       onOpenReports={onOpenReports}
+      trackTelemetry={trackTelemetry}
     />,
   )
-  return { ...view, requestData, navigate, onAnalyze, onOpenReports }
+  return { ...view, requestData, navigate, onAnalyze, onOpenReports, trackTelemetry }
 }
 
 describe('研究工作台', () => {
@@ -109,6 +115,91 @@ describe('研究工作台', () => {
     const metric = view.getByText('持仓成本金额').parentElement!
     expect(within(metric).getByText('—')).toBeTruthy()
     expect(view.queryByText('¥0')).toBeNull()
+  })
+
+  it('显式反馈显示当前选择、支持纠正，并只发送白名单上下文', async () => {
+    const view = renderWorkbench()
+    const heading = await view.findByRole('heading', { name: '白酒板块经营数据改善' })
+    const card = heading.closest('article')!
+    const controls = within(card)
+
+    fireEvent.click(controls.getByRole('button', { name: '值得关注' }))
+    await waitFor(() => {
+      expect(view.requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.personalized-feedback',
+        input: {
+          card_id: 'card-holdings', sentiment: 'useful',
+          meta: { ticker: '600519', direction: '利好', bucket: 'holdings' },
+        },
+      })
+    })
+    expect(controls.getByRole('button', { name: '值得关注' }).getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(controls.getByRole('button', { name: '减少此类' }))
+    await waitFor(() => {
+      expect(controls.getByRole('button', { name: '减少此类' }).getAttribute('aria-pressed')).toBe('true')
+    })
+    const correction = view.requestData.mock.calls
+      .map(([request]) => request)
+      .filter(request => request.operation === 'trading-core.personalized-feedback')
+      .at(-1)
+    expect(correction?.input?.card_id).toBe('card-holdings')
+    expect(correction?.input?.sentiment).toBe('useless')
+  })
+
+  it('反馈失败给出局部重试提示，不阻塞事件详情', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.personalized-feedback') throw new Error('offline')
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    const heading = await view.findByRole('heading', { name: '白酒板块经营数据改善' })
+    const card = heading.closest('article')!
+    fireEvent.click(within(card).getByRole('button', { name: '值得关注' }))
+    expect((await within(card).findByRole('alert')).textContent).toContain('偏好未保存，请重试。')
+    fireEvent.click(within(card).getByRole('button', { name: '查看事件详情' }))
+    expect(await view.findByRole('dialog')).toBeTruthy()
+  })
+
+  it('卡片进入一半视口并持续一秒后才记录有效曝光', async () => {
+    vi.useFakeTimers()
+    const observers: Array<{
+      callback: IntersectionObserverCallback
+      element?: Element
+      disconnected: boolean
+    }> = []
+    class TestIntersectionObserver {
+      readonly root = null
+      readonly rootMargin = '0px'
+      readonly thresholds = [0.5]
+      private readonly state: typeof observers[number]
+      constructor(callback: IntersectionObserverCallback) {
+        this.state = { callback, disconnected: false }
+        observers.push(this.state)
+      }
+      observe = (element: Element) => { this.state.element = element }
+      unobserve = () => {}
+      disconnect = () => { this.state.disconnected = true }
+      takeRecords = () => []
+    }
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver)
+    const view = renderWorkbench()
+    await vi.waitFor(() => { expect(view.getByText('白酒板块经营数据改善')).toBeTruthy() })
+    const article = view.getByText('白酒板块经营数据改善').closest('article')!
+    const observer = observers.find(item => item.element === article)!
+
+    observer.callback([{ isIntersecting: true, intersectionRatio: 0.5 } as IntersectionObserverEntry], {} as IntersectionObserver)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(view.trackTelemetry).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'impression' }))
+    observer.callback([{ isIntersecting: false, intersectionRatio: 0 } as IntersectionObserverEntry], {} as IntersectionObserver)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(view.trackTelemetry).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'impression' }))
+
+    observer.callback([{ isIntersecting: true, intersectionRatio: 0.8 } as IntersectionObserverEntry], {} as IntersectionObserver)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(view.trackTelemetry).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'impression', targetType: 'event', targetId: 'card-holdings', dedupe: 'session',
+    }))
   })
 
   it('筛选关联事件，并以可复核详情承接事件、风险和策略动作', async () => {

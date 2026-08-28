@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
@@ -7,6 +8,9 @@ import {
 } from './DetailDialogs.tsx'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
+import type {
+  LocalTelemetryContext, LocalTelemetryEvent, TrackLocalTelemetry,
+} from './telemetry.ts'
 import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
@@ -135,6 +139,109 @@ function strategyDisplayName(item: Record<string, unknown>, securityNames: Reado
   return labels.join('、') + (symbols.length > 2 ? `等${symbols.length}只` : '')
 }
 
+function eventTelemetryContext(card: Record<string, unknown>): LocalTelemetryContext {
+  const ticker = tickerFromCard(card)
+  const strategyId = strategyFromCard(card)
+  const industries = stringItems(card.industries)
+  const direction = text(card.direction, '')
+  const bucket = text(card.bucket, '')
+  const eventType = text(card.type, '')
+  return {
+    ...(ticker === undefined ? {} : { ticker: ticker.code }),
+    ...(industries.length === 0 ? {} : { industries }),
+    ...(strategyId === '' ? {} : { strategy_id: strategyId }),
+    ...(direction === '' ? {} : { direction }),
+    ...(bucket === '' ? {} : { bucket }),
+    ...(eventType === '' ? {} : { event_type: eventType }),
+  }
+}
+
+function riskTelemetryContext(item: Record<string, unknown>): LocalTelemetryContext {
+  const codes = stringItems(item.codes)
+  const source = text(item.source, '')
+  const severity = text(item.severity, '')
+  const strategyId = text(item.strategy_id, '')
+  return {
+    ...(codes[0] === undefined ? {} : { ticker: codes[0] }),
+    ...(source === '' ? {} : { risk_source: source }),
+    ...(severity === '' ? {} : { risk_severity: severity }),
+    ...(strategyId === '' ? {} : { strategy_id: strategyId }),
+  }
+}
+
+function ImpressionArticle({
+  className, impression, trackTelemetry, children,
+}: {
+  className: string | undefined
+  impression: LocalTelemetryEvent
+  trackTelemetry: TrackLocalTelemetry
+  children: ReactNode
+}) {
+  const ref = useRef<HTMLElement>(null)
+  const impressionRef = useRef(impression)
+  impressionRef.current = impression
+  useEffect(() => {
+    const element = ref.current
+    if (element === null || typeof IntersectionObserver === 'undefined') return
+    let timer: number | undefined
+    const cancel = (): void => {
+      if (timer === undefined) return
+      window.clearTimeout(timer); timer = undefined
+    }
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.some(entry => entry.isIntersecting && entry.intersectionRatio >= 0.5)
+      if (!visible) { cancel(); return }
+      if (timer !== undefined) return
+      timer = window.setTimeout(() => {
+        timer = undefined
+        void trackTelemetry({ ...impressionRef.current, dedupe: 'session' })
+      }, 1_000)
+    }, { threshold: 0.5 })
+    observer.observe(element)
+    return () => { cancel(); observer.disconnect() }
+  }, [impression.action, impression.surface, impression.targetId, impression.targetType, trackTelemetry])
+  return <article ref={ref} className={className}>{children}</article>
+}
+
+function PreferenceFeedback({
+  cardId, current, meta, requestData,
+}: {
+  cardId: string
+  current: string
+  meta: LocalTelemetryContext
+  requestData: RequestData
+}) {
+  const [sentiment, setSentiment] = useState(current)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { setSentiment(current) }, [current])
+
+  const submit = async (next: 'useful' | 'useless'): Promise<void> => {
+    if (busy || sentiment === next) return
+    setBusy(true); setError('')
+    try {
+      await requestData({
+        operation: 'trading-core.personalized-feedback',
+        input: { card_id: cardId, sentiment: next, meta: { ...meta } },
+      })
+      setSentiment(next)
+    } catch {
+      setError('偏好未保存，请重试。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={css.preferenceFeedback}>
+      <span>这条内容：</span>
+      <button type="button" aria-pressed={sentiment === 'useful'} disabled={busy} onClick={() => { void submit('useful') }}>值得关注</button>
+      <button type="button" aria-pressed={sentiment === 'useless'} disabled={busy} onClick={() => { void submit('useless') }}>减少此类</button>
+      {error !== '' && <small role="alert">{error}</small>}
+    </div>
+  )
+}
+
 function RegionError({
   title, message, retained, retry,
 }: { title: string; message: string; retained: boolean; retry: () => void }) {
@@ -170,13 +277,14 @@ interface ResearchWorkbenchPageProps {
   readonly navigate: (route: InvestmentRoute, context?: InvestmentNavigationContext) => void
   readonly onAnalyze: (intent: AssistantIntent) => void
   readonly onOpenReports: () => void
+  readonly trackTelemetry: TrackLocalTelemetry
 }
 
 type EventBucket = 'all' | 'holdings' | 'watchlist' | 'strategy'
 
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
-  requestData, navigate, onAnalyze, onOpenReports,
+  requestData, navigate, onAnalyze, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
   const holdings = useWorkbenchResource(requestData)
   const risk = useWorkbenchResource(requestData)
@@ -392,7 +500,15 @@ export function ResearchWorkbenchPage({
               const cardRisk = asRecord(card.risk)
               const riskLevel = text(cardRisk.level, '')
               return (
-                <article className={css.dashboardEvent} key={text(card.card_id, String(index))}>
+                <ImpressionArticle
+                  className={css.dashboardEvent}
+                  key={text(card.card_id, String(index))}
+                  trackTelemetry={trackTelemetry}
+                  impression={{
+                    action: 'impression', surface: 'dashboard', targetType: 'event',
+                    targetId: text(card.card_id, `event-${index}`), context: eventTelemetryContext(card),
+                  }}
+                >
                   <div className={css.dashboardEventMeta}>
                     <span>{BUCKET_LABELS[text(card.bucket, '')] ?? '关联事件'}</span>
                     {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
@@ -408,9 +524,27 @@ export function ResearchWorkbenchPage({
                   )}
                   {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
                   <div className={css.dashboardEventActions}>
-                    <button type="button" onClick={() => { setSelectedEvent(card) }}>{text(card.report_id, '') === '' ? '查看事件详情' : '查看投研报告'}</button>
-                    {ticker !== undefined && <button type="button" onClick={() => { navigate('stock-detail', { stockCode: ticker.code }) }}>查看个股</button>}
-                    {strategyId !== '' && <button type="button" onClick={() => { navigate('framework', { strategyId }) }}>查看策略</button>}
+                    <button type="button" onClick={() => {
+                      void trackTelemetry({
+                        action: 'open', surface: 'dashboard', targetType: 'event',
+                        targetId: text(card.card_id, `event-${index}`), context: eventTelemetryContext(card),
+                      })
+                      setSelectedEvent(card)
+                    }}>{text(card.report_id, '') === '' ? '查看事件详情' : '查看投研报告'}</button>
+                    {ticker !== undefined && <button type="button" onClick={() => {
+                      void trackTelemetry({
+                        action: 'open', surface: 'dashboard', targetType: 'security', targetId: ticker.code,
+                        context: { ticker: ticker.code },
+                      })
+                      navigate('stock-detail', { stockCode: ticker.code })
+                    }}>查看个股</button>}
+                    {strategyId !== '' && <button type="button" onClick={() => {
+                      void trackTelemetry({
+                        action: 'open', surface: 'dashboard', targetType: 'strategy', targetId: strategyId,
+                        context: { strategy_id: strategyId },
+                      })
+                      navigate('framework', { strategyId })
+                    }}>查看策略</button>}
                     <button
                       type="button"
                       onClick={() => {
@@ -419,7 +553,13 @@ export function ResearchWorkbenchPage({
                       }}
                     >带入智能分析</button>
                   </div>
-                </article>
+                  <PreferenceFeedback
+                    cardId={text(card.card_id, `event-${index}`)}
+                    current={text(card.feedback_sentiment, '')}
+                    meta={eventTelemetryContext(card)}
+                    requestData={requestData}
+                  />
+                </ImpressionArticle>
               )
             })}
             {cards.state.loaded && visibleCards.length === 0 && (
@@ -441,7 +581,15 @@ export function ResearchWorkbenchPage({
             {!alerts.state.loaded && alerts.state.error === '' && <RegionSkeleton />}
             {alerts.state.loaded && alertItems.slice(0, 5).map((item, index) => {
               return (
-                <article className={css.dashboardAlert} key={text(item.id, String(index))}>
+                <ImpressionArticle
+                  className={css.dashboardAlert}
+                  key={text(item.id, String(index))}
+                  trackTelemetry={trackTelemetry}
+                  impression={{
+                    action: 'impression', surface: 'dashboard', targetType: 'risk',
+                    targetId: text(item.id, `risk-${index}`), context: riskTelemetryContext(item),
+                  }}
+                >
                   <span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span>
                   <div><strong>{text(item.title, '风险提醒')}</strong><p>{text(item.detail, '')}</p><small>{displayTime(item.ts)}</small></div>
                   <button
@@ -450,6 +598,10 @@ export function ResearchWorkbenchPage({
                     data-risk-id={text(item.id, text(item.indicator, text(item.title, String(index))))}
                     aria-haspopup="dialog"
                     onClick={() => {
+                      void trackTelemetry({
+                        action: 'open', surface: 'dashboard', targetType: 'risk',
+                        targetId: text(item.id, `risk-${index}`), context: riskTelemetryContext(item),
+                      })
                       setSelectedRisk({
                         ...item,
                         degraded: alertValue.degraded === true,
@@ -457,7 +609,13 @@ export function ResearchWorkbenchPage({
                       })
                     }}
                   >查看详情</button>
-                </article>
+                  <PreferenceFeedback
+                    cardId={text(item.id, `risk-${index}`)}
+                    current={text(asRecord(item.feedback).current, '')}
+                    meta={riskTelemetryContext(item)}
+                    requestData={requestData}
+                  />
+                </ImpressionArticle>
               )
             })}
             {alerts.state.loaded && alertItems.length === 0 && <div className={css.dashboardGood}>当前没有风险预警</div>}
@@ -477,7 +635,15 @@ export function ResearchWorkbenchPage({
               const id = text(item.strategy_id, '')
               const reason = records(item.match_reasons)[0]
               return (
-                <button key={id || String(index)} type="button" className={css.dashboardStrategy} onClick={() => { navigate('framework', { strategyId: id }) }}>
+                <button key={id || String(index)} type="button" className={css.dashboardStrategy} onClick={() => {
+                  if (id !== '') {
+                    void trackTelemetry({
+                      action: 'open', surface: 'dashboard', targetType: 'strategy', targetId: id,
+                      context: { strategy_id: id },
+                    })
+                  }
+                  navigate('framework', { strategyId: id })
+                }}>
                   <span><strong>{strategyDisplayName(item, strategySecurityNames)}</strong><small>{reason === undefined ? text(item.caution, '查看匹配依据') : text(reason.text, '查看匹配依据')}</small></span>
                   <b>{number(item.match_score)?.toFixed(0) ?? '—'}</b>
                 </button>

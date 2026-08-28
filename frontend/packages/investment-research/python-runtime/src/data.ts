@@ -5,6 +5,8 @@ import type {
 interface RequestSpec {
   readonly backendId: InvestmentBackendId
   readonly method: 'GET' | 'POST'
+  /** Local learning facts must never be sent to a configured external backend. */
+  readonly localOnly?: boolean
   readonly path: (input: Readonly<Record<string, unknown>>) => string
   readonly body?: (input: Readonly<Record<string, unknown>>) => Readonly<Record<string, unknown>>
 }
@@ -194,6 +196,109 @@ function noInputPost(path: string, backendId: InvestmentBackendId): RequestSpec 
   }
 }
 
+const LOCAL_ACTIONS = ['page_view', 'impression', 'open', 'analyze', 'follow', 'unfollow'] as const
+const LOCAL_SURFACES = [
+  'dashboard', 'search', 'opportunity', 'stock_detail', 'portfolio',
+  'strategy', 'evolution', 'industry', 'reports', 'assistant',
+] as const
+const LOCAL_TARGET_TYPES = [
+  'page', 'event', 'risk', 'strategy', 'security', 'portfolio', 'industry', 'report',
+] as const
+const LOCAL_CONTEXT_KEYS = [
+  'ticker', 'industries', 'strategy_id', 'direction', 'bucket', 'event_type',
+  'risk_source', 'risk_severity', 'analysis_kind', 'position', 'reason_codes',
+] as const
+const LOCAL_LIST_CONTEXT_KEYS = new Set(['industries', 'reason_codes'])
+const SAFE_LOCAL_ID = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,119}$/u
+const SAFE_LOCAL_TEXT = /^[^\u0000-\u001f\u007f]{1,120}$/u
+const SAFE_TICKER_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,31}$/u
+const SAFE_EVENT_ID = /^[A-Za-z0-9._:-]{1,80}$/
+const LOCAL_CONTEXT_ENUMS: Readonly<Record<string, readonly string[]>> = {
+  direction: ['利好', '利空', '中性'],
+  bucket: ['holdings', 'watchlist', 'strategy', 'fresh', 'all'],
+  event_type: ['公告', '业绩', '价格异动', '政策', '产业', '合作', '评级', '宏观', '相关', '其他'],
+  risk_source: ['portfolio', 'shadow', 'event', 'profile'],
+  risk_severity: ['高', '中', '低'],
+  analysis_kind: ['stock', 'portfolio', 'watch', 'strategy', 'shadow', 'evolution', 'reports', 'industry', 'prompt'],
+}
+
+function localIdentifier(input: Readonly<Record<string, unknown>>, key: string, eventId = false): string {
+  const value = stringValue(input, key).trim()
+  const pattern = eventId ? SAFE_EVENT_ID : SAFE_LOCAL_ID
+  if (!pattern.test(value)) throw new TypeError(`investment data: ${key} must be a safe identifier`)
+  return value
+}
+
+function localContext(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  const context = record(value, label)
+  knownKeys(context, LOCAL_CONTEXT_KEYS)
+  const output: Record<string, unknown> = {}
+  for (const [key, candidate] of Object.entries(context)) {
+    if (candidate === undefined || candidate === null) continue
+    if (LOCAL_LIST_CONTEXT_KEYS.has(key)) {
+      if (!Array.isArray(candidate) || candidate.length > 10) {
+        throw new TypeError(`investment data: ${label}.${key} must contain at most 10 strings`)
+      }
+      output[key] = candidate.map((item) => {
+        const pattern = key === 'reason_codes' ? SAFE_LOCAL_ID : SAFE_LOCAL_TEXT
+        const maxLength = key === 'reason_codes' ? 120 : 40
+        if (typeof item !== 'string' || item.trim().length > maxLength || !pattern.test(item.trim())) {
+          throw new TypeError(`investment data: ${label}.${key} must contain safe identifiers`)
+        }
+        return item.trim()
+      })
+      continue
+    }
+    if (key === 'position') {
+      if (typeof candidate !== 'number' || !Number.isSafeInteger(candidate) || candidate < 0 || candidate > 1_000) {
+        throw new TypeError(`investment data: ${label}.position must be an integer between 0 and 1000`)
+      }
+      output[key] = candidate
+      continue
+    }
+    const cleaned = typeof candidate === 'string' ? candidate.trim() : ''
+    const enumValues = LOCAL_CONTEXT_ENUMS[key]
+    if (enumValues !== undefined) {
+      if (!enumValues.includes(cleaned)) {
+        throw new TypeError(`investment data: ${label}.${key} must use an allowed value`)
+      }
+      output[key] = cleaned
+      continue
+    }
+    const pattern = key === 'ticker' ? SAFE_TICKER_ID : SAFE_LOCAL_ID
+    if (!pattern.test(cleaned)) {
+      throw new TypeError(`investment data: ${label}.${key} must be a safe identifier`)
+    }
+    output[key] = cleaned
+  }
+  return output
+}
+
+function localLearningEvent(value: unknown, index: number): Readonly<Record<string, unknown>> {
+  const event = record(value, `events[${index}]`)
+  knownKeys(event, [
+    'event_id', 'schema_version', 'action', 'surface', 'target_type',
+    'target_id', 'session_id', 'context',
+  ])
+  if (event.schema_version !== 1) {
+    throw new TypeError(`investment data: events[${index}].schema_version must be 1`)
+  }
+  return {
+    event_id: localIdentifier(event, 'event_id', true),
+    schema_version: 1,
+    action: oneOf(event, 'action', LOCAL_ACTIONS, true),
+    surface: oneOf(event, 'surface', LOCAL_SURFACES, true),
+    target_type: oneOf(event, 'target_type', LOCAL_TARGET_TYPES, true),
+    target_id: localIdentifier(event, 'target_id'),
+    session_id: localIdentifier(event, 'session_id', true),
+    context: localContext(event.context, `events[${index}].context`),
+  }
+}
+
+function localNoInput(path: string): RequestSpec {
+  return { ...noInput(path, 'trading-core'), localOnly: true }
+}
+
 const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   'market-watch.overview': noInput('/overview', 'market-watch'),
   'market-watch.security-search': {
@@ -368,6 +473,7 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   'trading-core.personalized-feedback': {
     backendId: 'trading-core',
     method: 'POST',
+    localOnly: true,
     path: () => '/personalized/feedback',
     body: (input) => {
       knownKeys(input, ['card_id', 'sentiment', 'meta'])
@@ -376,10 +482,60 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
         throw new TypeError('investment data: sentiment must be useful or useless')
       }
       return {
-        card_id: stringValue(input, 'card_id'),
+        card_id: localIdentifier(input, 'card_id'),
         sentiment,
-        ...(input.meta === undefined ? {} : { meta: record(input.meta, 'meta') }),
+        ...(input.meta === undefined ? {} : { meta: localContext(input.meta, 'meta') }),
       }
+    },
+  },
+  'trading-core.local-learning-events': {
+    backendId: 'trading-core',
+    method: 'POST',
+    localOnly: true,
+    path: () => '/personalized/local-learning/events',
+    body: (input) => {
+      knownKeys(input, ['events'])
+      if (!Array.isArray(input.events) || input.events.length < 1 || input.events.length > 50) {
+        throw new TypeError('investment data: events must contain between 1 and 50 items')
+      }
+      return { events: input.events.map(localLearningEvent) }
+    },
+  },
+  'trading-core.local-learning-status': localNoInput('/personalized/local-learning/status'),
+  'trading-core.local-learning-settings': {
+    backendId: 'trading-core',
+    method: 'POST',
+    localOnly: true,
+    path: () => '/personalized/local-learning/settings',
+    body: (input) => {
+      knownKeys(input, ['enabled'])
+      const enabled = optionalBoolean(input, 'enabled')
+      if (enabled === undefined) throw new TypeError('investment data: enabled is required')
+      return { enabled }
+    },
+  },
+  'trading-core.local-learning-clear': {
+    backendId: 'trading-core',
+    method: 'POST',
+    localOnly: true,
+    path: () => '/personalized/local-learning/clear',
+    body: (input) => {
+      knownKeys(input, ['confirm'])
+      if (input.confirm !== true) throw new TypeError('investment data: confirm must be true')
+      return { confirm: true }
+    },
+  },
+  'trading-core.local-learning-review': {
+    backendId: 'trading-core',
+    method: 'GET',
+    localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['days'])
+      const days = integer(input, 'days', 7, 7, 90)
+      if (days !== 7 && days !== 30 && days !== 90) {
+        throw new TypeError('investment data: days must be 7, 30, or 90')
+      }
+      return query('/personalized/review', { days })
     },
   },
   'trading-core.personalized-profile': noInput('/personalized/profile', 'trading-core'),
@@ -751,10 +907,19 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   },
 }
 
-/** Resolve and execute one fixed backend operation without exposing an origin or URL to the browser. */
+/**
+ * Resolve and execute one fixed backend operation without exposing an origin or URL to the browser.
+ * @param request - Allow-listed operation name and validated JSON input.
+ * @param acquire - Backend lease provider owned by the host Runtime.
+ * @returns The backend's lossless JSON response.
+ */
 export async function requestInvestmentData(
   request: InvestmentDataRequest,
-  acquire: (id: InvestmentBackendId) => Promise<{ baseUrl: string; release(): Promise<void> }>,
+  acquire: (id: InvestmentBackendId) => Promise<{
+    baseUrl: string
+    ownership?: 'owned' | 'attached' | 'external'
+    release(): Promise<void>
+  }>,
 ): Promise<InvestmentJsonValue> {
   const spec = SPECS[request.operation]
   if (spec === undefined) {
@@ -765,6 +930,9 @@ export async function requestInvestmentData(
   const body = spec.body?.(input)
   const lease = await acquire(spec.backendId)
   try {
+    if (spec.localOnly === true && lease.ownership === 'external') {
+      throw new Error(`investment data: ${request.operation} requires a local backend`)
+    }
     const response = await fetch(`${lease.baseUrl}${path}`, {
       method: spec.method,
       ...(body === undefined

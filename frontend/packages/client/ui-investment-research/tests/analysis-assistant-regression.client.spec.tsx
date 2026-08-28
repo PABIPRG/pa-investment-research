@@ -3,7 +3,7 @@ import { createElement, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
-  InvestmentAssistantModuleSelect, InvestmentShell,
+  InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentShell,
 } from '../src/client/InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from '../src/client/assistant-intent.ts'
 import type {
@@ -72,6 +72,7 @@ function renderHarness(
         useSessions={neverGlobalHook}
         useWorkspaces={neverGlobalHook}
         requestData={requestData}
+        trackTelemetry={vi.fn(async () => {})}
         navigate={(route, context = {}) => {
           setSnapshot(current => ({
             ...current,
@@ -141,6 +142,16 @@ function chooseAssistantModule(label: string): void {
 }
 
 describe('智能分析与全局 AI 助理回归', () => {
+  it('在产品标识中展示当前候选版本', () => {
+    render(createElement(InvestmentBrand, {
+      compact: false,
+      label: '投研智能体',
+      startSession: vi.fn(),
+    } as never))
+
+    expect(screen.getByText('0.1.0-rc.8 · 智能投研系统')).toBeTruthy()
+  })
+
   it('始终保留结构化智能分析工作台，并在助理模式切换时保留两份业务输入', () => {
     renderHarness()
 

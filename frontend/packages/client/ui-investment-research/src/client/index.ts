@@ -17,6 +17,9 @@ import {
 } from './InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import {
+  createLocalTelemetry, type LocalTelemetryEvent, type LocalTelemetrySurface,
+} from './telemetry.ts'
+import {
   InvestmentUiState,
   type AssistantDisplayMode,
   type AssistantModule,
@@ -56,6 +59,10 @@ export const inject = [
 /** Mount the investment navigation and workbench without replacing the shared conversation surface. */
 export function apply(ctx: ClientContext): void {
   const state = new InvestmentUiState()
+  const requestData: InvestmentShellInjected['requestData'] = request => (
+    ctx.investmentResearchRuntimeClient.requestData(request)
+  )
+  const telemetry = createLocalTelemetry(requestData)
   let cancelPendingDraft: (() => void) | undefined
 
   ctx.effect(() => {
@@ -133,6 +140,59 @@ export function apply(ctx: ClientContext): void {
   }
 
   const prepareAssistant = (intent: AssistantIntent, moduleOverride?: AssistantModule): void => {
+    const currentRoute = state.getSnapshot().route
+    const surface: LocalTelemetrySurface = currentRoute === 'stock-detail'
+      ? 'stock_detail'
+      : currentRoute === 'framework' || currentRoute === 'projects'
+        ? 'strategy'
+        : currentRoute === 'tasks'
+          ? 'evolution'
+          : currentRoute === 'knowledge'
+            ? 'industry'
+            : currentRoute === 'opportunity'
+              ? 'opportunity'
+              : currentRoute === 'portfolio'
+                ? 'portfolio'
+                : currentRoute === 'dashboard'
+                  ? 'dashboard'
+                  : 'assistant'
+    const telemetryTarget: Pick<LocalTelemetryEvent, 'targetType' | 'targetId' | 'context'> = (() => {
+      if (intent.kind === 'stock') {
+        const code = intent.code.trim()
+        return {
+          targetType: 'security', targetId: code || 'unknown-security',
+          context: { ...(code === '' ? {} : { ticker: code }), analysis_kind: 'stock' },
+        }
+      }
+      if (intent.kind === 'portfolio') {
+        return { targetType: 'portfolio', targetId: 'current-portfolio', context: { analysis_kind: 'portfolio' } }
+      }
+      if (intent.kind === 'watch') {
+        const code = intent.code?.trim() ?? ''
+        return {
+          targetType: code === '' ? 'page' : 'security', targetId: code || 'market-overview',
+          context: { ...(code === '' ? {} : { ticker: code }), analysis_kind: 'watch' },
+        }
+      }
+      if (intent.kind === 'strategy' || intent.kind === 'shadow') {
+        const strategyId = intent.strategyId?.trim() ?? ''
+        return {
+          targetType: 'strategy', targetId: strategyId || 'strategy-pool',
+          context: { ...(strategyId === '' ? {} : { strategy_id: strategyId }), analysis_kind: intent.kind },
+        }
+      }
+      if (intent.kind === 'evolution') {
+        return { targetType: 'strategy', targetId: 'evolution-review', context: { analysis_kind: 'evolution' } }
+      }
+      if (intent.kind === 'reports') {
+        return { targetType: 'report', targetId: intent.reportId?.trim() || 'report-center', context: { analysis_kind: 'reports' } }
+      }
+      if (intent.kind === 'industry') {
+        return { targetType: 'industry', targetId: 'industry-context', context: { analysis_kind: 'industry' } }
+      }
+      return { targetType: 'page', targetId: 'assistant-prompt', context: { analysis_kind: 'prompt' } }
+    })()
+    void telemetry.track({ action: 'analyze', surface, ...telemetryTarget })
     const prompt = assistantPrompt(intent)
     const module: AssistantModule = moduleOverride ?? (intent.kind === 'stock' ? 'stock'
       : intent.kind === 'portfolio' ? 'portfolio'
@@ -180,7 +240,8 @@ export function apply(ctx: ClientContext): void {
 
   const shellInjected = (): InvestmentShellInjected => ({
     ...shared,
-    requestData: request => ctx.investmentResearchRuntimeClient.requestData(request),
+    requestData,
+    trackTelemetry: telemetry.track,
     setHistory: (open) => { state.setHistory(open) },
     setReports: (open) => { state.setReports(open) },
     setAssistantMode: (mode: AssistantDisplayMode) => { state.setAssistantMode(mode) },

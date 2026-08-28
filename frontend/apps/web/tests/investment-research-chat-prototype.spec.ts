@@ -25,7 +25,7 @@ describe('投研对话交互稿', () => {
     expect(document.querySelector('[data-testid="route-sidebar"]')?.classList.contains('sidebar'))
       .toBe(true)
     expect(document.querySelector('.brand-sub')?.textContent)
-      .toBe('v2.4.0 · 智能投研系统')
+      .toBe('0.1.0-rc.8 · 智能投研系统')
     expect(navigation?.querySelectorAll('a')).toHaveLength(7)
     expect(navigation?.querySelector('[data-route="ai-assistant"]')?.getAttribute('aria-current'))
       .toBe('page')

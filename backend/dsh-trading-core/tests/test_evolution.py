@@ -223,8 +223,8 @@ class EvolveTests(unittest.TestCase):
 
 
 class OutcomeTests(unittest.TestCase):
-    def test_decision_outcome_nudges_aggression(self):
-        # 淘汰 strat-bad（亏损策略）后，存活参与策略均为盈利 → 正修正
+    def test_decision_outcome_remains_strategy_evidence(self):
+        # 淘汰 strat-bad 后，结果仍可用于策略归因，但不能修改用户风险画像。
         store = _store()
         _plant(store)
         _preview_and_apply(store)
@@ -232,14 +232,14 @@ class OutcomeTests(unittest.TestCase):
         self.assertGreater(od["samples"], 0)
         self.assertGreater(od["delta"], 0.0)
 
-    def test_outcome_flows_into_behavior_profile(self):
+    def test_outcome_does_not_flow_into_explicit_risk_profile(self):
         store = _store()
         _plant(store)
         _preview_and_apply(store)
         beh = compute_behavior_profile(store)
         self.assertEqual(beh["outcome"]["delta"], 0.003)
-        self.assertEqual(beh["outcome_delta"], 0.003)
-        self.assertEqual(beh["aggression_delta"], 0.15)  # 0.3 利空占比 → clamp 0.15
+        self.assertEqual(beh["outcome_delta"], 0.0)
+        self.assertEqual(beh["aggression_delta"], 0.0)
 
     def test_decision_outcome_zero_when_insufficient(self):
         store = _store()

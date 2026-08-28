@@ -407,17 +407,21 @@ describe('investment data broker', () => {
     const release = vi.fn(async () => {})
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ saved: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
-    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'http://127.0.0.1:8000', ownership: 'owned' as const, release,
+    }))
 
     await requestInvestmentData({
       operation: 'trading-core.personalized-feedback',
-      input: { card_id: 'card-1', sentiment: 'useful', meta: { surface: 'dashboard' } },
+      input: { card_id: 'card-1', sentiment: 'useful', meta: { ticker: '600519.SH', risk_source: 'event' } },
     }, acquire)
 
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/personalized/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_id: 'card-1', sentiment: 'useful', meta: { surface: 'dashboard' } }),
+      body: JSON.stringify({
+        card_id: 'card-1', sentiment: 'useful', meta: { ticker: '600519.SH', risk_source: 'event' },
+      }),
     })
     expect(release).toHaveBeenCalledOnce()
 
@@ -426,6 +430,131 @@ describe('investment data broker', () => {
       input: { card_id: 'card-1', sentiment: 'maybe' },
     }, acquire)).rejects.toThrow('sentiment must be useful or useless')
     expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it('maps local learning events, status, settings, clear, and review to fixed local routes', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'http://127.0.0.1:8000', ownership: 'attached' as const, release,
+    }))
+    const event = {
+      event_id: 'evt:1', schema_version: 1, action: 'open', surface: 'dashboard',
+      target_type: 'event', target_id: 'event-1', session_id: 'session:1',
+      context: {
+        ticker: '600519.SH', industries: ['白酒'], strategy_id: 'strategy:alpha',
+        direction: '利空', bucket: 'holdings', event_type: '公告', risk_source: 'event',
+        risk_severity: '高', analysis_kind: 'stock', position: 2, reason_codes: ['holding-hit'],
+      },
+    }
+
+    await requestInvestmentData({
+      operation: 'trading-core.local-learning-events', input: { events: [event] },
+    }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.local-learning-status' }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.local-learning-settings', input: { enabled: false },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.local-learning-clear', input: { confirm: true },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.local-learning-review', input: { days: 30 },
+    }, acquire)
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'http://127.0.0.1:8000/personalized/local-learning/events',
+      'http://127.0.0.1:8000/personalized/local-learning/status',
+      'http://127.0.0.1:8000/personalized/local-learning/settings',
+      'http://127.0.0.1:8000/personalized/local-learning/clear',
+      'http://127.0.0.1:8000/personalized/review?days=30',
+    ])
+    expect(bodyOf(fetchMock, 0)).toEqual({ events: [event] })
+    expect(bodyOf(fetchMock, 2)).toEqual({ enabled: false })
+    expect(bodyOf(fetchMock, 3)).toEqual({ confirm: true })
+    expect(release).toHaveBeenCalledTimes(5)
+  })
+
+  it('rejects unsafe local metadata and invalid controls before acquiring a backend', async () => {
+    const acquire = vi.fn()
+    const baseEvent = {
+      event_id: 'evt-1', schema_version: 1, action: 'open', surface: 'dashboard',
+      target_type: 'event', target_id: 'event-1', session_id: 'session-1', context: {},
+    }
+
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-events',
+      input: { events: [{ ...baseEvent, context: { query: 'secret' } }] },
+    }, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-events', input: { events: [] },
+    }, acquire)).rejects.toThrow('between 1 and 50')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-events',
+      input: { events: [{ ...baseEvent, schema_version: 2 }] },
+    }, acquire)).rejects.toThrow('schema_version must be 1')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-settings', input: {},
+    }, acquire)).rejects.toThrow('enabled is required')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-clear', input: { confirm: false },
+    }, acquire)).rejects.toThrow('confirm must be true')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-review', input: { days: 14 },
+    }, acquire)).rejects.toThrow('days must be 7, 30, or 90')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.personalized-feedback',
+      input: { card_id: 'card-1', sentiment: 'useful', meta: { title: 'secret' } },
+    }, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-events',
+      input: { events: [{ ...baseEvent, target_id: '用户搜索 贵州茅台' }] },
+    }, acquire)).rejects.toThrow('safe identifier')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.local-learning-events',
+      input: { events: [{ ...baseEvent, context: { direction: '非常看好' } }] },
+    }, acquire)).rejects.toThrow('allowed value')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.personalized-feedback',
+      input: { card_id: '一段卡片标题', sentiment: 'useful' },
+    }, acquire)).rejects.toThrow('safe identifier')
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it('blocks every local learning operation before fetch in external mode and releases leases', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'https://external.example', ownership: 'external' as const, release,
+    }))
+    const requests = [
+      {
+        operation: 'trading-core.personalized-feedback' as const,
+        input: { card_id: 'card-1', sentiment: 'useful' },
+      },
+      {
+        operation: 'trading-core.local-learning-events' as const,
+        input: { events: [{
+          event_id: 'evt-1', schema_version: 1, action: 'open', surface: 'dashboard',
+          target_type: 'event', target_id: 'event-1', session_id: 'session-1', context: {},
+        }] },
+      },
+      { operation: 'trading-core.local-learning-status' as const },
+      { operation: 'trading-core.local-learning-settings' as const, input: { enabled: true } },
+      { operation: 'trading-core.local-learning-clear' as const, input: { confirm: true } },
+      { operation: 'trading-core.local-learning-review' as const, input: { days: 7 } },
+    ]
+
+    for (const request of requests) {
+      await expect(requestInvestmentData(request, acquire)).rejects.toThrow('requires a local backend')
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledTimes(requests.length)
   })
 
   it('maps the complete industry-chain read surface to fixed routes', async () => {
