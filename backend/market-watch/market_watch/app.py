@@ -6,6 +6,7 @@
 """
 
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -346,6 +347,25 @@ def scheduler_tick():
 @app.on_event("startup")
 def _startup():
     scheduler.start_scheduler()
+    _warm_event_cache()
+
+
+def _warm_event_cache() -> None:
+    """后台预热事件流（含定向个股新闻），避免 trading-core 首次请求撞上冷抽取超时。
+
+    冷抽取（全量快讯 + LLM + 定向）在网络不佳时可到数十秒，而 trading-core 侧
+    fetch_events 只有 15s 超时；daemon 线程后台预跑一轮，让 _EVENT_CACHE 在
+    trading-core 首次面板请求前就绪。预抽取一次即覆盖 60s TTL，此后由正常请求续热。
+    """
+
+    def run() -> None:
+        try:
+            events.extract_events(limit=60)
+            logger.info("事件流预热完成")
+        except Exception as exc:
+            logger.warning("事件流预热失败: %s", exc)
+
+    threading.Thread(target=run, name="event-warm", daemon=True).start()
 
 
 @app.on_event("shutdown")

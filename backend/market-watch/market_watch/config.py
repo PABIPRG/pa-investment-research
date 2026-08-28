@@ -98,6 +98,14 @@ class Settings:
         self.event_batch = int(os.getenv("MW_EVENT_BATCH", "15"))
         self.event_ttl = float(os.getenv("MW_EVENT_TTL", "60"))
         self.trading_core_url = os.getenv("MW_TRADING_CORE", "http://127.0.0.1:8000")
+        # 事件驱动 · 定向个股新闻（按持仓+自选逐只拉东财搜索，直标注 code，不走 LLM；频率受 event_ttl 限，无需独立 TTL）
+        self.directed_news_enabled = _true("MW_DIRECTED_NEWS_ENABLED", default=True)
+        self.directed_news_per_stock = int(os.getenv("MW_DIRECTED_NEWS_PER_STOCK", "3"))
+        self.directed_news_workers = int(os.getenv("MW_DIRECTED_NEWS_WORKERS", "4"))
+        self.directed_news_timeout = float(os.getenv("MW_DIRECTED_NEWS_TIMEOUT", "2"))
+        # 一轮定向总预算：服务冷抽取时 flash/LLM 会并行抢占网络，3s 内 5 只常只完成 2-3 只；
+        # 放宽到 8s 保证 5 只（≈2 波并发）都能在 budget 内完成，仍远小于 trading-core 15s deadline。
+        self.directed_news_deadline = float(os.getenv("MW_DIRECTED_NEWS_DEADLINE", "8"))
         # 盘前/盘后简报
         self.pre_brief_enabled = _true("MW_PRE_BRIEF_ENABLED")
         self.pre_brief_time = os.getenv("MW_PRE_BRIEF_TIME", "08:50")

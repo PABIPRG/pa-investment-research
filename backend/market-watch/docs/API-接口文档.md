@@ -408,6 +408,8 @@ GET /news/events?limit=30
 ```
 
 > `tickers[].code` 为名称解析结果；未指明公司时为 `""`。`type` 枚举：`公告` / `业绩` / `价格异动` / `政策` / `产业` / `合作` / `评级` / `宏观` / `相关` / `其他`。
+>
+> **事件流构成 = 全市场快讯抽取 + 持仓/自选逐只定向个股新闻**。定向条目来自东财搜索接口，直接标注已知 code（id 前缀 `ev-stock-`、`tickers[0].code` 命中持仓/自选，`direction`/`type` 用关键词规则判定、不走 LLM），每轮拉取受 `MW_DIRECTED_NEWS_DEADLINE`（默认 3s）总预算约束、随 `MW_EVENT_TTL`（默认 60s）缓存，不占 `event_batch` LLM 配额、不落持久化 `latest[:60]`。命中同一 `item_id` 时定向条目优先。
 
 ### 6.5 GET /news/event-alerts —— 事件预警中心
 
