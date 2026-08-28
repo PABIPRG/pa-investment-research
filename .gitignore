@@ -1,1 +1,7 @@
 .pnpm-store
+**/node_modules/
+backend/*/env/
+backend/*/.venv/
+**/__pycache__/
+*.py[cod]
+*.tsbuildinfo

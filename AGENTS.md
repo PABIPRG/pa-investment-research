@@ -65,7 +65,7 @@ public/master
 - 创建公仓 PR 前，确认特性分支包含最新 `public/master`、不存在未解决冲突，并完成合并前所需的测试和检查。
 - 公仓 PR 是代码进入公仓的唯一方式。禁止先把特性分支合并到 `private/master`，也禁止绕过 PR 直接向公仓推送代码。
 - 只有代码评审通过、自动检查通过且冲突完全解决后，方可合并公仓 PR。
-- 公仓 PR 合并后，及时把最新 `public/master` 以 fast-forward 方式回同步到 `private/master`，为下一项工作建立一致基线；随后可删除已经合并的私仓特性分支。
+- 公仓 PR 合并后，及时把最新 `public/master` 以 fast-forward 方式回同步到 `private/master`，为下一项工作建立一致基线；随后运行 `pnpm --dir frontend run branch:cleanup` 检查本地残留，并仅在用户授权后通过 `--apply` 删除已证明安全的本地特性分支和 worktree。
 
 ### 安全边界
 
