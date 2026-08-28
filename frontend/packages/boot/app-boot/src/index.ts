@@ -687,6 +687,21 @@ function formatActivationError(error: unknown): string {
   return error instanceof Error ? error.stack ?? error.message : String(error)
 }
 
+/** Preserve every actionable branch when Loader folds concurrent failures. */
+function formatLoadFailureDetails(error: unknown): string[] {
+  let current = error
+  while (current instanceof Error && current.cause !== undefined) {
+    current = current.cause
+    if (current instanceof AggregateError) {
+      return current.errors.flatMap((branch: unknown) => {
+        if (branch instanceof AggregateError) return formatLoadFailureDetails(branch)
+        return [formatActivationError(branch)]
+      })
+    }
+  }
+  return current === error ? [] : [formatActivationError(current)]
+}
+
 /**
  * Reject a settled Loader tree when an enabled entry failed or remains inactive.
  * Plugin failures include the original thrown stack; pending entries name their
@@ -782,6 +797,9 @@ export async function boot(
       await ctx.plugin(Loader)
     } else {
       await ctx.plugin(class HostResolvedLoader extends Loader {
+        // Both Loader entry points need the same host-owned fallback while preserving
+        // their own super.import receiver.
+        // oxlint-disable-next-line sonarjs/no-identical-functions
         override import(name: string, getOuterStack?: () => string[]): unknown {
           return importHostOwnedModule(
             name,
@@ -816,10 +834,9 @@ export async function boot(
     // deepest cause is the plugin's own thrown error, whose stack names the
     // real failure site — append it so the startup diagnostic preserves the
     // original activation error instead of only the wrap chain.
-    let deepest: unknown = cause
-    while (deepest instanceof Error && deepest.cause !== undefined) deepest = deepest.cause
-    const stack = deepest instanceof Error && deepest !== cause ? `\n${deepest.stack ?? deepest.message}` : ''
-    throw new Error(`${binName}: ${stage}: ${detail}${stack}`, { cause })
+    const diagnostics = formatLoadFailureDetails(cause)
+    const suffix = diagnostics.length > 0 ? `\n${diagnostics.join('\n')}` : ''
+    throw new Error(`${binName}: ${stage}: ${detail}${suffix}`, { cause })
   }
 }
 

@@ -26,6 +26,15 @@ function readVersion(): string {
 
 const invocation = parseDshArgs(process.argv.slice(2), readVersion())
 
+function investmentConflictOwner(error: unknown): { mode: 'web' | 'electron'; pid: number } | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error) || !('owner' in error)) return undefined
+  if (error.code !== 'DSH_INVESTMENT_INSTANCE_CONFLICT') return undefined
+  const owner = error.owner
+  if (typeof owner !== 'object' || owner === null || !('mode' in owner) || !('pid' in owner)) return undefined
+  if ((owner.mode !== 'web' && owner.mode !== 'electron') || typeof owner.pid !== 'number') return undefined
+  return { mode: owner.mode, pid: owner.pid }
+}
+
 switch (invocation.mode) {
   case 'electron': {
     const { runElectronApplication } = await import('./electron.ts')
@@ -34,12 +43,35 @@ switch (invocation.mode) {
   }
   case 'profile': {
     const { runProfile } = await import('./profile-boot.ts')
-    await runProfile({
-      environment: loadLayeredEnv('dsh'),
-      profile: invocation.profile,
-      patchFiles: invocation.patches,
-      args: invocation.args,
-    })
+    const investmentProduct = invocation.profile === 'investment-research'
+    const instanceOptions = investmentProduct
+      ? {
+        instanceMode: 'web' as const,
+        onInstanceConflict: (await import('./investment-instance-prompt.ts')).confirmInvestmentInstanceReplacement,
+      }
+      : {}
+    try {
+      await runProfile({
+        environment: loadLayeredEnv('dsh'),
+        profile: invocation.profile,
+        patchFiles: invocation.patches,
+        args: invocation.args,
+        ...instanceOptions,
+      })
+    } catch (error) {
+      const owner = investmentConflictOwner(error)
+      if (owner === undefined) throw error
+      const surface = owner.mode === 'web' ? 'Web 版' : 'Electron 版'
+      if (process.stdin.isTTY && process.stderr.isTTY) {
+        process.stderr.write(`\n已取消启动，现有${surface}投研继续运行。\n`)
+      } else {
+        process.stderr.write(
+          `检测到${surface}投研正在运行（PID ${String(owner.pid)}）。`
+          + '请先关闭旧实例，或在交互终端中确认替换。\n',
+        )
+        process.exitCode = 1
+      }
+    }
     break
   }
   case 'plugin': {

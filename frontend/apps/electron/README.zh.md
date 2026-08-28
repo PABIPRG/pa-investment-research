@@ -17,6 +17,8 @@ pnpm dsh electron --profile investment-research
 
 `electron` 是应用选择器，不是 profile 名称：`dsh --profile electron` 会查找用户 profile，不会启动桌面 runtime。`pnpm dsh electron` 检查已构建的主进程、沙箱化 preload 与 renderer，再通过应用本地的 Electron executable 启动默认 `web` profile，并且不会重新构建。源码启动会把产品 PNG 应用于 macOS Dock 和原生窗口，打包应用则使用 manifest 持有的 ICNS。`pnpm dsh electron --profile investment-research` 是五层投研 profile 的产品入口；配置诊断应单独使用 `pnpm dsh --profile investment-research --dump-default-config`。`pnpm run start:electron` 仍是构建后启动的便捷命令；`pnpm --filter @deepseek-ai/dsh-electron run start` 可直接启动现有产物。
 
+投研 Web 与 Electron 共用 `$DSH_HOME/investment-research/` 下的一份应用实例租约。Electron 发现仍在运行的 Web 所有者时，会明确显示当前端并询问是否先停止它；用户确认后，启动器通过带身份令牌的本机回环请求通知旧实例，等待其正常释放 profile（包括托管的 Python 子进程），随后才接管租约。取消操作不会影响旧实例。所有者进程已不存在的陈旧租约会自动恢复；无法验证归属的存活进程不会仅凭端口或持久化 PID 被终止。
+
 ## 投研 backend 部署
 
 随附业务行默认使用 `managed`：股票分析使用 `http://127.0.0.1:8000`，盘中盯盘使用 `http://127.0.0.1:8100`，源码启动会在本仓库中发现其项目。打包或移动后的部署应为每一行设置绝对 `backendProjectDir`；独立监管的 endpoint 使用 `backendMode: external` 与 `backendBaseUrl`，此模式验证身份，但绝不启动或停止进程。这些字段写入 `$DSH_HOME/profiles/investment-research/cordis.patch.yml`；请注意，配置行 patch 会替换其完整 `config`。
