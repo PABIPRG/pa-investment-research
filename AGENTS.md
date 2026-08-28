@@ -4,6 +4,23 @@
 - 使用 Superpowers 工作流时，所有新建或更新的 Markdown 文档均使用中文，包括规格、实施计划、handoff、task brief、task report 和进度账本。
 - 代码标识符、命令、文件路径、配置键、API 名称以及必须逐字保留的引用可以继续使用原文；其余标题和说明正文使用中文。
 
+## 多 Agent 与 Git worktree
+
+### 并行写入边界
+
+- 多个 Agent 并行修改代码时，必须遵守“一项独立任务 = 一个独立特性分支 = 一个独立 worktree = 一个独立顶层 Codex 会话”；不得让不同任务的写入 Agent 共用工作目录，也不得通过反复执行 `git switch` 或 `git checkout` 争用同一 worktree 的 `HEAD`。Codex 托管 worktree 可以按产品默认方式临时使用专属 detached `HEAD`，但提交或推送前必须创建符合本仓库命名规则的唯一特性分支。
+- 同一顶层会话内创建的子 Agent 默认只用于代码阅读、架构分析、问题定位、测试分析、代码审查和文档整理。除非运行环境能够为每个写入 Agent 绑定并验证唯一 worktree，否则不得让多个子 Agent 并行修改代码；无法隔离时改为串行写入。
+- 一个 worktree 同一时间只允许一个主要写入 Agent；不同 worktree 不得 checkout 同一分支。调度方在并行任务开始前必须明确分配唯一的 worktree 绝对路径和分支名；若明确使用 Codex 托管的 detached `HEAD`，还必须记录预期基准提交和后续目标分支名。
+- `codex -C <worktree_path>` 只负责设置 Agent 的启动工作目录，不视为文件系统访问控制。仍须依赖 sandbox 或 permission profile 限制可写目录，且 Agent 不得访问或修改其他 worktree。
+- worktree 只隔离工作副本、索引和 `HEAD`；端口、数据库、外部缓存、远程引用及其他共享资源仍须为并行任务分别配置或协调。
+
+### 启动、执行与收尾
+
+- 所有写入 Agent 在修改文件前必须检查并核对 `pwd`、`git rev-parse --show-toplevel`、`git branch --show-current`、`git status --short` 和 `git worktree list --porcelain`；实际目录、分支或 detached `HEAD` 基准与任务分配不一致时，立即停止并报告，不得自行切换分支修复。
+- 任务执行中的开发 Agent 不得为了进入其他任务而执行 `git switch`、`git checkout`，也不得自行创建、移动、删除或清理 worktree。调度或集成流程确需执行这些操作时，必须先确认目标、工作区状态和现有未提交修改。
+- 发现当前 worktree 中存在来源不明或与任务无关的未提交修改时，不得覆盖、暂存、提交或清理；若无法绕开，应停止并报告。
+- 提交、推送、创建 PR、合并以及 worktree 清理仍须遵守下方 Git 工作流和用户授权边界。清理 worktree 前必须确认工作区干净，且需要保留的改动已经安全进入提交或其他可恢复载体。
+
 ## Git 工作流
 
 ### 仓库和分支角色
