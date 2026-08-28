@@ -57,7 +57,7 @@ public/master
 ### 开发、提交与公仓 PR
 
 - 日常开发和本地提交只能发生在特性分支。
-- Codex 创建的所有 commit message 必须以 `[AI] ` 开头，例如 `[AI] 自动补全接口文档`。提醒用户：人工创建的 commit message 应以 `[Human] ` 开头，例如 `[Human] 修复登录页样式问题`。
+- Codex 创建的所有 commit message 和 PR 标题必须以 `[AI] ` 开头，例如 `[AI] 自动补全接口文档`。提醒用户：人工创建的 commit message 和 PR 标题应以 `[Human] ` 开头，例如 `[Human] 修复登录页样式问题`。
 - 保持提交粒度合理、主题单一，避免在一个提交中混入无关变更。
 - 开发期间需要同步基线时，先获取最新的 `public/master`，再将其 rebase 到特性分支；如必须保留合并语义才使用 merge。禁止对已经由多人共享的分支进行未经确认的历史改写。
 - 首次推送及后续更新只能推送到私仓对应特性分支，例如 `git push -u private codex/<topic>`；禁止将特性分支直接推送到 `public`。
