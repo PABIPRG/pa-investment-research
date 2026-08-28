@@ -1862,6 +1862,41 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   }, [alerts.run, coreWatchlist.run, events.run, holdings.run, nonce, risk.run, watchlist.run])
 
   const positions = records(asRecord(holdings.state.value).items)
+  // /holdings 的 name 恒空（后端故意留白让消费方补），持仓代码经 security-search 反查中文名。
+  const holdingCodes = [...new Set(positions.map(item => text(item.ticker, '').trim()).filter(Boolean))]
+  const namedHoldingCodes = new Set(
+    positions.filter(item => text(item.name, '').trim() !== '').map(item => text(item.ticker, '').trim()),
+  )
+  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
+  const unresolvedSecurityCodes = holdingCodes
+    .filter(code => !namedHoldingCodes.has(code) && (securityNames[code]?.trim() ?? '') === '')
+    .sort().join('|')
+  useEffect(() => {
+    const codes = unresolvedSecurityCodes === '' ? [] : unresolvedSecurityCodes.split('|')
+    if (codes.length === 0) return
+    const requestState = { cancelled: false }
+    void (async () => {
+      for (let start = 0; start < codes.length; start += 3) {
+        const resolved = await Promise.all(codes.slice(start, start + 3).map(async (code): Promise<readonly [string, string]> => {
+          try {
+            const result = asRecord(await requestData({
+              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
+            }))
+            const match = records(result.items).find(item => text(item.code, '').trim() === code)
+            return [code, text(match?.name, '').trim()] as const
+          } catch {
+            return [code, ''] as const
+          }
+        }))
+        if (requestState.cancelled) return
+        const named = Object.fromEntries(resolved.filter(([, name]) => name !== ''))
+        if (Object.keys(named).length > 0) {
+          setSecurityNames(current => ({ ...current, ...named }))
+        }
+      }
+    })()
+    return () => { requestState.cancelled = true }
+  }, [requestData, unresolvedSecurityCodes])
   const riskRecord = asRecord(risk.state.value)
   const summary = asRecord(riskRecord.summary)
   const breaches = records(riskRecord.breaches)
@@ -2004,22 +2039,26 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                 <table>
                   <thead><tr><th>股票代码</th><th>名称</th><th>数量</th><th>持仓成本</th></tr></thead>
                   <tbody>
-                    {positions.map((row, index) => (
-                      <tr key={`${text(row.ticker, '')}-${index}`}>
-                        <td>
-                          <button
-                            type="button"
-                            className={css.codeButton}
-                            onClick={() => {
-                              onAnalyze({ kind: 'stock', code: text(row.ticker, ''), name: text(row.name, '') })
-                            }}
-                          >{text(row.ticker)}</button>
-                        </td>
-                        <td>{text(row.name)}</td>
-                        <td>{number(row.quantity)?.toLocaleString('zh-CN') ?? '—'}</td>
-                        <td>{money(row.cost_price)}</td>
-                      </tr>
-                    ))}
+                    {positions.map((row, index) => {
+                      const code = text(row.ticker, '')
+                      const name = securityNames[code]?.trim() || text(row.name, '').trim()
+                      return (
+                        <tr key={`${code}-${index}`}>
+                          <td>
+                            <button
+                              type="button"
+                              className={css.codeButton}
+                              onClick={() => {
+                                onAnalyze({ kind: 'stock', code, name })
+                              }}
+                            >{code}</button>
+                          </td>
+                          <td>{name}</td>
+                          <td>{number(row.quantity)?.toLocaleString('zh-CN') ?? '—'}</td>
+                          <td>{money(row.cost_price)}</td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>

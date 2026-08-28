@@ -51,6 +51,35 @@ class SecurityApiTests(unittest.TestCase):
         self.assertEqual(search_securities("贵州茅台", 8)[0]["code"], "600519")
         self.assertEqual(search_securities("茅台", 8)[0]["code"], "600519")
 
+    @patch("market_watch.quotes.cache")
+    @patch("market_watch.quotes._security_catalog")
+    def test_search_falls_back_to_quote_cache_for_codes_outside_ashare_catalog(self, catalog, cache):
+        catalog.return_value = [{"code": "600519", "name": "贵州茅台", "market": "沪市"}]
+        cache.return_value.get_quote.return_value = {"code": "513050", "name": "中概互联网ETF易方达"}
+
+        result = search_securities("513050", 5)
+
+        self.assertEqual(result, [{"code": "513050", "name": "中概互联网ETF易方达", "market": "沪市"}])
+        cache.return_value.get_quote.assert_called_once_with("513050")
+
+    @patch("market_watch.quotes.cache")
+    @patch("market_watch.quotes._security_catalog")
+    def test_search_quote_fallback_skipped_when_catalog_already_matches(self, catalog, cache):
+        catalog.return_value = [{"code": "600519", "name": "贵州茅台", "market": "沪市"}]
+
+        result = search_securities("600519", 8)
+
+        self.assertEqual(result[0]["code"], "600519")
+        cache.return_value.get_quote.assert_not_called()
+
+    @patch("market_watch.quotes.cache")
+    @patch("market_watch.quotes._security_catalog")
+    def test_search_quote_fallback_returns_empty_when_quote_has_no_name(self, catalog, cache):
+        catalog.return_value = [{"code": "600519", "name": "贵州茅台", "market": "沪市"}]
+        cache.return_value.get_quote.return_value = {}
+
+        self.assertEqual(search_securities("513050", 5), [])
+
     @patch("market_watch.app.quotes.search_securities")
     def test_search_returns_ranked_security_candidates(self, search):
         search.return_value = [{"code": "600519", "name": "贵州茅台", "market": "沪市"}]
