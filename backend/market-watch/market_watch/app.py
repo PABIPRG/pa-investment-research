@@ -248,6 +248,14 @@ def overview():
     }
 
 
+@app.get("/indices")
+def indices():
+    return {
+        "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "items": briefs.indices_spot(),
+    }
+
+
 @app.post("/scan")
 def scan(req: ScanRequest):
     try:

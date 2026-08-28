@@ -8,7 +8,7 @@ from fastapi import HTTPException
 os.environ["MW_SCHEDULE_ENABLED"] = "false"
 
 from market_watch import quotes
-from market_watch.app import _technical_snapshot, securities_search, security_detail, tech_signal
+from market_watch.app import _technical_snapshot, indices, securities_search, security_detail, tech_signal
 from market_watch.quotes import search_securities
 from market_watch.schemas import SecurityDetailRequest, TechSignalRequest
 
@@ -93,6 +93,35 @@ class SecurityApiTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             securities_search("   ", 8)
         self.assertEqual(raised.exception.status_code, 422)
+
+    @patch("market_watch.app.briefs.indices_spot")
+    def test_indices_returns_a_compact_market_overview(self, indices_spot):
+        indices_spot.return_value = [
+            {"code": "000001", "name": "上证指数", "price": 3210.5, "pct_change": 0.8},
+        ]
+
+        payload = indices()
+
+        self.assertEqual(payload["items"][0]["name"], "上证指数")
+        self.assertIn("as_of", payload)
+
+    @patch("akshare.fund_etf_spot_em")
+    @patch("akshare.stock_info_a_code_name")
+    def test_security_catalog_includes_exchange_traded_etfs(self, stock_catalog, etf_catalog):
+        stock_catalog.return_value.to_dict.return_value = [
+            {"code": "600519", "name": "贵州茅台"},
+        ]
+        etf_catalog.return_value.to_dict.return_value = [
+            {"代码": "510300", "名称": "沪深300ETF"},
+        ]
+
+        items, index = quotes._load_security_catalog()
+
+        self.assertIn(
+            {"code": "510300", "name": "沪深300ETF", "market": "沪市 ETF", "type": "ETF"},
+            items,
+        )
+        self.assertEqual(index["沪深300ETF"], ["510300"])
 
     @patch("market_watch.app.news.fetch_stock_news")
     @patch("market_watch.app.quotes.get_fund_flow")

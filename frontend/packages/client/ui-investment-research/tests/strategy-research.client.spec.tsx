@@ -195,7 +195,9 @@ describe('策略研究产品事实与确认流程', () => {
     })
 
     renderStrategyPage(requestData)
-    fireEvent.click(await screen.findByRole('button', { name: '从事件生成候选' }))
+    expect(await screen.findByRole('heading', { name: '策略生命周期' })).toBeTruthy()
+    expect(screen.getByText(/点击右上角“从事件新建策略”/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '从事件新建策略' }))
 
     const dialog = await screen.findByRole('dialog', { name: '候选假设预览' })
     expect(within(dialog).getByText('渠道库存改善可能带来趋势延续。')).toBeTruthy()
@@ -255,7 +257,7 @@ describe('策略研究产品事实与确认流程', () => {
     })
 
     renderStrategyPage(requestData)
-    fireEvent.click(await screen.findByRole('button', { name: '从事件生成候选' }))
+    fireEvent.click(await screen.findByRole('button', { name: '从事件新建策略' }))
     const dialog = await screen.findByRole('dialog', { name: '候选假设预览' })
     expect(within(dialog).getByText('事件源暂无可用事件')).toBeTruthy()
     expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: '确认加入候选池' }).disabled).toBe(true)

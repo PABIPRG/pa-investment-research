@@ -28,6 +28,7 @@ import {
 } from './ProductPages.tsx'
 import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
 import { PreferenceReviewPage } from './PreferenceReviewPage.tsx'
+import { useSecurityNames } from './security-names.ts'
 import type { LocalTelemetrySurface, TrackLocalTelemetry } from './telemetry.ts'
 import type {
   AssistantDisplayMode, AssistantModule, InvestmentDraftKey, InvestmentNavigationContext,
@@ -506,8 +507,8 @@ function GlobalStockSearch({
             setFocused(false)
           }
         }}
-        placeholder="搜索 A 股代码或名称…"
-        aria-label="搜索 A 股代码或名称"
+        placeholder="搜索 A 股、场内 ETF 代码或名称…"
+        aria-label="搜索 A 股或场内 ETF 代码或名称"
       />
       {listOpen && (
         <div id="investment-security-results" className={css.searchResults} role="listbox">
@@ -528,7 +529,7 @@ function GlobalStockSearch({
               <code>{item.code}</code>
             </button>
           ))}
-          {!loading && error === '' && items.length === 0 && <div className={css.searchStatus}>没有找到匹配的 A 股证券</div>}
+          {!loading && error === '' && items.length === 0 && <div className={css.searchStatus}>没有找到匹配的 A 股或场内 ETF</div>}
         </div>
       )}
     </form>
@@ -1147,6 +1148,7 @@ export function OpportunityPage({
   const [nonce, setNonce] = useState(0)
   const [selected, setSelected] = useState(initialQuery)
   const scan = useRequestResource(requestData)
+  const indices = useRequestResource(requestData)
   const news = useRequestResource(requestData)
   const signal = useRequestResource(requestData)
 
@@ -1158,6 +1160,10 @@ export function OpportunityPage({
   useEffect(() => {
     scan.run({ operation: 'market-watch.scan', input: { kind, top_n: 12 } })
   }, [kind, nonce, scan.run])
+
+  useEffect(() => {
+    indices.run({ operation: 'market-watch.indices' })
+  }, [indices.run, nonce])
 
   useEffect(() => {
     news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false } })
@@ -1184,6 +1190,8 @@ export function OpportunityPage({
   }, [nonce, selected, signal.reset, signal.run])
 
   const signalRecord = asRecord(signal.state.value)
+  const indexRecord = asRecord(indices.state.value)
+  const indexItems = records(indexRecord.items)
   const indicators = asRecord(signalRecord.indicators)
   const support = asRecord(indicators.support_resistance)
   const newsRecord = asRecord(news.state.value)
@@ -1194,9 +1202,16 @@ export function OpportunityPage({
     ? '缓存资讯'
     : newsRecord.complete === false ? '部分来源' : undefined
   const resources = selected.trim() === ''
-    ? [scan.state, news.state]
-    : [scan.state, news.state, signal.state]
+    ? [indices.state, scan.state, news.state]
+    : [indices.state, scan.state, news.state, signal.state]
   const busy = resources.some(resource => resource.phase === 'loading' || resource.phase === 'refreshing')
+  const selectedRow = rows.find(row => text(row.code, '') === selected)
+  const selectedStoredName = text(signalRecord.name, '').trim() || text(selectedRow?.name, '').trim()
+  const selectedNames = useSecurityNames(requestData, selected === '' || selectedStoredName !== '' ? [] : [selected])
+  const selectedName = text(signalRecord.name, '').trim()
+    || text(selectedRow?.name, '').trim()
+    || selectedNames[selected]
+    || selected
 
   return (
     <div className={css.pageScroll}>
@@ -1209,6 +1224,31 @@ export function OpportunityPage({
           onClick={() => { setNonce(value => value + 1) }}
         >{busy ? '加载中…' : '刷新数据'}</button>
       </PageHeader>
+      <section className={css.marketOverview} aria-busy={indices.busy} aria-labelledby="market-overview-title">
+        <div className={css.sectionHeading}>
+          <div><strong id="market-overview-title">大盘概览</strong><small>常用指数实时快照</small></div>
+          <ResourceLabel state={indices.state} settled={text(indexRecord.as_of, '')} />
+        </div>
+        {indices.state.error !== '' && (
+          <ErrorCard title="大盘指数暂不可用" message={indices.state.error} retry={() => { indices.run({ operation: 'market-watch.indices' }) }} retained={indices.state.loaded} />
+        )}
+        {!indices.state.loaded && indices.state.error === '' && <LoadingSkeleton rows={1} />}
+        {indices.state.loaded && (
+          <div className={css.marketIndexGrid}>
+            {indexItems.map((item, index) => {
+              const change = number(item.pct_change ?? item.pct)
+              return (
+                <article key={`${text(item.code, '')}-${index}`}>
+                  <span>{text(item.name, text(item.code, '指数'))}</span>
+                  <strong>{number(item.price)?.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '—'}</strong>
+                  <small className={change !== undefined && change < 0 ? css.negative : css.positive}>{change === undefined ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}</small>
+                </article>
+              )
+            })}
+            {indexItems.length === 0 && <div className={css.emptyState}>当前指数源暂未返回数据，请稍后刷新。</div>}
+          </div>
+        )}
+      </section>
       <div className={css.segmented} role="group" aria-label="市场扫描类型">
         {SCAN_KINDS.map(([value, label]) => (
           <button
@@ -1267,15 +1307,15 @@ export function OpportunityPage({
         </section>
         <section className={css.detailCard} aria-label="股票研究详情">
           <div className={css.detailTitle}>
-            <div><strong>{text(signalRecord.name, selected || '选择一只股票')}</strong><span>{text(signalRecord.code, selected)}</span></div>
+            <div><strong>{selected === '' ? '选择一只证券' : selectedName}</strong><span>{text(signalRecord.code, selected)}</span></div>
             {selected !== '' && (
               <div className={css.detailActions}>
-                <button type="button" className={css.secondaryButton} onClick={() => { onView(selected) }}>查看个股详情</button>
+                <button type="button" className={css.secondaryButton} onClick={() => { onView(selected) }}>查看证券详情</button>
                 <button
                   type="button"
                   className={css.primaryButton}
                   onClick={() => {
-                    onAnalyze({ kind: 'stock', code: selected, name: text(signalRecord.name, '') })
+                    onAnalyze({ kind: 'stock', code: selected, name: selectedName === selected ? '' : selectedName })
                   }}
                 >带入智能分析</button>
               </div>
@@ -1841,6 +1881,8 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   const [notice, setNotice] = useState('')
   const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown>>()
   const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
+  const holdingsSection = useRef<HTMLElement>(null)
+  const riskSection = useRef<HTMLElement>(null)
   const holdings = useRequestResource(requestData)
   const risk = useRequestResource(requestData)
   const alerts = useRequestResource(requestData)
@@ -1862,41 +1904,13 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   }, [alerts.run, coreWatchlist.run, events.run, holdings.run, nonce, risk.run, watchlist.run])
 
   const positions = records(asRecord(holdings.state.value).items)
-  // /holdings 的 name 恒空（后端故意留白让消费方补），持仓代码经 security-search 反查中文名。
-  const holdingCodes = [...new Set(positions.map(item => text(item.ticker, '').trim()).filter(Boolean))]
-  const namedHoldingCodes = new Set(
-    positions.filter(item => text(item.name, '').trim() !== '').map(item => text(item.ticker, '').trim()),
-  )
-  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
-  const unresolvedSecurityCodes = holdingCodes
-    .filter(code => !namedHoldingCodes.has(code) && (securityNames[code]?.trim() ?? '') === '')
-    .sort().join('|')
-  useEffect(() => {
-    const codes = unresolvedSecurityCodes === '' ? [] : unresolvedSecurityCodes.split('|')
-    if (codes.length === 0) return
-    const requestState = { cancelled: false }
-    void (async () => {
-      for (let start = 0; start < codes.length; start += 3) {
-        const resolved = await Promise.all(codes.slice(start, start + 3).map(async (code): Promise<readonly [string, string]> => {
-          try {
-            const result = asRecord(await requestData({
-              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
-            }))
-            const match = records(result.items).find(item => text(item.code, '').trim() === code)
-            return [code, text(match?.name, '').trim()] as const
-          } catch {
-            return [code, ''] as const
-          }
-        }))
-        if (requestState.cancelled) return
-        const named = Object.fromEntries(resolved.filter(([, name]) => name !== ''))
-        if (Object.keys(named).length > 0) {
-          setSecurityNames(current => ({ ...current, ...named }))
-        }
-      }
-    })()
-    return () => { requestState.cancelled = true }
-  }, [requestData, unresolvedSecurityCodes])
+  const positionNames = useSecurityNames(requestData, positions
+    .filter(item => {
+      const code = text(item.ticker, '')
+      const name = text(item.name, '').trim()
+      return name === '' || name === code
+    })
+    .map(item => text(item.ticker, '')))
   const riskRecord = asRecord(risk.state.value)
   const summary = asRecord(riskRecord.summary)
   const breaches = records(riskRecord.breaches)
@@ -1971,10 +1985,10 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
         {!risk.state.loaded && risk.state.error === '' && <LoadingSkeleton rows={2} />}
         {risk.state.loaded && (
           <div className={css.metricRow}>
-            <Metric label="持仓数量" value={number(summary.n_positions)?.toFixed(0) ?? String(positions.length)} />
-            <Metric label="风险画像" value={text(riskRecord.profile_label)} />
-            <Metric label="等权占比" value={equalWeight === undefined ? '—' : `${(equalWeight * 100).toFixed(1)}%`} />
-            <Metric label="集中度 HHI" value={number(summary.hhi)?.toFixed(3) ?? '—'} />
+            <Metric label="持仓数量" value={number(summary.n_positions)?.toFixed(0) ?? String(positions.length)} hint="查看当前持仓" onClick={() => { revealSection(holdingsSection) }} />
+            <Metric label="风险画像" value={text(riskRecord.profile_label)} hint="查看画像与风险" onClick={() => { revealSection(riskSection) }} />
+            <Metric label="等权占比" value={equalWeight === undefined ? '—' : `${(equalWeight * 100).toFixed(1)}%`} hint="查看风险预算" onClick={() => { revealSection(riskSection) }} />
+            <Metric label="集中度 HHI" value={number(summary.hhi)?.toFixed(3) ?? '—'} hint="查看风险预算" onClick={() => { revealSection(riskSection) }} />
           </div>
         )}
       </section>
@@ -2019,7 +2033,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
         )}
       </section>
       <div className={css.portfolioGrid}>
-        <section className={css.tableCard} aria-busy={holdings.busy} aria-labelledby="holdings-title">
+        <section ref={holdingsSection} tabIndex={-1} className={css.tableCard} aria-busy={holdings.busy} aria-labelledby="holdings-title">
           <div className={css.sectionHeading}>
             <strong id="holdings-title">当前持仓</strong>
             <ResourceLabel state={holdings.state} settled={`${positions.length} 项`} />
@@ -2041,23 +2055,20 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                   <tbody>
                     {positions.map((row, index) => {
                       const code = text(row.ticker, '')
-                      const name = securityNames[code]?.trim() || text(row.name, '').trim()
-                      return (
-                        <tr key={`${code}-${index}`}>
-                          <td>
-                            <button
-                              type="button"
-                              className={css.codeButton}
-                              onClick={() => {
-                                onAnalyze({ kind: 'stock', code, name })
-                              }}
-                            >{code}</button>
-                          </td>
-                          <td>{name}</td>
-                          <td>{number(row.quantity)?.toLocaleString('zh-CN') ?? '—'}</td>
-                          <td>{money(row.cost_price)}</td>
-                        </tr>
-                      )
+                      const storedName = text(row.name, '').trim()
+                      const name = storedName !== '' && storedName !== code ? storedName : positionNames[code] || code
+                      return <tr key={`${code}-${index}`}>
+                        <td>
+                          <button
+                            type="button"
+                            className={css.codeButton}
+                            onClick={() => { onViewStock(code) }}
+                          >{code}</button>
+                        </td>
+                        <td><button type="button" className={css.nameButton} onClick={() => { onViewStock(code) }}>{name}</button></td>
+                        <td>{number(row.quantity)?.toLocaleString('zh-CN') ?? '—'}</td>
+                        <td>{money(row.cost_price)}</td>
+                      </tr>
                     })}
                   </tbody>
                 </table>
@@ -2066,7 +2077,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
             </>
           )}
         </section>
-        <section className={css.riskColumn} aria-label="持仓风险详情">
+        <section ref={riskSection} tabIndex={-1} className={css.riskColumn} aria-label="持仓风险详情">
           <div className={css.panelCard} aria-busy={risk.busy}>
             <div className={css.sectionHeading}>
               <strong>风险预算突破</strong>
@@ -2185,7 +2196,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                     <small>{text(item.source, '来源未知')} · {text(item.time, '时间未知')}</small>
                   </span>
                   <span>
-                    {text(item.direction, '') !== '' && <b>{text(item.direction)}</b>}
+                    {text(item.direction, '') !== '' && <b data-direction={text(item.direction)}>{text(item.direction)}</b>}
                     {text(itemRisk.level, '') !== '' && <b data-severity={text(itemRisk.level)}>{text(itemRisk.level)}风险</b>}
                     <i>{persistent ? '查看投研报告' : '查看事件详情'} →</i>
                   </span>
@@ -2252,7 +2263,15 @@ function PageHeader({ title, description, children }: { title: string; descripti
   return <div className={css.pageHeader}><div><h1>{title}</h1><p>{description}</p></div><div>{children}</div></div>
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function revealSection(ref: RefObject<HTMLElement | null>) {
+  ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  ref.current?.focus({ preventScroll: true })
+}
+
+function Metric({ label, value, hint, onClick }: { label: string; value: string; hint?: string; onClick?: () => void }) {
+  if (onClick !== undefined) {
+    return <button type="button" className={`${css.metric} ${css.metricButton}`} onClick={onClick}><span>{label}</span><strong>{value}</strong>{hint !== undefined && <small>{hint} →</small>}</button>
+  }
   return <div className={css.metric}><span>{label}</span><strong>{value}</strong></div>
 }
 

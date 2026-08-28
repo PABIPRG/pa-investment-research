@@ -21,7 +21,10 @@ import type { AgentPresetSettingsState } from '../src/client/settings-store.ts'
 import type { AgentPresetSeatState } from '../src/client/seat-store.ts'
 import { en } from '../src/client/locales.ts'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  document.body.removeAttribute('data-investment-research-ui')
+})
 
 const ROW_READY: AgentPresetSettingsState = {
   status: 'ready',
@@ -91,6 +94,14 @@ function renderLabel(
 }
 
 describe('the General-settings row', () => {
+  it('stays hidden in the investment-research product', () => {
+    document.body.setAttribute('data-investment-research-ui', '')
+    const actions = renderRow()
+
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(actions.select).not.toHaveBeenCalled()
+  })
+
   it('reads the roster once and shows the current default', async () => {
     const actions = renderRow()
 
@@ -201,6 +212,14 @@ describe('the General-settings row', () => {
 })
 
 describe('the new-session chip', () => {
+  it('stays hidden in the investment-research product while standard remains the default', () => {
+    document.body.setAttribute('data-investment-research-ui', '')
+    const actions = renderSeat()
+
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(actions.select).not.toHaveBeenCalled()
+  })
+
   it('reads the roster once and shows the staged preset by name', async () => {
     const actions = renderSeat()
 

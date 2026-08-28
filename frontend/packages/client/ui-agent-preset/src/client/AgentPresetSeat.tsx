@@ -71,6 +71,7 @@ export type AgentPresetSeatProps =
 export function AgentPresetSeat({ load, select, introduced, useAgentPresetSeat, t }: AgentPresetSeatProps) {
   const state = useAgentPresetSeat(snapshot => snapshot)
   const [open, setOpen] = useState(false)
+  const hiddenByProduct = document.body.hasAttribute('data-investment-research-ui')
 
   useEffect(() => {
     void load()
@@ -103,7 +104,7 @@ export function AgentPresetSeat({ load, select, introduced, useAgentPresetSeat, 
 
   // Nothing to choose between: the deployment composes no presets and every
   // session shares the host composition.
-  if (!ready) return null
+  if (!ready || hiddenByProduct) return null
 
   // One wrapper span: the chip is a flex row with a gap, so loose character
   // spans would each pick up the gap between them.

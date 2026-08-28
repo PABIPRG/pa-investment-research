@@ -301,6 +301,7 @@ function localNoInput(path: string): RequestSpec {
 
 const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   'market-watch.overview': noInput('/overview', 'market-watch'),
+  'market-watch.indices': noInput('/indices', 'market-watch'),
   'market-watch.security-search': {
     backendId: 'market-watch',
     method: 'GET',

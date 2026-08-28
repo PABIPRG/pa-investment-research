@@ -47,6 +47,114 @@
   text-align: right;
 }
 
+.modelRouting {
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.modelRoutingHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.modelRouting h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.modelRouting p,
+.projectModelSelect small,
+.modelModuleGrid small {
+  margin: 4px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.projectModelSelect {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: 14px;
+}
+
+.projectModelSelect > span {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.projectModelSelect select {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  font: inherit;
+  font-size: 13px;
+}
+
+.projectModelSelect select:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+
+.projectModelSelect small {
+  grid-column: 2;
+  margin-top: 0;
+}
+
+.modelError {
+  color: var(--dsw-alias-state-error-primary) !important;
+}
+
+.modelModuleGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.modelModuleGrid article {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 9px;
+  background: var(--dsw-alias-bg-base);
+}
+
+.modelModuleGrid strong,
+.modelModuleGrid span,
+.modelModuleGrid small {
+  display: block;
+}
+
+.modelModuleGrid strong {
+  font-size: 13px;
+}
+
+.modelModuleGrid span {
+  margin-top: 5px;
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.modelModuleGrid small {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .heading {
   display: flex;
   align-items: flex-start;
@@ -106,6 +214,7 @@
   font: inherit;
   font-size: 13px;
   line-height: 20px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -264,8 +373,18 @@
 
 @media (max-width: 720px) {
   .dataBackup,
+  .modelRoutingHeading,
   .heading {
     flex-direction: column;
+  }
+
+  .projectModelSelect,
+  .modelModuleGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .projectModelSelect small {
+    grid-column: 1;
   }
 
   .dataBackupAction {

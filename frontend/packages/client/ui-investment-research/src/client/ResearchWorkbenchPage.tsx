@@ -7,6 +7,7 @@ import {
   EventReportDialog, RiskDetailDialog, eventPrimaryTicker, riskIntentTarget,
 } from './DetailDialogs.tsx'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
+import { useSecurityNames } from './security-names.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
 import type {
   LocalTelemetryContext, LocalTelemetryEvent, TrackLocalTelemetry,
@@ -127,6 +128,24 @@ function strategySymbols(item: Record<string, unknown>): string[] {
   if (symbols.length > 0) return [...new Set(symbols)]
   const inferred = text(item.name, '').match(/(?:^|\D)(\d{6})(?:\D|$)/)?.[1]
   return inferred === undefined ? [] : [inferred]
+}
+
+function holdingReasonCode(value: string): string | undefined {
+  return value.match(/^命中持仓[：:]\s*(\d{6})(?:\s|$)/)?.[1]
+}
+
+function comparableCopy(value: string): string {
+  return value.replace(/\s+/g, '').replace(/[。！？!?；;，,：:]+$/g, '')
+}
+
+function resolvedSecurityName(
+  item: Record<string, unknown>,
+  code: string,
+  securityNames: Readonly<Record<string, string>>,
+): string {
+  const stored = text(item.name, '').trim()
+  const resolved = securityNames[code]?.trim() ?? ''
+  return stored !== '' && stored !== code ? stored : resolved !== '' ? resolved : code
 }
 
 function strategyDisplayName(item: Record<string, unknown>, securityNames: Readonly<Record<string, string>>): string {
@@ -329,45 +348,28 @@ export function ResearchWorkbenchPage({
   const allCards = records(cardValue.cards)
   const strategyValue = asRecord(matches.state.value)
   const strategyItems = records(strategyValue.items)
-  // 名称解析覆盖策略标的 + 持仓标的：/holdings 的 name 恒空（后端故意留白让消费方补），
-  // 持仓代码和策略代码一样经 security-search 反查中文名后展示。
-  const strategyCodes = [...new Set(strategyItems.flatMap(strategySymbols))]
-  const holdingCodes = [...new Set(positions.map(item => text(item.ticker, '').trim()).filter(Boolean))]
-  const namedHoldingCodes = new Set(
-    positions.filter(item => text(item.name, '').trim() !== '').map(item => text(item.ticker, '').trim()),
-  )
-  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
-  const unresolvedSecurityCodes = [...new Set(
-    [...strategyCodes, ...holdingCodes].filter(code => (
-      !namedHoldingCodes.has(code) && (securityNames[code]?.trim() ?? '') === ''
-    )),
-  )].sort().join('|')
-  useEffect(() => {
-    const codes = unresolvedSecurityCodes === '' ? [] : unresolvedSecurityCodes.split('|')
-    if (codes.length === 0) return
-    const requestState = { cancelled: false }
-    void (async () => {
-      for (let start = 0; start < codes.length; start += 3) {
-        const resolved = await Promise.all(codes.slice(start, start + 3).map(async (code): Promise<readonly [string, string]> => {
-          try {
-            const result = asRecord(await requestData({
-              operation: 'market-watch.security-search', input: { query: code, limit: 5 },
-            }))
-            const match = records(result.items).find(item => text(item.code, '').trim() === code)
-            return [code, text(match?.name, '').trim()] as const
-          } catch {
-            return [code, ''] as const
-          }
-        }))
-        if (requestState.cancelled) return
-        const named = Object.fromEntries(resolved.filter(([, name]) => name !== ''))
-        if (Object.keys(named).length > 0) {
-          setSecurityNames(current => ({ ...current, ...named }))
-        }
-      }
-    })()
-    return () => { requestState.cancelled = true }
-  }, [requestData, unresolvedSecurityCodes])
+  const missingHoldingCodes = positions
+    .filter(item => {
+      const code = text(item.ticker, '')
+      const name = text(item.name, '').trim()
+      return name === '' || name === code
+    })
+    .map(item => text(item.ticker, ''))
+  const knownCardCodes = new Set(allCards.flatMap(card => records(card.tickers))
+    .filter(item => {
+      const code = text(item.code, '')
+      const name = text(item.name, '').trim()
+      return code !== '' && name !== '' && name !== code
+    })
+    .map(item => text(item.code, '')))
+  const reasonCodes = allCards.flatMap(card => stringItems(card.reasons)
+    .map(holdingReasonCode)
+    .filter((code): code is string => code !== undefined))
+  const securityNames = useSecurityNames(requestData, [
+    ...missingHoldingCodes,
+    ...reasonCodes.filter(code => !knownCardCodes.has(code)),
+    ...strategyItems.flatMap(strategySymbols),
+  ])
   const visibleCards = useMemo(() => (
     bucket === 'all' ? allCards : allCards.filter(item => text(item.bucket, '') === bucket)
   ), [allCards, bucket])
@@ -446,10 +448,14 @@ export function ResearchWorkbenchPage({
       )}
 
       <section className={css.dashboardSummary} aria-label="投研概览">
-        <div><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>已保存持仓</small></div>
-        <div><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价，非实时市值</small></div>
-        <div><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'}` : '按组合风险预算校准'}</small></div>
-        <div><span>需关注预警</span><strong data-tone={actionableAlerts.length > 0 ? 'danger' : undefined}>{alerts.state.loaded ? String(actionableAlerts.length) : '—'}</strong><small>{alerts.state.loaded ? '高/中风险，排除画像提示' : '组合、影子与事件'}</small></div>
+        <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
+        <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价，非实时市值 →</small></button>
+        <button type="button" onClick={() => { navigate('portfolio') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
+        <button type="button" onClick={() => {
+          const target = document.getElementById('dashboard-alerts-title')?.closest('section')
+          target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          if (target instanceof HTMLElement) target.focus({ preventScroll: true })
+        }}><span>需关注预警</span><strong data-tone={actionableAlerts.length > 0 ? 'danger' : undefined}>{alerts.state.loaded ? String(actionableAlerts.length) : '—'}</strong><small>{alerts.state.loaded ? '高/中风险，点击查看 →' : '组合、影子与事件'}</small></button>
       </section>
 
       <div className={css.dashboardGrid}>
@@ -467,10 +473,9 @@ export function ResearchWorkbenchPage({
               <div className={css.dashboardHoldingList}>
                 {positions.slice(0, 6).map((item, index) => {
                   const code = text(item.ticker, '')
-                  const name = securityNames[code]?.trim() || text(item.name, '').trim()
                   return (
                     <button key={`${code}-${index}`} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
-                      <span><strong>{name === '' || name === code ? code : name}</strong><small>{code}</small></span>
+                      <span><strong>{resolvedSecurityName(item, code, securityNames)}</strong><small>{code}</small></span>
                       <span><b>{number(item.quantity)?.toLocaleString('zh-CN') ?? '—'} 股</b><small>成本 {money(item.cost_price)}</small></span>
                     </button>
                   )
@@ -514,6 +519,9 @@ export function ResearchWorkbenchPage({
               const reasons = stringItems(card.reasons)
               const cardRisk = asRecord(card.risk)
               const riskLevel = text(cardRisk.level, '')
+              const title = text(card.title, '市场事件').trim()
+              const summary = text(card.summary, '').trim()
+              const showSummary = summary !== '' && comparableCopy(summary) !== comparableCopy(title)
               return (
                 <ImpressionArticle
                   className={css.dashboardEvent}
@@ -524,56 +532,74 @@ export function ResearchWorkbenchPage({
                     targetId: text(card.card_id, `event-${index}`), context: eventTelemetryContext(card),
                   }}
                 >
-                  <div className={css.dashboardEventMeta}>
-                    <span>{BUCKET_LABELS[text(card.bucket, '')] ?? '关联事件'}</span>
-                    {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
-                    <span>{text(card.source, '来源未知')}</span>
-                    <time>{displayTime(card.time)}</time>
-                  </div>
-                  <h3>{text(card.title, '市场事件')}</h3>
-                  <p>{text(card.summary, '暂无事件摘要')}</p>
-                  {reasons.length > 0 && (
-                    <div className={css.dashboardReasons}>
-                      {reasons.map(reason => <span key={reason}>{reason}</span>)}
+                  <div className={css.dashboardEventBody}>
+                    <div className={css.dashboardEventMeta}>
+                      <span>{BUCKET_LABELS[text(card.bucket, '')] ?? '关联事件'}</span>
+                      {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
+                      <span>{text(card.source, '来源未知')}</span>
+                      <time>{displayTime(card.time)}</time>
                     </div>
-                  )}
-                  {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
-                  <div className={css.dashboardEventActions}>
-                    <button type="button" onClick={() => {
-                      void trackTelemetry({
-                        action: 'open', surface: 'dashboard', targetType: 'event',
-                        targetId: text(card.card_id, `event-${index}`), context: eventTelemetryContext(card),
-                      })
-                      setSelectedEvent(card)
-                    }}>{text(card.report_id, '') === '' ? '查看事件详情' : '查看投研报告'}</button>
-                    {ticker !== undefined && <button type="button" onClick={() => {
-                      void trackTelemetry({
-                        action: 'open', surface: 'dashboard', targetType: 'security', targetId: ticker.code,
-                        context: { ticker: ticker.code },
-                      })
-                      navigate('stock-detail', { stockCode: ticker.code })
-                    }}>查看个股</button>}
-                    {strategyId !== '' && <button type="button" onClick={() => {
-                      void trackTelemetry({
-                        action: 'open', surface: 'dashboard', targetType: 'strategy', targetId: strategyId,
-                        context: { strategy_id: strategyId },
-                      })
-                      navigate('framework', { strategyId })
-                    }}>查看策略</button>}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (ticker !== undefined) onAnalyze({ kind: 'stock', code: ticker.code, name: ticker.name })
-                        else onAnalyze({ kind: 'industry', reference: text(card.title, '') })
-                      }}
-                    >带入智能分析</button>
+                    <h3>{title}</h3>
+                    {showSummary && <p>{summary}</p>}
+                    {reasons.length > 0 && (
+                      <div className={css.dashboardReasons}>
+                        {reasons.map((reason) => {
+                          const code = holdingReasonCode(reason)
+                          if (code === undefined) {
+                            const direction = reason.includes('利好') ? '利好' : reason.includes('利空') ? '利空' : undefined
+                            return <span key={reason} data-direction={direction}>{reason}</span>
+                          }
+                          const resolvedName = securityNames[code]?.trim() ?? ''
+                          const name = resolvedName !== '' ? resolvedName : ticker?.name.trim() ?? ''
+                          return (
+                            <button key={reason} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
+                              命中持仓：{name === '' || name === code ? code : name}<small>{code}</small>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
                   </div>
-                  <PreferenceFeedback
-                    cardId={text(card.card_id, `event-${index}`)}
-                    current={text(card.feedback_sentiment, '')}
-                    meta={eventTelemetryContext(card)}
-                    requestData={requestData}
-                  />
+                  <div className={css.dashboardEventControls} role="group" aria-label="事件操作">
+                    <span className={css.dashboardActionLabel}>操作</span>
+                    <div className={css.dashboardEventActions}>
+                      <button type="button" onClick={() => {
+                        void trackTelemetry({
+                          action: 'open', surface: 'dashboard', targetType: 'event',
+                          targetId: text(card.card_id, `event-${index}`), context: eventTelemetryContext(card),
+                        })
+                        setSelectedEvent(card)
+                      }}>{text(card.report_id, '') === '' ? '查看事件详情' : '查看投研报告'}</button>
+                      {ticker !== undefined && <button type="button" onClick={() => {
+                        void trackTelemetry({
+                          action: 'open', surface: 'dashboard', targetType: 'security', targetId: ticker.code,
+                          context: { ticker: ticker.code },
+                        })
+                        navigate('stock-detail', { stockCode: ticker.code })
+                      }}>查看个股</button>}
+                      {strategyId !== '' && <button type="button" onClick={() => {
+                        void trackTelemetry({
+                          action: 'open', surface: 'dashboard', targetType: 'strategy', targetId: strategyId,
+                          context: { strategy_id: strategyId },
+                        })
+                        navigate('framework', { strategyId })
+                      }}>查看策略</button>}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (ticker !== undefined) onAnalyze({ kind: 'stock', code: ticker.code, name: ticker.name })
+                          else onAnalyze({ kind: 'industry', reference: title })
+                        }}
+                      >带入智能分析</button>
+                    </div>
+                    <PreferenceFeedback
+                      cardId={text(card.card_id, `event-${index}`)}
+                      current={text(card.feedback_sentiment, '')}
+                      meta={eventTelemetryContext(card)}
+                      requestData={requestData}
+                    />
+                  </div>
                 </ImpressionArticle>
               )
             })}
@@ -584,7 +610,7 @@ export function ResearchWorkbenchPage({
         </div>
 
         <aside className={css.dashboardSide} aria-label="风险与策略">
-          <section className={css.dashboardPanel} aria-labelledby="dashboard-alerts-title" aria-busy={alerts.busy}>
+          <section className={css.dashboardPanel} tabIndex={-1} aria-labelledby="dashboard-alerts-title" aria-busy={alerts.busy}>
             <div className={css.dashboardPanelHead}>
               <div><h2 id="dashboard-alerts-title">风险预警</h2><p>按严重度优先处理</p></div>
               <RegionMeta state={alerts.state} settled={alertsAsOf === '' ? `${alertItems.length} 条` : `更新于 ${displayTime(alertsAsOf)}`} />

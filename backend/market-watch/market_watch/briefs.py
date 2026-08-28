@@ -25,7 +25,7 @@ MAIN_INDICES = {
 }
 
 
-def _indices_spot() -> list[dict]:
+def indices_spot() -> list[dict]:
     """关键指数实时快照（best-effort，失败空）。"""
     import akshare as ak
 
@@ -36,7 +36,7 @@ def _indices_spot() -> list[dict]:
             if code in MAIN_INDICES.values():
                 rows.append({
                     "name": str(name), "code": str(code),
-                    "price": float(price), "pct": float(pct),
+                    "price": float(price), "pct_change": float(pct),
                 })
     except Exception as exc:
         logger.warning("指数快照拉取失败: %s", exc)
@@ -129,7 +129,7 @@ def generate(period: str = "pre", manual: bool = False) -> dict:
     if not manual and not quotes.is_trading_day(quotes.latest_trade_date()):
         raise RuntimeError("非交易日，生成简报无意义；manual 可强制（仅测试）")
 
-    indices = _indices_spot()
+    indices = indices_spot()
     watch = _watch_status()
     triggers = _today_triggers()
     titles = _watch_titles(top=settings.news_top)

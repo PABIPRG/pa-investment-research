@@ -5,7 +5,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { SettingsRootComponentProps } from '../src/client/shell-contract.ts'
 import { SettingsRoot } from '../src/client/SettingsRoot.tsx'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  document.body.removeAttribute('data-investment-research-ui')
+})
 
 type Row = { id: string; order: number; label: string }
 type Step = { id: string; order: number }
@@ -178,6 +181,15 @@ describe('SettingsPanel close paths', () => {
 })
 
 describe('SettingsPanel navigation', () => {
+  it('hides Agent presets in the investment-research product', () => {
+    document.body.setAttribute('data-investment-research-ui', '')
+    mount()
+    openPanel()
+
+    expect(screen.queryByRole('button', { name: 'Agent presets' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'General' })).toBeTruthy()
+  })
+
   it('projects rows, marks the first active, and renders only that section', () => {
     mount()
     openPanel()

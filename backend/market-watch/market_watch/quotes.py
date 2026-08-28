@@ -471,7 +471,7 @@ _NAME_INDEX_TTL = 3600.0  # 名称映射几乎不变，1 小时足够；用轻�
 
 
 def _load_security_catalog() -> tuple[list[dict[str, str]], dict[str, list[str]]]:
-    """加载全 A 证券目录及 name→code 索引，失败时返回空结果。"""
+    """加载 A 股与场内 ETF 目录及 name→code 索引，单一数据源失败时保留另一类结果。"""
     catalog: list[dict[str, str]] = []
     index: dict[str, list[str]] = {}
     try:
@@ -482,11 +482,31 @@ def _load_security_catalog() -> tuple[list[dict[str, str]], dict[str, list[str]]
             if not name or len(code) != 6 or not code.isdigit():
                 continue
             market = "沪市" if code.startswith(("6", "9")) else "深市" if code.startswith(("0", "2", "3")) else "北交所"
-            catalog.append({"code": code, "name": name, "market": market})
-            index.setdefault(name, []).append(code)
+            catalog.append({"code": code, "name": name, "market": market, "type": "股票"})
     except Exception as exc:
-        logger.warning("证券目录构建失败: %s", exc)
-    return catalog, index
+        logger.warning("A 股证券目录构建失败: %s", exc)
+    try:
+        import akshare as ak
+        for r in ak.fund_etf_spot_em().to_dict("records"):
+            name = str(r.get("名称") or "").strip()
+            code = str(r.get("代码") or "").strip()
+            if not name or len(code) != 6 or not code.isdigit():
+                continue
+            market = "沪市 ETF" if code.startswith(("5", "58")) else "深市 ETF"
+            catalog.append({"code": code, "name": name, "market": market, "type": "ETF"})
+    except Exception as exc:
+        logger.warning("场内 ETF 目录构建失败: %s", exc)
+
+    deduplicated: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in catalog:
+        code = item["code"]
+        if code in seen:
+            continue
+        seen.add(code)
+        deduplicated.append(item)
+        index.setdefault(item["name"], []).append(code)
+    return deduplicated, index
 
 
 def _security_catalog() -> list[dict[str, str]]:
@@ -506,7 +526,7 @@ def _name_to_code_index() -> dict[str, list[str]]:
 
 
 def search_securities(query: str, limit: int = 8) -> list[dict[str, str]]:
-    """按代码前缀或名称搜索 A 股，精确匹配优先。"""
+    """按代码前缀或名称搜索 A 股与场内 ETF，精确匹配优先。"""
     keyword = str(query).strip().casefold()
     if not keyword:
         return []

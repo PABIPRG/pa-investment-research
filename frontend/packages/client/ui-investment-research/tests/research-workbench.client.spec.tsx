@@ -99,9 +99,10 @@ describe('研究工作台', () => {
     expect(await view.findByText('白酒板块经营数据改善')).toBeTruthy()
     expect(view.getByText('稳健画像与策略风险需求匹配')).toBeTruthy()
     expect(view.getByText('持仓成本金额')).toBeTruthy()
-    expect(view.getByText('数量 × 成本价，非实时市值')).toBeTruthy()
+    expect(view.getByText('数量 × 成本价，非实时市值 →')).toBeTruthy()
     expect(view.getByText('¥15.0 万')).toBeTruthy()
     expect(view.getByText('集中度超预算')).toBeTruthy()
+    expect(view.getByRole('button', { name: /命中持仓：贵州茅台.*600519/ })).toBeTruthy()
   })
 
   it('持仓 name 为空时经 security-search 反查中文名，与代码一起展示', async () => {
@@ -126,7 +127,7 @@ describe('研究工作台', () => {
     expect(await view.findByText('中概互联网ETF易方达')).toBeTruthy()
     expect(requestData).toHaveBeenCalledWith({
       operation: 'market-watch.security-search',
-      input: { query: '513050', limit: 5 },
+      input: { query: '513050', limit: 8 },
     })
   })
 
@@ -141,6 +142,17 @@ describe('研究工作台', () => {
     const metric = view.getByText('持仓成本金额').parentElement!
     expect(within(metric).getByText('—')).toBeTruthy()
     expect(view.queryByText('¥0')).toBeNull()
+  })
+
+  it('概览信号提供明确的持仓、风险画像和预警查看入口', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    expect(view.navigate).toHaveBeenCalledWith('portfolio')
+    fireEvent.click(view.getByRole('button', { name: /风险画像/ }))
+    expect(view.navigate).toHaveBeenCalledWith('portfolio')
+    expect(view.getByRole('button', { name: /需关注预警/ })).toBeTruthy()
   })
 
   it('显式反馈显示当前选择、支持纠正，并只发送白名单上下文', async () => {
@@ -171,6 +183,26 @@ describe('研究工作台', () => {
       .at(-1)
     expect(correction?.input?.card_id).toBe('card-holdings')
     expect(correction?.input?.sentiment).toBe('useless')
+  })
+
+  it('标题与摘要重复时只保留标题，并把可操作项集中在独立操作区', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      const response = completeResponse(request.operation)
+      if (request.operation !== 'trading-core.personalized-cards') return response
+      const value = response as { cards: Array<Record<string, unknown>> }
+      return {
+        ...value,
+        cards: [{ ...value.cards[0], title: '银行行业资金流出榜', summary: '银行行业资金流出榜。' }],
+      }
+    })
+    const view = renderWorkbench(requestData)
+
+    const heading = await view.findByRole('heading', { name: '银行行业资金流出榜' })
+    const article = heading.closest('article')!
+    expect(within(article).queryByText('银行行业资金流出榜。')).toBeNull()
+    const controls = within(article).getByRole('group', { name: '事件操作' })
+    expect(within(controls).getByRole('button', { name: '查看事件详情' })).toBeTruthy()
+    expect(within(controls).getByRole('button', { name: '带入智能分析' })).toBeTruthy()
   })
 
   it('反馈失败给出局部重试提示，不阻塞事件详情', async () => {

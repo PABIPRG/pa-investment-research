@@ -573,7 +573,7 @@ describe('投研产品闭环', () => {
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.stats' })
     })
-    const globalSearch = screen.getByRole<HTMLInputElement>('combobox', { name: '搜索 A 股代码或名称' })
+    const globalSearch = screen.getByRole<HTMLInputElement>('combobox', { name: '搜索 A 股或场内 ETF 代码或名称' })
     const chainFilter = screen.getByRole<HTMLInputElement>('textbox', { name: '搜索公司、行业或股票代码' })
 
     fireEvent.change(globalSearch, { target: { value: '贵州茅台' } })
@@ -709,6 +709,36 @@ describe('投研产品闭环', () => {
     expect(await screen.findByText('2026-08-26 15:30:00')).toBeTruthy()
     expect(screen.getByText('已完成')).toBeTruthy()
     expect(screen.getByText('100')).toBeTruthy()
+  })
+
+  it('产业链搜索复用全市场证券目录，并为无图谱证券提供个股入口', async () => {
+    const onOpenStock = vi.fn<(code: string) => void>()
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'industry-chain.data-status') {
+        return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
+      }
+      if (request.operation === 'industry-chain.stats') return { total_nodes: 1, total_edges: 0, subject_count: 1, relationships: 0 }
+      if (request.operation === 'industry-chain.companies') return { items: [], count: 0 }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '510300', name: '沪深300ETF', type: 'etf' }] }
+      }
+      if (request.operation === 'trading-core.personalized-impact') return { events: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<IndustryChainPage
+      requestData={requestData as never}
+      query="510300"
+      onQuery={() => {}}
+      onAnalyze={() => {}}
+      onOpenStock={onOpenStock}
+    />)
+
+    expect(await screen.findByText('全市场证券匹配')).toBeTruthy()
+    expect(screen.getByText('沪深300ETF')).toBeTruthy()
+    expect(screen.getByText('暂无产业链图谱 · 查看个股')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /沪深300ETF.*510300/ }))
+    expect(onOpenStock).toHaveBeenCalledWith('510300')
   })
 
   it('影子验证切页后停止长任务轮询且不再读取结果', async () => {
