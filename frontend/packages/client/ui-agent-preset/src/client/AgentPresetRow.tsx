@@ -38,6 +38,7 @@ export type AgentPresetRowProps =
 export function AgentPresetRow({ load, select, useAgentPreset, t }: AgentPresetRowProps) {
   const state = useAgentPreset(snapshot => snapshot)
   const [open, setOpen] = useState(false)
+  const hiddenByProduct = document.body.hasAttribute('data-investment-research-ui')
 
   useEffect(() => {
     void load()
@@ -50,7 +51,7 @@ export function AgentPresetRow({ load, select, useAgentPreset, t }: AgentPresetR
 
   // A deployment that composes no presets has nothing to choose between, and
   // every session shares the host composition — the row simply does not exist.
-  if (state.status === 'unavailable') return null
+  if (state.status === 'unavailable' || hiddenByProduct) return null
   const busy = state.status === 'loading' || state.status === 'saving'
   // Every preset surface applies the same display-copy rule. The id remains
   // addressing rather than a label, except where no display name exists.

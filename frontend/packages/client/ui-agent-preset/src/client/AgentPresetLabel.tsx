@@ -44,6 +44,7 @@ export function AgentPresetLabel({
 }: AgentPresetLabelProps) {
   const preset = useSessions(state => state.byId[sessionId]?.agentPreset)
   const options = useAgentPresets(state => state.options)
+  const hiddenByProduct = document.body.hasAttribute('data-investment-research-ui')
 
   useEffect(() => {
     // Deployments that compose no presets never label anything, so the roster
@@ -51,7 +52,7 @@ export function AgentPresetLabel({
     if (preset !== undefined) void load()
   }, [preset, load])
 
-  if (preset === undefined) return null
+  if (preset === undefined || hiddenByProduct) return null
 
   const option = options.find(entry => entry.id === preset)
   const text = option === undefined ? undefined : presetDisplayText(option, t)

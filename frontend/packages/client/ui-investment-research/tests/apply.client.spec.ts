@@ -173,7 +173,7 @@ describe('ui-investment-research apply', () => {
     fireEvent.click(themeButton)
     expect(toggleTheme).toHaveBeenCalledOnce()
 
-    const input = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
+    const input = view.getByRole('combobox', { name: '搜索 A 股或场内 ETF 代码或名称' })
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: '茅台' } })
 
@@ -431,7 +431,7 @@ describe('ui-investment-research apply', () => {
     expect(view.queryByText('探索未至之境')).toBeNull()
     expect(view.queryByText('预览版')).toBeNull()
 
-    const globalSearch = view.getByRole('combobox', { name: '搜索 A 股代码或名称' })
+    const globalSearch = view.getByRole('combobox', { name: '搜索 A 股或场内 ETF 代码或名称' })
     const analysisInput = view.getByRole('textbox', { name: '个股分析股票代码' })
     const backtestInput = view.getByRole('textbox', { name: '历史回测股票代码' })
     fireEvent.change(globalSearch, { target: { value: '贵州茅台' } })

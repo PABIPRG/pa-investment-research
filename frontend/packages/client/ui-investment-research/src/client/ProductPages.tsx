@@ -770,7 +770,7 @@ export function StrategyResearchPage({
         {view === 'pool' && <>
           <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
           <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
-            {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件生成候选'}
+            {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件新建策略'}
           </button>
         </>}
       </PageHeading>
@@ -778,11 +778,20 @@ export function StrategyResearchPage({
         <button type="button" aria-pressed={view === 'pool'} className={view === 'pool' ? css.segmentActive : undefined} onClick={() => { setView('pool') }}>策略池</button>
         <button type="button" aria-pressed={view === 'shadow'} className={view === 'shadow' ? css.segmentActive : undefined} onClick={() => { setView('shadow') }}>影子验证</button>
       </div>
-      <div className={css.lifecycleStrip} aria-label="策略生命周期">
-        <span>事件与假设</span><b aria-hidden="true">→</b><span>样本外回测</span><b aria-hidden="true">→</b><span>影子验证</span><b aria-hidden="true">→</b><span>进化观察</span>
-      </div>
+      <section className={css.lifecyclePanel} aria-labelledby="strategy-lifecycle-title">
+        <div className={css.lifecycleIntro}>
+          <div><h2 id="strategy-lifecycle-title">策略生命周期</h2><small>每条策略都沿着真实证据逐步推进，不会自动进入下一阶段</small></div>
+          {view === 'pool' && <span>新建方式：点击右上角“从事件新建策略”</span>}
+        </div>
+        <div className={css.lifecycleStrip} aria-label="策略生命周期步骤">
+          <span data-state="active"><b>1</b><strong>事件形成假设</strong><small>从真实市场事件生成候选</small></span><i aria-hidden="true">→</i>
+          <span><b>2</b><strong>样本外回测</strong><small>用未参与构建的数据验证</small></span><i aria-hidden="true">→</i>
+          <span><b>3</b><strong>影子验证</strong><small>纸面账户跟踪真实行情</small></span><i aria-hidden="true">→</i>
+          <span><b>4</b><strong>进化观察</strong><small>归因后人工确认升降级</small></span>
+        </div>
+      </section>
       {view === 'pool' ? <>
-        <div className={css.contextHint}>页面只保存策略标识；AI 评审时会通过 investment_context 工具读取当前策略上下文。</div>
+        <div className={css.contextHint}>AI 评审会自动读取当前策略上下文；页面只保存策略标识，不会复制或覆盖策略内容。</div>
         {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
         {reportReady && (
           <div className={css.moduleToolbar}>
@@ -1159,11 +1168,12 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
         <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
         <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void evolve(false) }}>{busy ? '计算中…' : '生成进化预案'}</button>
       </PageHeading>
+      <div className={css.evolutionGuide}>可操作步骤：查看归因证据 → 生成只读预案 → 核对后人工确认应用。点击下面的步骤卡即可前往对应区域。</div>
       <section className={css.evolutionFlow} aria-label="自进化流程">
         <div data-state={days > 0 ? 'completed' : 'active'}><span>1</span><strong>累积影子数据</strong><small>{days}/{minDays || '—'} 个交易日</small></div>
-        <div data-state={strategyRows.length > 0 ? 'completed' : days > 0 ? 'active' : undefined}><span>2</span><strong>查看策略归因</strong><small>{strategyRows.length} 条策略证据</small></div>
-        <div data-state={previewAvailable || previewApplied ? 'completed' : statusRecord.ready === true ? 'active' : undefined}><span>3</span><strong>生成只读预案</strong><small>升降级、淘汰或变异</small></div>
-        <div data-state={previewApplied ? 'completed' : previewAvailable ? 'active' : undefined}><span>4</span><strong>人工确认应用</strong><small>确认后才写入策略库</small></div>
+        <button type="button" data-state={strategyRows.length > 0 ? 'completed' : days > 0 ? 'active' : undefined} onClick={() => { document.getElementById('evolution-evidence')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}><span>2</span><strong>查看策略归因</strong><small>{strategyRows.length} 条策略证据 · 点击查看</small></button>
+        <button type="button" data-state={previewAvailable || previewApplied ? 'completed' : statusRecord.ready === true ? 'active' : undefined} disabled={busy} onClick={() => { void evolve(false) }}><span>3</span><strong>生成只读预案</strong><small>升降级、淘汰或变异 · 点击生成</small></button>
+        <button type="button" data-state={previewApplied ? 'completed' : previewAvailable ? 'active' : undefined} disabled={!previewAvailable} onClick={() => { document.getElementById('evolution-preview-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}><span>4</span><strong>人工确认应用</strong><small>{previewAvailable ? '预案已就绪 · 点击核对' : '生成预案后可操作'}</small></button>
       </section>
       {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
@@ -1194,7 +1204,7 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
           </dl>
           {text(attributionRecord.data_note, '') !== '' && <p>{text(attributionRecord.data_note)}</p>}
         </article>
-        <article className={`${css.moduleCard} ${css.evolutionEvidenceCard}`}>
+        <article id="evolution-evidence" className={`${css.moduleCard} ${css.evolutionEvidenceCard}`}>
           <div className={css.sectionHeading}><strong>分策略证据</strong><span>{strategyRows.length} 项</span></div>
           <div className={css.dataList}>
             {strategyRows.slice(0, 10).map((item, index) => {
@@ -1681,6 +1691,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const dataStatus = useDataResource(requestData)
   const stats = useDataResource(requestData)
   const companies = useDataResource(requestData)
+  const securityMatches = useDataResource(requestData)
   const chain = useDataResource(requestData)
   const impact = useDataResource(requestData)
   const alive = useAliveRef()
@@ -1738,7 +1749,8 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
     setSearchedKeyword(cleanKeyword)
     setSearchAttempted(true)
     companies.run({ operation: 'industry-chain.companies', input: { keyword: cleanKeyword, limit: 20 } })
-  }, [companies.run])
+    securityMatches.run({ operation: 'market-watch.security-search', input: { query: cleanKeyword, limit: 8 } })
+  }, [companies.run, securityMatches.run])
   const loadChain = useCallback((company: IndustryCompanySelection) => {
     setChainLeafNotice('')
     chain.run({ operation: 'industry-chain.chain', input: { code: company.code } })
@@ -1814,6 +1826,12 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   }, [industryReady, loadChain, loadDataStatus, loadImpact, loadStats, searchCompanies, searchedKeyword, selectedCompany])
 
   const companyItems = records(asRecord(companies.state.value).items)
+  const companyCodes = new Set(companyItems.map(item => text(item.code, '').trim()).filter(Boolean))
+  const securityOnlyItems = records(asRecord(securityMatches.state.value).items)
+    .filter(item => {
+      const code = text(item.code, '').trim()
+      return code !== '' && !companyCodes.has(code)
+    })
   const chainValue = asRecord(chain.state.value)
   const center = asRecord(chainValue.center)
   const upLevels = records(chainValue.up_levels)
@@ -2117,7 +2135,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
 
           <section className={css.industrySearchPanel} aria-labelledby="industry-search-title">
             <div className={css.sectionHeading}>
-              <div><h2 id="industry-search-title">公司产业链检索</h2><small>公司、行业与股票代码使用独立检索状态</small></div>
+              <div><h2 id="industry-search-title">公司产业链检索</h2><small>与顶部共用全市场证券检索，并叠加产业链公司与行业数据</small></div>
               {searchedKeyword !== '' && <span>当前结果：{searchedKeyword}</span>}
             </div>
             <form className={css.inlineForm} onSubmit={(event) => { event.preventDefault(); searchCompanies(query) }}>
@@ -2133,12 +2151,13 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
               />
               <button
                 type="submit"
-                disabled={searchAttempted && companies.state.phase === 'loading'}
-                aria-busy={searchAttempted && companies.state.phase === 'loading'}
+                disabled={searchAttempted && (companies.state.phase === 'loading' || securityMatches.state.phase === 'loading')}
+                aria-busy={searchAttempted && (companies.state.phase === 'loading' || securityMatches.state.phase === 'loading')}
               >搜索</button>
             </form>
             {searchValidation !== '' && <p className={css.inlineError} id="industry-chain-query-error" role="alert">{searchValidation}</p>}
-            {searchAttempted && companies.state.phase === 'loading' && companies.state.value === undefined && <BusyRows />}
+            {searchAttempted && (companies.state.phase === 'loading' || securityMatches.state.phase === 'loading')
+              && companies.state.value === undefined && securityMatches.state.value === undefined && <BusyRows />}
             {searchAttempted && (
               <IndustryResourceFeedback
                 state={companies.state}
@@ -2172,7 +2191,34 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
                 })}
               </div>
             )}
-            {searchAttempted && companies.state.phase === 'success' && companyItems.length === 0 && <Empty>没有找到匹配的公司。</Empty>}
+            {searchAttempted && securityOnlyItems.length > 0 && (
+              <div className={css.securityMatchList} aria-label="证券匹配结果">
+                <div className={css.securityMatchHeading}>
+                  <strong>全市场证券匹配</strong>
+                  <small>以下证券能在顶部搜索中找到，但当前没有产业链图谱；可直接查看个股。</small>
+                </div>
+                {securityOnlyItems.map((security, index) => {
+                  const code = text(security.code, '').trim()
+                  const name = text(security.name, '').trim()
+                  return (
+                    <button
+                      type="button"
+                      className={css.dataRow}
+                      key={`${code}-${index}`}
+                      onClick={() => { onOpenStock(code) }}
+                    >
+                      <span><strong>{name || code}</strong><small>暂无产业链图谱 · 查看个股</small></span>
+                      <span>{code}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            {searchAttempted && securityMatches.state.phase === 'error' && (
+              <p className={css.inlineNote} role="status">全市场证券匹配暂不可用，产业链公司结果仍可正常使用。</p>
+            )}
+            {searchAttempted && companies.state.phase === 'success' && securityMatches.state.phase === 'success'
+              && companyItems.length === 0 && securityOnlyItems.length === 0 && <Empty>没有找到匹配的公司或证券。</Empty>}
             {!searchAttempted && <div className={css.contextHint}>输入关键词后按 Enter 或点击“搜索”，再选择一家公司查看真实上下游链路。</div>}
           </section>
 

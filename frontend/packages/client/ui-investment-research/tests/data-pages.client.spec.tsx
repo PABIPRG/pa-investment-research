@@ -22,8 +22,36 @@ function deferred<T>(): Deferred<T> {
 afterEach(cleanup)
 
 describe('投研数据页慢请求状态', () => {
+  it('为代码占位的持仓补全证券名称，并保留代码作为次级信息', async () => {
+    const requestData = vi.fn<RequestData>(async (request) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [{ ticker: '000001', name: '000001', quantity: 100, cost_price: 11.65 }] }
+      }
+      if (request.operation === 'trading-core.risk-portfolio') {
+        return { profile_label: '稳健型', summary: { n_positions: 1 }, breaches: [] }
+      }
+      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
+      if (request.operation === 'trading-core.personalized-cards') return { items: [] }
+      if (request.operation === 'market-watch.watchlist') return { items: [] }
+      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '000001', name: '平安银行', market: '深市' }] }
+      }
+      return {}
+    })
+
+    render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+
+    expect((await screen.findAllByText('平安银行')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('000001').length).toBeGreaterThan(0)
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'market-watch.security-search', input: { query: '000001', limit: 8 },
+    })
+  })
+
   it('只把后端返回的安全原文地址渲染为新窗口链接', async () => {
     const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.news-flash') {
         return Promise.resolve({
@@ -51,6 +79,7 @@ describe('投研数据页慢请求状态', () => {
 
   it('从个股详情返回时保留原研究对象，即使它不在当前扫描榜单', async () => {
     const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({ items: [{ code: '600519', name: '榜单股票' }] })
       }
@@ -78,6 +107,9 @@ describe('投研数据页慢请求状态', () => {
     const signal = deferred<unknown>()
     const newsFlights = [firstNews.promise, retriedNews.promise]
     const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.indices') {
+        return Promise.resolve({ items: [{ code: 'sh000001', name: '上证指数', price: 3210, pct_change: 0.8 }] })
+      }
       if (request.operation === 'market-watch.scan') return scan.promise
       if (request.operation === 'market-watch.news-flash') return newsFlights.shift()!
       if (request.operation === 'market-watch.tech-signal') return signal.promise
@@ -86,30 +118,31 @@ describe('投研数据页慢请求状态', () => {
 
     render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
 
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
+    expect(await screen.findByText('上证指数')).toBeTruthy()
     expect(requestData).toHaveBeenCalledWith({
       operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false },
     })
     const scanRegion = screen.getByRole('region', { name: '市场扫描' })
     expect(scanRegion.getAttribute('aria-busy')).toBe('true')
-    expect(screen.getByRole('status').textContent).toContain('已完成 0/2 项')
+    expect(screen.getByRole('status').textContent).toContain('已完成 1/3 项')
 
     await act(async () => {
       scan.resolve({ items: [{ code: '600519', name: '贵州茅台', price: 1688, pct_change: 1.2 }] })
     })
-    await screen.findByText('贵州茅台')
+    await screen.findAllByText('贵州茅台')
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
         operation: 'market-watch.tech-signal', input: { code: '600519', lookback: 120 },
       })
     })
-    expect(screen.getByText('贵州茅台')).toBeTruthy()
+    expect(screen.getAllByText('贵州茅台')).not.toHaveLength(0)
     expect(screen.getByRole('status').textContent).toContain('数据会在完成后逐项显示')
 
     await act(async () => { firstNews.reject(new Error('news upstream timeout')) })
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('实时资讯暂不可用')
-    expect(screen.getByText('贵州茅台')).toBeTruthy()
+    expect(screen.getAllByText('贵州茅台')).not.toHaveLength(0)
     fireEvent.click(within(alert).getByRole('button', { name: '重试实时资讯暂不可用' }))
     await waitFor(() => {
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(2)
@@ -183,6 +216,7 @@ describe('投研数据页慢请求状态', () => {
     const signal = deferred<unknown>()
     const scans = [firstScan.promise, secondScan.promise]
     const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') return scans.shift()!
       if (request.operation === 'market-watch.news-flash') return news.promise
       if (request.operation === 'market-watch.tech-signal') return signal.promise
@@ -190,7 +224,7 @@ describe('投研数据页慢请求状态', () => {
     })
 
     render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
     fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
     await waitFor(() => {
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.scan')).toHaveLength(2)
@@ -199,11 +233,11 @@ describe('投研数据页慢请求状态', () => {
     await act(async () => {
       secondScan.resolve({ items: [{ code: '000001', name: '新筛选结果' }] })
     })
-    await screen.findByText('新筛选结果')
+    await screen.findAllByText('新筛选结果')
     await act(async () => {
       firstScan.resolve({ items: [{ code: '600000', name: '晚到旧结果' }] })
     })
-    expect(screen.getByText('新筛选结果')).toBeTruthy()
+    expect(screen.getAllByText('新筛选结果')).not.toHaveLength(0)
     expect(screen.queryByText('晚到旧结果')).toBeNull()
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(1)
     expect(screen.getByRole('button', { name: '量比异动' }).getAttribute('aria-pressed')).toBe('true')
@@ -254,6 +288,7 @@ describe('投研数据页慢请求状态', () => {
     const gainers = deferred<unknown>()
     const volumeRatio = deferred<unknown>()
     const requestData = vi.fn<RequestData>((request) => {
+      if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.news-flash') return Promise.resolve([])
       if (request.operation === 'market-watch.tech-signal') return Promise.resolve({ signals: [] })
       if (request.operation === 'market-watch.scan') {
@@ -263,7 +298,7 @@ describe('投研数据页慢请求状态', () => {
     })
 
     render(<OpportunityPage requestData={requestData} initialQuery="" onAnalyze={() => {}} onView={() => {}} />)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
 
     fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
     await waitFor(() => {
@@ -279,11 +314,11 @@ describe('投研数据页慢请求状态', () => {
     await act(async () => {
       gainers.resolve({ items: [{ code: '600000', name: '最终 A 结果' }] })
     })
-    await screen.findByText('最终 A 结果')
+    await screen.findAllByText('最终 A 结果')
     await act(async () => {
       volumeRatio.resolve({ items: [{ code: '000001', name: '晚到 B 结果' }] })
     })
-    expect(screen.getByText('最终 A 结果')).toBeTruthy()
+    expect(screen.getAllByText('最终 A 结果')).not.toHaveLength(0)
     expect(screen.queryByText('晚到 B 结果')).toBeNull()
     expect(screen.getByRole('button', { name: '涨幅榜' }).getAttribute('aria-pressed')).toBe('true')
   })

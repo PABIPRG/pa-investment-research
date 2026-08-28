@@ -15,6 +15,7 @@ async function bench() {
   await ctx.plugin(SlotRegistry).await()
   const locale = new LocaleRuntime(ctx)
   ctx.provide('locale', locale)
+  ctx.provide('connection', { api: {} } as never)
   const facade = {
     getSnapshot: () => EMPTY,
     subscribe: vi.fn(() => () => {}),
@@ -38,9 +39,9 @@ function declare(slots: SlotRegistry): () => void {
 }
 
 describe('ui-settings-investment-research apply', () => {
-  it('declares only its four required services', () => {
+  it('declares only its five required services', () => {
     expect(inject).toEqual([
-      'slots', 'locale', 'investmentResearchRuntimeClient', 'sessionLogDownload',
+      'slots', 'locale', 'connection', 'investmentResearchRuntimeClient', 'sessionLogDownload',
     ])
   })
 

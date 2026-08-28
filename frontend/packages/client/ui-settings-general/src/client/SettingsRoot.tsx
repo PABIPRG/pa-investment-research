@@ -130,6 +130,9 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
   // freshly localized text on locale change, and the trigger/header/close
   // seats re-render through their own outlets' subscriptions.
   const rows = useSections(s => s)
+  const visibleRows = document.body.hasAttribute('data-investment-research-ui')
+    ? rows.filter(row => row.id !== 'agent-presets')
+    : rows
   const onboardingSteps = useOnboardingSteps(s => s)
   const onboardingActive = useSessions(state =>
     state.phase === 'ready'
@@ -163,7 +166,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
       </button>
       {open && (
         <SettingsPanel
-          rows={rows}
+          rows={visibleRows}
           renderSlot={renderSlot}
           activeId={activeId}
           onSelect={setActiveId}

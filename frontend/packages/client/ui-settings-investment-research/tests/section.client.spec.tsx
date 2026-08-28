@@ -7,6 +7,9 @@ import {
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
+import type {
+  InvestmentReadinessSectionInjected, ProjectModelSettings,
+} from '../src/client/InvestmentReadinessSection.tsx'
 import { createInvestmentReadinessStore } from '../src/client/store.ts'
 import type { InvestmentReadinessSnapshot, InvestmentRestartResult } from '../src/client/store.ts'
 import { en, zh } from '../src/client/locales.ts'
@@ -19,6 +22,15 @@ const WINDOWS_LOG = 'C:\\Users\\Example User\\.dsh\\investment-research\\market-
 type CredentialRef = InvestmentReadinessSnapshot['backends'][number]['credentials'][number]['ref']
 const DEEPSEEK_REF = 'DEEPSEEK_API_KEY' as CredentialRef
 const CURRENT_SESSION = 'session-investment-settings' as SessionId
+const PROJECT_MODELS: ProjectModelSettings = {
+  current: { provider: 'deepseek-official', model: 'deepseek-chat' },
+  options: [
+    { provider: 'deepseek-official', model: 'deepseek-chat', label: 'DeepSeek Chat', providerLabel: 'DeepSeek' },
+    { provider: 'openai', model: 'gpt-5', label: 'GPT-5', providerLabel: 'OpenAI' },
+  ],
+  writable: true,
+  revision: 3,
+}
 
 const MISSING: InvestmentReadinessSnapshot = {
   runtimeAsset: { status: 'source-env-ready' },
@@ -95,6 +107,8 @@ function mount(
     noCurrentSession?: boolean
     downloadState?: SessionLogDownloadState
     locale?: 'zh' | 'en'
+    loadProjectModels?: () => Promise<ProjectModelSettings>
+    saveProjectModel?: InvestmentReadinessSectionInjected['saveProjectModel']
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
@@ -108,6 +122,10 @@ function mount(
   const requestRestart = vi.fn(overrides.requestRestart ?? (() => Promise.resolve({ status: 'accepted' as const })))
   const refresh = vi.fn(overrides.refresh ?? (() => Promise.resolve()))
   const downloadSession = vi.fn(overrides.downloadSession ?? (() => Promise.resolve()))
+  const loadProjectModels = vi.fn(overrides.loadProjectModels ?? (() => Promise.resolve(PROJECT_MODELS)))
+  const saveProjectModel = vi.fn(overrides.saveProjectModel ?? ((selection) => Promise.resolve({
+    ...PROJECT_MODELS, current: selection, revision: PROJECT_MODELS.revision + 1,
+  })))
   const dictionary = overrides.locale === 'en' ? en : zh
   const unusedHook = (() => { throw new Error('unused standing hook') }) as never
   const view = render(<InvestmentReadinessSection
@@ -122,6 +140,8 @@ function mount(
     downloadSession={downloadSession}
     requestRestart={requestRestart}
     refresh={refresh}
+    loadProjectModels={loadProjectModels}
+    saveProjectModel={saveProjectModel}
     t={key => dictionary[key as InvestmentReadinessKey]}
   />)
   return {
@@ -133,11 +153,13 @@ function mount(
     downloadSession,
     requestRestart,
     refresh,
+    loadProjectModels,
+    saveProjectModel,
   }
 }
 
 describe('InvestmentReadinessSection', () => {
-  it('presents honest bilingual data-and-backup copy without internal storage concepts', () => {
+  it('presents honest bilingual data-and-backup copy without internal storage concepts', async () => {
     const chinese = mount(CONFIGURED)
 
     expect(screen.getByRole('heading', { name: '数据与备份' })).toBeTruthy()
@@ -145,7 +167,7 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.getByText('导出内容仅包含当前对话、关联对话与附件。')).toBeTruthy()
     expect(chinese.container.textContent).not.toContain('工作区')
     expect(chinese.container.textContent).not.toContain('存储位置')
-    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(await screen.findByRole('combobox', { name: '默认主模型' })).toBeTruthy()
     chinese.unmount()
 
     const english = mount(CONFIGURED, { locale: 'en' })
@@ -158,6 +180,21 @@ describe('InvestmentReadinessSection', () => {
     )).toBeTruthy()
     expect(english.container.textContent?.toLowerCase()).not.toContain('workspace')
     expect(english.container.textContent?.toLowerCase()).not.toContain('storage location')
+  })
+
+  it('shows the project default model, explains module routing, and persists a new default', async () => {
+    const { saveProjectModel } = mount(CONFIGURED)
+
+    const select = await screen.findByRole<HTMLSelectElement>('combobox', { name: '默认主模型' })
+    expect(select.value).toBe('deepseek-official\u0000deepseek-chat')
+    expect(screen.getByText('跟随会话主模型')).toBeTruthy()
+    expect(screen.getAllByText('后端专用 DeepSeek')).toHaveLength(2)
+    expect(screen.getByText('检索无需模型')).toBeTruthy()
+
+    fireEvent.change(select, { target: { value: 'openai\u0000gpt-5' } })
+    await waitFor(() => {
+      expect(saveProjectModel).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-5' }, 3)
+    })
   })
 
   it('disables current-conversation export when no Session is selected', () => {
@@ -401,18 +438,10 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.getByText('已提交重启请求。应用会在安全退出后重新打开。')).toBeTruthy()
   })
 
-  it('presents explicit conversation-run acceptance steps without invoking a tool', () => {
+  it('keeps operator acceptance steps out of the end-user settings surface', () => {
     const { requestRestart, refresh } = mount(CONFIGURED)
-    expect(screen.getByRole('heading', { name: '验收清单' })).toBeTruthy()
-    expect(screen.getByText('请在对话中显式执行以下步骤；此页面不会自动运行任何工具。')).toBeTruthy()
-    for (const text of [
-      '检查三个后端均为健康状态',
-      '运行 watch_list',
-      '运行 watch_add 后再次运行 watch_list',
-      '运行 get_watchlist',
-      '确认后运行 analyze_stock（会使用 DeepSeek）',
-      '运行 scan_movers 或 daily_brief',
-    ]) expect(screen.getByText(text)).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '验收清单' })).toBeNull()
+    expect(screen.queryByText('请在对话中显式执行以下步骤；此页面不会自动运行任何工具。')).toBeNull()
     expect(requestRestart).not.toHaveBeenCalled()
     expect(refresh).not.toHaveBeenCalled()
   })

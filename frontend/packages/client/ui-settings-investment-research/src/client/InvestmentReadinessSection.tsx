@@ -1,5 +1,5 @@
 import clsx from 'clsx'
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   HostObservable, InjectFace, PropsLocale, PropsRuntime, PropsStore,
@@ -29,6 +29,27 @@ export interface InvestmentReadinessSectionInjected {
   refresh: () => Promise<void>
   /** Ask the launcher to restart after quiescent shutdown. */
   requestRestart: () => Promise<InvestmentRestartResult>
+  /** Read the configured provider catalog and the project-wide default Agent model. */
+  loadProjectModels: () => Promise<ProjectModelSettings>
+  /** Persist the project-wide default Agent model. */
+  saveProjectModel: (selection: ProjectModelSelection, expectedRevision: number) => Promise<ProjectModelSettings>
+}
+
+export interface ProjectModelSelection {
+  readonly provider: string
+  readonly model: string
+}
+
+export interface ProjectModelOption extends ProjectModelSelection {
+  readonly label: string
+  readonly providerLabel: string
+}
+
+export interface ProjectModelSettings {
+  readonly current: ProjectModelSelection
+  readonly options: readonly ProjectModelOption[]
+  readonly writable: boolean
+  readonly revision: number
 }
 
 /** Full props assembled by the settings section registration. */
@@ -127,6 +148,17 @@ function restartFeedback(
   return undefined
 }
 
+function modelValue(selection: ProjectModelSelection): string {
+  return `${selection.provider}\u0000${selection.model}`
+}
+
+function projectModelOption(
+  options: readonly ProjectModelOption[],
+  value: string,
+): ProjectModelOption | undefined {
+  return options.find(option => modelValue(option) === value)
+}
+
 /** Render the secret-free investment Runtime readiness and explicit actions. */
 export function InvestmentReadinessSection(props: InvestmentReadinessSectionProps): ReactNode {
   const snapshot = props.useInvestmentReadiness(value => value)
@@ -135,6 +167,9 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
     ? undefined
     : value.bySession[String(currentSession)]?.status)
   const interaction = props.useStore(value => value)
+  const [projectModels, setProjectModels] = useState<ProjectModelSettings>()
+  const [projectModelsError, setProjectModelsError] = useState('')
+  const [projectModelsBusy, setProjectModelsBusy] = useState(false)
   const restart = interaction.restart
   const downloadBusy = downloadStatus === 'downloading'
   const needsModels = snapshot.backends.some(backend => backend.capability?.llm !== 'none'
@@ -155,6 +190,28 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
       : snapshot.runtimeAsset.status === 'invalid'
         ? 'invalidRuntime'
         : 'missingRuntime'
+
+  useEffect(() => {
+    let alive = true
+    setProjectModelsError('')
+    void props.loadProjectModels().then(
+      (value) => { if (alive) setProjectModels(value) },
+      () => { if (alive) setProjectModelsError(props.t('projectModelsLoadFailed')) },
+    )
+    return () => { alive = false }
+  }, [props.loadProjectModels, props.t])
+
+  const selectProjectModel = (value: string): void => {
+    if (projectModels === undefined || projectModelsBusy) return
+    const selection = projectModelOption(projectModels.options, value)
+    if (selection === undefined) return
+    setProjectModelsBusy(true)
+    setProjectModelsError('')
+    void props.saveProjectModel({ provider: selection.provider, model: selection.model }, projectModels.revision).then(
+      setProjectModels,
+      () => { setProjectModelsError(props.t('projectModelsSaveFailed')) },
+    ).finally(() => { setProjectModelsBusy(false) })
+  }
 
   const requestRestart = (): void => {
     if (restart.status === 'pending') return
@@ -199,6 +256,43 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
               ? 'exportNoCurrentConversation'
               : 'exportCurrentConversationScope')}
           </p>
+        </div>
+      </section>
+
+      <section className={css.modelRouting} aria-labelledby="investment-project-model-title">
+        <div className={css.modelRoutingHeading}>
+          <div>
+            <h2 id="investment-project-model-title">{props.t('projectModelTitle')}</h2>
+            <p>{props.t('projectModelIntro')}</p>
+          </div>
+          <button type="button" className={css.secondaryButton} onClick={() => { props.openSection('models') }}>
+            {props.t('manageConfiguredModels')}
+          </button>
+        </div>
+        <label className={css.projectModelSelect}>
+          <span>{props.t('defaultMainModel')}</span>
+          <select
+            aria-label={props.t('defaultMainModel')}
+            value={projectModels === undefined ? '' : modelValue(projectModels.current)}
+            disabled={projectModels === undefined || !projectModels.writable || projectModelsBusy}
+            aria-busy={projectModelsBusy}
+            onChange={(event) => { selectProjectModel(event.target.value) }}
+          >
+            {projectModels === undefined && <option value="">{props.t('loadingModels')}</option>}
+            {projectModels?.options.map(option => (
+              <option key={modelValue(option)} value={modelValue(option)}>
+                {option.label} · {option.providerLabel}
+              </option>
+            ))}
+          </select>
+          <small>{props.t('defaultMainModelHint')}</small>
+        </label>
+        {projectModelsError !== '' && <p className={css.modelError} role="alert">{projectModelsError}</p>}
+        <div className={css.modelModuleGrid} aria-label={props.t('moduleModelUsage')}>
+          <article><strong>{props.t('intelligentAnalysis')}</strong><span>{props.t('followsMainModel')}</span><small>{props.t('intelligentAnalysisModelHint')}</small></article>
+          <article><strong>{props.t('stockBackend')}</strong><span>{props.t('backendDeepSeekModel')}</span><small>{props.t('stockModelHint')}</small></article>
+          <article><strong>{props.t('marketBackend')}</strong><span>{props.t('backendDeepSeekModel')}</span><small>{props.t('marketModelHint')}</small></article>
+          <article><strong>{props.t('industryQuery')}</strong><span>{props.t('queryNoModel')}</span><small>{props.t('industryModelHint')}</small></article>
         </div>
       </section>
 
@@ -279,16 +373,6 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
         })}
       </div>
 
-      <section className={css.checklist}>
-        <h2>{props.t('checklist')}</h2>
-        <p>{props.t('checklistIntro')}</p>
-        <ul>
-          {([
-            'checkHealthy', 'checkWatchList', 'checkWatchWrite',
-            'checkStockList', 'checkAnalyze', 'checkMarket',
-          ] satisfies InvestmentReadinessKey[]).map(key => <li key={key}>{props.t(key)}</li>)}
-        </ul>
-      </section>
     </section>
   )
 }

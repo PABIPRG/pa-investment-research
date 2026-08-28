@@ -12,6 +12,22 @@ function bodyOf(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
 }
 
 describe('investment data broker', () => {
+  it('maps the market index overview to the fixed market-watch route', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [{ name: '上证指数' }] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await requestInvestmentData({ operation: 'market-watch.indices' }, async () => ({
+      baseUrl: 'http://127.0.0.1:8100', release,
+    }))
+
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8100/indices', { method: 'GET' })
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('maps security search and detail to fixed market-watch routes', async () => {
     const release = vi.fn(async () => {})
     const fetchMock = vi.fn()
