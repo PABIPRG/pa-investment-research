@@ -227,6 +227,15 @@ const REPORT_TITLE_LABELS: Readonly<Record<string, string>> = {
 
 const STRATEGY_KINDS = new Set(['ma_cross', 'rsi_reversal', 'momentum', 'breakout', 'bollinger', 'volume_breakout'])
 
+/** 回测样本窗口选项（年）。后端按 lookback_years × 366 天取日线，再按 70% 样本内 / 30% 样本外切分。 */
+const BACKTEST_WINDOW_OPTIONS: ReadonlyArray<{ readonly value: number; readonly label: string }> = [
+  { value: 0.5, label: '6个月' },
+  { value: 1, label: '1年' },
+  { value: 2, label: '2年' },
+  { value: 3, label: '3年' },
+  { value: 5, label: '5年' },
+]
+
 function strategySubjectLabel(value: unknown, securityNames: Readonly<Record<string, string>> = {}): string {
   const raw = text(value, '').trim()
   if (raw === '') return ''
@@ -618,6 +627,7 @@ export function StrategyResearchPage({
   const [reportReady, setReportReady] = useState(false)
   const [view, setView] = useState<'pool' | 'shadow'>(initialView)
   const [filter, setFilter] = useState<StrategyFilter>('all')
+  const [backtestYears, setBacktestYears] = useState<number>(2)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
   const [hypothesisPreview, setHypothesisPreview] = useState<StrategyHypothesisPreview>()
   const [hypothesisStatus, setHypothesisStatus] = useState('')
@@ -722,7 +732,7 @@ export function StrategyResearchPage({
     try {
       const started = await requestData({
         operation: 'trading-core.strategy-run',
-        input: { strategy_id: strategyId, lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 },
+        input: { strategy_id: strategyId, lookback_years: backtestYears, oos_frac: 0.3, min_oos_trades: 4 },
       })
       const id = taskId(started)
       if (id === '') throw new Error('后端没有返回任务编号')
@@ -768,6 +778,14 @@ export function StrategyResearchPage({
     <div className={css.pageScroll}>
       <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
         {view === 'pool' && <>
+          <label className={css.backtestWindow} title="回测样本窗口：按 70% 样本内 / 30% 样本外切分，窗口越长样本外证据越足">
+            <span>回测窗口</span>
+            <select className={css.backtestWindowSelect} value={backtestYears} disabled={busyAction !== ''} onChange={(event) => { setBacktestYears(Number(event.target.value)) }}>
+              {BACKTEST_WINDOW_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
           <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
           <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
             {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件新建策略'}
