@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
 
 afterEach(cleanup)
@@ -262,5 +262,44 @@ describe('策略研究产品事实与确认流程', () => {
     expect(within(dialog).getByText('事件源暂无可用事件')).toBeTruthy()
     expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: '确认加入候选池' }).disabled).toBe(true)
     expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.strategies-hypothesize' && request.input?.dry_run === false)).toBe(false)
+  })
+
+  it('回测窗口可选：运行回测把用户选择的年份传给后端，默认 2 年', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return { items: [{ id: 's-1', name: '可回测策略', status: 'active', kind: 'ma_cross', backtest: null }] }
+      }
+      if (request.operation === 'trading-core.strategy-run') return { task_id: 'task-1' }
+      if (request.operation === 'trading-core.task-status') return { status: 'done' }
+      if (request.operation === 'trading-core.task-result') return { reports: { 'r-1': {} } }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    const card = (await screen.findByText('可回测策略')).closest('article')
+    expect(card).not.toBeNull()
+
+    const runInputs = () => requestData.mock.calls
+      .filter(([request]) => request.operation === 'trading-core.strategy-run')
+      .map(([request]) => request.input)
+    const runButton = () => within(
+      screen.getByText('可回测策略').closest('article') as HTMLElement,
+    ).getByRole('button', { name: '运行回测' })
+    // 等待回测结束后按钮重新可用（回测中按钮会消失并置为 disabled）
+    const awaitIdle = async () => { await waitFor(() => expect((runButton() as HTMLButtonElement).disabled).toBe(false)) }
+
+    // 默认 2 年
+    fireEvent.click(runButton())
+    await awaitIdle()
+    expect(runInputs()).toEqual([{ strategy_id: 's-1', lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 }])
+
+    // 切到 3 年后再回测
+    fireEvent.change(screen.getByLabelText('回测窗口'), { target: { value: '3' } })
+    fireEvent.click(runButton())
+    await awaitIdle()
+    expect(runInputs()).toEqual([
+      { strategy_id: 's-1', lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 },
+      { strategy_id: 's-1', lookback_years: 3, oos_frac: 0.3, min_oos_trades: 4 },
+    ])
   })
 })
