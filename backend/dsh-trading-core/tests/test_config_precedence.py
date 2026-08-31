@@ -44,6 +44,28 @@ class ConfigPrecedenceTests(unittest.TestCase):
 
             self.assertEqual(config.settings.deepseek_api_key, "host-key")
 
+    def test_closed_loop_flags_read_from_dotenv(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config, temporary_project = load_config_from_temporary_project(
+                "CLOSED_LOOP_ENABLED=true\n"
+                "CLOSED_LOOP_TIME=16:00\n"
+                "CANDIDATE_AUTO_REJECT=false\n"
+            )
+            self.addCleanup(temporary_project.cleanup)
+
+            self.assertTrue(config.settings.closed_loop_enabled)
+            self.assertEqual(config.settings.closed_loop_time, "16:00")
+            self.assertFalse(config.settings.candidate_auto_reject)
+
+    def test_closed_loop_defaults_off_without_env(self):
+        with patch.dict(os.environ, {}, clear=True):
+            config, temporary_project = load_config_from_temporary_project("")
+            self.addCleanup(temporary_project.cleanup)
+
+            self.assertFalse(config.settings.closed_loop_enabled)
+            self.assertEqual(config.settings.closed_loop_time, "15:35")
+            self.assertTrue(config.settings.candidate_auto_reject)
+
 
 if __name__ == "__main__":
     unittest.main()

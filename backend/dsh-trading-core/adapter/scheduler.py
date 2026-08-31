@@ -81,10 +81,109 @@ def _run_shadow_job() -> None:
         logger.error("影子验证失败: %s", exc)
 
 
+def _run_closed_loop_job() -> None:
+    """全自动自进化闭环：shadow → 自动进化 → 衍生候选自动回测激活 → 推送。
+
+    每个交易日跑一次；任一环节异常不拖垮整轮，进度由日志 + 推送日报留痕。
+    候选回测只用 verification_status 仍为 pending 的（passed/failed 天然跳过），
+    同步调用 StrategyBacktestRunner（baostock 串行，无 LLM），通过→激活、失败→淘汰。
+    """
+    from .brief_engine import _is_trading_day  # lazy
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if not _is_trading_day(today):
+        logger.info("非交易日 %s，跳过自进化闭环", today)
+        return
+
+    logger.info("🔁 自进化闭环（%s）…", today)
+    store = JsonStore()
+    lines: list[str] = []
+    try:
+        # Step A：影子验证（幂等，同日已跑自动 skipped）
+        from .shadow import ShadowRunner
+        shadow = ShadowRunner(store).run({"force": False}, lambda m: None)
+        if shadow.get("skipped"):
+            lines.append(f"影子验证：{shadow.get('reason')}")
+        else:
+            lines.append(
+                f"影子验证：ok，overall_nav={shadow.get('overall_nav')}，"
+                f"策略 {len(shadow.get('strategies') or {})} 个"
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("闭环影子验证失败: %s", exc)
+        lines.append(f"影子验证：失败 {exc}")
+
+    # Step B：自动进化（数据就绪才写库）
+    evolve_report = {"status": "waiting_data", "count": 0, "actions": []}
+    try:
+        from . import evolution
+        evolve_report = evolution.evolve_auto(store)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("闭环自动进化失败: %s", exc)
+        lines.append(f"自动进化：失败 {exc}")
+    actions = evolve_report.get("actions") or []
+    if actions:
+        labels = {"promote": "升级", "demote": "降级", "retire": "淘汰", "mutate": "变异"}
+        lines.append(f"自动进化：应用 {len(actions)} 项动作")
+        for a in actions:
+            label = labels.get(a.get("type"), a.get("type"))
+            lines.append(f"  · {label} {a.get('sid')}：{a.get('reason', '')}")
+    else:
+        lines.append(
+            f"自动进化：{evolve_report.get('status', 'none')}"
+            + (f"（{evolve_report.get('data_note', '')}）" if evolve_report.get("data_note") else "")
+        )
+
+    # Step C：衍生候选自动回测 → 激活/淘汰
+    activated: list[str] = []
+    rejected: list[str] = []
+    try:
+        from .strategies import StrategyBacktestRunner, transition_strategy
+        runner = StrategyBacktestRunner(store)
+        candidates = [
+            sid for sid, s in (store.all("strategies") or {}).items()
+            if isinstance(s, dict) and s.get("status") == "candidate"
+            and s.get("verification_status") not in ("passed", "failed", "archived")
+        ]
+        for sid in candidates:
+            try:
+                res = runner.run(
+                    {"strategy_id": sid, "lookback_years": 2.0, "oos_frac": 0.3,
+                     "min_oos_trades": 4},
+                    lambda m: None,
+                )
+                vstatus = res.get("verification_status")
+                if vstatus == "passed":
+                    transition_strategy(store, sid, "activate")
+                    activated.append(sid)
+                    logger.info("候选 %s 回测通过 → 激活进入影子", sid)
+                elif vstatus == "failed" and settings.candidate_auto_reject:
+                    transition_strategy(store, sid, "reject")
+                    rejected.append(sid)
+                    logger.info("候选 %s 回测未达标 → 淘汰", sid)
+            except Exception as exc:  # noqa: BLE001 — 单候选失败不拖垮整轮
+                logger.warning("候选 %s 自动回测失败: %s", sid, exc)
+        lines.append(
+            f"候选验证：回测 {len(candidates)} 条，激活 {len(activated)}，淘汰 {len(rejected)}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("闭环候选验证失败: %s", exc)
+        lines.append(f"候选验证：失败 {exc}")
+
+    # Step D：推送闭环日报（通道未配则 no-op，不影响闭环）
+    try:
+        from .push import PusherManager
+        md = "\n".join(lines) or "（本轮无记录）"
+        results = PusherManager().push(f"📈 自进化闭环日报 · {today}", md)
+        logger.info("闭环日报推送完成: %s", results)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("闭环日报推送失败: %s", exc)
+
+
 def setup_scheduler() -> BackgroundScheduler | None:
-    """按 BRIEF_SCHEDULE_ENABLED / SHADOW_SCHEDULE_ENABLED 决定是否挂载；全关返回 None。"""
-    if not settings.schedule_enabled and not settings.shadow_schedule_enabled:
-        logger.info("BRIEF_SCHEDULE_ENABLED=false 且 SHADOW_SCHEDULE_ENABLED=false，跳过定时调度")
+    """按 BRIEF_SCHEDULE_ENABLED / SHADOW_SCHEDULE_ENABLED / CLOSED_LOOP_ENABLED 决定是否挂载；全关返回 None。"""
+    if not settings.schedule_enabled and not settings.shadow_schedule_enabled and not settings.closed_loop_enabled:
+        logger.info("简报/影子/闭环调度全关，跳过定时调度")
         return None
 
     sched = BackgroundScheduler(timezone=_TIMEZONE)
@@ -109,6 +208,14 @@ def setup_scheduler() -> BackgroundScheduler | None:
             id="shadow_daily", replace_existing=True,
         )
         logger.info("👤 定时影子验证已启动: %s:%02d", s_h, s_m)
+
+    if settings.closed_loop_enabled:
+        c_h, c_m = _parse_hhmm(settings.closed_loop_time)
+        sched.add_job(
+            _run_closed_loop_job, CronTrigger(hour=c_h, minute=c_m),
+            id="closed_loop_daily", replace_existing=True,
+        )
+        logger.info("🔁 定时自进化闭环已启动: %s:%02d", c_h, c_m)
 
     if sched.get_jobs():
         sched.start()

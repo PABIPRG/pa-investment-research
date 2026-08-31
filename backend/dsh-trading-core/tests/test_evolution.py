@@ -27,6 +27,7 @@ from adapter.evolution import (
     current_preview,
     decision_outcome,
     evolve,
+    evolve_auto,
     status,
 )
 from adapter.personalize import _active_strategies
@@ -173,6 +174,59 @@ class EvolveTests(unittest.TestCase):
             self.assertEqual(rec["verification_status"], "pending")
             self.assertEqual(rec["mutated_from"], "strat-good")
 
+    def test_preview_includes_per_strategy_decision_reasons(self):
+        store = _store()
+        _plant(store)
+        preview = evolve(store, apply=False)
+        per = {p["strategy_id"]: p for p in preview["per_strategy"]}
+        self.assertEqual(per["strat-good"]["decision"], "promote")
+        self.assertEqual(per["strat-bad"]["decision"], "retire")
+        self.assertIn("升级线", per["strat-good"]["reason"])
+        self.assertIn("平仓胜率", per["strat-bad"]["reason"])
+        self.assertEqual(per["strat-good"]["behavior"], "升级+变异")
+        self.assertEqual(per["strat-bad"]["behavior"], "淘汰")
+
+    def test_preview_per_strategy_none_when_upgraded_or_in_band(self):
+        """无动作时 per_strategy 给出可读原因：已升级不重复 / 带内无动作。"""
+        store = _store()
+        store.set("strategies", "strat-t2", {
+            "id": "strat-t2", "name": "已升级", "kind": "momentum",
+            "direction": "利好", "symbols": ["600000"], "params": {"n": 10},
+            "status": "active",
+            "evolve": {"state": "active", "tier": 2},
+        })
+        store.set("strategies", "strat-band", {
+            "id": "strat-band", "name": "带内", "kind": "momentum",
+            "direction": "利好", "symbols": ["600001"], "params": {"n": 10},
+            "status": "active",
+            "evolve": {"state": "active", "tier": 1},
+        })
+        for d, ov in [("2026-08-24", 1.0), ("2026-08-25", 1.005), ("2026-08-26", 1.01),
+                      ("2026-08-27", 1.015), ("2026-08-28", 1.02)]:
+            store.set("shadow_equity", d, {
+                "overall_nav": ov,
+                "strategies": {"strat-t2": {"nav": ov}, "strat-band": {"nav": ov}},
+            })
+        preview = evolve(store, apply=False)
+        self.assertEqual(preview["actions"], [])
+        per = {p["strategy_id"]: p for p in preview["per_strategy"]}
+        self.assertEqual(per["strat-t2"]["decision"], "none")
+        self.assertIn("不重复升级", per["strat-t2"]["reason"])
+        self.assertEqual(per["strat-t2"]["behavior"], "已升级")
+        self.assertEqual(per["strat-band"]["decision"], "none")
+        self.assertIn("带内", per["strat-band"]["reason"])
+        self.assertEqual(per["strat-band"]["behavior"], "带内运行")
+
+    def test_preview_exposes_last_applied_at_after_auto_apply(self):
+        """闭环自动应用过进化后，再生成空预案也能带上轮应用时间供前端展示。"""
+        store = _store()
+        _plant(store)
+        _preview_and_apply(store)
+        preview = evolve(store, apply=False)
+        self.assertEqual(preview["actions"], [])  # 已升级/已淘汰后无新动作
+        self.assertIsNotNone(preview["last_applied_at"])
+        self.assertRegex(str(preview["last_applied_at"]), r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
     def test_preview_token_rejects_duplicate_apply(self):
         store = _store()
         _plant(store)
@@ -220,6 +274,43 @@ class EvolveTests(unittest.TestCase):
         actives = [s.get("id") for s in _active_strategies(store)]
         self.assertIn("strat-good", actives)
         self.assertNotIn("strat-bad", actives)
+
+
+class EvolveAutoTests(unittest.TestCase):
+    """全自动闭环用 evolve_auto()：数据不足不写库；就绪自动 preview→apply。"""
+
+    def test_waiting_data_returns_note_and_writes_nothing(self):
+        store = _store()
+        _plant(store, days=1)
+        result = evolve_auto(store)
+        self.assertEqual(result["status"], "waiting_data")
+        self.assertEqual(result["count"], 0)
+        self.assertEqual(result["actions"], [])
+        # 未写 evolution_previews 集合
+        self.assertEqual(store.all("evolution_previews"), {})
+        # 生命周期未变
+        self.assertEqual(store.get("strategies", "strat-good")["evolve"]["tier"], 1)
+        self.assertEqual(store.get("strategies", "strat-bad")["status"], "active")
+
+    def test_ready_auto_applies_promote_retire_mutate(self):
+        store = _store()
+        _plant(store)  # 5 日影子数据 → 就绪
+        result = evolve_auto(store)
+        self.assertTrue(result["applied"])
+        self.assertEqual(result["preview_status"], "applied")
+        types = {a["type"] for a in result["actions"]}
+        self.assertIn("promote", types)
+        self.assertIn("retire", types)
+        self.assertIn("mutate", types)
+        good = store.get("strategies", "strat-good")
+        bad = store.get("strategies", "strat-bad")
+        self.assertEqual(good["evolve"]["tier"], 2)
+        self.assertEqual(bad["status"], "retired")
+        kids = [k for k, v in store.all("strategies").items()
+                if isinstance(v, dict) and v.get("source") == "evolution"]
+        self.assertEqual(len(kids), 2)
+        # 预案已消费，无残留待确认预案
+        self.assertEqual(current_preview(store)["preview_status"], "none")
 
 
 class OutcomeTests(unittest.TestCase):
