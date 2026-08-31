@@ -193,6 +193,9 @@ def _row_from_diff(d: dict) -> dict | None:
 # ulist 批量行情短缓存（防 scheduler 30s 轮询高频打 push2）
 _UL_TTL = 10.0
 _ul_cache: dict[str, tuple[float, dict[str, dict]]] = {}
+# 双源均缺时兜底展示的最近成功价（秒）。东财 push2 间歇断连 + 新浪偶发失败时，
+# 避免把现价打成 '—'；窗口内价格波动有限，可接受作为展示。超窗仍返回缺省由前端降级。
+_last_good: dict[str, tuple[float, dict]] = {}
 
 
 def _ulist(codes: list[str]) -> dict[str, dict]:
@@ -414,6 +417,32 @@ def _fetch_spot_map() -> dict[str, dict]:
             raise
 
 
+def _quote_map(codes: list[str]) -> dict[str, dict]:
+    """批量取价（东财 ulist 为主，漏掉的码逐批用新浪补位）。
+    不做全量 `or` 降级：ulist 成功但缺个别码时（新股/代码差异/基金）仍用新浪补齐，
+    避免个别持仓永远 '—'。两源皆缺的码返回时由 _stale_fill 决定是否兜底旧价。"""
+    m = _ulist(codes)
+    missing = [c for c in codes if c not in m]
+    if missing:
+        m.update(_sina_hq(missing))
+    return m
+
+
+def _stale_fill(codes: list[str], m: dict[str, dict]) -> dict[str, dict]:
+    """成功价记入 _last_good；两源皆缺的码回填最近一次成功价（限 quote_stale_ttl）。
+    超窗不回填，由调用方按缺省处理（前端降级 '—'）。"""
+    now = time.time()
+    for c in codes:
+        row = m.get(c)
+        if row is not None:
+            _last_good[c] = (now, row)
+        else:
+            hit = _last_good.get(c)
+            if hit and (now - hit[0]) <= settings.quote_stale_ttl:
+                m[c] = hit[1]
+    return m
+
+
 class QuoteCache:
     """全市场实时快照 TTL 缓存（线程安全）。"""
 
@@ -439,11 +468,11 @@ class QuoteCache:
             return self._map
 
     def get_quote(self, code: str) -> dict | None:
-        m = _ulist([code]) or _sina_hq([code])
+        m = _stale_fill([code], _quote_map([code]))
         return m.get(code)
 
     def get_quotes(self, codes: list[str]) -> list[dict]:
-        m = _ulist(codes) or _sina_hq(codes)
+        m = _stale_fill(codes, _quote_map(codes))
         return [m[c] for c in codes if c in m]
 
     def all_quotes(self) -> list[dict]:
@@ -843,7 +872,7 @@ def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
 
 
 def _fetch_point_quote(code: str) -> dict | None:
-    rows = _ulist([code]) or _sina_hq([code])
+    rows = _stale_fill([code], _quote_map([code]))
     return rows.get(code)
 
 

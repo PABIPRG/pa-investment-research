@@ -19,7 +19,7 @@ from . import briefs, events, news, quotes, rules, scanner, scheduler
 from .config import settings
 from .indicators import compute_indicators, summarize
 from .schemas import (
-    AlertRule, BriefRequest, ScanRequest, SecurityDetailRequest, TechSignalRequest,
+    AlertRule, BriefRequest, QuotesBatchRequest, ScanRequest, SecurityDetailRequest, TechSignalRequest,
     WatchAddRequest, WatchRemoveRequest,
 )
 from .store import JsonStore
@@ -245,6 +245,35 @@ def overview():
         "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
         "trade_date": quotes.latest_trade_date(),
         "items": out,
+    }
+
+
+@app.post("/quotes/batch")
+def quotes_batch(req: QuotesBatchRequest):
+    """批量实时快照（持仓现价）。复用 ulist 批量短缓存，miss 自动跳过；停牌价可为 None。"""
+    if len(req.codes) > 100:
+        raise HTTPException(422, "单次最多查询 100 只股票")
+    codes: list[str] = []
+    for code in req.codes:
+        try:
+            codes.append(quotes.normalize_code(code))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+    # 去重保序；空列表也安全（get_quotes([]) → []）
+    codes = list(dict.fromkeys(codes))
+    rows = quotes.cache().get_quotes(codes)
+    return {
+        "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "trade_date": quotes.latest_trade_date(),
+        "items": [
+            {
+                "code": q["code"],
+                "name": q.get("name") or "",
+                "price": q.get("price"),
+                "pct_change": q.get("pct_change"),
+            }
+            for q in rows
+        ],
     }
 
 

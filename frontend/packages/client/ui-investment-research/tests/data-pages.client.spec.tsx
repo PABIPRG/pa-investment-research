@@ -191,7 +191,7 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.getByText('浦发银行')).toBeTruthy()
     expect(screen.getByRole('status').textContent).toContain('正在更新持仓数据')
     fireEvent.click(busyButton)
-    expect(requestData).toHaveBeenCalledTimes(12)
+    expect(requestData).toHaveBeenCalledTimes(14)
 
     await act(async () => {
       nextHoldings.resolve({ items: [{ ticker: '000001', name: '平安银行', quantity: 200, cost_price: 11 }] })
@@ -334,5 +334,75 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.getByRole('button', { name: '重试风险预警暂不可用' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '重试研究事件暂不可用' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '重试自选股暂不可用' })).toBeTruthy()
+  })
+
+  it('持仓表按实时行情渲染现价与市值，并汇总总资产现价', async () => {
+    const requestData = vi.fn<RequestData>(async (request) => {
+      if (request.operation === 'trading-core.holdings') {
+        return {
+          items: [
+            { ticker: '000001', name: '平安银行', quantity: 100, cost_price: 10 },
+            { ticker: '600519', name: '贵州茅台', quantity: 2, cost_price: 1400 },
+          ],
+        }
+      }
+      if (request.operation === 'trading-core.risk-portfolio') {
+        return { profile_label: '稳健型', summary: { n_positions: 2 }, breaches: [] }
+      }
+      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
+      if (request.operation === 'trading-core.personalized-cards') return { items: [] }
+      if (request.operation === 'market-watch.watchlist') return { items: [] }
+      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
+      if (request.operation === 'market-watch.quotes-batch') {
+        return {
+          as_of: '2026-08-31 10:00:00', trade_date: '2026-08-31',
+          items: [
+            { code: '000001', name: '平安银行', price: 14.5, pct_change: 1.2 },
+            { code: '600519', name: '贵州茅台', price: 1200, pct_change: -0.5 },
+          ],
+        }
+      }
+      return {}
+    })
+
+    render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+
+    await screen.findByText('贵州茅台')
+    expect(screen.getByText('¥14.50')).toBeTruthy()
+    expect(screen.getByText('¥1200.00')).toBeTruthy()
+    expect(screen.getByText('¥1450.00')).toBeTruthy()
+    expect(screen.getByText('¥2400.00')).toBeTruthy()
+    expect(screen.getByText('¥3,850')).toBeTruthy()
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'market-watch.quotes-batch',
+      input: { codes: ['000001', '600519'] },
+    })
+  })
+
+  it('实时行情不可用时持仓价格静默降级为 —，不渲染额外错误', async () => {
+    const requestData = vi.fn<RequestData>(async (request) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [{ ticker: '000001', name: '平安银行', quantity: 100, cost_price: 10 }] }
+      }
+      if (request.operation === 'trading-core.risk-portfolio') {
+        return { profile_label: '稳健型', summary: { n_positions: 1 }, breaches: [] }
+      }
+      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
+      if (request.operation === 'trading-core.personalized-cards') return { items: [] }
+      if (request.operation === 'market-watch.watchlist') return { items: [] }
+      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
+      if (request.operation === 'market-watch.quotes-batch') return Promise.reject(new Error('quotes upstream unavailable'))
+      return {}
+    })
+
+    render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+
+    await screen.findByText('平安银行')
+    const row = screen.getAllByRole('row')[1]!
+    const cells = within(row).getAllByRole('cell')
+    expect(cells[4]!.textContent).toBe('—')
+    expect(cells[5]!.textContent).toBe('—')
+    expect(screen.getByText('总资产现价').nextElementSibling?.textContent).toBe('—')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

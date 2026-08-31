@@ -5,3 +5,8 @@ backend/*/.venv/
 **/__pycache__/
 *.py[cod]
 *.tsbuildinfo
+
+# 运行时状态（trading-core 个性化/影子仓位、market-watch 手动运行日志）
+backend/dsh-trading-core/tmp*/
+backend/dsh-trading-core/cards.json
+backend/market-watch/run-8100.log

@@ -96,6 +96,7 @@ export type InvestmentDataOperation =
   | 'market-watch.watch-add'
   | 'market-watch.watch-remove'
   | 'market-watch.alerts'
+  | 'market-watch.quotes-batch'
   | 'trading-core.analyze'
   | 'trading-core.watchlist'
   | 'trading-core.watchlist-save'

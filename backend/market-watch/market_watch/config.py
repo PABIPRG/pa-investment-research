@@ -93,6 +93,7 @@ class Settings:
         self.kline_baostock_timeout = float(os.getenv("MW_KLINE_BAOSTOCK_TIMEOUT", "2"))
         self.kline_refresh_workers = int(os.getenv("MW_KLINE_REFRESH_WORKERS", "4"))
         self.quote_name_deadline = float(os.getenv("MW_QUOTE_NAME_DEADLINE", "0.3"))
+        self.quote_stale_ttl = float(os.getenv("MW_QUOTE_STALE_TTL", "300"))
         # 事件驱动（快讯 → 结构化事件 → 命中自选/持仓预警 → 个性化）
         self.event_enabled = _true("MW_EVENT_ENABLED", default=True)
         self.event_batch = int(os.getenv("MW_EVENT_BATCH", "15"))

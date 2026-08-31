@@ -58,6 +58,12 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
       }],
     }
   }
+  if (operation === 'market-watch.quotes-batch') {
+    return {
+      as_of: '2026-08-26 09:35:00', trade_date: '2026-08-26',
+      items: [{ code: '600519', name: '贵州茅台', price: 1450, pct_change: 1.2 }],
+    }
+  }
   return {}
 }
 
@@ -83,13 +89,14 @@ describe('研究工作台', () => {
     const view = renderWorkbench()
 
     expect(view.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
-    await waitFor(() => { expect(view.requestData).toHaveBeenCalledTimes(5) })
+    await waitFor(() => { expect(view.requestData).toHaveBeenCalledTimes(6) })
     expect(view.requestData.mock.calls.map(([request]) => request.operation)).toEqual(expect.arrayContaining([
       'trading-core.holdings',
       'trading-core.risk-portfolio',
       'trading-core.risk-alerts',
       'trading-core.personalized-cards',
       'trading-core.personalized-matches',
+      'market-watch.quotes-batch',
     ]))
     expect(view.requestData).toHaveBeenCalledWith({
       operation: 'trading-core.personalized-cards',
@@ -99,8 +106,12 @@ describe('研究工作台', () => {
     expect(await view.findByText('白酒板块经营数据改善')).toBeTruthy()
     expect(view.getByText('稳健画像与策略风险需求匹配')).toBeTruthy()
     expect(view.getByText('持仓成本金额')).toBeTruthy()
-    expect(view.getByText('数量 × 成本价，非实时市值 →')).toBeTruthy()
+    expect(view.getByText('总资产现价')).toBeTruthy()
+    expect(view.getByText('数量 × 成本价 →')).toBeTruthy()
+    expect(view.getByText('数量 × 实时价，不含现金 →')).toBeTruthy()
     expect(view.getByText('¥15.0 万')).toBeTruthy()
+    expect(view.getByText('¥14.5 万')).toBeTruthy()
+    expect(view.getByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeTruthy()
     expect(view.getByText('集中度超预算')).toBeTruthy()
     expect(view.getByRole('button', { name: /命中持仓：贵州茅台.*600519/ })).toBeTruthy()
   })
@@ -139,7 +150,7 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
 
     expect(await view.findByText('尚未保存持仓。录入真实持仓后，这里会关联风险与资讯。')).toBeTruthy()
-    const metric = view.getByText('持仓成本金额').parentElement!
+    const metric = view.getByText('总资产现价').parentElement!
     expect(within(metric).getByText('—')).toBeTruthy()
     expect(view.queryByText('¥0')).toBeNull()
   })

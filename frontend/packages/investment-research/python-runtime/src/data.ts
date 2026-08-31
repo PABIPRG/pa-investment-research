@@ -390,6 +390,15 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     },
   },
   'market-watch.alerts': noInput('/alerts', 'market-watch'),
+  'market-watch.quotes-batch': {
+    backendId: 'market-watch',
+    method: 'POST',
+    path: () => '/quotes/batch',
+    body: (input) => {
+      knownKeys(input, ['codes'])
+      return { codes: optionalStringArray(input, 'codes') ?? [] }
+    },
+  },
   'trading-core.analyze': {
     backendId: 'trading-core',
     method: 'POST',

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { AssistantIntent } from './assistant-intent.ts'
-import { asRecord, money, number, productErrorText, records, text } from './data.ts'
+import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
+import { useQuotePolling } from './quote-polling.ts'
 import {
   EventReportDialog, RiskDetailDialog, eventPrimaryTicker, riskIntentTarget,
 } from './DetailDialogs.tsx'
@@ -93,12 +94,6 @@ function costAmount(positions: readonly Record<string, unknown>[]): number {
   return positions.reduce((sum, item) => (
     sum + (number(item.quantity) ?? 0) * (number(item.cost_price) ?? 0)
   ), 0)
-}
-
-function compactMoney(value: number): string {
-  if (value >= 100_000_000) return `¥${(value / 100_000_000).toFixed(2)} 亿`
-  if (value >= 10_000) return `¥${(value / 10_000).toFixed(1)} 万`
-  return `¥${value.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`
 }
 
 const BUCKET_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -310,6 +305,7 @@ export function ResearchWorkbenchPage({
   const alerts = useWorkbenchResource(requestData)
   const cards = useWorkbenchResource(requestData)
   const matches = useWorkbenchResource(requestData)
+  const quotes = useWorkbenchResource(requestData)
   const alive = useRef(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [bucket, setBucket] = useState<EventBucket>('all')
@@ -340,6 +336,21 @@ export function ResearchWorkbenchPage({
   }, [cards.run, refreshVersion])
 
   const positions = records(asRecord(holdings.state.value).items)
+  useQuotePolling(quotes, holdings.state.value, refreshVersion)
+
+  const quoteItems = records(asRecord(quotes.state.value).items)
+  const quoteMap = new Map(quoteItems.map(item => [text(item.code, ''), item] as const))
+  const totalCurrent = (() => {
+    if (positions.length === 0) return undefined
+    let sum = 0
+    for (const item of positions) {
+      const quantity = number(item.quantity)
+      const price = number(asRecord(quoteMap.get(text(item.ticker, ''))).price)
+      if (quantity === undefined || price === undefined) return undefined
+      sum += quantity * price
+    }
+    return sum
+  })()
   const riskValue = asRecord(risk.state.value)
   const riskSummary = asRecord(riskValue.summary)
   const alertValue = asRecord(alerts.state.value)
@@ -449,7 +460,8 @@ export function ResearchWorkbenchPage({
 
       <section className={css.dashboardSummary} aria-label="投研概览">
         <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
-        <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价，非实时市值 →</small></button>
+        <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价 →</small></button>
+        <button type="button" onClick={() => { navigate('portfolio') }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small>数量 × 实时价，不含现金 →</small></button>
         <button type="button" onClick={() => { navigate('portfolio') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
         <button type="button" onClick={() => {
           const target = document.getElementById('dashboard-alerts-title')?.closest('section')
@@ -473,10 +485,13 @@ export function ResearchWorkbenchPage({
               <div className={css.dashboardHoldingList}>
                 {positions.slice(0, 6).map((item, index) => {
                   const code = text(item.ticker, '')
+                  const quantity = number(item.quantity)
+                  const price = number(asRecord(quoteMap.get(code)).price)
+                  const marketValue = quantity !== undefined && price !== undefined ? quantity * price : undefined
                   return (
                     <button key={`${code}-${index}`} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
                       <span><strong>{resolvedSecurityName(item, code, securityNames)}</strong><small>{code}</small></span>
-                      <span><b>{number(item.quantity)?.toLocaleString('zh-CN') ?? '—'} 股</b><small>成本 {money(item.cost_price)}</small></span>
+                      <span><b>{quantity?.toLocaleString('zh-CN') ?? '—'} 股</b><small>成本 {money(number(item.cost_price))} · 现价 {money(price)} · 市值 {marketValue === undefined ? '—' : compactMoney(marketValue)}</small></span>
                     </button>
                   )
                 })}
