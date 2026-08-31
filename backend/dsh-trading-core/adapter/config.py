@@ -88,6 +88,10 @@ class Settings:
         self.evolve_retire_closed_win = float(os.getenv("EVOLVE_RETIRE_CLOSED_WIN", "0.35"))  # 平仓胜率< 淘汰
         self.evolve_mutate_branches = int(os.getenv("EVOLVE_MUTATE_BRANCHES", "2"))  # 每升级策略变异分支数
         self.evolve_mutate_cooldown_days = int(os.getenv("EVOLVE_MUTATE_COOLDOWN_DAYS", "7"))  # 父策略变异冷却
+        # 全自动闭环（每日 shadow → 自动进化 → 衍生候选自动回测激活 → 推送）
+        self.closed_loop_enabled = os.getenv("CLOSED_LOOP_ENABLED", "false").lower() == "true"
+        self.closed_loop_time = os.getenv("CLOSED_LOOP_TIME", "15:35")          # 闭环每日时刻（收盘后）
+        self.candidate_auto_reject = os.getenv("CANDIDATE_AUTO_REJECT", "true").lower() == "true"
 
     def llm_available(self) -> bool:
         return bool(self.deepseek_api_key)

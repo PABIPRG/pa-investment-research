@@ -1167,12 +1167,10 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
     return () => { requestState.cancelled = true }
   }, [requestData, unresolvedSymbolKey])
   const actions = records(preview?.actions)
+  const perStrategy = records(preview?.per_strategy)
   const previewStatus = text(preview?.preview_status, '')
   const previewApplied = preview?.applied === true || previewStatus === 'applied'
-  const previewReady = preview !== undefined
-    && previewStatus === 'pending'
-    && /^[0-9a-f]{32}$/.test(text(preview.preview_token, ''))
-    && text(preview.status, '') !== 'waiting_data'
+    && text(preview?.status, '') !== 'waiting_data'
     && actions.length > 0
   const firstError = [status.state, attribution.state].find(item => item.phase === 'error')
   const days = number(statusRecord.days_of_data) ?? 0
@@ -1182,11 +1180,11 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
 
   return (
     <div className={css.pageScroll}>
-      <PageHeading title="自进化" description="先归因、再预览、后确认；任何策略升降级或变异都不会静默写入">
+      <PageHeading title="自进化" description="闭环每日自动应用进化（升级/降级/淘汰/变异）；本页可查看归因证据与判定依据，必要时人工干预确认">
         <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
         <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void evolve(false) }}>{busy ? '计算中…' : '生成进化预案'}</button>
       </PageHeading>
-      <div className={css.evolutionGuide}>可操作步骤：查看归因证据 → 生成只读预案 → 核对后人工确认应用。点击下面的步骤卡即可前往对应区域。</div>
+      <div className={css.evolutionGuide}>闭环已自动应用每日进化；本页可查看归因证据、各策略判定依据，手动确认仅作为干预入口。点击下面的步骤卡即可前往对应区域。</div>
       <section className={css.evolutionFlow} aria-label="自进化流程">
         <div data-state={days > 0 ? 'completed' : 'active'}><span>1</span><strong>累积影子数据</strong><small>{days}/{minDays || '—'} 个交易日</small></div>
         <button type="button" data-state={strategyRows.length > 0 ? 'completed' : days > 0 ? 'active' : undefined} onClick={() => { document.getElementById('evolution-evidence')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}><span>2</span><strong>查看策略归因</strong><small>{strategyRows.length} 条策略证据 · 点击查看</small></button>
@@ -1203,7 +1201,7 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
           <div className={css.evolutionReadiness}>
             <div><span>数据完成度</span><strong>{Math.round(readiness)}%</strong></div>
             <progress max="100" value={readiness} aria-label="自进化数据完成度" />
-            <small>{text(statusRecord.note, statusRecord.ready === true ? '数据门槛已满足，可以生成只读预案。' : '继续运行影子验证以累积真实数据。')}</small>
+            <small>{text(statusRecord.note, statusRecord.ready === true ? '数据门槛已满足；闭环会自动应用进化，生成预案可查看判定依据。' : '继续运行影子验证以累积真实数据。')}</small>
           </div>
           <dl className={css.reportMeta}>
             <div><dt>数据天数</dt><dd>{number(statusRecord.days_of_data)?.toFixed(0) ?? '—'}</dd></div>
@@ -1253,7 +1251,9 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
           <div>
             <h2 id="evolution-preview-title">{previewApplied ? '进化动作已应用' : '进化动作预览'}</h2>
             <p>{actions.length === 0
-              ? text(preview.data_note, text(preview.note, '当前没有满足条件的进化动作。'))
+              ? text(preview.data_note, text(preview.note, preview.last_applied_at
+                ? `闭环已自动应用上一轮进化（${text(preview.last_applied_at)}），下方为各策略判定依据。`
+                : '闭环每日自动应用进化；下方为各策略判定依据。'))
               : previewApplied ? `已按确认预案应用 ${actions.length} 项动作。` : `共 ${actions.length} 项；确认后将写入策略库。`}</p>
           </div>
           <div className={css.dataList}>
@@ -1274,10 +1274,21 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
                 </div>
               )
             })}
+            {actions.length === 0 && perStrategy.map((item, index) => (
+              <div className={css.dataRow} key={`per-strategy-${text(item.strategy_id)}-${index}`}>
+                <div>
+                  <strong>{strategyTargetLabel(item, securityNames)}</strong>
+                  <small>{text(item.reason)}</small>
+                </div>
+                <span className={css.evolutionEvidenceMeta}>
+                  <strong>净值 {compactMetric(item.nav)}</strong>
+                  <small>{text(item.behavior)}</small>
+                </span>
+              </div>
+            ))}
           </div>
           <div className={css.moduleToolbar}>
             <button type="button" className={css.secondaryButton} disabled={previewStatus !== 'pending'} onClick={() => { onAnalyze({ kind: 'evolution' }) }}>AI 复核预案</button>
-            <button type="button" className={css.primaryButton} disabled={!previewReady || busy} onClick={() => { void evolve(true) }}>{previewApplied ? '已应用' : '确认并应用'}</button>
           </div>
         </section>
       )}

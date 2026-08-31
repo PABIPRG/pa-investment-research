@@ -113,6 +113,22 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _last_applied_at(store: JsonStore) -> str | None:
+    """最近一次成功应用的进化时间（YYYY-MM-DD HH:MM:SS）；从未应用返回 None。
+
+    扫 evolution_previews 集合里 preview_status=="applied" 的记录取最大 applied_at，
+    不依赖当前指针（指针会被新的 pending 预案顶掉）。
+    """
+    best: str | None = None
+    for rec in (store.all(_PREVIEW_COLLECTION) or {}).values():
+        if not isinstance(rec, dict) or rec.get("preview_status") != "applied":
+            continue
+        ts = str(rec.get("applied_at") or "")
+        if ts and (best is None or ts > best):
+            best = ts
+    return best
+
+
 def _parse_ts(ts) -> float | None:
     """'%Y-%m-%d %H:%M:%S' → epoch；解析失败返回 None。"""
     if not ts:
@@ -330,6 +346,37 @@ def evolve(
         return _store_preview(store, response, version_after)
 
 
+def evolve_auto(store: JsonStore | None = None) -> dict:
+    """全自动闭环用：数据就绪则生成并立即应用进化预案（preview→apply 两步合并）。
+
+    - 影子数据不足（< EVOLVE_MIN_DAYS）→ 返回 waiting_data，不写库（与手动一致）。
+    - 就绪但无动作 → 返回只读预案，不写。
+    - 就绪且有动作 → 立即应用（promote/demote/retire/mutate 落库），返回 applied。
+    数据就绪时 preview→apply 背靠背调用，期间无其它写入，state_version 不变，
+    不会触发 EvolutionPreviewConflict；异常向上抛由调度 job 兜底记录。
+    """
+    store = store or JsonStore()
+    days, n = _shadow_series(store)
+    if n < settings.evolve_min_days:
+        return {
+            "as_of": _now(),
+            "status": "waiting_data",
+            "days_of_data": n,
+            "min_days": settings.evolve_min_days,
+            "applied": False,
+            "count": 0,
+            "actions": [],
+            "data_note": (
+                f"影子净值仅 {n} 日，需累积至 {settings.evolve_min_days} 日才执行升降级/变异"
+            ),
+        }
+    preview = evolve(store, apply=False)
+    if not (preview.get("actions") or []):
+        return preview
+    token = preview.get("preview_token")
+    return evolve(store, apply=True, preview_token=token)
+
+
 def _build_preview(store: JsonStore) -> dict:
     days, n = _shadow_series(store)
     resp = {
@@ -339,6 +386,8 @@ def _build_preview(store: JsonStore) -> dict:
         "applied": False,
         "count": 0,
         "actions": [],
+        "per_strategy": [],
+        "last_applied_at": _last_applied_at(store),
     }
     if n < settings.evolve_min_days:
         resp["status"] = "waiting_data"
@@ -353,6 +402,7 @@ def _build_preview(store: JsonStore) -> dict:
     strats = store.all("strategies") or {}
     now = time.time()
     cooldown = settings.evolve_mutate_cooldown_days * 86400
+    per_strategy: list[dict] = []
     for s in attr["strategies"]:
         sid = s["strategy_id"]
         rec = strats.get(sid) or {}
@@ -362,17 +412,34 @@ def _build_preview(store: JsonStore) -> dict:
         nav = s["nav"]
         winr = s["closed_win_rate_pct"]
         closed = s["closed_trades"] or 0
+        tier = int(ev.get("tier") or 1)
+        entry: dict = {
+            "strategy_id": sid,
+            "name": rec.get("name"),
+            "kind": rec.get("kind"),
+            "tier": tier,
+            "symbols": rec.get("symbols"),
+            "nav": nav,
+            "closed_win_rate_pct": winr,
+            "closed_trades": closed,
+            "decision": "none",
+            "reason": "",
+            "behavior": "带内运行",
+        }
         # 1) 淘汰（净值跌破淘汰线）
         if nav is not None and nav <= settings.evolve_retire_nav and ev.get("state") != "retired":
+            reason = f"影子净值 {nav:.4f} ≤ 淘汰线 {settings.evolve_retire_nav}"
+            entry.update(decision="retire", behavior="淘汰", reason=reason)
             actions.append(
                 {
                     "type": "retire",
                     "sid": sid,
                     "from": ev.get("state") or "active",
                     "to": "retired",
-                    "reason": f"影子净值 {nav:.4f} ≤ 淘汰线 {settings.evolve_retire_nav}",
+                    "reason": reason,
                 }
             )
+            per_strategy.append(entry)
             continue
         # 2) 淘汰（平仓胜率过低，样本量充足）
         if (
@@ -381,43 +448,51 @@ def _build_preview(store: JsonStore) -> dict:
             and closed >= 3
             and ev.get("state") != "retired"
         ):
+            reason = (
+                f"平仓胜率 {winr:.0f}% < {settings.evolve_retire_closed_win * 100:.0f}%"
+                f"（已平 {closed} 笔），影子表现不可靠"
+            )
+            entry.update(decision="retire", behavior="淘汰", reason=reason)
             actions.append(
                 {
                     "type": "retire",
                     "sid": sid,
                     "from": ev.get("state") or "active",
                     "to": "retired",
-                    "reason": (
-                        f"平仓胜率 {winr:.0f}% < {settings.evolve_retire_closed_win * 100:.0f}%"
-                        f"（已平 {closed} 笔），影子表现不可靠"
-                    ),
+                    "reason": reason,
                 }
             )
+            per_strategy.append(entry)
             continue
         # 3) 降级观察
         if nav is not None and nav <= settings.evolve_demote_nav and ev.get("state") == "active":
+            reason = (
+                f"影子净值 {nav:.4f} ≤ 观察线 {settings.evolve_demote_nav}，"
+                f"降级为观察（停止推荐、继续跑影子）"
+            )
+            entry.update(decision="demote", behavior="降级观察", reason=reason)
             actions.append(
                 {
                     "type": "demote",
                     "sid": sid,
                     "from": "active",
                     "to": "watch",
-                    "reason": (
-                        f"影子净值 {nav:.4f} ≤ 观察线 {settings.evolve_demote_nav}，"
-                        f"降级为观察（停止推荐、继续跑影子）"
-                    ),
+                    "reason": reason,
                 }
             )
+            per_strategy.append(entry)
             continue
         # 4) 升级 + 变异回流
-        if nav is not None and nav >= settings.evolve_promote_nav and int(ev.get("tier") or 1) < 2:
+        if nav is not None and nav >= settings.evolve_promote_nav and tier < 2:
+            reason = f"影子净值 {nav:.4f} ≥ 升级线 {settings.evolve_promote_nav}"
+            entry.update(decision="promote", behavior="升级", reason=reason)
             actions.append(
                 {
                     "type": "promote",
                     "sid": sid,
-                    "from": f"tier{ev.get('tier') or 1}",
+                    "from": f"tier{tier}",
                     "to": "tier2",
-                    "reason": f"影子净值 {nav:.4f} ≥ 升级线 {settings.evolve_promote_nav}",
+                    "reason": reason,
                 }
             )
             oos = ((rec.get("backtest") or {}).get("out_of_sample") or {})
@@ -454,8 +529,35 @@ def _build_preview(store: JsonStore) -> dict:
                             ),
                         }
                     )
+            if any(a.get("type") == "mutate" and a.get("parent") == sid for a in actions):
+                entry.update(behavior="升级+变异")
+            per_strategy.append(entry)
+            continue
+        # 5) 无动作：带内 / 已升级 / 已降级
+        if nav is None:
+            entry.update(behavior="待判定", reason="影子净值缺失，暂不参与判定")
+        elif tier >= 2:
+            entry.update(
+                behavior="已升级",
+                reason=f"影子净值 {nav:.4f}，已升级至 tier2，不重复升级",
+            )
+        elif ev.get("state") == "watch":
+            entry.update(
+                behavior="降级观察中",
+                reason=f"影子净值 {nav:.4f} ≤ 观察线 {settings.evolve_demote_nav}，已在 watch 观察",
+            )
+        else:
+            entry.update(
+                behavior="带内运行",
+                reason=(
+                    f"影子净值 {nav:.4f} 处于 {settings.evolve_demote_nav}~"
+                    f"{settings.evolve_promote_nav} 带内，无升降级动作"
+                ),
+            )
+        per_strategy.append(entry)
     resp["count"] = len(actions)
     resp["actions"] = actions
+    resp["per_strategy"] = per_strategy
     return resp
 
 
