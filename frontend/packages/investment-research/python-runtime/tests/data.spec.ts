@@ -105,6 +105,59 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
+  it('maps a batch quote request to the fixed market-watch route', async () => {
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8100', release }))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      as_of: '2026-08-31 10:00:00', trade_date: '2026-08-31',
+      items: [{ code: '600519', name: '贵州茅台', price: 1450.0, pct_change: 1.2 }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestInvestmentData({
+      operation: 'market-watch.quotes-batch',
+      input: { codes: ['600519', '000858'] },
+    }, acquire)).resolves.toMatchObject({ items: [{ code: '600519', price: 1450.0 }] })
+
+    expect(acquire).toHaveBeenCalledWith('market-watch')
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8100/quotes/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes: ['600519', '000858'] }),
+    })
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('maps an absent codes input to an empty codes batch body', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await requestInvestmentData({ operation: 'market-watch.quotes-batch' }, async () => ({
+      baseUrl: 'http://127.0.0.1:8100', release,
+    }))
+
+    expect(bodyOf(fetchMock, 0)).toEqual({ codes: [] })
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('rejects unsafe or non-string codes before acquiring the backend', async () => {
+    const acquire = vi.fn()
+    await expect(requestInvestmentData({
+      operation: 'market-watch.quotes-batch',
+      input: { codes: ['600519', ''] },
+    }, acquire)).rejects.toThrow('codes must be an array of non-empty strings')
+    await expect(requestInvestmentData({
+      operation: 'market-watch.quotes-batch',
+      input: { codes: [600519] },
+    }, acquire)).rejects.toThrow('codes must be an array of non-empty strings')
+    await expect(requestInvestmentData({
+      operation: 'market-watch.quotes-batch',
+      input: { codes: ['600519'], url: 'https://example.com' },
+    }, acquire)).rejects.toThrow('unknown input key')
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
   it('maps all nine industry-chain operations to the fixed backend routes', async () => {
     const release = vi.fn(async () => {})
     const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8200', release }))

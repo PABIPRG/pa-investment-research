@@ -261,7 +261,7 @@
 
 .dashboardSummary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -472,6 +472,8 @@
 .detailTitle strong { display: block; font-size: 1.2143rem; }
 .detailTitle span { color: var(--dsw-alias-label-tertiary); font: 0.7857rem ui-monospace, monospace; }
 .signalGrid, .metricRow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+/* 组合风险概览加入“总资产现价”后为 5 项；窄屏 900px 媒体查询会回落到 2 列。 */
+.metricRow { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .metric { padding: 13px; }
 .metric span { display: block; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .metric strong { display: block; margin-top: 6px; font-size: 1.0714rem; overflow-wrap: anywhere; }

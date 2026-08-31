@@ -23,7 +23,11 @@ class WatchRemoveRequest(BaseModel):
     code: str = Field(min_length=6, max_length=6)
 
 
-# ---- 盯盘规则 ------------------------------------------------------------
+# ---- 批量行情 ------------------------------------------------------------
+
+
+class QuotesBatchRequest(BaseModel):
+    codes: list[str] = Field(description="待查询的 6 位股票代码列表，单次上限 100 只")
 
 
 class AlertCondition(BaseModel):

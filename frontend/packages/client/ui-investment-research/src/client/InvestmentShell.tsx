@@ -15,7 +15,8 @@ import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversat
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { SmartAnalysisPage } from './AnalysisPage.tsx'
-import { asRecord, money, number, percent, productErrorText, records, text } from './data.ts'
+import { asRecord, compactMoney, money, number, percent, productErrorText, records, text } from './data.ts'
+import { useQuotePolling } from './quote-polling.ts'
 import {
   DetailDialog, EventReportDialog, RiskDetailDialog, eventPrimaryTicker, riskIntentTarget,
 } from './DetailDialogs.tsx'
@@ -1889,6 +1890,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   const events = useRequestResource(requestData)
   const watchlist = useRequestResource(requestData)
   const coreWatchlist = useRequestResource(requestData)
+  const quotes = useRequestResource(requestData)
   const [removingWatch, setRemovingWatch] = useState('')
 
   useEffect(() => {
@@ -1904,6 +1906,21 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   }, [alerts.run, coreWatchlist.run, events.run, holdings.run, nonce, risk.run, watchlist.run])
 
   const positions = records(asRecord(holdings.state.value).items)
+  useQuotePolling(quotes, holdings.state.value, nonce)
+
+  const quoteItems = records(asRecord(quotes.state.value).items)
+  const quoteMap = new Map(quoteItems.map(item => [text(item.code, ''), item] as const))
+  const totalCurrent = (() => {
+    if (positions.length === 0) return undefined
+    let sum = 0
+    for (const item of positions) {
+      const quantity = number(item.quantity)
+      const price = number(asRecord(quoteMap.get(text(item.ticker, ''))).price)
+      if (quantity === undefined || price === undefined) return undefined
+      sum += quantity * price
+    }
+    return sum
+  })()
   const positionNames = useSecurityNames(requestData, positions
     .filter(item => {
       const code = text(item.ticker, '')
@@ -1985,6 +2002,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
         {!risk.state.loaded && risk.state.error === '' && <LoadingSkeleton rows={2} />}
         {risk.state.loaded && (
           <div className={css.metricRow}>
+            <Metric label="总资产现价" value={totalCurrent === undefined ? '—' : compactMoney(totalCurrent)} hint="不含现金 · 实时" onClick={() => { revealSection(holdingsSection) }} />
             <Metric label="持仓数量" value={number(summary.n_positions)?.toFixed(0) ?? String(positions.length)} hint="查看当前持仓" onClick={() => { revealSection(holdingsSection) }} />
             <Metric label="风险画像" value={text(riskRecord.profile_label)} hint="查看画像与风险" onClick={() => { revealSection(riskSection) }} />
             <Metric label="等权占比" value={equalWeight === undefined ? '—' : `${(equalWeight * 100).toFixed(1)}%`} hint="查看风险预算" onClick={() => { revealSection(riskSection) }} />
@@ -2051,12 +2069,15 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
             <>
               <div className={css.tableWrap}>
                 <table>
-                  <thead><tr><th>股票代码</th><th>名称</th><th>数量</th><th>持仓成本</th></tr></thead>
+                  <thead><tr><th>股票代码</th><th>名称</th><th>数量</th><th>持仓成本</th><th>现价</th><th>市值</th></tr></thead>
                   <tbody>
                     {positions.map((row, index) => {
                       const code = text(row.ticker, '')
                       const storedName = text(row.name, '').trim()
                       const name = storedName !== '' && storedName !== code ? storedName : positionNames[code] || code
+                      const quantity = number(row.quantity)
+                      const price = number(asRecord(quoteMap.get(code)).price)
+                      const marketValue = quantity !== undefined && price !== undefined ? quantity * price : undefined
                       return <tr key={`${code}-${index}`}>
                         <td>
                           <button
@@ -2066,8 +2087,10 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                           >{code}</button>
                         </td>
                         <td><button type="button" className={css.nameButton} onClick={() => { onViewStock(code) }}>{name}</button></td>
-                        <td>{number(row.quantity)?.toLocaleString('zh-CN') ?? '—'}</td>
+                        <td>{quantity?.toLocaleString('zh-CN') ?? '—'}</td>
                         <td>{money(row.cost_price)}</td>
+                        <td>{money(price)}</td>
+                        <td>{money(marketValue)}</td>
                       </tr>
                     })}
                   </tbody>
