@@ -3,7 +3,9 @@ import {
   consumeSse,
   getLatestBrief,
   getInvestmentContext,
+  getResearchChatContext,
   getRiskProfile,
+  getStrategyDetail,
   getWatchlist,
   httpJson,
   parseSse,
@@ -118,6 +120,32 @@ describe('stock-analysis adapter client', () => {
     })
     await expect(getInvestmentContext(BASE, 'browser-state' as never, signal))
       .rejects.toThrow('不支持的投研上下文领域')
+  })
+
+  it('reads research selection and strategy detail through encoded fixed routes', async () => {
+    const calls: Array<{ url: string; signal: AbortSignal | undefined }> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, signal: init.signal ?? undefined })
+      return response({ ok: true })
+    }))
+    const signal = new AbortController().signal
+
+    await getResearchChatContext(BASE, 'session:1', signal)
+    await getStrategyDetail(BASE, 'strategy:@1', signal)
+
+    expect(calls).toEqual([
+      { url: `${BASE}/research-chat/contexts/session%3A1`, signal },
+      { url: `${BASE}/strategies/strategy%3A%401`, signal },
+    ])
+  })
+
+  it('rejects unsafe research identifiers before network I/O', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+
+    expect(() => getResearchChatContext(BASE, '../session')).toThrow('会话 ID 格式无效')
+    expect(() => getStrategyDetail(BASE, 'strategy/escape')).toThrow('策略 ID 格式无效')
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('reads a selected report detail through a validated fixed route', async () => {

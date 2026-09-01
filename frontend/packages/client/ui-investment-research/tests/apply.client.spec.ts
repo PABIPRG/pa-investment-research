@@ -8,19 +8,20 @@ import packageManifest from '@deepseek-ai/dsh-client-ui-investment-research/pack
 import { apply, inject } from '../src/client/index.ts'
 import {
   InvestmentBrand,
-  InvestmentAssistantModuleSelect,
   InvestmentNewSession,
   InvestmentWelcome,
   InvestmentShell,
   InvestmentSidebar,
   type InvestmentShellInjected,
 } from '../src/client/InvestmentShell.tsx'
+import { InvestmentComposerContextControls } from '../src/client/ResearchContextControls.tsx'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
 afterEach(() => {
   cleanup()
   delete document.body.dataset.investmentWorkbenchActive
   delete document.body.dataset.investmentAssistantMode
+  delete document.body.dataset.investmentConversationPrimary
   document.body.removeAttribute('data-ds-dark-theme')
 })
 
@@ -126,7 +127,7 @@ describe('ui-investment-research apply', () => {
     expect(screen.getByText(`${packageManifest.version} · 智能投研系统`)).toBeTruthy()
   })
 
-  it('keeps the business workbench mounted while the global assistant changes display mode', () => {
+  it('switches between the conversation-primary view and the preserved analysis workbench', () => {
     const props = {
       requestData: vi.fn(async () => ({ items: [] })),
       navigate: vi.fn(), setHistory: vi.fn(), setReports: vi.fn(), setModuleDraft: vi.fn(), selectStrategy: vi.fn(),
@@ -137,13 +138,15 @@ describe('ui-investment-research apply', () => {
       ...props,
       useInvestmentUi: useUi({ route: 'portfolio' }),
     } as never))
-    expect(document.body.dataset.investmentWorkbenchActive).toBe('')
+    expect(document.body.dataset.investmentConversationPrimary).toBe('')
+    expect(document.body.dataset.investmentWorkbenchActive).toBeUndefined()
 
     view.rerender(createElement(InvestmentShell, {
       ...props,
       useInvestmentUi: useUi({ route: 'analysis', assistantMode: 'docked' }),
     } as never))
     expect(document.body.dataset.investmentWorkbenchActive).toBeUndefined()
+    expect(document.body.dataset.investmentConversationPrimary).toBeUndefined()
     expect(view.getByTestId('analysis-workbench')).toBeTruthy()
     expect(view.getByTestId('assistant-panel').getAttribute('data-mode')).toBe('docked')
   })
@@ -370,6 +373,8 @@ describe('ui-investment-research apply', () => {
       prepareAssistant: vi.fn(),
     } as never))
 
+    fireEvent.click(view.getByRole('button', { name: '投研资料' }))
+    expect(await view.findByRole('dialog', { name: '投研资料' })).toBeTruthy()
     expect(await view.findByText(/尚未保存持仓/)).toBeTruthy()
     fireEvent.click(view.getByRole('button', { name: '导入持仓' }))
     const dialog = view.getByRole('dialog', { name: '导入持仓' })
@@ -498,8 +503,8 @@ describe('ui-investment-research apply', () => {
     expect(sidebar.options.priority).toBe(-100)
     expect(shell.component).toBe(InvestmentShell)
     expect(welcome.component).toBe(InvestmentWelcome)
-    expect(assistantModule.component).toBe(InvestmentAssistantModuleSelect)
-    expect(assistantModule.options).toMatchObject({ id: 'investment-assistant-module', order: -100 })
+    expect(assistantModule.component).toBe(InvestmentComposerContextControls)
+    expect(assistantModule.options).toMatchObject({ id: 'investment-research-context', order: -100 })
     expect(welcome.options.priority).toBe(-100)
     expect(shell.options).toMatchObject({ id: 'investment-research-shell', order: -100 })
     expect(document.body.dataset.investmentResearchUi).toBe('')

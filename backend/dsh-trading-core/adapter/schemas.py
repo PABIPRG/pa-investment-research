@@ -131,6 +131,44 @@ class StrategyRunRequest(BaseModel):
     )
 
 
+class ResearchChatInstrument(BaseModel):
+    """聊天式我的投研中由证券搜索确认的单一主要标的。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    code: str = Field(pattern=r"^\d{6}$", description="六位 A 股或场内 ETF 代码")
+    name: str = Field(min_length=1, max_length=80, description="证券展示名称")
+    market: str = Field(min_length=1, max_length=32, description="证券市场展示名称")
+    type: Literal["stock", "etf"] = Field(description="当前支持的标的类型")
+
+    @field_validator("name", "market")
+    @classmethod
+    def strip_display_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("展示文本不能为空")
+        return stripped
+
+
+class ResearchChatContextSaveRequest(BaseModel):
+    """完整替换一个会话的已确认策略与标的上下文。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0, description="客户端最后确认的修订号")
+    strategy_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$",
+        description="策略池中的稳定策略标识；null 表示清除",
+    )
+    instrument: Optional[ResearchChatInstrument] = Field(
+        default=None,
+        description="证券搜索确认的主要标的；null 表示清除",
+    )
+
+
 class ShadowRunRequest(BaseModel):
     """POST /shadow/run 请求体：实时影子策略验证。"""
 

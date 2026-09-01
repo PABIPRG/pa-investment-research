@@ -74,6 +74,13 @@ describe('投研工作台主题样式', () => {
     expect(styles).toMatch(/data-investment-assistant-mode='expanded'\]\) \.historyBackdrop/)
   })
 
+  it('为聊天主界面和输入框上下文控件使用语义 token', () => {
+    expect(styles).toContain(':global(body[data-investment-conversation-primary])')
+    expect(styles).toContain('.researchContextControls')
+    expect(styles).toContain('.researchContextPopover')
+    expect(styles).not.toMatch(/\.researchContext(?:Controls|Popover)[^{]*\{[^}]*#[0-9a-f]{3,8}/isu)
+  })
+
   it('消费 profile 的隐藏标记并隐藏新对话中的工作区上下文', () => {
     expect(conversationStyles).toContain(":global(body[data-workspace-context-visibility='hidden']) .heroWorkspaceContext")
     expect(conversationStyles).toMatch(

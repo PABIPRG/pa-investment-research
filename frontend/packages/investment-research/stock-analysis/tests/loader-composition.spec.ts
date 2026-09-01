@@ -84,7 +84,7 @@ async function loadComposition(): Promise<Context> {
 }
 
 describe('stock-analysis through a real Loader composition', () => {
-  it('loads all ten schemas by package name and removes them when its Loader fiber disposes', async () => {
+  it('loads all eleven schemas by package name and removes them when its Loader fiber disposes', async () => {
     const ctx = await loadComposition()
     expect(ctx.tools.schemas().map(schema => schema.name).sort()).toEqual([
       'analyze_holdings',
@@ -93,6 +93,7 @@ describe('stock-analysis through a real Loader composition', () => {
       'get_risk_profile',
       'get_watchlist',
       'investment_context',
+      'investment_research_context',
       'market_brief',
       'set_holdings',
       'set_risk_profile',

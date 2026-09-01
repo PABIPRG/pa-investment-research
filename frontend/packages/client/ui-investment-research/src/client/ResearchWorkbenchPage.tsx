@@ -7,6 +7,12 @@ import { useQuotePolling } from './quote-polling.ts'
 import {
   EventReportDialog, RiskDetailDialog, eventPrimaryTicker, riskIntentTarget,
 } from './DetailDialogs.tsx'
+import {
+  WorkbenchOverviewDialog,
+} from './WorkbenchOverviewDialog.tsx'
+import type {
+  WorkbenchDetailKind, WorkbenchHoldingInput, WorkbenchPositionDetail,
+} from './WorkbenchOverviewDialog.tsx'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
 import { useSecurityNames } from './security-names.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
@@ -311,6 +317,7 @@ export function ResearchWorkbenchPage({
   const [bucket, setBucket] = useState<EventBucket>('all')
   const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown>>()
   const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
+  const [selectedOverview, setSelectedOverview] = useState<WorkbenchDetailKind>()
   const [brief, setBrief] = useState<{
     phase: 'idle' | 'running' | 'background' | 'done' | 'error'
     message: string
@@ -381,6 +388,16 @@ export function ResearchWorkbenchPage({
     ...reasonCodes.filter(code => !knownCardCodes.has(code)),
     ...strategyItems.flatMap(strategySymbols),
   ])
+  const overviewPositions: WorkbenchPositionDetail[] = positions.map((item) => {
+    const code = text(item.ticker, '')
+    return {
+      code,
+      name: resolvedSecurityName(item, code, securityNames),
+      quantity: number(item.quantity),
+      costPrice: number(item.cost_price),
+      currentPrice: number(asRecord(quoteMap.get(code)).price),
+    }
+  })
   const visibleCards = useMemo(() => (
     bucket === 'all' ? allCards : allCards.filter(item => text(item.bucket, '') === bucket)
   ), [allCards, bucket])
@@ -388,6 +405,14 @@ export function ResearchWorkbenchPage({
     text(item.source, '') !== 'profile' && text(item.severity, '低') !== '低'
   ))
   const allBusy = [holdings, risk, alerts, cards, matches].some(resource => resource.busy)
+
+  const saveHoldings = useCallback(async (next: readonly WorkbenchHoldingInput[]): Promise<void> => {
+    await requestData({
+      operation: 'trading-core.holdings-save',
+      input: { holdings: next.map(item => ({ ...item })) },
+    })
+    if (alive.current) setRefreshVersion(value => value + 1)
+  }, [requestData])
 
   const startBrief = async (): Promise<void> => {
     if (brief.phase === 'running') return
@@ -459,22 +484,18 @@ export function ResearchWorkbenchPage({
       )}
 
       <section className={css.dashboardSummary} aria-label="投研概览">
-        <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
-        <button type="button" onClick={() => { navigate('portfolio') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价 →</small></button>
-        <button type="button" onClick={() => { navigate('portfolio') }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small>数量 × 实时价，不含现金 →</small></button>
-        <button type="button" onClick={() => { navigate('portfolio') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
-        <button type="button" onClick={() => {
-          const target = document.getElementById('dashboard-alerts-title')?.closest('section')
-          target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          if (target instanceof HTMLElement) target.focus({ preventScroll: true })
-        }}><span>需关注预警</span><strong data-tone={actionableAlerts.length > 0 ? 'danger' : undefined}>{alerts.state.loaded ? String(actionableAlerts.length) : '—'}</strong><small>{alerts.state.loaded ? '高/中风险，点击查看 →' : '组合、影子与事件'}</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('holdings') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('cost') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价 →</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('market-value') }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small>数量 × 实时价，不含现金 →</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-center') }}><span>需关注预警</span><strong data-tone={actionableAlerts.length > 0 ? 'danger' : undefined}>{alerts.state.loaded ? String(actionableAlerts.length) : '—'}</strong><small>{alerts.state.loaded ? '高/中风险，点击查看 →' : '组合、影子与事件'}</small></button>
       </section>
 
       <div className={css.dashboardGrid}>
         <div className={css.dashboardPrimary}>
           <section className={css.dashboardPanel} aria-labelledby="dashboard-holdings-title" aria-busy={holdings.busy}>
             <div className={css.dashboardPanelHead}>
-              <div><h2 id="dashboard-holdings-title">持仓概览</h2><p>快速确认当前研究对象，完整编辑与风险明细仍在“我的投研”</p></div>
+              <div><h2 id="dashboard-holdings-title">持仓概览</h2><p>快速确认当前研究对象，可在当前页查看并维护完整持仓</p></div>
               <RegionMeta state={holdings.state} settled={`${positions.length} 项`} />
             </div>
             {holdings.state.error !== '' && (
@@ -500,7 +521,7 @@ export function ResearchWorkbenchPage({
             {holdings.state.loaded && positions.length === 0 && (
               <div className={css.dashboardEmpty}>尚未保存持仓。录入真实持仓后，这里会关联风险与资讯。</div>
             )}
-            <button type="button" className={css.dashboardTextButton} onClick={() => { navigate('portfolio') }}>管理持仓与风险 →</button>
+            <button type="button" className={css.dashboardTextButton} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('holdings') }}>管理持仓 →</button>
           </section>
 
           <section className={css.dashboardPanel} aria-labelledby="dashboard-events-title" aria-busy={cards.busy}>
@@ -675,7 +696,7 @@ export function ResearchWorkbenchPage({
               )
             })}
             {alerts.state.loaded && alertItems.length === 0 && <div className={css.dashboardGood}>当前没有风险预警</div>}
-            <button type="button" className={css.dashboardTextButton} onClick={() => { navigate('portfolio') }}>查看完整风险详情 →</button>
+            <button type="button" className={css.dashboardTextButton} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-center') }}>查看完整风险详情 →</button>
           </section>
 
           <section className={css.dashboardPanel} aria-labelledby="dashboard-strategies-title" aria-busy={matches.busy}>
@@ -728,6 +749,24 @@ export function ResearchWorkbenchPage({
           </section>
         </aside>
       </div>
+      {selectedOverview !== undefined && (
+        <WorkbenchOverviewDialog
+          kind={selectedOverview}
+          positions={overviewPositions}
+          risk={riskValue}
+          alerts={alertItems}
+          riskAsOf={riskAsOf}
+          alertsAsOf={alertsAsOf}
+          alertsDegraded={alertValue.degraded === true}
+          alertsDegradedReason={text(alertValue.degraded_reason, '')}
+          holdingsState={{ loaded: holdings.state.loaded, busy: holdings.busy, error: holdings.state.error }}
+          quotesState={{ loaded: quotes.state.loaded, busy: quotes.busy, error: quotes.state.error }}
+          riskState={{ loaded: risk.state.loaded, busy: risk.busy, error: risk.state.error }}
+          alertsState={{ loaded: alerts.state.loaded, busy: alerts.busy, error: alerts.state.error }}
+          onSaveHoldings={saveHoldings}
+          onClose={() => { setSelectedOverview(undefined) }}
+        />
+      )}
       {selectedRisk !== undefined && (
         <RiskDetailDialog
           item={selectedRisk}
