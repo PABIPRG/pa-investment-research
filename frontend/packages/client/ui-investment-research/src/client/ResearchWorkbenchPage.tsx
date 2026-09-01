@@ -45,7 +45,7 @@ function useWorkbenchResource(requestData: RequestData) {
 
   useEffect(() => () => { generation.current += 1 }, [])
 
-  const run = useCallback((request: InvestmentDataRequest): void => {
+  const run = useCallback((request: InvestmentDataRequest, options?: { trailing?: boolean }): void => {
     const key = JSON.stringify(request)
     const current = ++generation.current
     setState(previous => ({
@@ -55,8 +55,11 @@ function useWorkbenchResource(requestData: RequestData) {
       error: '',
     }))
     let flight = flights.current.get(key)
-    if (flight === undefined) {
-      flight = Promise.resolve().then(() => requestData(request))
+    if (flight === undefined || options?.trailing === true) {
+      const previous = flight
+      flight = previous === undefined
+        ? Promise.resolve().then(() => requestData(request))
+        : previous.catch(() => undefined).then(() => requestData(request))
       flights.current.set(key, flight)
       const release = (): void => {
         if (flights.current.get(key) === flight) flights.current.delete(key)
@@ -329,17 +332,18 @@ export function ResearchWorkbenchPage({
   }, [])
 
   useEffect(() => {
-    holdings.run({ operation: 'trading-core.holdings' })
-    risk.run({ operation: 'trading-core.risk-portfolio' })
-    alerts.run({ operation: 'trading-core.risk-alerts' })
-    matches.run({ operation: 'trading-core.personalized-matches' })
+    const options = refreshVersion === 0 ? undefined : { trailing: true }
+    holdings.run({ operation: 'trading-core.holdings' }, options)
+    risk.run({ operation: 'trading-core.risk-portfolio' }, options)
+    alerts.run({ operation: 'trading-core.risk-alerts' }, options)
+    matches.run({ operation: 'trading-core.personalized-matches' }, options)
   }, [alerts.run, holdings.run, matches.run, refreshVersion, risk.run])
 
   useEffect(() => {
     cards.run({
       operation: 'trading-core.personalized-cards',
       input: { limit: 20, bucket: 'all', match: true, comment: false },
-    })
+    }, refreshVersion === 0 ? undefined : { trailing: true })
   }, [cards.run, refreshVersion])
 
   const positions = records(asRecord(holdings.state.value).items)

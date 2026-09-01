@@ -85,6 +85,33 @@ describe('current investment-research context projection', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('treats a persisted empty tombstone as empty while retaining its freshness metadata', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      exists: true,
+      context: {
+        schema_version: 1,
+        session_id: 'session-1',
+        strategy_id: null,
+        instrument: null,
+        revision: 5,
+        updated_at: '2026-09-01T04:00:00Z',
+      },
+    })))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(resolveInvestmentResearchContext(
+      'http://adapter.test', 'session-1', new AbortController().signal,
+    )).resolves.toEqual({
+      status: 'empty',
+      context_revision: 5,
+      context_updated_at: '2026-09-01T04:00:00Z',
+      recommended: false,
+      compatibility: 'not_applicable',
+      warnings: [],
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['wrong session', { ...selectedContext(), context: { ...selectedContext().context, session_id: 'session-other' } }],
     ['invalid revision', { ...selectedContext(), context: { ...selectedContext().context, revision: -1 } }],

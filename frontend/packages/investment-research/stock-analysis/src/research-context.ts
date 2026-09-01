@@ -180,6 +180,15 @@ export async function resolveInvestmentResearchContext(
     if (context === null) {
       return { status: 'empty', recommended: false, compatibility: 'not_applicable', warnings: [] }
     }
+    if (context.strategy_id === null && context.instrument === null) {
+      return {
+        status: 'empty',
+        ...contextFields(context),
+        recommended: false,
+        compatibility: 'not_applicable',
+        warnings: [],
+      }
+    }
 
     const instrument = record(context.instrument) as unknown as ResearchContextInstrument | undefined
     const strategyId = typeof context.strategy_id === 'string' ? context.strategy_id : undefined

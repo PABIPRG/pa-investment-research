@@ -32,9 +32,9 @@ class AnalyzeRequest(BaseModel):
 class HoldingItem(BaseModel):
     """单只持仓：代码 + 数量 + 成本价（手动结构化输入）。"""
 
-    ticker: str = Field(description="股票代码（如 600519）")
+    ticker: str = Field(pattern=r"^\d{6}$", description="六位股票代码（如 600519）")
     quantity: float = Field(gt=0, description="持仓数量（股）")
-    cost_price: float = Field(ge=0, description="持仓成本价（元）")
+    cost_price: float = Field(gt=0, description="持仓成本价（元）")
 
 
 class HoldingsRequest(BaseModel):

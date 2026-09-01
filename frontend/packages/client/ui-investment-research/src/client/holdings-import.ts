@@ -66,8 +66,8 @@ function findHeaderIndex(cells: string[], aliases: ReadonlySet<string>) {
 
 function normalizeTicker(value: string) {
   const compact = value.trim().toUpperCase()
-  if (/^\d{1,6}$/.test(compact)) return compact.padStart(6, '0')
-  return compact.match(/\d{6}/)?.[0]
+  const matched = compact.match(/^(\d{1,6})(?:\.(?:SH|SZ|BJ))?$/)
+  return matched?.[1]?.padStart(6, '0')
 }
 
 function parseNumber(value: string) {
@@ -119,8 +119,8 @@ export function parseHoldingsImport(source: string): HoldingImportResult {
       errors.push(`第 ${row.line} 行：数量必须大于 0。`)
       continue
     }
-    if (costPrice === undefined || costPrice < 0) {
-      errors.push(`第 ${row.line} 行：成本价必须大于或等于 0。`)
+    if (costPrice === undefined || costPrice <= 0) {
+      errors.push(`第 ${row.line} 行：成本价必须大于 0。`)
       continue
     }
     if (seen.has(ticker)) {

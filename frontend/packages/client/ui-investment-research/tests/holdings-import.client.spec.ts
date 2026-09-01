@@ -40,4 +40,20 @@ describe('holdings import parser', () => {
       '第 4 行：数量必须大于 0。',
     ])
   })
+
+  it('rejects embedded or overlong stock codes and non-positive costs', () => {
+    const result = parseHoldingsImport([
+      'ticker,quantity,cost_price',
+      'abc600519xyz,100,1500',
+      '1234567,100,20',
+      '000858,100,0',
+    ].join('\n'))
+
+    expect(result.items).toEqual([])
+    expect(result.errors).toEqual([
+      '第 2 行：股票代码“abc600519xyz”无效。',
+      '第 3 行：股票代码“1234567”无效。',
+      '第 4 行：成本价必须大于 0。',
+    ])
+  })
 })

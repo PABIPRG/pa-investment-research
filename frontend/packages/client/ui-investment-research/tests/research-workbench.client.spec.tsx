@@ -267,12 +267,15 @@ describe('研究工作台', () => {
   it('保存成功到持仓刷新完成前继续以已确认列表为操作基线', async () => {
     let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
     let saveCount = 0
+    let holdingsReadCount = 0
     let releaseRefresh: (() => void) | undefined
     const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve })
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
       if (request.operation === 'trading-core.holdings') {
-        if (saveCount > 0) await refreshGate
-        return { items: savedHoldings }
+        holdingsReadCount += 1
+        const snapshot = savedHoldings.map(item => ({ ...item }))
+        if (saveCount > 0 && holdingsReadCount === 2) await refreshGate
+        return { items: snapshot }
       }
       if (request.operation === 'trading-core.holdings-save') {
         saveCount += 1
@@ -302,6 +305,11 @@ describe('研究工作台', () => {
       })
     })
     releaseRefresh?.()
+    await waitFor(() => { expect(holdingsReadCount).toBeGreaterThanOrEqual(3) })
+    await waitFor(() => {
+      expect(within(dialog).queryByText('贵州茅台')).toBeNull()
+      expect(within(dialog).getAllByText('000001').length).toBeGreaterThan(0)
+    })
   })
 
   it('在持仓明细内编辑并经二次确认删除已有持仓', async () => {

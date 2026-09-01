@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 
 os.environ["ADAPTER_RUNNER"] = "fake"
 os.environ["BRIEF_SCHEDULE_ENABLED"] = "false"
@@ -18,6 +20,17 @@ from adapter.store import JsonStore
 
 
 class HoldingsSaveTests(unittest.TestCase):
+    def test_holdings_contract_rejects_malformed_codes_and_non_positive_costs(self):
+        invalid_rows = [
+            {"ticker": "abc600519xyz", "quantity": 100, "cost_price": 1500},
+            {"ticker": "1234567", "quantity": 100, "cost_price": 20},
+            {"ticker": "000858", "quantity": 100, "cost_price": 0},
+        ]
+
+        for row in invalid_rows:
+            with self.subTest(row=row), self.assertRaises(ValidationError):
+                HoldingsRequest(holdings=[row])
+
     def test_empty_holdings_replaces_the_saved_collection(self):
         with tempfile.TemporaryDirectory() as temporary:
             store = JsonStore(Path(temporary))
