@@ -30,7 +30,9 @@ import {
 import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
 import { PreferenceReviewPage } from './PreferenceReviewPage.tsx'
 import { ResearchFloatingSurface } from './ResearchFloatingSurface.tsx'
+import { MarketNewsPanel } from './MarketNewsPanel.tsx'
 import { SecurityResearchContent } from './SecurityResearchContent.tsx'
+import { SurfaceResizeIcon } from './SurfaceResizeIcon.tsx'
 import { createResearchResourceStore } from './research-resource.ts'
 import type { ResearchResourceStore } from './research-resource.ts'
 import type { RequestData, ResearchSubject, ResearchSurfaceMode } from './research-types.ts'
@@ -215,21 +217,6 @@ function HistoryIcon() {
     <svg className={css.actionIcon} viewBox="0 0 16 16" aria-hidden="true">
       <path d="M3.35 4.2A5.5 5.5 0 1 1 2.5 8" />
       <path d="M2.25 3.15v2.7h2.7M8 4.85V8l2.15 1.3" />
-    </svg>
-  )
-}
-
-function AssistantResizeIcon({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      className={css.actionIcon}
-      viewBox="0 0 16 16"
-      aria-hidden="true"
-      data-icon={expanded ? 'assistant-collapse' : 'assistant-expand'}
-    >
-      {expanded
-        ? <><path d="M7 2.5V7H2.5" /><path d="m2.5 7 4.5-4.5" /><path d="M9 13.5V9h4.5" /><path d="M13.5 9 9 13.5" /></>
-        : <><path d="M6.5 2.5h-4v4" /><path d="m2.5 2.5 4.5 4.5" /><path d="M9.5 13.5h4v-4" /><path d="M13.5 13.5 9 9" /></>}
     </svg>
   )
 }
@@ -669,7 +656,7 @@ function AssistantFloatingSurface({
               aria-label={mode === 'expanded' ? '收起 AI 助理' : '近全屏展开 AI 助理'}
               title={mode === 'expanded' ? '收起' : '近全屏展开'}
               onClick={() => { onMode(mode === 'expanded' ? 'docked' : 'expanded') }}
-            ><AssistantResizeIcon expanded={mode === 'expanded'} /></button>
+            ><SurfaceResizeIcon expanded={mode === 'expanded'} /></button>
             <button type="button" data-action="assistant-close" aria-label="关闭 AI 研究助理" title="关闭" onClick={onClose}>×</button>
           </div>
         </header>
@@ -733,6 +720,7 @@ export function InvestmentShell({
   const assistantTriggerRef = useRef<HTMLButtonElement>(null)
   const researchTriggerRef = useRef<HTMLElement>(null)
   const opportunityScrollRef = useRef<HTMLDivElement>(null)
+  const opportunityResearchWidthAnchorRef = useRef<HTMLDivElement>(null)
   const workbenchRef = useRef<HTMLElement>(null)
   const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
   const assistantExitReasonRef = useRef<AssistantExitReason>('none')
@@ -1098,6 +1086,7 @@ export function InvestmentShell({
             activeCode={researchSurface.mode === 'closed' ? '' : researchSurface.subject?.code ?? ''}
             researchTriggerRef={researchTriggerRef}
             pageScrollRef={opportunityScrollRef}
+            researchWidthAnchorRef={opportunityResearchWidthAnchorRef}
             onOpenResearch={openResearch}
             onAnalyzeResearch={prepareAssistantFromOpportunity}
           />
@@ -1158,6 +1147,7 @@ export function InvestmentShell({
           triggerRef={researchTriggerRef}
           backgroundRef={workbenchRef}
           scrollContainerRef={opportunityScrollRef}
+          widthAnchorRef={opportunityResearchWidthAnchorRef}
           interactionEnabled={!snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
           escapeEnabled={!snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
           modalResourcesEnabled={assistantMode === 'closed'}
@@ -1425,6 +1415,7 @@ export interface OpportunityPageProps {
   readonly onAnalyzeResearch: (subject: ResearchSubject) => void
   readonly researchTriggerRef?: MutableRefObject<HTMLElement | null>
   readonly pageScrollRef?: MutableRefObject<HTMLDivElement | null>
+  readonly researchWidthAnchorRef?: RefObject<HTMLDivElement>
 }
 
 function normalizedResearchCode(value: unknown): string {
@@ -1466,6 +1457,7 @@ export function OpportunityPage({
   onAnalyzeResearch,
   researchTriggerRef,
   pageScrollRef,
+  researchWidthAnchorRef,
 }: OpportunityPageProps) {
   const [kind, setKind] = useState('gainers')
   const [nonce, setNonce] = useState(0)
@@ -1555,11 +1547,13 @@ export function OpportunityPage({
         ))}
       </div>
       <ResourceProgress label="机会数据" resources={resources} />
-      <p className={css.opportunityHint}>
-        <strong>选择证券查看研究详情</strong>
-        <span>，或直接带入智能分析。</span>
-      </p>
-      <section className={css.cardList} aria-busy={scan.busy} aria-labelledby="market-scan-title">
+      <div className={css.opportunityWorkspace} role="region" aria-label="实时盯盘机会工作区">
+        <div className={css.opportunityScanColumn}>
+          <p className={css.opportunityHint}>
+            <strong>选择证券查看研究详情</strong>
+            <span>，或直接带入智能分析。</span>
+          </p>
+          <section className={css.cardList} aria-busy={scan.busy} aria-labelledby="market-scan-title">
         <div className={css.sectionHeading}>
           <strong id="market-scan-title">市场扫描</strong>
           <ResourceLabel state={scan.state} settled={`${rows.length} 个结果`} />
@@ -1627,15 +1621,6 @@ export function OpportunityPage({
                       onClick={(event) => {
                         if (subject === undefined) return
                         if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
-                        onOpenResearch(subject)
-                      }}
-                    >详情</button>
-                    <button
-                      type="button"
-                      disabled={subject === undefined}
-                      onClick={(event) => {
-                        if (subject === undefined) return
-                        if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
                         onAnalyzeResearch(subject)
                       }}
                     >智能分析</button>
@@ -1646,7 +1631,13 @@ export function OpportunityPage({
             {rows.length === 0 && <div className={css.emptyState}>当前扫描没有返回结果</div>}
           </>
         )}
-      </section>
+          </section>
+        </div>
+        <aside className={css.marketNewsRail} aria-label="市场资讯栏">
+          <MarketNewsPanel requestData={requestData} refreshNonce={nonce} />
+          <div ref={researchWidthAnchorRef} className={css.researchWidthAnchor} />
+        </aside>
+      </div>
     </div>
   )
 }

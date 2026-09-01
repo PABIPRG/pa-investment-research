@@ -3,7 +3,6 @@ import {
   useEffect,
   useId,
   useRef,
-  useState,
   useSyncExternalStore,
 } from 'react'
 import css from './InvestmentShell.module.css'
@@ -15,7 +14,6 @@ import { useSecurityNames } from './security-names.ts'
 
 const TECHNICAL_LOOKBACK = 120
 const SECURITY_NEWS_LIMIT = 8
-const MARKET_NEWS_LIMIT = 12
 const DEFAULT_RETRY_DELAY_MS = 1500
 const MIN_RETRY_DELAY_MS = 1000
 const MAX_RETRY_DELAY_MS = 5000
@@ -40,13 +38,6 @@ function securityNewsKey(code: string): string {
     operation: 'market-watch.security-news', code, limit: SECURITY_NEWS_LIMIT,
   })
 }
-
-const MARKET_NEWS_KEY = JSON.stringify({
-  operation: 'market-watch.news-flash',
-  limit: MARKET_NEWS_LIMIT,
-  enrich: false,
-  personal: false,
-})
 
 function useResourceSnapshot<T>(
   resources: ResearchResourceStore,
@@ -176,8 +167,6 @@ export function SecurityResearchContent({
 }: SecurityResearchContentProps) {
   const componentId = useId()
   const timerOwner = `security-research:${componentId}`
-  const [selectedTab, setSelectedTab] = useState<'security' | 'market'>('security')
-  const [marketOpened, setMarketOpened] = useState(false)
   const retainedTechnical = useRef(new Map<string, Record<string, unknown>>())
   const activeRef = useRef(active)
   const technicalKeyRef = useRef('')
@@ -195,7 +184,6 @@ export function SecurityResearchContent({
   const displayName = subject.name?.trim() || names[code]?.trim() || code
   const technical = useResourceSnapshot<unknown>(resources, currentTechnicalKey)
   const securityNews = useResourceSnapshot<unknown>(resources, currentSecurityNewsKey)
-  const marketNews = useResourceSnapshot<unknown>(resources, MARKET_NEWS_KEY)
 
   const loadTechnical = useCallback(
     () => requestData({
@@ -211,23 +199,12 @@ export function SecurityResearchContent({
     }),
     [code, requestData],
   )
-  const loadMarketNews = useCallback(
-    () => requestData({
-      operation: 'market-watch.news-flash',
-      input: { limit: MARKET_NEWS_LIMIT, enrich: false, personal: false },
-    }),
-    [requestData],
-  )
-
   const readTechnical = useCallback((): void => {
     void resources.read(currentTechnicalKey, loadTechnical).catch(() => {})
   }, [currentTechnicalKey, loadTechnical, resources])
   const readSecurityNews = useCallback((): void => {
     void resources.read(currentSecurityNewsKey, loadSecurityNews).catch(() => {})
   }, [currentSecurityNewsKey, loadSecurityNews, resources])
-  const readMarketNews = useCallback((): void => {
-    void resources.read(MARKET_NEWS_KEY, loadMarketNews).catch(() => {})
-  }, [loadMarketNews, resources])
   const activateTechnical = useCallback((): void => {
     const snapshot = resources.getSnapshot<unknown>(currentTechnicalKey)
     if (statusOf(snapshot.value) === 'ready') {
@@ -261,11 +238,6 @@ export function SecurityResearchContent({
       resources.clearTimers(timerOwner)
     }
   }, [active, activateSecurityNews, activateTechnical, resources, timerOwner])
-
-  useEffect(() => {
-    if (!active || !marketOpened) return
-    readMarketNews()
-  }, [active, marketOpened, readMarketNews])
 
   const technicalStatus = statusOf(technical.value)
   const preparingTransportFailed = technicalStatus === 'preparing'
@@ -330,12 +302,6 @@ export function SecurityResearchContent({
     resources.invalidate(currentSecurityNewsKey)
     readSecurityNews()
   }
-  const retryMarketNews = (): void => {
-    if (!activeRef.current || resourceIsBusy(resources, MARKET_NEWS_KEY)) return
-    resources.invalidate(MARKET_NEWS_KEY)
-    readMarketNews()
-  }
-
   const quote = subject.quote
   const pctChange = number(quote?.pctChange)
   const securityNewsStatus = statusOf(securityNews.value)
@@ -349,19 +315,7 @@ export function SecurityResearchContent({
     ? text(asRecord(securityNews.value).message, '个股资讯源暂不可用。')
     : securityNews.error
   const securityNewsBusy = securityNews.phase === 'preparing' || securityNews.phase === 'refreshing'
-  const marketNewsStatus = statusOf(marketNews.value)
-  const marketItems = newsItems(marketNews.value)
-  const marketIsStale = marketNews.phase === 'stale'
-    || marketNewsStatus === 'stale'
-    || asRecord(marketNews.value).stale === true
-  const marketUnavailable = marketNewsStatus === 'unavailable'
-    || (marketNews.phase === 'unavailable' && marketNews.value === undefined)
-  const marketNewsError = marketNewsStatus === 'unavailable'
-    ? text(asRecord(marketNews.value).message, '市场快讯源暂不可用。')
-    : marketNews.error
   const technicalBusy = technical.phase === 'preparing' || technical.phase === 'refreshing'
-  const marketNewsBusy = marketNews.phase === 'preparing' || marketNews.phase === 'refreshing'
-  const tabBaseId = `security-research-tabs-${componentId.replaceAll(':', '')}`
 
   return (
     <div className={css.researchContent} data-active={active}>
@@ -426,73 +380,24 @@ export function SecurityResearchContent({
       </section>
 
       <section className={css.researchContentRegion} aria-label="资讯">
-        <div className={css.researchTabs} role="tablist" aria-label="证券资讯类型">
-          <button
-            id={`${tabBaseId}-security-tab`}
-            type="button"
-            role="tab"
-            aria-selected={selectedTab === 'security'}
-            aria-controls={`${tabBaseId}-security-panel`}
-            className={selectedTab === 'security' ? css.researchTabActive : css.researchTab}
-            onClick={() => { setSelectedTab('security') }}
-          >个股相关</button>
-          <button
-            id={`${tabBaseId}-market-tab`}
-            type="button"
-            role="tab"
-            aria-selected={selectedTab === 'market'}
-            aria-controls={`${tabBaseId}-market-panel`}
-            className={selectedTab === 'market' ? css.researchTabActive : css.researchTab}
-            onClick={() => { setMarketOpened(true); setSelectedTab('market') }}
-          >市场快讯</button>
+        <div className={css.researchContentHeading}>
+          <h3>个股相关资讯</h3>
+          {securityIsStale && <span>缓存 · {factTime(securityNews.value, securityNews.asOf) || '原时间未知'}</span>}
         </div>
-
-        {selectedTab === 'security' && (
-          <div id={`${tabBaseId}-security-panel`} role="tabpanel" aria-labelledby={`${tabBaseId}-security-tab`}>
-            <div className={css.researchContentHeading}>
-              <h3>个股相关资讯</h3>
-              {securityIsStale && <span>缓存 · {factTime(securityNews.value, securityNews.asOf) || '原时间未知'}</span>}
-            </div>
-            {securityUnavailable && (
-              <ResourceAlert
-                title="个股资讯暂不可用"
-                message={securityNewsError}
-                retryLabel="重试个股资讯"
-                onRetry={retrySecurityNews}
-                disabled={!active}
-                busy={securityNewsBusy}
-              />
-            )}
-            {!securityUnavailable && securityNews.value === undefined && <div className={css.researchContentPreparing} role="status">正在加载个股相关资讯</div>}
-            {securityItems.length > 0 && <NewsItems items={securityItems} />}
-            {!securityUnavailable && securityNews.value !== undefined && securityItems.length === 0 && (
-              <p className={css.researchContentEmpty}>暂无与该证券直接关联的资讯</p>
-            )}
-          </div>
+        {securityUnavailable && (
+          <ResourceAlert
+            title="个股资讯暂不可用"
+            message={securityNewsError}
+            retryLabel="重试个股资讯"
+            onRetry={retrySecurityNews}
+            disabled={!active}
+            busy={securityNewsBusy}
+          />
         )}
-
-        {selectedTab === 'market' && (
-          <div id={`${tabBaseId}-market-panel`} role="tabpanel" aria-labelledby={`${tabBaseId}-market-tab`}>
-            <div className={css.researchContentHeading}>
-              <div><h3>市场快讯</h3><small>不特指当前证券</small></div>
-              {marketIsStale && <span>缓存 · {factTime(marketNews.value, marketNews.asOf) || '原时间未知'}</span>}
-            </div>
-            {marketUnavailable && (
-              <ResourceAlert
-                title="市场快讯暂不可用"
-                message={marketNewsError}
-                retryLabel="重试市场快讯"
-                onRetry={retryMarketNews}
-                disabled={!active}
-                busy={marketNewsBusy}
-              />
-            )}
-            {!marketUnavailable && marketNews.value === undefined && <div className={css.researchContentPreparing} role="status">正在加载市场快讯</div>}
-            {marketItems.length > 0 && <NewsItems items={marketItems} />}
-            {!marketUnavailable && marketNews.value !== undefined && marketItems.length === 0 && (
-              <p className={css.researchContentEmpty}>当前暂无市场快讯</p>
-            )}
-          </div>
+        {!securityUnavailable && securityNews.value === undefined && <div className={css.researchContentPreparing} role="status">正在加载个股相关资讯</div>}
+        {securityItems.length > 0 && <NewsItems items={securityItems} />}
+        {!securityUnavailable && securityNews.value !== undefined && securityItems.length === 0 && (
+          <p className={css.researchContentEmpty}>暂无与该证券直接关联的资讯</p>
         )}
       </section>
     </div>

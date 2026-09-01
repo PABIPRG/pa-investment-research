@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { ResearchFloatingSurface } from '../src/client/ResearchFloatingSurface.tsx'
 import type { ResearchSurfaceMode } from '../src/client/research-types.ts'
 
-const BREAKPOINT_QUERY = '(max-width: 900px)'
+const BREAKPOINT_QUERY = '(max-width: 1023px)'
 const styles = readFileSync(
   resolve(process.cwd(), 'packages/client/ui-investment-research/src/client/InvestmentShell.module.css'),
   'utf8',
@@ -72,14 +72,17 @@ function createSurfaceRefs(ownerDocument = document) {
   trigger.textContent = '打开研究窗'
   const background = ownerDocument.createElement('main')
   const scrollContainer = ownerDocument.createElement('div')
-  ownerDocument.body.append(trigger, background, scrollContainer)
+  const widthAnchor = ownerDocument.createElement('div')
+  ownerDocument.body.append(trigger, background, scrollContainer, widthAnchor)
   return {
     trigger,
     background,
     scrollContainer,
+    widthAnchor,
     triggerRef: { current: trigger },
     backgroundRef: { current: background },
     scrollContainerRef: { current: scrollContainer },
+    widthAnchorRef: { current: widthAnchor },
   }
 }
 
@@ -127,7 +130,7 @@ function installMatchMediaOn(ownerWindow: Window, initialMatches = false): Media
 }
 
 function disableChromeActions(): void {
-  for (const name of ['最小化研究窗', '停靠研究窗', '展开研究窗', '关闭研究窗']) {
+  for (const name of ['最小化研究窗', '收起研究窗', '近全屏展开研究窗', '关闭研究窗']) {
     const button = screen.queryByRole('button', { name }) as HTMLButtonElement | null
     if (button !== null) button.disabled = true
   }
@@ -251,7 +254,111 @@ describe('ResearchFloatingSurface', () => {
     expect(dialog.getAttribute('aria-modal')).toBe('true')
   })
 
-  it('derives a modal from docked mode at the same 900px breakpoint and cleans the listener', async () => {
+  it('mounts both viewport-docked and expanded content in the document body', () => {
+    installMatchMedia(false)
+    const refs = createSurfaceRefs()
+    const view = render(
+      <ResearchFloatingSurface
+        mode="docked"
+        subject={{ code: '000001' }}
+        onModeChange={() => {}}
+        {...refs}
+      >研究内容</ResearchFloatingSurface>,
+    )
+
+    const docked = screen.getByRole('complementary', { name: '000001证券研究窗' })
+    expect(refs.widthAnchor.contains(docked)).toBe(false)
+    expect(document.body.contains(docked)).toBe(true)
+    expect(docked.getAttribute('data-placement')).toBe('viewport')
+
+    view.rerender(
+      <ResearchFloatingSurface
+        mode="expanded"
+        subject={{ code: '000001' }}
+        onModeChange={() => {}}
+        {...refs}
+      >研究内容</ResearchFloatingSurface>,
+    )
+    const expanded = screen.getByRole('dialog', { name: '000001证券研究窗' })
+    expect(refs.widthAnchor.contains(expanded)).toBe(false)
+    expect(document.body.contains(expanded)).toBe(true)
+  })
+
+  it('uses the market-news rail width for the viewport-docked surface', async () => {
+    installMatchMedia(false)
+    const refs = createSurfaceRefs()
+    vi.spyOn(refs.widthAnchor, 'getBoundingClientRect').mockReturnValue({
+      x: 804,
+      y: 210,
+      width: 366,
+      height: 640,
+      top: 210,
+      right: 1170,
+      bottom: 850,
+      left: 804,
+      toJSON: () => ({}),
+    })
+
+    render(
+      <ResearchFloatingSurface
+        mode="docked"
+        subject={{ code: '000001' }}
+        onModeChange={() => {}}
+        {...refs}
+      >研究内容</ResearchFloatingSurface>,
+    )
+
+    const docked = screen.getByRole('complementary', { name: '000001证券研究窗' })
+    await waitFor(() => {
+      expect(docked.style.getPropertyValue('--investment-research-surface-width')).toBe('366px')
+    })
+  })
+
+  it('tracks market-news rail width changes that do not resize the viewport', async () => {
+    installMatchMedia(false)
+    let width = 366
+    let notifyResize: ResizeObserverCallback | undefined
+    class ResizeObserverHarness {
+      constructor(callback: ResizeObserverCallback) { notifyResize = callback }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', ResizeObserverHarness)
+    const refs = createSurfaceRefs()
+    vi.spyOn(refs.widthAnchor, 'getBoundingClientRect').mockImplementation(() => ({
+      x: 804,
+      y: 210,
+      width,
+      height: 640,
+      top: 210,
+      right: 804 + width,
+      bottom: 850,
+      left: 804,
+      toJSON: () => ({}),
+    }))
+
+    render(
+      <ResearchFloatingSurface
+        mode="docked"
+        subject={{ code: '000001' }}
+        onModeChange={() => {}}
+        {...refs}
+      >研究内容</ResearchFloatingSurface>,
+    )
+    const docked = screen.getByRole('complementary', { name: '000001证券研究窗' })
+    await waitFor(() => {
+      expect(docked.style.getPropertyValue('--investment-research-surface-width')).toBe('366px')
+    })
+
+    width = 412
+    act(() => { notifyResize?.([], {} as ResizeObserver) })
+    await waitFor(() => {
+      expect(docked.style.getPropertyValue('--investment-research-surface-width')).toBe('412px')
+    })
+  })
+
+  it('derives a modal from docked mode at the same 1023px breakpoint and cleans the listener', async () => {
     const media = installMatchMedia(false)
     const refs = createSurfaceRefs()
     const view = render(
@@ -321,10 +428,11 @@ describe('ResearchFloatingSurface', () => {
     )
 
     const minimize = screen.getByRole('button', { name: '最小化研究窗' })
-    const dock = screen.getByRole('button', { name: '停靠研究窗' })
+    const dock = screen.getByRole('button', { name: '收起研究窗' })
     const close = screen.getByRole('button', { name: '关闭研究窗' })
     await waitFor(() => { expect(document.activeElement).toBe(minimize) })
     expect(dock).not.toBeNull()
+    expect(dock.querySelector('[data-icon="surface-collapse"]')).not.toBeNull()
     expect(close).not.toBeNull()
 
     const last = screen.getByRole('button', { name: '内容操作' })
@@ -336,6 +444,22 @@ describe('ResearchFloatingSurface', () => {
 
     refs.trigger.focus()
     expect(document.activeElement).toBe(minimize)
+  })
+
+  it('uses the shared expand icon and state name in docked mode', () => {
+    installMatchMedia(false)
+    const refs = createSurfaceRefs()
+    render(
+      <ResearchFloatingSurface
+        mode="docked"
+        subject={{ code: '600519', name: '贵州茅台' }}
+        onModeChange={() => {}}
+        {...refs}
+      >研究内容</ResearchFloatingSurface>,
+    )
+
+    const expand = screen.getByRole('button', { name: '近全屏展开研究窗' })
+    expect(expand.querySelector('[data-icon="surface-expand"]')).not.toBeNull()
   })
 
   it('handles zero, one and many dynamically computed focus candidates', async () => {
@@ -742,7 +866,7 @@ describe('ResearchFloatingSurface', () => {
     const mount = foreignDocument.createElement('div')
     foreignDocument.body.append(mount)
     const onModeChange = vi.fn()
-    const view = render(
+    render(
       <ResearchFloatingSurface
         mode="expanded"
         subject={{ code: '000001' }}
@@ -754,13 +878,14 @@ describe('ResearchFloatingSurface', () => {
       </ResearchFloatingSurface>,
       { container: mount },
     )
-    for (const name of ['最小化研究窗', '停靠研究窗', '关闭研究窗']) {
-      const button = view.getByRole('button', { name }) as HTMLButtonElement
+    const ownerQueries = within(foreignDocument.body)
+    for (const name of ['最小化研究窗', '收起研究窗', '关闭研究窗']) {
+      const button = ownerQueries.getByRole('button', { name }) as HTMLButtonElement
       button.disabled = true
     }
 
     refs.trigger.focus()
-    expect(foreignDocument.activeElement).toBe(view.getByRole('button', { name: '跨文档操作' }))
+    expect(foreignDocument.activeElement).toBe(ownerQueries.getByRole('button', { name: '跨文档操作' }))
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onModeChange).not.toHaveBeenCalled()
     fireEvent.keyDown(foreignDocument, { key: 'Escape' })
@@ -780,7 +905,7 @@ describe('ResearchFloatingSurface', () => {
       realm.mount,
     )
     const view = render(portal())
-    const portalQueries = within(realm.mount)
+    const portalQueries = within(realm.ownerDocument.body)
 
     expect(portalQueries.getByRole('dialog').getAttribute('aria-modal')).toBe('true')
     expect(vi.mocked(window.matchMedia)).not.toHaveBeenCalled()
@@ -858,8 +983,8 @@ describe('ResearchFloatingSurface', () => {
       </ResearchFloatingSurface>,
       realm.mount,
     ))
-    const portalQueries = within(realm.mount)
-    for (const name of ['最小化研究窗', '停靠研究窗', '关闭研究窗']) {
+    const portalQueries = within(realm.ownerDocument.body)
+    for (const name of ['最小化研究窗', '收起研究窗', '关闭研究窗']) {
       const button = portalQueries.getByRole('button', { name }) as HTMLButtonElement
       button.disabled = true
     }
@@ -900,7 +1025,7 @@ describe('ResearchFloatingSurface', () => {
       ><button type="button">卸载前操作</button></ResearchFloatingSurface>,
       realm.mount,
     ))
-    const surface = within(realm.mount).getByRole('dialog')
+    const surface = within(realm.ownerDocument.body).getByRole('dialog')
     const surfaceFocus = vi.spyOn(surface, 'focus')
     view.unmount()
     onModeChange.mockClear()
@@ -1174,7 +1299,7 @@ describe('ResearchFloatingSurface', () => {
         {...refs}
       />,
     )
-    await waitFor(() => { expect(status.textContent).toContain('已停靠') })
+    await waitFor(() => { expect(status.textContent).toContain('已悬浮') })
     view.rerender(
       <ResearchFloatingSurface
         mode="minimized"
@@ -1240,9 +1365,10 @@ describe('ResearchFloatingSurface', () => {
     const dockedStyles = styles.match(/\.researchFloatingSurface\s*\{[^}]*}/s)?.[0] ?? ''
     expect(dockedStyles).toContain('position: fixed')
     expect(dockedStyles).toContain('top: 68px')
-    expect(dockedStyles).toContain('right: 24px')
+    expect(dockedStyles).toContain('right: max(24px, env(safe-area-inset-right))')
     expect(dockedStyles).toContain('bottom: 24px')
-    expect(dockedStyles).toContain('width: clamp(420px, 42vw, 620px)')
+    expect(dockedStyles).toContain('width: clamp(360px, var(--investment-research-surface-width, 42vw), 620px)')
+    expect(styles).not.toContain('.researchDockTarget .researchFloatingSurface')
     const expandedStyles = styles.match(/\.researchFloatingSurface\[data-mode='expanded'\]\s*\{[^}]*}/s)?.[0] ?? ''
     expect(expandedStyles).toContain('top: 16px')
     expect(expandedStyles).toContain('right: 16px')
@@ -1261,5 +1387,17 @@ describe('ResearchFloatingSurface', () => {
     expect(floatingStyles).not.toMatch(/cursor:\s*(?:move|grab|grabbing)/)
     expect(floatingStyles).not.toMatch(/\bresize\s*:/)
     expect(floatingStyles).not.toMatch(/drag(?:Handle|ger)/i)
+  })
+
+  it('applies near-fullscreen geometry at the same 1023px breakpoint that enables modal behavior', () => {
+    const responsiveStart = styles.indexOf('@media (max-width: 1023px)')
+    const responsiveEnd = styles.indexOf('@media (max-width: 960px)', responsiveStart)
+    const responsiveStyles = styles.slice(responsiveStart, responsiveEnd)
+
+    expect(responsiveStyles).toContain(
+      ".researchFloatingSurface, .researchFloatingSurface[data-mode='expanded']",
+    )
+    expect(responsiveStyles).toContain('left: max(8px, env(safe-area-inset-left))')
+    expect(responsiveStyles).toContain('width: auto')
   })
 })

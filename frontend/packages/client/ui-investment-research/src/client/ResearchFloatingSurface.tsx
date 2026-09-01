@@ -1,9 +1,11 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import css from './InvestmentShell.module.css'
+import { SurfaceResizeIcon } from './SurfaceResizeIcon.tsx'
 import type { ResearchSubject, ResearchSurfaceMode } from './research-types.ts'
 
-const MOBILE_QUERY = '(max-width: 900px)'
+const MOBILE_QUERY = '(max-width: 1023px)'
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -40,6 +42,7 @@ export interface ResearchFloatingSurfaceProps {
   readonly triggerRef: RefObject<HTMLElement>
   readonly backgroundRef: RefObject<HTMLElement>
   readonly scrollContainerRef: RefObject<HTMLElement>
+  readonly widthAnchorRef: RefObject<HTMLElement>
   readonly onModeChange: (nextMode: ResearchSurfaceMode) => void
   readonly interactionEnabled?: boolean
   readonly escapeEnabled?: boolean
@@ -177,6 +180,7 @@ export function ResearchFloatingSurface({
   triggerRef,
   backgroundRef,
   scrollContainerRef,
+  widthAnchorRef,
   onModeChange,
   interactionEnabled = true,
   escapeEnabled = true,
@@ -195,6 +199,7 @@ export function ResearchFloatingSurface({
     const ownerWindow = triggerRef.current?.ownerDocument.defaultView
       ?? backgroundRef.current?.ownerDocument.defaultView
       ?? scrollContainerRef.current?.ownerDocument.defaultView
+      ?? widthAnchorRef.current?.ownerDocument.defaultView
     return ownerWindow?.matchMedia(MOBILE_QUERY).matches ?? false
   })
   const modal = mode === 'expanded' || (mode === 'docked' && mobile)
@@ -209,6 +214,7 @@ export function ResearchFloatingSurface({
     const ownerDocument = surfaceRef.current?.ownerDocument
       ?? backgroundRef.current?.ownerDocument
       ?? scrollContainerRef.current?.ownerDocument
+      ?? widthAnchorRef.current?.ownerDocument
       ?? triggerRef.current?.ownerDocument
     const ownerWindow = ownerDocument?.defaultView
     if (ownerWindow === null || ownerWindow === undefined) return
@@ -217,7 +223,34 @@ export function ResearchFloatingSurface({
     setMobile(media.matches)
     media.addEventListener('change', update)
     return () => { media.removeEventListener('change', update) }
-  }, [backgroundRef, scrollContainerRef, triggerRef])
+  }, [backgroundRef, scrollContainerRef, triggerRef, widthAnchorRef])
+
+  useLayoutEffect(() => {
+    if (mode !== 'docked' || mobile) {
+      surfaceRef.current?.style.removeProperty('--investment-research-surface-width')
+      return
+    }
+    const widthAnchor = widthAnchorRef.current
+    const ownerWindow = widthAnchor?.ownerDocument.defaultView
+    if (widthAnchor === null || widthAnchor === undefined || ownerWindow === null || ownerWindow === undefined) return
+    const updateWidth = (): void => {
+      const nextWidth = Math.round(widthAnchor.getBoundingClientRect().width)
+      const surface = surfaceRef.current
+      if (surface === null) return
+      if (nextWidth > 0) surface.style.setProperty('--investment-research-surface-width', `${nextWidth}px`)
+      else surface.style.removeProperty('--investment-research-surface-width')
+    }
+    updateWidth()
+    const resizeObserver = typeof ownerWindow.ResizeObserver === 'function'
+      ? new ownerWindow.ResizeObserver(updateWidth)
+      : undefined
+    resizeObserver?.observe(widthAnchor)
+    ownerWindow.addEventListener('resize', updateWidth)
+    return () => {
+      resizeObserver?.disconnect()
+      ownerWindow.removeEventListener('resize', updateWidth)
+    }
+  }, [mobile, mode, widthAnchorRef])
 
   useEffect(() => {
     const surface = surfaceRef.current
@@ -351,7 +384,7 @@ export function ResearchFloatingSurface({
     const modeText: Record<ResearchSurfaceMode, string> = {
       closed: '已关闭',
       minimized: '已最小化',
-      docked: '已停靠',
+      docked: '已悬浮',
       expanded: '已展开',
     }
     setAnnouncement(`${subjectLabel}研究窗${modeText[mode]}`)
@@ -386,15 +419,21 @@ export function ResearchFloatingSurface({
     )
   }
 
-  return (
+  const ownerDocument = widthAnchorRef.current?.ownerDocument
+    ?? backgroundRef.current?.ownerDocument
+    ?? scrollContainerRef.current?.ownerDocument
+    ?? triggerRef.current?.ownerDocument
+  const portalTarget = ownerDocument?.body
+
+  const surface = (
     <>
-      {status}
       {modal && <div className={css.researchFloatingBackdrop} aria-hidden="true" />}
       <section
         ref={surfaceRef}
         className={css.researchFloatingSurface}
         data-mode={mode}
         data-modal={modal ? 'true' : 'false'}
+        data-placement={modal ? 'modal' : 'viewport'}
         data-interaction-enabled={interactionEnabled ? 'true' : 'false'}
         role={modal ? 'dialog' : 'complementary'}
         aria-modal={modal ? 'true' : undefined}
@@ -415,21 +454,14 @@ export function ResearchFloatingSurface({
               disabled={!interactionEnabled}
               onClick={() => { onModeChange('minimized') }}
             ><span aria-hidden="true">―</span></button>
-            {mode === 'expanded'
-              ? <button
-                type="button"
-                className={css.researchSurfaceAction}
-                aria-label="停靠研究窗"
-                disabled={!interactionEnabled}
-                onClick={() => { onModeChange('docked') }}
-              ><span aria-hidden="true">◲</span></button>
-              : <button
-                type="button"
-                className={css.researchSurfaceAction}
-                aria-label="展开研究窗"
-                disabled={!interactionEnabled}
-                onClick={() => { onModeChange('expanded') }}
-              ><span aria-hidden="true">□</span></button>}
+            <button
+              type="button"
+              className={css.researchSurfaceAction}
+              aria-label={mode === 'expanded' ? '收起研究窗' : '近全屏展开研究窗'}
+              title={mode === 'expanded' ? '收起' : '近全屏展开'}
+              disabled={!interactionEnabled}
+              onClick={() => { onModeChange(mode === 'expanded' ? 'docked' : 'expanded') }}
+            ><SurfaceResizeIcon expanded={mode === 'expanded'} /></button>
             <button
               type="button"
               className={css.researchSurfaceAction}
@@ -441,6 +473,13 @@ export function ResearchFloatingSurface({
         </header>
         <div className={css.researchSurfaceBody}>{children}</div>
       </section>
+    </>
+  )
+
+  return (
+    <>
+      {status}
+      {portalTarget === undefined ? surface : createPortal(surface, portalTarget)}
     </>
   )
 }

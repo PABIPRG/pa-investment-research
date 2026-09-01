@@ -46,7 +46,7 @@ function installBrowserDoubles(mobile = false): void {
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
     value: vi.fn((query: string) => ({
-      matches: query === '(max-width: 900px)' ? mobile : false,
+      matches: query === '(max-width: 1023px)' ? mobile : false,
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -275,7 +275,7 @@ describe('Shell 右侧表面协调', () => {
     await waitForScan()
     fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
 
-    fireEvent.click(screen.getByRole('button', { name: '展开研究窗' }))
+    fireEvent.click(screen.getByRole('button', { name: '近全屏展开研究窗' }))
 
     expect(screen.getByRole('dialog', { name: '贵州茅台证券研究窗' }).getAttribute('data-mode')).toBe('expanded')
     expect(screen.queryByRole('button', { name: '打开 AI 研究助理' })).toBeNull()

@@ -439,6 +439,12 @@
 .dashboardDegraded { margin-bottom: 9px; color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); text-align: left; }
 
 .opportunityGrid { display: grid; grid-template-columns: minmax(340px, 0.9fr) minmax(430px, 1.25fr); gap: 14px; align-items: start; }
+.opportunityWorkspace { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(360px, .9fr); gap: 14px; align-items: start; }
+.opportunityScanColumn { min-width: 0; }
+.marketNewsRail { position: sticky; top: 12px; min-width: 0; min-height: min(640px, calc(100vh - 104px)); max-height: calc(100vh - 104px); overflow: hidden; border-radius: 12px; isolation: isolate; }
+.marketNewsPanel { display: flex; min-height: min(640px, calc(100vh - 104px)); max-height: calc(100vh - 104px); box-sizing: border-box; flex-direction: column; gap: 8px; padding: 12px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-bg-base); }
+.marketNewsPanel .researchNewsList { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.researchWidthAnchor { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 .opportunityHint { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); font-size: var(--investment-font-secondary); }
 .marketOverview { margin-bottom: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-bg-base); }
 .marketOverview .sectionHeading > div strong, .marketOverview .sectionHeading > div small { display: block; }
@@ -461,16 +467,16 @@
 .stockCard:hover { border-color: var(--dsw-alias-border-l3); background: var(--dsw-alias-interactive-bg-hover); box-shadow: var(--dsw-shadow-lv2); transform: translateY(-1px); }
 .stockCardActive { border-color: var(--dsw-alias-state-business-primary); background: var(--investment-selected-surface); }
 .stockCardActive:hover { border-color: var(--investment-primary); box-shadow: var(--dsw-shadow-lv2); transform: translateY(-1px); }
-.stockCardMain { display: grid; min-width: 0; grid-template-columns: 1fr auto; gap: 8px; padding: 12px; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.stockCardMain { display: grid; min-width: 0; grid-template-columns: minmax(112px, 1fr) auto minmax(220px, 1.45fr); align-items: center; gap: 10px; padding: 9px 10px; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .stockCardMain:active { background: var(--dsw-alias-interactive-bg-active); }
 .stockCardMain:disabled { color: var(--dsw-alias-label-dimmed); cursor: not-allowed; }
 .stockCardIdentity strong, .stockCardIdentity > span { display: block; }
 .stockCardIdentity > span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
-.stockCardMain dl { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, 1fr); margin: 4px 0 0; }
+.stockCardMain dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .stockCardMain dl div { display: flex; flex-direction: column; gap: 2px; }
 .stockCardMain dt { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .stockCardMain dd { margin: 0; font-size: 0.8571rem; }
-.stockCardActions { display: flex; min-width: 104px; flex-direction: column; justify-content: center; gap: 6px; padding: 8px; border-left: 1px solid var(--dsw-alias-border-l1); }
+.stockCardActions { display: flex; min-width: 96px; flex-direction: column; justify-content: center; gap: 6px; padding: 7px; border-left: 1px solid var(--dsw-alias-border-l1); }
 .stockCardActions button { min-height: var(--investment-control-height); padding: 0 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); font: inherit; font-size: var(--investment-font-secondary); cursor: pointer; }
 .stockCardActions button:last-child { color: var(--investment-primary); border-color: var(--investment-primary); }
 .stockCardActions button:hover:not(:disabled) { background: var(--investment-interactive-hover); }
@@ -970,9 +976,9 @@
 .lineageTree { display: grid; gap: 0; }
 .lineageNode { display: grid; gap: 0; }
 .lineageRow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 40px; padding: 4px 0; }
-.lineageConnector { justify-self: center; align-self: stretch; width: 12px; border-left: 2px solid var(--dsw-alias-border-l2); border-bottom: 2px solid var(--dsw-alias-border-l2); border-bottom-left-radius: 6px; }
-.lineageNode[data-depth='0'] > .lineageRow > .lineageConnector { border-left: 0; border-bottom: 0; }
-.lineageChildren { margin-left: 22px; padding-left: 8px; border-left: 2px solid var(--dsw-alias-border-l2); }
+.lineageConnector { justify-self: center; align-self: stretch; width: 12px; border-inline-start: 2px solid var(--dsw-alias-border-l2); border-bottom: 2px solid var(--dsw-alias-border-l2); border-end-start-radius: 6px; }
+.lineageNode[data-depth='0'] > .lineageRow > .lineageConnector { border-inline-start: 0; border-bottom: 0; }
+.lineageChildren { margin-inline-start: 22px; padding-inline-start: 8px; border-inline-start: 2px solid var(--dsw-alias-border-l2); }
 .lineageLabel { display: inline-flex; align-items: center; gap: 8px; min-width: 0; box-sizing: border-box; padding: 4px 8px; border: 1px solid transparent; border-radius: 7px; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .lineageLabel:hover:not(:disabled) { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
 .lineageLabel:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
@@ -1524,7 +1530,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 
 .researchStatus { position: absolute; width: 1px; height: 1px; overflow: hidden; margin: -1px; padding: 0; border: 0; clip-path: inset(50%); white-space: nowrap; }
 .researchFloatingBackdrop { position: fixed; inset: 0; z-index: 880; background: var(--dsw-alias-bg-mask-1); pointer-events: auto; animation: investment-backdrop-enter 160ms ease-out; }
-.researchFloatingSurface { position: fixed; top: 68px; right: 24px; bottom: 24px; z-index: 890; display: flex; width: clamp(420px, 42vw, 620px); min-height: 0; flex-direction: column; box-sizing: border-box; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 16px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); box-shadow: var(--dsw-shadow-lv3); pointer-events: auto; animation: investment-drawer-enter 180ms ease-out; }
+.researchFloatingSurface { position: fixed; top: 68px; right: max(24px, env(safe-area-inset-right)); bottom: 24px; z-index: 890; display: flex; width: clamp(360px, var(--investment-research-surface-width, 42vw), 620px); min-height: 0; flex-direction: column; box-sizing: border-box; overflow: hidden; border: 1px solid var(--dsw-alias-border-l3); border-radius: 16px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); box-shadow: var(--dsw-shadow-lv3); pointer-events: auto; animation: investment-drawer-enter 180ms ease-out; }
 .researchFloatingSurface[data-mode='expanded'] { top: 16px; right: 16px; bottom: 16px; left: 16px; width: auto; }
 .researchFloatingSurface[data-interaction-enabled='false'] { pointer-events: none; }
 .researchSurfaceHeader { display: flex; min-height: 60px; align-items: center; justify-content: space-between; gap: 12px; box-sizing: border-box; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-overlay); }
@@ -1638,6 +1644,13 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .topbar { grid-template-columns: minmax(0, .5fr) minmax(250px, 420px) auto; }
 }
 
+@media (max-width: 1023px) {
+  .opportunityWorkspace { grid-template-columns: minmax(0, 1fr); }
+  .marketNewsRail { position: relative; top: auto; min-height: 420px; max-height: none; }
+  .marketNewsPanel { min-height: 420px; max-height: min(620px, 70vh); }
+  .researchFloatingSurface, .researchFloatingSurface[data-mode='expanded'] { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left)); width: auto; border-radius: 14px; }
+}
+
 @media (max-width: 960px) {
   .topActions .primaryButton, .topActions .secondaryButton { flex: none; width: var(--investment-control-height); padding: 0; }
   .actionLabel { display: none; }
@@ -1664,7 +1677,6 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   :global(body[data-investment-assistant-mode='docked']) :global([data-conversation-scroll]),
   :global(body[data-investment-assistant-mode='expanded']) :global([data-conversation-scroll]) { right: 17px; width: min(408px, calc(100vw - var(--dsh-sidebar-width, 56px) - 34px)); }
   :global(body[data-investment-assistant-mode='expanded']) :global([data-conversation-scroll]) { left: 17px; width: auto; }
-  .researchFloatingSurface, .researchFloatingSurface[data-mode='expanded'] { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left)); width: auto; border-radius: 14px; }
 }
 
 @media (max-width: 680px) {
@@ -1683,6 +1695,8 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .preferenceControls > div:nth-child(2) { width: 100%; }
   .preferenceControls .secondaryButton, .preferenceControls .dangerButton, .clearConfirmation button { min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
   .segmented button { flex: none; min-height: var(--investment-touch-target); }
+  .stockCardMain { grid-template-columns: minmax(0, 1fr) auto; }
+  .stockCardMain dl { grid-column: 1 / -1; }
   .stockCardActions button { min-height: var(--investment-touch-target); }
   .dashboardTaskNotice { align-items: stretch; flex-direction: column; }
   .dashboardTaskNotice button, .dashboardTextButton { min-height: var(--investment-touch-target); }

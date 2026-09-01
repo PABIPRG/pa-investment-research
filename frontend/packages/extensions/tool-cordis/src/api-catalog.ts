@@ -769,6 +769,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'current backend, credential, and capability facts.',
       },
       {
+        signature: '@Remote(\'request-data\') requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>',
+        description: 'Execute one browser-safe, allow-listed investment data operation. Backend origins and arbitrary paths never cross the Remote boundary.',
+        parameters: [{ name: 'request', description: 'Stable operation name and validated JSON input.' }],
+        returns: 'The backend\'s lossless JSON response.',
+      },
+      {
         signature: '@Remote(\'request-restart\') requestRestart(): InvestmentRestartResult',
         description: 'Request the launcher to restart the complete application after the Remote acknowledgement is sent.',
         parameters: [],
@@ -3231,7 +3237,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'InvestmentBackendId',
-    declaration: 'export type InvestmentBackendId = \'trading-core\' | \'market-watch\';',
+    declaration: 'export type InvestmentBackendId = \'trading-core\' | \'market-watch\' | \'industry-chain\';',
   },
   {
     name: 'InvestmentBackendManager',
@@ -3246,32 +3252,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type InvestmentBackendMode = \'managed\' | \'external\';',
   },
   {
-    name: 'InvestmentBackendReadiness',
-    declaration: 'export interface InvestmentBackendReadiness {\n    readonly backendId: InvestmentBackendId;\n    readonly ownership: PythonBackendLease[\'ownership\'] | null;\n    readonly backendStatus: \'stopped\' | \'healthy-owned\' | \'healthy-attached\' | \'external\' | \'failed\';\n    readonly credentials: readonly InvestmentCredentialReadiness[];\n    readonly capability: InvestmentCapabilityReadiness | null;\n    readonly restartRequired: boolean;\n    readonly runtimeLogPath: string;\n}',
-  },
-  {
     name: 'InvestmentCapabilityDefinition',
     declaration: 'export interface InvestmentCapabilityDefinition {\n    readonly backendId: InvestmentBackendId;\n    readonly toolCount: number;\n    readonly llm: \'required\' | \'enhancement\' | \'none\';\n}',
-  },
-  {
-    name: 'InvestmentCapabilityReadiness',
-    declaration: 'export interface InvestmentCapabilityReadiness {\n    readonly llm: InvestmentCapabilityDefinition[\'llm\'];\n    readonly toolCount: number;\n    readonly status: \'stock-full\' | \'market-template-only\' | \'market-full\' | \'unavailable\';\n}',
   },
   {
     name: 'InvestmentCapabilityUse',
     declaration: 'export type InvestmentCapabilityUse = \'llm-required\' | \'llm-enhancement\' | \'non-llm\';',
   },
   {
-    name: 'InvestmentCredentialReadiness',
-    declaration: 'export interface InvestmentCredentialReadiness {\n    readonly ref: CredentialRef;\n    readonly configured?: boolean;\n    readonly source?: string;\n    readonly writable?: boolean;\n    readonly status: \'missing\' | \'configured\' | \'read-only\' | \'restart-required\' | \'external-managed\';\n}',
+    name: 'InvestmentDataOperation',
+    declaration: 'export type InvestmentDataOperation = \'market-watch.overview\' | \'market-watch.indices\' | \'market-watch.security-search\' | \'market-watch.security-detail\' | \'market-watch.security-news\' | \'market-watch.scan\' | \'market-watch.tech-signal\' | \'market-watch.news-flash\' | \'market-watch.news-events\' | \'market-watch.watchlist\' | \'market-watch.watch-add\' | \'market-watch.watch-remove\' | \'market-watch.alerts\' | \'market-watch.quotes-batch\' | \'trading-core.analyze\' | \'trading-core.watchlist\' | \'trading-core.watchlist-save\' | \'trading-core.holdings\' | \'trading-core.holdings-save\' | \'trading-core.holdings-analyze\' | \'trading-core.risk-portfolio\' | \'trading-core.risk-alerts\' | \'trading-core.personalized-cards\' | \'trading-core.personalized-feedback\' | \'trading-core.local-learning-events\' | \'trading-core.local-learning-status\' | \'trading-core.local-learning-settings\' | \'trading-core.local-learning-clear\' | \'trading-core.local-learning-review\' | \'trading-core.personalized-matches\' | \'trading-core.personalized-impact\' | \'trading-core.personalized-profile\' | \'trading-core.risk-profile\' | \'trading-core.kyc-profile\' | \'trading-core.kyc-questionnaire\' | \'trading-core.kyc-adjust\' | \'trading-core.kyc-parse\' | \'trading-core.brief-start\' | \'trading-core.brief-run\' | \'trading-core.reports\' | \'trading-core.report\' | \'trading-core.strategies\' | \'trading-core.strategy-detail\' | \'trading-core.strategies-hypothesize\' | \'trading-core.strategy-transition\' | \'trading-core.strategy-action\' | \'trading-core.strategy- /* …truncated — full shape in source */',
   },
   {
-    name: 'InvestmentReadinessSnapshot',
-    declaration: 'export interface InvestmentReadinessSnapshot {\n    readonly backends: readonly InvestmentBackendReadiness[];\n}',
+    name: 'InvestmentDataRequest',
+    declaration: 'export interface InvestmentDataRequest {\n    readonly operation: InvestmentDataOperation;\n    readonly input?: Readonly<Record<string, InvestmentJsonValue>>;\n}',
   },
   {
-    name: 'InvestmentRestartResult',
-    declaration: 'export type InvestmentRestartResult = Readonly<{\n    status: \'accepted\';\n}> | Readonly<{\n    status: \'unavailable\';\n    reason: string;\n}>;',
+    name: 'InvestmentJsonValue',
+    declaration: 'export type InvestmentJsonValue = null | boolean | number | string | InvestmentJsonValue[] | {\n    [key: string]: InvestmentJsonValue;\n};',
   },
   {
     name: 'InvocationDescriptor',
@@ -3671,7 +3669,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'PythonBackendDefinition',
-    declaration: 'export interface PythonBackendDefinition {\n    readonly id: InvestmentBackendId;\n    readonly service: InvestmentBackendId;\n    readonly mode: InvestmentBackendMode;\n    readonly baseUrl: string;\n    readonly projectDir?: string;\n    readonly repositoryPath: readonly string[];\n    readonly module: \'adapter.app:app\' | \'market_watch.app:app\';\n    readonly healthPath: \'/health\';\n    readonly healthOk: Readonly<Record<string, string | boolean>>;\n    readonly initCommand: Readonly<{\n        posix: \'./init.sh\';\n        windows: \'init.bat\';\n    }>;\n    readonly managedEnv?: Readonly<Record<string, string | undefined>>;\n    readonly credentialEnv?: readonly ManagedCredentialEnv[];\n}',
+    declaration: 'export interface PythonBackendDefinition {\n    readonly id: InvestmentBackendId;\n    readonly service: InvestmentBackendId;\n    readonly mode: InvestmentBackendMode;\n    readonly baseUrl: string;\n    readonly projectDir?: string;\n    readonly repositoryPath: readonly string[];\n    readonly module: \'adapter.app:app\' | \'market_watch.app:app\' | \'industry_chain.app:app\';\n    readonly healthPath: \'/health\';\n    readonly healthOk: Readonly<Record<string, string | boolean>>;\n    readonly initCommand: Readonly<{\n        posix: \'./init.sh\';\n        windows: \'init.bat\';\n    }>;\n    readonly managedEnv?: Readonly<Record<string, string | undefined>>;\n    readonly credentialEnv?: readonly ManagedCredentialEnv[];\n}',
   },
   {
     name: 'PythonBackendLease',
@@ -3723,7 +3721,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResolvedBackendPaths',
-    declaration: 'export interface ResolvedBackendPaths {\n    readonly projectDir: string;\n    readonly pythonExecutable: string;\n}',
+    declaration: 'export type ResolvedBackendPaths = Readonly<{\n    source: \'source\';\n    projectDir: string;\n    pythonExecutable: string;\n}> | Readonly<{\n    source: \'bundled\';\n    projectDir: string;\n    pythonExecutable: string;\n    sitePackages: string;\n    stateDir: string;\n}>;',
   },
   {
     name: 'ResolvedCredential',

@@ -6,6 +6,15 @@ import { OpportunityPage, PortfolioPage, safeExternalNewsUrl } from '../src/clie
 
 type RequestData = ComponentProps<typeof OpportunityPage>['requestData']
 
+function requestDataWithMarketNews(handler: RequestData): ReturnType<typeof vi.fn<RequestData>> {
+  return vi.fn<RequestData>((request) => request.operation === 'market-watch.news-flash'
+    ? Promise.resolve({
+      status: 'ready', as_of: '2026-09-01 10:02:00',
+      items: [{ id: 'market-1', title: '页面级市场快讯', source: '测试资讯源', time: '10:02' }],
+    })
+    : handler(request))
+}
+
 interface Deferred<T> {
   readonly promise: Promise<T>
   resolve: (value: T) => void
@@ -23,7 +32,7 @@ afterEach(cleanup)
 
 describe('投研数据页慢请求状态', () => {
   it('为代码占位的持仓补全证券名称，并保留代码作为次级信息', async () => {
-    const requestData = vi.fn<RequestData>(async (request) => {
+    const requestData = requestDataWithMarketNews(async (request) => {
       if (request.operation === 'trading-core.holdings') {
         return { items: [{ ticker: '000001', name: '000001', quantity: 100, cost_price: 11.65 }] }
       }
@@ -56,13 +65,19 @@ describe('投研数据页慢请求状态', () => {
     expect(safeExternalNewsUrl('/relative')).toBeUndefined()
   })
 
-  it('首次只请求指数和当前扫描，不自动选股或预取证券资源', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+  it('首次加载页面级市场资讯，但不自动选股或预取证券资源', async () => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') {
         return Promise.resolve({ items: [{ code: 'sh000001', name: '上证指数', price: 3210, pct_change: 0.8 }] })
       }
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({ items: [{ code: '600519', name: '贵州茅台' }] })
+      }
+      if (request.operation === 'market-watch.news-flash') {
+        return Promise.resolve({
+          status: 'ready', as_of: '2026-09-01 10:02:00',
+          items: [{ id: 'market-1', title: '页面级市场快讯', source: '测试资讯源', time: '10:02' }],
+        })
       }
       throw new Error(`unexpected operation ${request.operation}`)
     })
@@ -81,19 +96,22 @@ describe('投研数据页慢请求状态', () => {
 
     expect(await screen.findByText('上证指数')).toBeTruthy()
     expect(await screen.findByText('贵州茅台')).toBeTruthy()
+    expect(await screen.findByRole('region', { name: '市场资讯' })).toBeTruthy()
+    expect(screen.getByText('页面级市场快讯')).toBeTruthy()
     await waitFor(() => {
       const requests = requestData.mock.calls.map(([request]) => request)
-      expect(requests).toHaveLength(2)
+      expect(requests).toHaveLength(3)
       expect(requests).toEqual(expect.arrayContaining([
         { operation: 'market-watch.indices' },
         { operation: 'market-watch.scan', input: { kind: 'gainers', top_n: 12 } },
+        { operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false } },
       ]))
     })
     const operations = requestData.mock.calls.map(([request]) => request.operation)
     expect(operations).not.toContain('market-watch.tech-signal')
     expect(operations).not.toContain('market-watch.security-news')
     expect(operations).not.toContain('market-watch.security-detail')
-    expect(operations).not.toContain('market-watch.news-flash')
+    expect(operations.filter(operation => operation === 'market-watch.news-flash')).toHaveLength(1)
     expect(onOpenResearch).not.toHaveBeenCalled()
     expect(onAnalyzeResearch).not.toHaveBeenCalled()
     expect(screen.getByText('选择证券查看研究详情')).toBeTruthy()
@@ -115,7 +133,7 @@ describe('投研数据页慢请求状态', () => {
   ])('成功扫描以非阻断事实条披露$label', async ({
     source, expectedSource, stale, complete, warning,
   }) => {
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({
@@ -152,8 +170,8 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
-  it('扫描项主体、详情和智能分析分别发出完整的显式意图', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+  it('扫描项主体打开详情且只保留独立的智能分析动作', async () => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({
@@ -187,21 +205,19 @@ describe('投研数据页慢请求状态', () => {
       quote: { price: 1688.5, pctChange: 1.2, volumeRatio: 2.5, amountYi: 31.6 },
     }
     const main = within(item).getByRole('button', { name: '打开贵州茅台研究' })
-    const detail = within(item).getByRole('button', { name: '详情' })
     const analyze = within(item).getByRole('button', { name: '智能分析' })
+    expect(within(item).queryByRole('button', { name: '详情' })).toBeNull()
     fireEvent.click(main)
-    fireEvent.click(detail)
     expect(onOpenResearch).toHaveBeenNthCalledWith(1, subject)
-    expect(onOpenResearch).toHaveBeenNthCalledWith(2, subject)
     expect(onAnalyzeResearch).not.toHaveBeenCalled()
     fireEvent.click(analyze)
     expect(onAnalyzeResearch).toHaveBeenCalledTimes(1)
     expect(onAnalyzeResearch).toHaveBeenCalledWith(subject)
-    expect(onOpenResearch).toHaveBeenCalledTimes(2)
+    expect(onOpenResearch).toHaveBeenCalledTimes(1)
   })
 
   it('扫描 subject 只保留有限数值且不把错误类型强制转换为行情', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({
@@ -241,8 +257,8 @@ describe('投研数据页慢请求状态', () => {
     })
   })
 
-  it('非字符串证券代码不产生 subject，三个扫描动作均禁用', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+  it('非字符串证券代码不产生 subject，详情主体和智能分析动作均禁用', async () => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({ items: [{ code: 600519, name: ['非字符串名称'], price: 0 }] })
@@ -264,7 +280,7 @@ describe('投研数据页慢请求状态', () => {
 
     const item = await screen.findByRole('article', { name: 'row-0 row-0' })
     const actions = within(item).getAllByRole<HTMLButtonElement>('button')
-    expect(actions).toHaveLength(3)
+    expect(actions).toHaveLength(2)
     for (const action of actions) {
       expect(action.disabled).toBe(true)
       fireEvent.click(action)
@@ -274,7 +290,7 @@ describe('投研数据页慢请求状态', () => {
   })
 
   it('activeCode 只标记当前研究证券，点击其他扫描项不在页内改写高亮', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({
@@ -309,7 +325,7 @@ describe('投研数据页慢请求状态', () => {
   })
 
   it('initialQuery 每个合法代码只发出一次打开意图，StrictMode 重放和扫描返回均不重复', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({ items: [{ code: '300750', name: '扫描证券' }] })
@@ -349,8 +365,8 @@ describe('投研数据页慢请求状态', () => {
     expect(onOpenResearch).toHaveBeenCalledTimes(2)
   })
 
-  it('刷新只重新请求指数和当前扫描', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
+  it('刷新重新请求指数、当前扫描和页面级市场资讯', async () => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return Promise.resolve({ items: [{ code: '600519', name: '贵州茅台' }] })
@@ -373,11 +389,14 @@ describe('投研数据页慢请求状态', () => {
     const refresh = await screen.findByRole<HTMLButtonElement>('button', { name: '刷新数据' })
     await waitFor(() => { expect(refresh.disabled).toBe(false) })
     fireEvent.click(refresh)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(4) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(6) })
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.indices')).toHaveLength(2)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.scan')).toHaveLength(2)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(2)
     expect(requestData.mock.calls.every(([request]) =>
-      request.operation === 'market-watch.indices' || request.operation === 'market-watch.scan')).toBe(true)
+      request.operation === 'market-watch.indices'
+      || request.operation === 'market-watch.scan'
+      || request.operation === 'market-watch.news-flash')).toBe(true)
     expect(onOpenResearch).not.toHaveBeenCalled()
     expect(onAnalyzeResearch).not.toHaveBeenCalled()
   })
@@ -385,7 +404,7 @@ describe('投研数据页慢请求状态', () => {
   it('指数失败时保留已完成扫描，局部重试不重发扫描', async () => {
     const firstIndices = deferred<unknown>()
     let indicesAttempts = 0
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') {
         indicesAttempts += 1
         return indicesAttempts === 1
@@ -426,7 +445,7 @@ describe('投研数据页慢请求状态', () => {
   it('扫描失败时保留已完成指数，局部重试不重发指数', async () => {
     const firstScan = deferred<unknown>()
     let scanAttempts = 0
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') {
         return Promise.resolve({ items: [{ code: 'sh000001', name: '上证指数', price: 3210 }] })
       }
@@ -482,7 +501,7 @@ describe('投研数据页慢请求状态', () => {
         nextAlerts.promise,
       ]],
     ])
-    const requestData = vi.fn<RequestData>(request =>
+    const requestData = requestDataWithMarketNews(request =>
       Promise.resolve(flights.get(request.operation)?.shift()))
 
     render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
@@ -519,7 +538,7 @@ describe('投研数据页慢请求状态', () => {
     const firstScan = deferred<unknown>()
     const secondScan = deferred<unknown>()
     const scans = [firstScan.promise, secondScan.promise]
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') return scans.shift()!
       throw new Error(`unexpected operation ${request.operation}`)
@@ -534,7 +553,7 @@ describe('投研数据页慢请求状态', () => {
         onAnalyzeResearch={() => {}}
       />,
     )
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
     fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
     await waitFor(() => {
       expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.scan')).toHaveLength(2)
@@ -550,7 +569,9 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.getAllByText('新筛选结果')).not.toHaveLength(0)
     expect(screen.queryByText('晚到旧结果')).toBeNull()
     expect(requestData.mock.calls.every(([request]) =>
-      request.operation === 'market-watch.indices' || request.operation === 'market-watch.scan')).toBe(true)
+      request.operation === 'market-watch.indices'
+      || request.operation === 'market-watch.scan'
+      || request.operation === 'market-watch.news-flash')).toBe(true)
     expect(screen.getByRole('button', { name: '量比异动' }).getAttribute('aria-pressed')).toBe('true')
   })
 
@@ -559,7 +580,7 @@ describe('投研数据页慢请求状态', () => {
     const risk = deferred<unknown>()
     const alerts = deferred<unknown>()
     const events = deferred<unknown>()
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'trading-core.holdings') return holdings.promise
       if (request.operation === 'trading-core.risk-portfolio') return risk.promise
       if (request.operation === 'trading-core.risk-alerts') return alerts.promise
@@ -598,7 +619,7 @@ describe('投研数据页慢请求状态', () => {
   it('A-B-A 筛选复用仍未完成的 A flight，并由最后一次 A 选择接收结果', async () => {
     const gainers = deferred<unknown>()
     const volumeRatio = deferred<unknown>()
-    const requestData = vi.fn<RequestData>((request) => {
+    const requestData = requestDataWithMarketNews((request) => {
       if (request.operation === 'market-watch.indices') return Promise.resolve({ items: [] })
       if (request.operation === 'market-watch.scan') {
         return request.input?.kind === 'gainers' ? gainers.promise : volumeRatio.promise
@@ -615,7 +636,7 @@ describe('投研数据页慢请求状态', () => {
         onAnalyzeResearch={() => {}}
       />,
     )
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
 
     fireEvent.click(screen.getByRole('button', { name: '量比异动' }))
     await waitFor(() => {
@@ -641,7 +662,7 @@ describe('投研数据页慢请求状态', () => {
   })
 
   it('多个局部错误的重试按钮包含对应区域名称', async () => {
-    const requestData = vi.fn<RequestData>(request => Promise.reject(new Error(`${request.operation} unavailable`)))
+    const requestData = requestDataWithMarketNews(request => Promise.reject(new Error(`${request.operation} unavailable`)))
 
     render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
 
@@ -654,7 +675,7 @@ describe('投研数据页慢请求状态', () => {
   })
 
   it('持仓表按实时行情渲染现价与市值，并汇总总资产现价', async () => {
-    const requestData = vi.fn<RequestData>(async (request) => {
+    const requestData = requestDataWithMarketNews(async (request) => {
       if (request.operation === 'trading-core.holdings') {
         return {
           items: [
@@ -697,7 +718,7 @@ describe('投研数据页慢请求状态', () => {
   })
 
   it('实时行情不可用时持仓价格静默降级为 —，不渲染额外错误', async () => {
-    const requestData = vi.fn<RequestData>(async (request) => {
+    const requestData = requestDataWithMarketNews(async (request) => {
       if (request.operation === 'trading-core.holdings') {
         return { items: [{ ticker: '000001', name: '平安银行', quantity: 100, cost_price: 10 }] }
       }

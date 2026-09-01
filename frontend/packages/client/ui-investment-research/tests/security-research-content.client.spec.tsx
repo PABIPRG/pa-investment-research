@@ -34,10 +34,6 @@ function requestCode(request: Parameters<RequestData>[0]): string {
   return typeof request.input?.code === 'string' ? request.input.code : ''
 }
 
-const MARKET_NEWS_KEY = JSON.stringify({
-  operation: 'market-watch.news-flash', limit: 12, enrich: false, personal: false,
-})
-
 function readyTech(code: string, signal = `信号-${code}`, asOf = '2026-08-31 10:00:00') {
   return {
     status: 'ready', code, as_of: asOf, stale: false, bars: 120,
@@ -107,7 +103,8 @@ describe('SecurityResearchContent', () => {
     expect(screen.getByText('+1.25%')).toBeTruthy()
     expect(screen.getByText('2.40')).toBeTruthy()
     expect(screen.getByText('3.60 亿')).toBeTruthy()
-    expect(screen.getByRole('tab', { name: '个股相关' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.getByRole('heading', { name: '个股相关资讯' })).toBeTruthy()
     expect(requestData).toHaveBeenCalledTimes(2)
     expect(requestData).toHaveBeenCalledWith({
       operation: 'market-watch.tech-signal', input: { code: '920223', lookback: 120 },
@@ -153,31 +150,6 @@ describe('SecurityResearchContent', () => {
     expect(requestData).toHaveBeenCalledWith({
       operation: 'market-watch.security-news', input: { code: '000001', limit: 8 },
     })
-  })
-
-  it('loads the global market-news key lazily once and reuses it across security changes', async () => {
-    const requestData = defaultRequestData()
-    const resources = createResearchResourceStore()
-    const read = vi.spyOn(resources, 'read')
-    const first = renderContent({ requestData, resources })
-    await screen.findByText('资讯-920223')
-    expect(requestData.mock.calls.some(([request]) => request.operation === 'market-watch.news-flash')).toBe(false)
-
-    fireEvent.click(screen.getByRole('tab', { name: '市场快讯' }))
-    expect(await screen.findByText('不特指当前证券')).toBeTruthy()
-    await waitFor(() => {
-      expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(1)
-    })
-    expect(read.mock.calls.some(([key]) => key === MARKET_NEWS_KEY)).toBe(true)
-    expect(MARKET_NEWS_KEY).not.toContain('920223')
-
-    first.view.rerender(<SecurityResearchContent
-      {...first.props}
-      subject={{ code: '600519', name: '贵州茅台' }}
-    />)
-    await screen.findByText('信号-600519')
-    expect(screen.getByText('不特指当前证券')).toBeTruthy()
-    expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.news-flash')).toHaveLength(1)
   })
 
   it('shows a security-specific empty result without mixing in market news', async () => {
@@ -255,22 +227,6 @@ describe('SecurityResearchContent', () => {
     const technical = screen.getByRole('region', { name: '技术信号' })
     expect(within(technical).getByRole('alert').textContent).toContain('技术信号暂不可用')
     expect(within(technical).getByRole('alert').textContent).toContain('technical transport failed')
-  })
-
-  it('keeps security news visible when the independently lazy market region fails', async () => {
-    const requestData = vi.fn<RequestData>((request) => {
-      if (request.operation === 'market-watch.tech-signal') return Promise.resolve(readyTech('920223'))
-      if (request.operation === 'market-watch.security-news') return Promise.resolve(readyNews('920223', '仍然可见的个股资讯'))
-      if (request.operation === 'market-watch.news-flash') return Promise.reject(new Error('market news failed'))
-      throw new Error(`unexpected operation ${request.operation}`)
-    })
-
-    renderContent({ requestData })
-    await screen.findByText('仍然可见的个股资讯')
-    fireEvent.click(screen.getByRole('tab', { name: '市场快讯' }))
-    expect((await screen.findByRole('alert')).textContent).toContain('市场快讯暂不可用')
-    fireEvent.click(screen.getByRole('tab', { name: '个股相关' }))
-    expect(screen.getByText('仍然可见的个股资讯')).toBeTruthy()
   })
 
   it('continues a preparing technical result automatically on the same key until ready', async () => {
@@ -514,40 +470,6 @@ describe('SecurityResearchContent', () => {
     expect(newsCalls).toBe(3)
   })
 
-  it('deduplicates consecutive market-news retry calls and permits another retry after settlement', async () => {
-    const retryFlight = deferred<unknown>()
-    let marketCalls = 0
-    const requestData = vi.fn<RequestData>((request) => {
-      if (request.operation === 'market-watch.tech-signal') return Promise.resolve(readyTech('920223'))
-      if (request.operation === 'market-watch.security-news') return Promise.resolve(readyNews('920223'))
-      if (request.operation === 'market-watch.news-flash') {
-        marketCalls += 1
-        if (marketCalls === 1 || marketCalls === 3) {
-          return Promise.resolve({ status: 'unavailable', message: '市场快讯源不可用' })
-        }
-        return retryFlight.promise
-      }
-      throw new Error(`unexpected operation ${request.operation}`)
-    })
-
-    renderContent({ requestData })
-    fireEvent.click(screen.getByRole('tab', { name: '市场快讯' }))
-    const firstRetry = await screen.findByRole<HTMLButtonElement>('button', { name: '重试市场快讯' })
-    await act(async () => { firstRetry.click(); firstRetry.click() })
-    expect(marketCalls).toBe(2)
-    const busyRetry = screen.getByRole<HTMLButtonElement>('button', { name: '重试市场快讯' })
-    expect(busyRetry.disabled).toBe(true)
-    expect(busyRetry.getAttribute('aria-busy')).toBe('true')
-
-    await act(async () => {
-      retryFlight.resolve({ status: 'unavailable', message: '市场快讯仍不可用' })
-    })
-    const settledRetry = screen.getByRole<HTMLButtonElement>('button', { name: '重试市场快讯' })
-    expect(settledRetry.disabled).toBe(false)
-    fireEvent.click(settledRetry)
-    expect(marketCalls).toBe(3)
-  })
-
   it('disables every retry while inactive and guards handlers even if disabled DOM is programmatically bypassed', async () => {
     const requestData = vi.fn<RequestData>((request) => {
       if (request.operation === 'market-watch.tech-signal') {
@@ -556,26 +478,20 @@ describe('SecurityResearchContent', () => {
       if (request.operation === 'market-watch.security-news') {
         return Promise.resolve({ status: 'unavailable', code: '920223', message: '个股资讯源不可用' })
       }
-      if (request.operation === 'market-watch.news-flash') {
-        return Promise.resolve({ status: 'unavailable', message: '市场快讯源不可用' })
-      }
       throw new Error(`unexpected operation ${request.operation}`)
     })
     const first = renderContent({ requestData })
     await screen.findByRole('button', { name: '重试技术信号' })
     await screen.findByRole('button', { name: '重试个股资讯' })
-    fireEvent.click(screen.getByRole('tab', { name: '市场快讯' }))
-    await screen.findByRole('button', { name: '重试市场快讯' })
     first.view.rerender(<SecurityResearchContent {...first.props} active={false} />)
     const before = requestData.mock.calls.length
 
-    for (const name of ['重试技术信号', '重试市场快讯']) {
+    for (const name of ['重试技术信号']) {
       const button = screen.getByRole<HTMLButtonElement>('button', { name })
       expect(button.disabled).toBe(true)
       button.disabled = false
       await act(async () => { button.click() })
     }
-    fireEvent.click(screen.getByRole('tab', { name: '个股相关' }))
     const securityRetry = screen.getByRole<HTMLButtonElement>('button', { name: '重试个股资讯' })
     expect(securityRetry.disabled).toBe(true)
     securityRetry.disabled = false

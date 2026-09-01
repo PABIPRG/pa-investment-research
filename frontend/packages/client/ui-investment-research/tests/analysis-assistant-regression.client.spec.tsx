@@ -173,14 +173,14 @@ describe('智能分析与全局 AI 助理回归', () => {
     const docked = screen.getByTestId('assistant-panel')
     expect(docked.getAttribute('data-mode')).toBe('docked')
     expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
-    expect(docked.querySelector('[data-icon="assistant-expand"]')).toBeTruthy()
+    expect(docked.querySelector('[data-icon="surface-expand"]')).toBeTruthy()
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '近全屏展开 AI 助理' }))
     const expanded = screen.getByTestId('assistant-panel')
     expect(expanded.getAttribute('data-mode')).toBe('expanded')
     expect(expanded.getAttribute('role')).toBe('dialog')
-    expect(expanded.querySelector('[data-icon="assistant-collapse"]')).toBeTruthy()
+    expect(expanded.querySelector('[data-icon="surface-collapse"]')).toBeTruthy()
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '收起 AI 助理' }))
