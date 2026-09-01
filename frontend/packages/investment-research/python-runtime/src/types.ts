@@ -88,6 +88,7 @@ export type InvestmentDataOperation =
   | 'market-watch.indices'
   | 'market-watch.security-search'
   | 'market-watch.security-detail'
+  | 'market-watch.security-news'
   | 'market-watch.scan'
   | 'market-watch.tech-signal'
   | 'market-watch.news-flash'

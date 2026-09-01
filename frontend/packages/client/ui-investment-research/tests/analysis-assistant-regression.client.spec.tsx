@@ -149,7 +149,7 @@ describe('智能分析与全局 AI 助理回归', () => {
       startSession: vi.fn(),
     } as never))
 
-    expect(screen.getByText('0.1.0-rc.8 · 智能投研系统')).toBeTruthy()
+    expect(screen.getByText('0.1.0-rc.9 · 智能投研系统')).toBeTruthy()
   })
 
   it('始终保留结构化智能分析工作台，并在助理模式切换时保留两份业务输入', () => {
@@ -172,6 +172,7 @@ describe('智能分析与全局 AI 助理回归', () => {
     fireEvent.click(assistantLauncher())
     const docked = screen.getByTestId('assistant-panel')
     expect(docked.getAttribute('data-mode')).toBe('docked')
+    expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
     expect(docked.querySelector('[data-icon="assistant-expand"]')).toBeTruthy()
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
 
@@ -258,6 +259,7 @@ describe('智能分析与全局 AI 助理回归', () => {
     fireEvent.keyDown(window, { key: 'Escape', code: 'Escape' })
     expect(screen.queryByTestId('assistant-panel')).toBeNull()
     expect(assistantLauncher()).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /恢复.*研究窗/u })).toBeNull()
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
   })
 

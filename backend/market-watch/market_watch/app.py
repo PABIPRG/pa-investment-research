@@ -11,8 +11,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from . import briefs, events, news, quotes, rules, scanner, scheduler
@@ -172,16 +173,40 @@ def securities_search(q: str, limit: int = 8):
 
 
 def _technical_snapshot(code: str, lookback: int) -> dict:
-    try:
-        df = quotes.get_kline(code, lookback=lookback)
-    except quotes.KlineDeadlineExceeded as exc:
-        raise HTTPException(504, f"{exc}，后台刷新仍在继续，请稍后重试")
-    except quotes.KlineRefreshBusy as exc:
-        raise HTTPException(503, f"{exc}，请稍后重试")
+    result = quotes.read_kline(code, lookback=lookback)
+    if result.status == "preparing":
+        return {
+            "status": "preparing",
+            "code": code,
+            "as_of": result.as_of,
+            "retry_after_ms": result.retry_after_ms,
+            "message": result.message,
+        }
+    if result.status == "unavailable":
+        return {
+            "status": "unavailable",
+            "code": code,
+            "as_of": result.as_of,
+            "reason_code": result.reason_code,
+            "message": result.message,
+            "retryable": True,
+        }
+    df = result.frame
     if df is None or df.empty:
-        raise HTTPException(404, f"{code} 无 K 线数据")
+        return {
+            "status": "unavailable",
+            "code": code,
+            "as_of": result.as_of,
+            "reason_code": "no_data",
+            "message": f"{code} 暂无 K 线数据，请稍后重试",
+            "retryable": True,
+        }
     indicators = compute_indicators(df)
     return {
+        "status": "ready",
+        "code": code,
+        "as_of": result.as_of,
+        "stale": result.stale,
         "bars": len(df),
         "last": df.iloc[-1].to_dict(),
         "indicators": indicators,
@@ -204,8 +229,13 @@ def security_detail(req: SecurityDetailRequest):
             raise
         technical = {}
         warnings.append(str(exc.detail))
+    if technical.get("status") in ("preparing", "unavailable"):
+        warnings.append(technical.get("message") or f"{code} 技术数据暂不可用")
     if not quote and not technical:
         raise HTTPException(404, f"{code} 无可用行情或 K 线数据")
+    stock_news = news.stock_news_snapshot(code, limit=8)
+    if stock_news.status != "ready" and stock_news.message:
+        warnings.append(stock_news.message)
     return {
         "code": code,
         "name": quote.get("name") or code,
@@ -213,7 +243,7 @@ def security_detail(req: SecurityDetailRequest):
         "quote": quote,
         "fund_flow_yi": quotes.get_fund_flow(code),
         "technical": technical,
-        "news": news.fetch_stock_news(code, top=8),
+        "news": list(stock_news.items),
         "warnings": warnings,
     }
 
@@ -279,16 +309,15 @@ def quotes_batch(req: QuotesBatchRequest):
 
 @app.get("/indices")
 def indices():
-    return {
-        "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "items": briefs.indices_spot(),
-    }
+    return briefs.indices_snapshot()
 
 
 @app.post("/scan")
 def scan(req: ScanRequest):
     try:
         return scanner.scan(kind=req.kind, top_n=req.top_n, min_amount_yi=req.min_amount_yi)
+    except scanner.MarketDataUnavailable as exc:
+        raise HTTPException(503, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
@@ -300,10 +329,13 @@ def tech_signal(req: TechSignalRequest):
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     technical = _technical_snapshot(code, req.lookback)
+    if technical["status"] == "preparing":
+        return JSONResponse(status_code=202, content=technical)
+    if technical["status"] == "unavailable":
+        return technical
     q = quotes.get_quote_bounded(code)
     return {
         "code": code, "name": (q or {}).get("name") or "",
-        "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
         **technical,
     }
 
@@ -322,6 +354,15 @@ def news_latest():
     if record is None:
         raise HTTPException(404, "暂无新闻速递，先调 POST /news/express")
     return record
+
+
+@app.get("/news/stock")
+def news_stock(code: str, limit: int = Query(default=8, ge=5, le=20)):
+    try:
+        normalized = quotes.normalize_code(code)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return news.stock_news_snapshot(normalized, limit=limit)
 
 
 @app.get("/news/flash")

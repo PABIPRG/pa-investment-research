@@ -16,8 +16,10 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from dataclasses import dataclass
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout, wait
+from typing import Literal
 from urllib.parse import urlencode
 
 import requests
@@ -58,29 +60,151 @@ def fetch_global_news(top: int = 8) -> list[dict]:
     return items[:top]
 
 
-def fetch_stock_news(code: str, top: int = 3) -> list[dict]:
-    """东财个股新闻。失败返回空。"""
+@dataclass(frozen=True)
+class StockNewsSnapshot:
+    status: Literal["ready", "stale", "unavailable"]
+    code: str
+    as_of: str
+    items: tuple[dict, ...]
+    complete: bool
+    message: str | None = None
+
+
+_STOCK_NEWS_CACHE: OrderedDict[
+    tuple[str, int], tuple[float, StockNewsSnapshot]
+] = OrderedDict()
+_STOCK_NEWS_FLIGHTS: dict[tuple[str, int], Future] = {}
+_STOCK_NEWS_LOCK = threading.RLock()
+_STOCK_NEWS_CLOCK = time.monotonic
+
+
+def _stock_news_now() -> str:
+    return datetime.now(ZoneInfo(settings.timezone)).isoformat(timespec="seconds")
+
+
+def _fetch_stock_news_source(code: str, limit: int) -> list[dict]:
+    """从东财读取一次个股资讯；来源异常向调用方传播。"""
     import akshare as ak
 
     items = []
+    df = ak.stock_news_em(symbol=code)
+    title_col = _pick(df, "新闻标题", "标题", "新闻")
+    time_col = _pick(df, "发布时间", "时间", "日期")
+    if title_col is None:
+        return items
+    for i in range(min(limit, len(df))):
+        title = str(title_col.iloc[i] or "").strip()
+        if not title:
+            continue
+        items.append({
+            "title": title,
+            "source": "东财",
+            "time": str(time_col.iloc[i]) if time_col is not None else "",
+        })
+    return items
+
+
+def _stock_news_cached(
+    key: tuple[str, int], now: float,
+) -> tuple[StockNewsSnapshot | None, bool]:
+    with _STOCK_NEWS_LOCK:
+        cached = _STOCK_NEWS_CACHE.get(key)
+        if cached is None:
+            return None, False
+        age = now - cached[0]
+        if age > settings.stock_news_stale_ttl:
+            _STOCK_NEWS_CACHE.pop(key, None)
+            return None, False
+        _STOCK_NEWS_CACHE.move_to_end(key)
+        return cached[1], age <= settings.stock_news_cache_ttl
+
+
+def _store_stock_news(key: tuple[str, int], snapshot: StockNewsSnapshot) -> None:
+    with _STOCK_NEWS_LOCK:
+        _STOCK_NEWS_CACHE[key] = (_STOCK_NEWS_CLOCK(), snapshot)
+        _STOCK_NEWS_CACHE.move_to_end(key)
+        capacity = max(1, settings.stock_news_cache_size)
+        while len(_STOCK_NEWS_CACHE) > capacity:
+            _STOCK_NEWS_CACHE.popitem(last=False)
+
+
+def _refresh_stock_news(key: tuple[str, int], code: str, limit: int) -> StockNewsSnapshot:
     try:
-        df = ak.stock_news_em(symbol=code)
-        title_col = _pick(df, "新闻标题", "标题", "新闻")
-        time_col = _pick(df, "发布时间", "时间", "日期")
-        if title_col is None:
-            return items
-        for i in range(min(top, len(df))):
-            title = str(title_col.iloc[i] or "").strip()
-            if not title:
-                continue
-            items.append({
-                "title": title,
-                "source": "东财",
-                "time": str(time_col.iloc[i]) if time_col is not None else "",
-            })
+        items = _fetch_stock_news_source(code, limit)
     except Exception as exc:
         logger.warning("个股新闻 %s 拉取失败: %s", code, exc)
-    return items
+        cached, _fresh = _stock_news_cached(key, _STOCK_NEWS_CLOCK())
+        if cached is not None:
+            return StockNewsSnapshot(
+                status="stale",
+                code=code,
+                as_of=cached.as_of,
+                items=cached.items,
+                complete=False,
+                message="个股资讯源暂不可用，已返回最近成功缓存",
+            )
+        return StockNewsSnapshot(
+            status="unavailable",
+            code=code,
+            as_of=_stock_news_now(),
+            items=(),
+            complete=False,
+            message="个股资讯源暂不可用，请稍后重试",
+        )
+    snapshot = StockNewsSnapshot(
+        status="ready",
+        code=code,
+        as_of=_stock_news_now(),
+        items=tuple(items),
+        complete=True,
+    )
+    _store_stock_news(key, snapshot)
+    return snapshot
+
+
+def _finish_stock_news_flight(
+    key: tuple[str, int], flight: Future, *,
+    snapshot: StockNewsSnapshot | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """发布一次同键刷新终态并清理 flight；等待者持有 Future 引用仍可读取结果。"""
+    with _STOCK_NEWS_LOCK:
+        try:
+            if error is None:
+                flight.set_result(snapshot)
+            else:
+                flight.set_exception(error)
+        finally:
+            if _STOCK_NEWS_FLIGHTS.get(key) is flight:
+                _STOCK_NEWS_FLIGHTS.pop(key, None)
+
+
+def stock_news_snapshot(code: str, limit: int = 8) -> StockNewsSnapshot:
+    """返回个股资讯领域状态；同键冷抓取与 stale 刷新共享一次上游结果。"""
+    key = (code, limit)
+    with _STOCK_NEWS_LOCK:
+        cached, fresh = _stock_news_cached(key, _STOCK_NEWS_CLOCK())
+        if cached is not None and fresh:
+            return cached
+        flight = _STOCK_NEWS_FLIGHTS.get(key)
+        leader = flight is None
+        if leader:
+            flight = Future()
+            _STOCK_NEWS_FLIGHTS[key] = flight
+    if not leader:
+        return flight.result()
+    try:
+        snapshot = _refresh_stock_news(key, code, limit)
+    except BaseException as exc:
+        _finish_stock_news_flight(key, flight, error=exc)
+        raise
+    _finish_stock_news_flight(key, flight, snapshot=snapshot)
+    return snapshot
+
+
+def fetch_stock_news(code: str, top: int = 3) -> list[dict]:
+    """兼容旧调用：以列表返回个股资讯快照中的条目。"""
+    return [dict(item) for item in stock_news_snapshot(code, limit=top).items]
 
 
 def _digest_llm(global_items: list[dict], stock_map: dict[str, list[dict]]) -> str:

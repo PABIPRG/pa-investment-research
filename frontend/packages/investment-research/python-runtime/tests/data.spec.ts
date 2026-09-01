@@ -158,6 +158,78 @@ describe('investment data broker', () => {
     expect(acquire).not.toHaveBeenCalled()
   })
 
+  it('maps security news to its fixed market-watch route with the default limit', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8100', release }))
+
+    await expect(requestInvestmentData({
+      operation: 'market-watch.security-news', input: { code: '000001' },
+    }, acquire)).resolves.toEqual({ items: [] })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8100/news/stock?code=000001&limit=8',
+      { method: 'GET' },
+    )
+    expect(acquire).toHaveBeenCalledWith('market-watch')
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('rejects unsafe security-news input before acquiring a lease', async () => {
+    const acquire = vi.fn()
+
+    await expect(requestInvestmentData({
+      operation: 'market-watch.security-news', input: { code: '600519', url: '/arbitrary' },
+    }, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'market-watch.security-news', input: { code: '600519/news/stock' },
+    }, acquire)).rejects.toThrow('code must be exactly six digits')
+    await expect(requestInvestmentData({
+      operation: 'market-watch.security-news', input: { code: '600519', limit: 4 },
+    }, acquire)).rejects.toThrow('limit must be an integer between 5 and 20')
+    await expect(requestInvestmentData({
+      operation: 'market-watch.security-news', input: { code: '600519', limit: 21 },
+    }, acquire)).rejects.toThrow('limit must be an integer between 5 and 20')
+
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it('passes through an accepted tech-signal JSON response and releases its lease', async () => {
+    const release = vi.fn(async () => {})
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ status: 'queued' }), {
+      status: 202,
+      headers: { 'Content-Type': 'application/json' },
+    })))
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8100', release }))
+
+    await expect(requestInvestmentData({
+      operation: 'market-watch.tech-signal', input: { code: '600519' },
+    }, acquire)).resolves.toEqual({ status: 'queued' })
+
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['fetch rejects', async () => { throw new Error('network down') }, /network down/],
+    ['HTTP response fails', async () => new Response('unavailable', { status: 503 }), /failed with HTTP 503/],
+    ['successful response contains invalid JSON', async () => new Response('not-json', { status: 200 }), /Unexpected token/],
+  ])('releases the security-news lease when %s', async (_description, response, error) => {
+    const release = vi.fn(async () => {})
+    vi.stubGlobal('fetch', vi.fn(response))
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8100', release }))
+
+    await expect(requestInvestmentData({
+      operation: 'market-watch.security-news', input: { code: '600519' },
+    }, acquire)).rejects.toThrow(error)
+
+    expect(acquire).toHaveBeenCalledOnce()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('maps all nine industry-chain operations to the fixed backend routes', async () => {
     const release = vi.fn(async () => {})
     const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8200', release }))

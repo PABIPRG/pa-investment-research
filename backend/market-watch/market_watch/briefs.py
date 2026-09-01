@@ -8,11 +8,14 @@
 
 import json
 import logging
+import threading
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from . import llm, news, quotes
 from .config import settings
+from .normalization import finite_number
 from .store import JsonStore
 
 logger = logging.getLogger("market_watch.briefs")
@@ -24,23 +27,109 @@ MAIN_INDICES = {
     "沪深300": "sh000300",
 }
 
+_INDICES_CACHE: dict[str, tuple[float, dict]] = {}
+_INDICES_LOCK = threading.Lock()
 
-def indices_spot() -> list[dict]:
-    """关键指数实时快照（best-effort，失败空）。"""
+
+def _index_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        text = str(value).strip()
+    except Exception:
+        return ""
+    return "" if text.lower() in {"nan", "none", "<na>"} else text
+
+
+def _normalized_index(record: dict, as_of: str) -> tuple[dict, bool]:
+    raw_price = record.get("最新价")
+    raw_pct_change = record.get("涨跌幅")
+    price = finite_number(raw_price)
+    pct_change = finite_number(raw_pct_change)
+    return ({
+        "name": _index_text(record.get("名称")),
+        "code": _index_text(record.get("代码")),
+        "price": price,
+        "pct_change": pct_change,
+        "as_of": as_of,
+        "stale": False,
+    }, price is None or pct_change is None)
+
+
+def _cacheable_index(item: dict) -> bool:
+    return bool(
+        item.get("code")
+        and item.get("name")
+        and (item.get("price") is not None or item.get("pct_change") is not None)
+    )
+
+
+def indices_snapshot() -> dict:
+    """返回主指数结构化快照，并按代码使用最近成功项进行局部降级。"""
     import akshare as ak
 
-    rows = []
+    warnings: list[str] = []
+    current: dict[str, dict] = {}
+    source_failed = False
     try:
-        df = ak.stock_zh_index_spot_sina()
-        for code, name, price, pct in df[["代码", "名称", "最新价", "涨跌幅"]].itertuples(index=False):
-            if code in MAIN_INDICES.values():
-                rows.append({
-                    "name": str(name), "code": str(code),
-                    "price": float(price), "pct_change": float(pct),
-                })
+        records = ak.stock_zh_index_spot_sina().to_dict(orient="records")
     except Exception as exc:
+        source_failed = True
+        records = []
+        warnings.append(f"指数源暂不可用: {type(exc).__name__}")
         logger.warning("指数快照拉取失败: %s", exc)
-    return rows
+
+    response_as_of = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S")
+    main_codes = set(MAIN_INDICES.values())
+    for record in records:
+        try:
+            item, has_missing_number = _normalized_index(record, response_as_of)
+        except Exception as exc:
+            logger.warning("指数行归一化失败: %s", exc)
+            warnings.append("指数行归一化失败")
+            continue
+        code = item["code"]
+        if code not in main_codes:
+            continue
+        current[code] = item
+        if has_missing_number:
+            warnings.append(f"{code} 指数数值缺失")
+
+    now = time.monotonic()
+    items: list[dict] = []
+    with _INDICES_LOCK:
+        for code in MAIN_INDICES.values():
+            item = current.get(code)
+            if item is not None and _cacheable_index(item):
+                _INDICES_CACHE[code] = (now, dict(item))
+                items.append(item)
+                continue
+
+            cached = _INDICES_CACHE.get(code)
+            if cached is not None and (now - cached[0]) <= settings.indices_stale_ttl:
+                stale_item = {**cached[1], "stale": True}
+                items.append(stale_item)
+                warnings.append(f"{code} 使用最近成功缓存")
+                continue
+
+            if cached is not None:
+                _INDICES_CACHE.pop(code, None)
+            if item is not None:
+                items.append(item)
+            elif not source_failed:
+                warnings.append(f"{code} 本轮缺失且无合格缓存")
+
+    return {
+        "as_of": response_as_of,
+        "items": items,
+        "stale": any(item["stale"] for item in items),
+        "warnings": warnings,
+    }
+
+
+def indices_spot() -> list[dict]:
+    """关键指数兼容列表；归一化和降级逻辑与结构化接口共用。"""
+    return indices_snapshot()["items"]
 
 
 def _watch_status() -> list[dict]:
@@ -103,7 +192,11 @@ def _fallback_brief(period: str, indices: list[dict], watch: list[dict],
     lines = ["# 盘前关注" if period == "pre" else "# 盘后复盘", ""]
     lines.append("## 市场状态")
     for ix in indices:
-        lines.append(f"- {ix['name']} {ix['price']}（{ix['pct']:+.2f}%）")
+        price = ix.get("price")
+        pct_change = ix.get("pct_change")
+        price_text = str(price) if price is not None else "--"
+        pct_text = f"{pct_change:+.2f}%" if pct_change is not None else "--"
+        lines.append(f"- {ix['name']} {price_text}（{pct_text}）")
     lines.append("")
     lines.append("## 自选股")
     for w in watch:

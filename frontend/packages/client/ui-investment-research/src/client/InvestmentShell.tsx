@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode, RefObject } from 'react'
+import type { MutableRefObject, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import packageManifest from '@deepseek-ai/dsh-client-ui-investment-research/package.json' with { type: 'json' }
 import type {
@@ -29,6 +29,11 @@ import {
 } from './ProductPages.tsx'
 import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
 import { PreferenceReviewPage } from './PreferenceReviewPage.tsx'
+import { ResearchFloatingSurface } from './ResearchFloatingSurface.tsx'
+import { SecurityResearchContent } from './SecurityResearchContent.tsx'
+import { createResearchResourceStore } from './research-resource.ts'
+import type { ResearchResourceStore } from './research-resource.ts'
+import type { RequestData, ResearchSubject, ResearchSurfaceMode } from './research-types.ts'
 import { useSecurityNames } from './security-names.ts'
 import type { LocalTelemetrySurface, TrackLocalTelemetry } from './telemetry.ts'
 import type {
@@ -36,8 +41,6 @@ import type {
   InvestmentRoute, InvestmentUiSnapshot,
 } from './state.ts'
 import css from './InvestmentShell.module.css'
-
-type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
 export const INVESTMENT_APP_VERSION = packageManifest.version
 
@@ -608,7 +611,7 @@ export function assistantModulePrompt(module: AssistantModule): string {
 
 function AssistantFloatingSurface({
   mode, module, starting, historyOpen, launcherRef, historyRef,
-  onMode, onNew, onHistory,
+  launcherPlacement, onMode, onClose, onReturnToResearch, onNew, onHistory,
 }: {
   mode: AssistantDisplayMode
   module: AssistantModule
@@ -616,18 +619,23 @@ function AssistantFloatingSurface({
   historyOpen: boolean
   launcherRef: RefObject<HTMLButtonElement>
   historyRef: RefObject<HTMLButtonElement>
+  launcherPlacement: 'default' | 'hidden' | 'research-minimized'
   onMode: (mode: AssistantDisplayMode) => void
+  onClose: () => void
+  onReturnToResearch?: () => void
   onNew: () => void
   onHistory: () => void
 }) {
   const selected = ASSISTANT_MODULE_OPTIONS.find(item => item.id === module) ?? GENERAL_ASSISTANT_OPTION
   if (mode === 'closed') {
+    if (launcherPlacement === 'hidden') return null
     return (
       <button
         ref={launcherRef}
         type="button"
         className={css.assistantLauncher}
         data-action="assistant-open"
+        data-placement={launcherPlacement}
         aria-label="打开 AI 研究助理"
         aria-controls="investment-assistant-panel"
         aria-expanded="false"
@@ -662,10 +670,19 @@ function AssistantFloatingSurface({
               title={mode === 'expanded' ? '收起' : '近全屏展开'}
               onClick={() => { onMode(mode === 'expanded' ? 'docked' : 'expanded') }}
             ><AssistantResizeIcon expanded={mode === 'expanded'} /></button>
-            <button type="button" data-action="assistant-close" aria-label="关闭 AI 研究助理" title="关闭" onClick={() => { onMode('closed') }}>×</button>
+            <button type="button" data-action="assistant-close" aria-label="关闭 AI 研究助理" title="关闭" onClick={onClose}>×</button>
           </div>
         </header>
         <div className={css.assistantToolbar}>
+          {onReturnToResearch !== undefined && (
+            <button
+              type="button"
+              className={css.assistantReturnAction}
+              data-action="assistant-return-research"
+              aria-label="返回证券详情"
+              onClick={onReturnToResearch}
+            ><span aria-hidden="true">↩</span>返回证券详情</button>
+          )}
           <div>
             <button type="button" data-action="assistant-new" disabled={starting} aria-busy={starting} onClick={onNew}><PlusIcon />{starting ? '创建中…' : '新对话'}</button>
             <button ref={historyRef} type="button" data-action="assistant-history" aria-haspopup="dialog" aria-expanded={historyOpen} onClick={onHistory}><HistoryIcon />历史</button>
@@ -675,6 +692,30 @@ function AssistantFloatingSurface({
     </>
   )
 }
+
+interface ResearchSurfaceState {
+  readonly subject?: ResearchSubject
+  readonly mode: ResearchSurfaceMode
+  readonly suspendedByAssistant: boolean
+}
+
+interface ResearchReturnTarget {
+  readonly subject: ResearchSubject
+  readonly restoreMode: 'minimized' | 'docked'
+}
+
+interface PendingResearchActivation {
+  readonly subject: ResearchSubject
+  readonly mode: 'minimized' | 'docked'
+  readonly closeRequestGeneration: number
+}
+
+type AssistantExitReason = 'none' | 'direct-close' | 'return-to-research' | 'open-research'
+
+const INITIAL_RESEARCH_SURFACE: ResearchSurfaceState = Object.freeze({
+  mode: 'closed',
+  suspendedByAssistant: false,
+})
 
 export function InvestmentShell({
   useInvestmentUi, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
@@ -690,13 +731,137 @@ export function InvestmentShell({
   const historyTriggerRef = useRef<HTMLButtonElement>(null)
   const reportTriggerRef = useRef<HTMLButtonElement>(null)
   const assistantTriggerRef = useRef<HTMLButtonElement>(null)
+  const researchTriggerRef = useRef<HTMLElement>(null)
+  const opportunityScrollRef = useRef<HTMLDivElement>(null)
   const workbenchRef = useRef<HTMLElement>(null)
   const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
+  const assistantExitReasonRef = useRef<AssistantExitReason>('none')
+  const pendingResearchActivationRef = useRef<PendingResearchActivation>()
+  const assistantCloseRequestGenerationRef = useRef(0)
+  const [assistantCloseRequestGeneration, setAssistantCloseRequestGeneration] = useState(0)
+  const researchResourcesRef = useRef<ResearchResourceStore>()
+  if (researchResourcesRef.current === undefined) {
+    researchResourcesRef.current = createResearchResourceStore()
+  }
+  const researchResources = researchResourcesRef.current
+  const [researchSurface, setResearchSurface] = useState<ResearchSurfaceState>(INITIAL_RESEARCH_SURFACE)
+  const [researchReturnTarget, setResearchReturnTarget] = useState<ResearchReturnTarget>()
+  const researchSurfaceRef = useRef(researchSurface)
+  const researchReturnTargetRef = useRef(researchReturnTarget)
   const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
   const assistantMode = snapshot.assistantMode
+  const assistantModeRef = useRef(assistantMode)
+  assistantModeRef.current = assistantMode
+  researchSurfaceRef.current = researchSurface
+  researchReturnTargetRef.current = researchReturnTarget
   const assistantModule = snapshot.assistantModule
   const colorScheme = useActiveColorScheme()
+
+  const updateResearchSurface = useCallback((next: ResearchSurfaceState): void => {
+    researchSurfaceRef.current = next
+    setResearchSurface(next)
+  }, [])
+
+  const updateResearchReturnTarget = useCallback((next: ResearchReturnTarget | undefined): void => {
+    researchReturnTargetRef.current = next
+    setResearchReturnTarget(next)
+  }, [])
+
+  const queueResearchAfterAssistantClose = useCallback((
+    next: Omit<PendingResearchActivation, 'closeRequestGeneration'>,
+    reason: Exclude<AssistantExitReason, 'none'>,
+  ): void => {
+    const closeRequestGeneration = assistantCloseRequestGenerationRef.current + 1
+    assistantCloseRequestGenerationRef.current = closeRequestGeneration
+    pendingResearchActivationRef.current = { ...next, closeRequestGeneration }
+    assistantExitReasonRef.current = reason
+    updateResearchSurface({ ...next, suspendedByAssistant: true })
+    setAssistantCloseRequestGeneration(closeRequestGeneration)
+    setAssistantMode('closed')
+  }, [setAssistantMode, updateResearchSurface])
+
+  const openResearch = useCallback((subject: ResearchSubject): void => {
+    pendingResearchActivationRef.current = undefined
+    updateResearchReturnTarget(undefined)
+    if (assistantModeRef.current !== 'closed') {
+      queueResearchAfterAssistantClose({ subject, mode: 'docked' }, 'open-research')
+      return
+    }
+    updateResearchSurface({ subject, mode: 'docked', suspendedByAssistant: false })
+  }, [queueResearchAfterAssistantClose, updateResearchReturnTarget, updateResearchSurface])
+
+  const prepareAssistantWithoutReturn = useCallback((
+    intent: AssistantIntent,
+    module?: AssistantModule,
+  ): void => {
+    pendingResearchActivationRef.current = undefined
+    assistantExitReasonRef.current = 'none'
+    updateResearchReturnTarget(undefined)
+    const current = researchSurfaceRef.current
+    if (current.subject !== undefined && current.mode !== 'closed') {
+      updateResearchSurface({ ...current, mode: 'closed', suspendedByAssistant: true })
+    }
+    if (module === undefined) prepareAssistant(intent)
+    else prepareAssistant(intent, module)
+  }, [prepareAssistant, updateResearchReturnTarget, updateResearchSurface])
+
+  const prepareAssistantFromResearch = useCallback((intent: AssistantIntent): void => {
+    const current = researchSurfaceRef.current
+    if (current.subject === undefined || current.mode === 'closed') return
+    pendingResearchActivationRef.current = undefined
+    assistantExitReasonRef.current = 'none'
+    updateResearchReturnTarget({ subject: current.subject, restoreMode: 'docked' })
+    updateResearchSurface({ ...current, suspendedByAssistant: true })
+    prepareAssistant(intent)
+  }, [prepareAssistant, updateResearchReturnTarget, updateResearchSurface])
+
+  const prepareAssistantFromOpportunity = useCallback((subject: ResearchSubject): void => {
+    pendingResearchActivationRef.current = undefined
+    assistantExitReasonRef.current = 'none'
+    updateResearchReturnTarget({ subject, restoreMode: 'docked' })
+    updateResearchSurface({ subject, mode: 'docked', suspendedByAssistant: true })
+    prepareAssistant({
+      kind: 'stock',
+      code: subject.code,
+      ...(subject.name === undefined ? {} : { name: subject.name }),
+    })
+  }, [prepareAssistant, updateResearchReturnTarget, updateResearchSurface])
+
+  const closeAssistant = useCallback((): void => {
+    const target = researchReturnTargetRef.current
+    if (target !== undefined) {
+      updateResearchReturnTarget(undefined)
+      queueResearchAfterAssistantClose({ subject: target.subject, mode: 'minimized' }, 'direct-close')
+      return
+    }
+    pendingResearchActivationRef.current = undefined
+    assistantExitReasonRef.current = 'none'
+    setAssistantMode('closed')
+  }, [queueResearchAfterAssistantClose, setAssistantMode, updateResearchReturnTarget])
+
+  const returnToResearch = useCallback((): void => {
+    const target = researchReturnTargetRef.current
+    if (target === undefined) return
+    updateResearchReturnTarget(undefined)
+    queueResearchAfterAssistantClose({
+      subject: target.subject,
+      mode: target.restoreMode,
+    }, 'return-to-research')
+  }, [queueResearchAfterAssistantClose, updateResearchReturnTarget])
+
+  const changeAssistantMode = useCallback((nextMode: AssistantDisplayMode): void => {
+    if (assistantModeRef.current === 'closed' && nextMode !== 'closed') {
+      pendingResearchActivationRef.current = undefined
+      assistantExitReasonRef.current = 'none'
+      updateResearchReturnTarget(undefined)
+      const current = researchSurfaceRef.current
+      if (current.subject !== undefined && current.mode !== 'closed') {
+        updateResearchSurface({ ...current, mode: 'closed', suspendedByAssistant: true })
+      }
+    }
+    setAssistantMode(nextMode)
+  }, [setAssistantMode, updateResearchReturnTarget, updateResearchSurface])
 
   useEffect(() => {
     const surface: LocalTelemetrySurface = snapshot.route === 'stock-detail'
@@ -734,10 +899,57 @@ export function InvestmentShell({
   useEffect(() => {
     const previous = previousAssistantModeRef.current
     previousAssistantModeRef.current = assistantMode
-    if (previous !== 'closed' && assistantMode === 'closed') {
-      window.requestAnimationFrame(() => { assistantTriggerRef.current?.focus() })
+    if (assistantMode !== 'closed') {
+      const pending = pendingResearchActivationRef.current
+      if (pending !== undefined) {
+        if (pending.closeRequestGeneration > assistantCloseRequestGeneration) return
+        pendingResearchActivationRef.current = undefined
+        assistantExitReasonRef.current = 'none'
+        updateResearchReturnTarget(undefined)
+        updateResearchSurface(INITIAL_RESEARCH_SURFACE)
+        return
+      }
+      assistantExitReasonRef.current = 'none'
+      const current = researchSurfaceRef.current
+      if (current.subject !== undefined && current.mode !== 'closed' && !current.suspendedByAssistant) {
+        const hasReturnTarget = researchReturnTargetRef.current !== undefined
+        updateResearchSurface(hasReturnTarget
+          ? { ...current, suspendedByAssistant: true }
+          : { ...current, mode: 'closed', suspendedByAssistant: true })
+      }
+      return
     }
-  }, [assistantMode])
+    if (previous !== 'closed') {
+      const reason = assistantExitReasonRef.current
+      assistantExitReasonRef.current = 'none'
+      const pending = pendingResearchActivationRef.current
+      pendingResearchActivationRef.current = undefined
+      if (pending !== undefined) {
+        updateResearchSurface({
+          subject: pending.subject,
+          mode: pending.mode,
+          suspendedByAssistant: false,
+        })
+        return
+      }
+      const target = researchReturnTargetRef.current
+      if (reason === 'none' && target !== undefined) {
+        updateResearchReturnTarget(undefined)
+        updateResearchSurface({
+          subject: target.subject,
+          mode: 'minimized',
+          suspendedByAssistant: false,
+        })
+      } else if (reason === 'none') {
+        window.requestAnimationFrame(() => { assistantTriggerRef.current?.focus() })
+      }
+    }
+  }, [assistantCloseRequestGeneration, assistantMode, updateResearchReturnTarget, updateResearchSurface])
+  useEffect(() => () => {
+    pendingResearchActivationRef.current = undefined
+    assistantExitReasonRef.current = 'none'
+    assistantCloseRequestGenerationRef.current = 0
+  }, [])
   useEffect(() => {
     const workbench = workbenchRef.current
     if (workbench === null) return
@@ -756,7 +968,8 @@ export function InvestmentShell({
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
-        setAssistantMode(assistantMode === 'expanded' ? 'docked' : 'closed')
+        if (assistantMode === 'expanded') setAssistantMode('docked')
+        else closeAssistant()
         return
       }
       if (event.key !== 'Tab' || assistantMode !== 'expanded') return
@@ -775,7 +988,7 @@ export function InvestmentShell({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => { window.removeEventListener('keydown', handleKeyDown) }
-  }, [assistantMode, setAssistantMode, snapshot.historyOpen, snapshot.reportsOpen])
+  }, [assistantMode, closeAssistant, setAssistantMode, snapshot.historyOpen, snapshot.reportsOpen])
 
   const closeHistory = useCallback(() => {
     if (historyClosing) return
@@ -788,6 +1001,21 @@ export function InvestmentShell({
     setReports(false)
     window.requestAnimationFrame(() => { reportTriggerRef.current?.focus() })
   }, [setReports])
+
+  const assistantLauncherPlacement: 'default' | 'hidden' | 'research-minimized' =
+    pendingResearchActivationRef.current !== undefined
+      ? 'hidden'
+      : assistantMode === 'closed'
+        && !researchSurface.suspendedByAssistant
+        && researchSurface.subject !== undefined
+        && (researchSurface.mode === 'docked' || researchSurface.mode === 'expanded')
+        ? 'hidden'
+        : assistantMode === 'closed'
+          && !researchSurface.suspendedByAssistant
+          && researchSurface.subject !== undefined
+          && researchSurface.mode === 'minimized'
+          ? 'research-minimized'
+          : 'default'
 
   const switchSession = useCallback(async (sessionId: SessionId): Promise<void> => {
     if (switchingSessionId !== undefined) return
@@ -849,7 +1077,7 @@ export function InvestmentShell({
               onStockQuery={(value) => { setModuleDraft('analysisQuery', value) }}
               onBacktestQuery={(value) => { setModuleDraft('backtestQuery', value) }}
               onOpenReports={() => { setReports(true) }}
-              onOpenAssistant={prepareAssistant}
+              onOpenAssistant={prepareAssistantWithoutReturn}
               onOpenPortfolio={() => { navigate('portfolio') }}
             />
           </div>
@@ -858,7 +1086,7 @@ export function InvestmentShell({
           <ResearchWorkbenchPage
             requestData={requestData}
             navigate={navigate}
-            onAnalyze={prepareAssistant}
+            onAnalyze={prepareAssistantWithoutReturn}
             onOpenReports={() => { setReports(true) }}
             trackTelemetry={trackTelemetry}
           />
@@ -867,8 +1095,11 @@ export function InvestmentShell({
           <OpportunityPage
             requestData={requestData}
             initialQuery={snapshot.selectedStockCode || snapshot.watchQuery}
-            onAnalyze={prepareAssistant}
-            onView={(code) => { navigate('stock-detail', { stockCode: code }) }}
+            activeCode={researchSurface.mode === 'closed' ? '' : researchSurface.subject?.code ?? ''}
+            researchTriggerRef={researchTriggerRef}
+            pageScrollRef={opportunityScrollRef}
+            onOpenResearch={openResearch}
+            onAnalyzeResearch={prepareAssistantFromOpportunity}
           />
         )}
         {snapshot.route === 'stock-detail' && (
@@ -876,13 +1107,13 @@ export function InvestmentShell({
             requestData={requestData}
             code={snapshot.selectedStockCode}
             onBack={() => { navigate('opportunity') }}
-            onAnalyze={prepareAssistant}
+            onAnalyze={prepareAssistantWithoutReturn}
           />
         )}
         {snapshot.route === 'portfolio' && (
           <PortfolioPage
             requestData={requestData}
-            onAnalyze={prepareAssistant}
+            onAnalyze={prepareAssistantWithoutReturn}
             onViewStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
             trackTelemetry={trackTelemetry}
           />
@@ -894,7 +1125,7 @@ export function InvestmentShell({
             onSelectStrategy={selectStrategy}
             onOpenShadow={(strategyId) => { navigate('projects', { strategyId }) }}
             onOpenReports={() => { setReports(true) }}
-            onAnalyze={prepareAssistant}
+            onAnalyze={prepareAssistantWithoutReturn}
             initialView={snapshot.route === 'projects' ? 'shadow' : 'pool'}
             onOpenEvolution={() => { navigate('tasks') }}
           />
@@ -902,7 +1133,7 @@ export function InvestmentShell({
         {snapshot.route === 'tasks' && (
           <EvolutionPage
             requestData={requestData}
-            onAnalyze={prepareAssistant}
+            onAnalyze={prepareAssistantWithoutReturn}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
           />
         )}
@@ -911,11 +1142,53 @@ export function InvestmentShell({
             requestData={requestData}
             query={snapshot.chainQuery}
             onQuery={(query) => { setModuleDraft('chainQuery', query) }}
-            onAnalyze={prepareAssistant}
+            onAnalyze={prepareAssistantWithoutReturn}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
           />
         )}
       </main>
+
+      {researchSurface.subject !== undefined && (
+        <ResearchFloatingSurface
+          key={researchSurface.subject.code}
+          mode={researchSurface.suspendedByAssistant || assistantMode !== 'closed'
+            ? 'closed'
+            : researchSurface.mode}
+          subject={researchSurface.subject}
+          triggerRef={researchTriggerRef}
+          backgroundRef={workbenchRef}
+          scrollContainerRef={opportunityScrollRef}
+          interactionEnabled={!snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
+          escapeEnabled={!snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
+          modalResourcesEnabled={assistantMode === 'closed'}
+          restoreFocusOnExit={researchReturnTarget === undefined
+            && !snapshot.historyOpen
+            && !snapshot.reportsOpen
+            && assistantMode === 'closed'}
+          onModeChange={(mode) => {
+            updateResearchSurface({ ...researchSurfaceRef.current, mode, suspendedByAssistant: false })
+          }}
+        >
+          <SecurityResearchContent
+            subject={researchSurface.subject}
+            requestData={requestData}
+            resources={researchResources}
+            active={!researchSurface.suspendedByAssistant
+              && assistantMode === 'closed'
+              && (researchSurface.mode === 'docked' || researchSurface.mode === 'expanded')}
+            onAnalyze={prepareAssistantFromResearch}
+            onOpenFullDetail={(code) => {
+              updateResearchReturnTarget(undefined)
+              updateResearchSurface({
+                ...researchSurfaceRef.current,
+                mode: 'closed',
+                suspendedByAssistant: false,
+              })
+              navigate('stock-detail', { stockCode: code })
+            }}
+          />
+        </ResearchFloatingSurface>
+      )}
 
       <AssistantFloatingSurface
         mode={assistantMode}
@@ -924,7 +1197,10 @@ export function InvestmentShell({
         historyOpen={snapshot.historyOpen}
         launcherRef={assistantTriggerRef}
         historyRef={historyTriggerRef}
-        onMode={setAssistantMode}
+        launcherPlacement={assistantLauncherPlacement}
+        onMode={changeAssistantMode}
+        onClose={closeAssistant}
+        {...(researchReturnTarget === undefined ? {} : { onReturnToResearch: returnToResearch })}
         onNew={() => {
           if (startingSession) return
           setStartingSession(true)
@@ -951,7 +1227,7 @@ export function InvestmentShell({
         />
       )}
       {snapshot.reportsOpen && (
-        <ReportCenter requestData={requestData} onClose={closeReports} onAnalyze={prepareAssistant} />
+        <ReportCenter requestData={requestData} onClose={closeReports} onAnalyze={prepareAssistantWithoutReturn} />
       )}
     </>
   )
@@ -1141,22 +1417,69 @@ function HistoryDrawer({
   )
 }
 
-/** Opportunity workbench with independently settling market data regions. */
+export interface OpportunityPageProps {
+  readonly requestData: RequestData
+  readonly initialQuery: string
+  readonly activeCode: string
+  readonly onOpenResearch: (subject: ResearchSubject) => void
+  readonly onAnalyzeResearch: (subject: ResearchSubject) => void
+  readonly researchTriggerRef?: MutableRefObject<HTMLElement | null>
+  readonly pageScrollRef?: MutableRefObject<HTMLDivElement | null>
+}
+
+function normalizedResearchCode(value: unknown): string {
+  const code = text(value, '').trim()
+  return /^\d{6}$/u.test(code) ? code : ''
+}
+
+function scanSourceLabel(value: unknown): string {
+  const source = text(value, '').trim()
+  if (source === '') return '未知'
+  if (source.toLowerCase() === 'eastmoney') return '东财'
+  if (source.toLowerCase() === 'sina') return '新浪'
+  return source
+}
+
+function researchSubject(row: Record<string, unknown>): ResearchSubject | undefined {
+  const code = normalizedResearchCode(row.code)
+  if (code === '') return undefined
+  const name = text(row.name, '').trim()
+  const price = number(row.price)
+  const pctChange = number(row.pct_change)
+  const volumeRatio = number(row.volume_ratio)
+  const amountYi = number(row.amount_yi)
+  const quote: NonNullable<ResearchSubject['quote']> = {
+    ...(price === undefined ? {} : { price }),
+    ...(pctChange === undefined ? {} : { pctChange }),
+    ...(volumeRatio === undefined ? {} : { volumeRatio }),
+    ...(amountYi === undefined ? {} : { amountYi }),
+  }
+  return { code, ...(name === '' ? {} : { name }), quote }
+}
+
+/** Opportunity workbench that emits explicit research intents without owning selection. */
 export function OpportunityPage({
-  requestData, initialQuery, onAnalyze, onView,
-}: { requestData: RequestData; initialQuery: string; onAnalyze: (intent: AssistantIntent) => void; onView: (code: string) => void }) {
+  requestData,
+  initialQuery,
+  activeCode,
+  onOpenResearch,
+  onAnalyzeResearch,
+  researchTriggerRef,
+  pageScrollRef,
+}: OpportunityPageProps) {
   const [kind, setKind] = useState('gainers')
   const [nonce, setNonce] = useState(0)
-  const [selected, setSelected] = useState(initialQuery)
   const scan = useRequestResource(requestData)
   const indices = useRequestResource(requestData)
-  const news = useRequestResource(requestData)
-  const signal = useRequestResource(requestData)
+  const openedInitialCodesRef = useRef(new Set<string>())
 
   useEffect(() => {
-    const query = initialQuery.trim()
-    if (query !== '') setSelected(query)
-  }, [initialQuery])
+    const code = normalizedResearchCode(initialQuery)
+    if (code === '' || openedInitialCodesRef.current.has(code)) return
+    openedInitialCodesRef.current.add(code)
+    if (researchTriggerRef !== undefined) researchTriggerRef.current = null
+    onOpenResearch({ code })
+  }, [initialQuery, onOpenResearch, researchTriggerRef])
 
   useEffect(() => {
     scan.run({ operation: 'market-watch.scan', input: { kind, top_n: 12 } })
@@ -1166,57 +1489,27 @@ export function OpportunityPage({
     indices.run({ operation: 'market-watch.indices' })
   }, [indices.run, nonce])
 
-  useEffect(() => {
-    news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false } })
-  }, [news.run, nonce])
-
   const rows = useMemo(() => {
     const record = asRecord(scan.state.value)
     return [...records(record.items), ...records(record.limit_up), ...records(record.limit_down)]
   }, [scan.state.value])
-
-  useEffect(() => {
-    if (scan.state.phase !== 'success') return
-    // A stock deliberately carried back from the detail page may not appear in
-    // the current scan bucket. Keep that research subject instead of silently
-    // replacing it with the first ranked row.
-    if (selected.trim() !== '') return
-    setSelected(text(rows[0]?.code, ''))
-  }, [rows, scan.state.phase, selected])
-
-  useEffect(() => {
-    const code = selected.trim()
-    if (code === '') { signal.reset(); return }
-    signal.run({ operation: 'market-watch.tech-signal', input: { code, lookback: 120 } })
-  }, [nonce, selected, signal.reset, signal.run])
-
-  const signalRecord = asRecord(signal.state.value)
+  const scanRecord = asRecord(scan.state.value)
   const indexRecord = asRecord(indices.state.value)
   const indexItems = records(indexRecord.items)
-  const indicators = asRecord(signalRecord.indicators)
-  const support = asRecord(indicators.support_resistance)
-  const newsRecord = asRecord(news.state.value)
-  const headlines = Array.isArray(news.state.value)
-    ? news.state.value
-    : records(newsRecord.items)
-  const newsSettled = newsRecord.stale === true
-    ? '缓存资讯'
-    : newsRecord.complete === false ? '部分来源' : undefined
-  const resources = selected.trim() === ''
-    ? [indices.state, scan.state, news.state]
-    : [indices.state, scan.state, news.state, signal.state]
+  const scanSource = scanSourceLabel(scanRecord.source)
+  const scanAsOf = text(scanRecord.as_of, '').trim() || '未知'
+  const scanStale = scanRecord.stale === true
+  const scanIncomplete = scanRecord.complete === false
+  const scanWarnings = Array.isArray(scanRecord.warnings)
+    ? scanRecord.warnings.filter((warning): warning is string => typeof warning === 'string' && warning.trim() !== '')
+    : []
+  const resources = [indices.state, scan.state]
   const busy = resources.some(resource => resource.phase === 'loading' || resource.phase === 'refreshing')
-  const selectedRow = rows.find(row => text(row.code, '') === selected)
-  const selectedStoredName = text(signalRecord.name, '').trim() || text(selectedRow?.name, '').trim()
-  const selectedNames = useSecurityNames(requestData, selected === '' || selectedStoredName !== '' ? [] : [selected])
-  const selectedName = text(signalRecord.name, '').trim()
-    || text(selectedRow?.name, '').trim()
-    || selectedNames[selected]
-    || selected
+  const normalizedActiveCode = normalizedResearchCode(activeCode)
 
   return (
-    <div className={css.pageScroll}>
-      <PageHeader title="实时盯盘" description="基于实时扫描、技术信号和基础实时资讯发现研究线索">
+    <div ref={pageScrollRef} className={css.pageScroll}>
+      <PageHeader title="实时盯盘" description="通过大盘快照和实时扫描发现研究线索">
         <button
           type="button"
           className={css.secondaryButton}
@@ -1262,146 +1555,98 @@ export function OpportunityPage({
         ))}
       </div>
       <ResourceProgress label="机会数据" resources={resources} />
-      <div className={css.opportunityGrid}>
-        <section className={css.cardList} aria-busy={scan.busy} aria-labelledby="market-scan-title">
-          <div className={css.sectionHeading}>
-            <strong id="market-scan-title">市场扫描</strong>
-            <ResourceLabel state={scan.state} settled={`${rows.length} 个结果`} />
-          </div>
-          {scan.state.error !== '' && (
-            <ErrorCard
-              title={scan.state.loaded ? '市场扫描更新失败' : '市场扫描暂不可用'}
-              message={scan.state.error}
-              retry={() => { scan.run({ operation: 'market-watch.scan', input: { kind, top_n: 12 } }) }}
-              retained={scan.state.loaded}
-            />
-          )}
-          {!scan.state.loaded && scan.state.error === '' && <LoadingSkeleton rows={5} />}
-          {scan.state.loaded && (
-            <>
-              {rows.map((row, index) => {
-                const code = text(row.code, `row-${index}`)
-                const pctChange = number(row.pct_change)
-                const amountYi = number(row.amount_yi)
-                return (
+      <p className={css.opportunityHint}>
+        <strong>选择证券查看研究详情</strong>
+        <span>，或直接带入智能分析。</span>
+      </p>
+      <section className={css.cardList} aria-busy={scan.busy} aria-labelledby="market-scan-title">
+        <div className={css.sectionHeading}>
+          <strong id="market-scan-title">市场扫描</strong>
+          <ResourceLabel state={scan.state} settled={`${rows.length} 个结果`} />
+        </div>
+        {scan.state.error !== '' && (
+          <ErrorCard
+            title={scan.state.loaded ? '市场扫描更新失败' : '市场扫描暂不可用'}
+            message={scan.state.error}
+            retry={() => { scan.run({ operation: 'market-watch.scan', input: { kind, top_n: 12 } }) }}
+            retained={scan.state.loaded}
+          />
+        )}
+        {!scan.state.loaded && scan.state.error === '' && <LoadingSkeleton rows={5} />}
+        {scan.state.loaded && (
+          <>
+            <div className={css.scanFacts} role="note" aria-label="扫描数据事实">
+              <span>来源：{scanSource}</span>
+              <span>数据时间：{scanAsOf}</span>
+              {scanStale && <strong>缓存数据</strong>}
+              {scanIncomplete && <strong>结果不完整</strong>}
+              {scanWarnings.map((warning, index) => (
+                <span className={css.scanFactWarning} key={`${warning}-${index}`}>提示：{warning}</span>
+              ))}
+            </div>
+            {rows.map((row, index) => {
+              const subject = researchSubject(row)
+              const rawCode = text(row.code, '').trim()
+              const code = subject?.code ?? (rawCode || `row-${index}`)
+              const name = subject?.name ?? code
+              const pctChange = number(row.pct_change)
+              const amountYi = number(row.amount_yi)
+              const active = subject !== undefined && subject.code === normalizedActiveCode
+              return (
+                <article
+                  key={`${code}-${index}`}
+                  className={active ? css.stockCardActive : css.stockCard}
+                  aria-label={`${name} ${code}`}
+                >
                   <button
-                    key={`${code}-${index}`}
                     type="button"
-                    className={selected === code ? css.stockCardActive : css.stockCard}
-                    onClick={() => { setSelected(code) }}
+                    className={css.stockCardMain}
+                    aria-label={`打开${name}研究`}
+                    aria-current={active ? 'true' : undefined}
+                    disabled={subject === undefined}
+                    onClick={(event) => {
+                      if (subject === undefined) return
+                      if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
+                      onOpenResearch(subject)
+                    }}
                   >
-                    <div><strong>{text(row.name, code)}</strong><span>{code}</span></div>
-                    <div className={pctChange !== undefined && pctChange < 0 ? css.negative : css.positive}>
+                    <span className={css.stockCardIdentity}><strong>{name}</strong><span>{code}</span></span>
+                    <span className={pctChange !== undefined && pctChange < 0 ? css.negative : css.positive}>
                       {percent(row.pct_change)}
-                    </div>
+                    </span>
                     <dl>
                       <div><dt>现价</dt><dd>{money(row.price)}</dd></div>
                       <div><dt>量比</dt><dd>{number(row.volume_ratio)?.toFixed(2) ?? '—'}</dd></div>
                       <div><dt>成交额</dt><dd>{amountYi === undefined ? '—' : `${amountYi.toFixed(2)} 亿`}</dd></div>
                     </dl>
                   </button>
-                )
-              })}
-              {rows.length === 0 && <div className={css.emptyState}>当前扫描没有返回结果</div>}
-            </>
-          )}
-        </section>
-        <section className={css.detailCard} aria-label="股票研究详情">
-          <div className={css.detailTitle}>
-            <div><strong>{selected === '' ? '选择一只证券' : selectedName}</strong><span>{text(signalRecord.code, selected)}</span></div>
-            {selected !== '' && (
-              <div className={css.detailActions}>
-                <button type="button" className={css.secondaryButton} onClick={() => { onView(selected) }}>查看证券详情</button>
-                <button
-                  type="button"
-                  className={css.primaryButton}
-                  onClick={() => {
-                    onAnalyze({ kind: 'stock', code: selected, name: selectedName === selected ? '' : selectedName })
-                  }}
-                >带入智能分析</button>
-              </div>
-            )}
-          </div>
-          <div className={css.dataRegion} aria-busy={signal.busy} aria-labelledby="technical-signal-title">
-            <div className={css.sectionHeading}>
-              <strong id="technical-signal-title">技术信号</strong>
-              <ResourceLabel state={signal.state} />
-            </div>
-            {signal.state.error !== '' && selected !== '' && (
-              <ErrorCard
-                title={signal.state.loaded ? '技术信号更新失败' : '技术信号暂不可用'}
-                message={signal.state.error}
-                retry={() => {
-                  signal.run({ operation: 'market-watch.tech-signal', input: { code: selected, lookback: 120 } })
-                }}
-                retained={signal.state.loaded}
-              />
-            )}
-            {selected !== '' && !signal.state.loaded && signal.state.error === '' && <LoadingSkeleton rows={3} />}
-            {signal.state.loaded && (
-              <>
-                <div className={css.signalGrid}>
-                  <Metric label="K 线样本" value={number(signalRecord.bars)?.toFixed(0) ?? '—'} />
-                  <Metric label="支撑位" value={number(support.support)?.toFixed(2) ?? '—'} />
-                  <Metric label="压力位" value={number(support.resistance)?.toFixed(2) ?? '—'} />
-                  <Metric label="数据时间" value={text(signalRecord.as_of)} />
-                </div>
-                <div className={css.signalList}>
-                  <h3>技术信号</h3>
-                  {(Array.isArray(signalRecord.signals) ? signalRecord.signals : []).map((item, index) => (
-                    <p key={index}>{String(item)}</p>
-                  ))}
-                  {!Array.isArray(signalRecord.signals) && <p>当前数据源未返回技术信号。</p>}
-                </div>
-              </>
-            )}
-            {selected === '' && <div className={css.emptyState}>选择扫描结果后加载技术信号。</div>}
-          </div>
-          <div className={css.newsList} aria-busy={news.busy} aria-labelledby="market-news-title">
-            <div className={css.sectionHeading}>
-              <h3 id="market-news-title">实时资讯（基础）</h3>
-              <ResourceLabel state={news.state} {...(newsSettled === undefined ? {} : { settled: newsSettled })} />
-            </div>
-            {news.state.error !== '' && (
-              <ErrorCard
-                title={news.state.loaded ? '实时资讯更新失败' : '实时资讯暂不可用'}
-                message={news.state.error}
-                retry={() => {
-                  news.run({ operation: 'market-watch.news-flash', input: { limit: 12, enrich: false, personal: false } })
-                }}
-                retained={news.state.loaded}
-              />
-            )}
-            {!news.state.loaded && news.state.error === '' && <LoadingSkeleton rows={4} />}
-            {news.state.loaded && (
-              <>
-                {headlines.slice(0, 8).map((item, index) => {
-                  const row = asRecord(item)
-                  const title = text(row.title, text(row.summary, '市场快讯'))
-                  const source = text(row.source, text(row.tag, '资讯源'))
-                  const url = safeExternalNewsUrl(row.url)
-                  return (
-                    <article key={text(row.id, String(index))}>
-                      <div className={css.newsHeadline}>
-                        {url === undefined
-                          ? <strong>{title}</strong>
-                          : (
-                            <a href={url} target="_blank" rel="noopener noreferrer" aria-label={`${title}（打开原文）`}>
-                              <strong>{title}</strong><span aria-hidden="true">↗</span>
-                            </a>
-                          )}
-                        <small>{source}{url === undefined ? ' · 暂无原文链接' : ' · 原文'}</small>
-                      </div>
-                      <time>{text(row.time, text(row.ts, ''))}</time>
-                    </article>
-                  )
-                })}
-                {headlines.length === 0 && <p>当前数据源未返回资讯。</p>}
-              </>
-            )}
-          </div>
-        </section>
-      </div>
+                  <div className={css.stockCardActions}>
+                    <button
+                      type="button"
+                      disabled={subject === undefined}
+                      onClick={(event) => {
+                        if (subject === undefined) return
+                        if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
+                        onOpenResearch(subject)
+                      }}
+                    >详情</button>
+                    <button
+                      type="button"
+                      disabled={subject === undefined}
+                      onClick={(event) => {
+                        if (subject === undefined) return
+                        if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
+                        onAnalyzeResearch(subject)
+                      }}
+                    >智能分析</button>
+                  </div>
+                </article>
+              )
+            })}
+            {rows.length === 0 && <div className={css.emptyState}>当前扫描没有返回结果</div>}
+          </>
+        )}
+      </section>
     </div>
   )
 }
@@ -1922,7 +2167,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
     return sum
   })()
   const positionNames = useSecurityNames(requestData, positions
-    .filter(item => {
+    .filter((item) => {
       const code = text(item.ticker, '')
       const name = text(item.name, '').trim()
       return name === '' || name === code

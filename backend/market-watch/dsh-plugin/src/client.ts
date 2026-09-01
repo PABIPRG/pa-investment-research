@@ -68,13 +68,64 @@ export type QuoteItem = {
   near?: Array<{ name?: string; code?: string }>
 }
 
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
+type SnapshotMeta = {
+  trade_date: string
+  as_of: string
+  source: string
+  stale: boolean
+  complete: boolean
+  warnings: string[]
+}
+
+export type ScanSnapshot = (
+  | { kind: 'gainers' | 'volume_ratio' | 'turnover' | 'amount'; items: QuoteItem[] }
+  | { kind: 'limit'; limit_up: QuoteItem[]; limit_down: QuoteItem[] }
+) & SnapshotMeta
+
+export type TechSignalSnapshot =
+  | {
+      status: 'ready'
+      code: string
+      name: string
+      as_of: string
+      stale: boolean
+      bars: number
+      last: JsonValue
+      indicators: JsonValue
+      signals: JsonValue[]
+    }
+  | {
+      status: 'preparing'
+      code: string
+      as_of: string | null
+      retry_after_ms: number
+      message: string
+    }
+  | {
+      status: 'unavailable'
+      code: string
+      as_of: string | null
+      reason_code: string
+      message: string
+      retryable: boolean
+    }
+
 // ---- 实时快讯流 ----------------------------------------------------------
 
 export function flash(
   baseUrl: string,
   body: { limit?: number },
   signal?: AbortSignal,
-): Promise<{ as_of: string; sources: string[]; items: FlashItem[] }> {
+): Promise<{
+  as_of: string
+  sources: string[]
+  tier: 'base' | 'full'
+  complete: boolean
+  stale: boolean
+  items: FlashItem[]
+}> {
   const qs = new URLSearchParams()
   if (body.limit !== undefined) qs.set('limit', String(body.limit))
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
@@ -122,8 +173,8 @@ export function scan(
   baseUrl: string,
   body: { kind?: string },
   signal?: AbortSignal,
-): Promise<{ kind: string; trade_date: string; as_of: string; items: QuoteItem[] }> {
-  return httpJson(baseUrl, '/scan', 'POST', body, signal)
+): Promise<ScanSnapshot> {
+  return httpJson<ScanSnapshot>(baseUrl, '/scan', 'POST', body, signal)
 }
 
 // ---- 个股技术信号 --------------------------------------------------------
@@ -132,8 +183,8 @@ export function techSignal(
   baseUrl: string,
   body: { code: string },
   signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  return httpJson(baseUrl, '/tech-signal', 'POST', body, signal)
+): Promise<TechSignalSnapshot> {
+  return httpJson<TechSignalSnapshot>(baseUrl, '/tech-signal', 'POST', body, signal)
 }
 
 // ---- 最近简报 ------------------------------------------------------------

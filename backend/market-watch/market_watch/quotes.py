@@ -19,15 +19,35 @@ import re
 import requests
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from .config import settings
+from .market_identity import baostock_code, eastmoney_secid, resolve_market, sina_symbol
 
 logger = logging.getLogger("market_watch.quotes")
+
+SCAN_CAPABILITIES = {
+    "gainers": ("eastmoney", "sina"),
+    "volume_ratio": ("eastmoney",),
+    "limit": ("eastmoney", "sina"),
+    "turnover": ("eastmoney", "sina"),
+    "amount": ("eastmoney", "sina"),
+}
+
+
+@dataclass(frozen=True)
+class ScanRows:
+    rows: list[dict]
+    source: Literal["eastmoney", "sina"]
+    complete: bool
+    warnings: tuple[str, ...] = ()
 
 # baostock 全局 socket 非线程安全：本模块内部串行访问
 _bs_lock = threading.Lock()
@@ -99,14 +119,7 @@ def normalize_code(code: str) -> str:
 
 def _bs_code(code: str) -> str:
     """A 股代码 → baostock 格式（600519→sh.600519，000858→sz.000858）。"""
-    t = code.strip()
-    if t.startswith(("6", "9")):
-        return f"sh.{t}"
-    if t.startswith(("0", "3", "2")):
-        return f"sz.{t}"
-    if t.startswith(("4", "8", "92")):
-        raise ValueError(f"{code} 属北交所，暂不支持，请改用沪深代码")
-    return f"sh.{t}"
+    return baostock_code(code)
 
 
 def _fetch_spot_em() -> dict[str, dict]:
@@ -169,7 +182,7 @@ def _fetch_spot_em() -> dict[str, dict]:
 def _secid(code: str) -> str:
     """A 股代码 → 东财 secid（600519→1.600519，000858→0.000858，513050→1.513050）。
     沪市：6 开头股票、5/9 开头基金与 B 股；其余（0/1/2/3）归深市。"""
-    return ("1." if code.startswith(("6", "5", "9")) else "0.") + code
+    return eastmoney_secid(code)
 
 
 def _row_from_diff(d: dict) -> dict | None:
@@ -252,11 +265,7 @@ def _clist_top(fid: str, top_n: int, po: int = 1, page_size: int | None = None) 
 def _sina_sym(code: str) -> str:
     """A 股代码 → 新浪 symbol（600519→sh600519，000858→sz000858，513050→sh513050）。
     沪市：6 开头股票、5/9 开头基金与 B 股；其余归深市。"""
-    if code.startswith(("6", "5", "9")):
-        return "sh" + code
-    if code.startswith(("4", "8", "92")):
-        return "bj" + code
-    return "sz" + code
+    return sina_symbol(code)
 
 
 def _sina_hq(codes: list[str]) -> dict[str, dict]:
@@ -355,24 +364,85 @@ def _sina_kline(sym: str, lookback: int) -> list[dict] | None:
     return out or None
 
 
-def _scan_rows(kind: str, top_n: int, min_amount_yi: float | None = None) -> list[dict]:
-    """异动扫描行情源：东财 clist 服务端排序为主（完整字段含量比/换手），
-    东财限流时降级新浪 Market_Center 排序（无 volume_ratio）。量比仅东财有。"""
-    if kind == "volume_ratio":
-        return _clist_top("f10", top_n)  # 东财限流时抛错，由 app 层 503 提示
-    fid = {"gainers": "f3", "turnover": "f8", "amount": "f6"}[kind]
-    try:
-        rows = _clist_top(fid, top_n * 3 if kind == "amount" else top_n)
-    except Exception:
-        sort = {"f3": "changepercent", "f8": "turnoverratio", "f6": "amount"}[fid]
-        rows = _sina_market(sort, max(top_n * 3, 30))
+def _filter_scan_rows(
+    kind: str, rows: list[dict], min_amount_yi: float | None,
+) -> list[dict]:
     if kind == "turnover":
-        rows = [r for r in rows if r.get("turnover") is not None]
-    elif kind == "amount":
-        rows = [r for r in rows if r.get("amount_yi") is not None]
+        return [row for row in rows if row.get("turnover") is not None]
+    if kind == "amount":
+        rows = [row for row in rows if row.get("amount_yi") is not None]
         if min_amount_yi is not None:
-            rows = [r for r in rows if r["amount_yi"] >= min_amount_yi]
+            rows = [row for row in rows if row["amount_yi"] >= min_amount_yi]
     return rows
+
+
+def _eastmoney_scan_rows(kind: str, top_n: int) -> list[dict]:
+    if kind == "limit":
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            up_future = executor.submit(_clist_top, "f3", 100, 1)
+            down_future = executor.submit(_clist_top, "f3", 100, 0)
+            return up_future.result() + down_future.result()
+    fid = {
+        "gainers": "f3", "volume_ratio": "f10", "turnover": "f8", "amount": "f6",
+    }[kind]
+    return _clist_top(fid, top_n * 3 if kind == "amount" else top_n)
+
+
+def _sina_scan_rows(kind: str, top_n: int) -> list[dict]:
+    if kind == "limit":
+        sample_size = max(top_n * 3, 30)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            up_future = executor.submit(_sina_market, "changepercent", sample_size, 0)
+            down_future = executor.submit(_sina_market, "changepercent", sample_size, 1)
+            return up_future.result() + down_future.result()
+    sort = {
+        "gainers": "changepercent", "turnover": "turnoverratio", "amount": "amount",
+    }[kind]
+    return _sina_market(sort, max(top_n * 3, 30))
+
+
+def _scan_rows(
+    kind: str, top_n: int, min_amount_yi: float | None = None,
+) -> ScanRows:
+    """返回扫描行及其真实来源；备用源只用于能力表明确支持的类型。"""
+    started = time.monotonic()
+    primary_error: Exception | None = None
+    try:
+        rows = _filter_scan_rows(kind, _eastmoney_scan_rows(kind, top_n), min_amount_yi)
+        logger.info(
+            "scan_source_success kind=%s source=eastmoney elapsed_ms=%.1f fallback=none",
+            kind, (time.monotonic() - started) * 1000,
+        )
+        return ScanRows(rows=rows, source="eastmoney", complete=True)
+    except Exception as primary_exc:
+        primary_error = primary_exc
+        fallback = "sina" if "sina" in SCAN_CAPABILITIES[kind] else "none"
+        logger.warning(
+            "scan_source_failed kind=%s source=eastmoney error=%s elapsed_ms=%.1f fallback=%s",
+            kind, type(primary_exc).__name__, (time.monotonic() - started) * 1000, fallback,
+        )
+        if fallback == "none":
+            raise
+
+    fallback_started = time.monotonic()
+    try:
+        rows = _filter_scan_rows(kind, _sina_scan_rows(kind, top_n), min_amount_yi)
+        logger.info(
+            "scan_source_success kind=%s source=sina elapsed_ms=%.1f fallback=eastmoney",
+            kind, (time.monotonic() - fallback_started) * 1000,
+        )
+        return ScanRows(
+            rows=rows,
+            source="sina",
+            complete=(kind != "limit"),
+            warnings=("主行情源不可用，已使用备用源",),
+        )
+    except Exception as fallback_exc:
+        logger.warning(
+            "scan_source_failed kind=%s source=sina error=%s elapsed_ms=%.1f fallback=none",
+            kind, type(fallback_exc).__name__, (time.monotonic() - fallback_started) * 1000,
+        )
+        raise fallback_exc from primary_error
 
 
 def _fetch_spot_sina() -> dict[str, dict]:
@@ -510,7 +580,7 @@ def _load_security_catalog() -> tuple[list[dict[str, str]], dict[str, list[str]]
             code = str(r.get("code") or "").strip()
             if not name or len(code) != 6 or not code.isdigit():
                 continue
-            market = "沪市" if code.startswith(("6", "9")) else "深市" if code.startswith(("0", "2", "3")) else "北交所"
+            market = {"sh": "沪市", "sz": "深市", "bj": "北交所"}[resolve_market(code)]
             catalog.append({"code": code, "name": name, "market": market, "type": "股票"})
     except Exception as exc:
         logger.warning("A 股证券目录构建失败: %s", exc)
@@ -521,7 +591,7 @@ def _load_security_catalog() -> tuple[list[dict[str, str]], dict[str, list[str]]
             code = str(r.get("代码") or "").strip()
             if not name or len(code) != 6 or not code.isdigit():
                 continue
-            market = "沪市 ETF" if code.startswith(("5", "58")) else "深市 ETF"
+            market = {"sh": "沪市", "sz": "深市", "bj": "北交所"}[resolve_market(code)] + " ETF"
             catalog.append({"code": code, "name": name, "market": market, "type": "ETF"})
     except Exception as exc:
         logger.warning("场内 ETF 目录构建失败: %s", exc)
@@ -589,10 +659,7 @@ def search_securities(query: str, limit: int = 8) -> list[dict[str, str]]:
         quote = cache().get_quote(keyword)
         name = str((quote or {}).get("name") or "").strip()
         if name:
-            market = (
-                "沪市" if keyword.startswith(("6", "5", "9"))
-                else "深市" if keyword.startswith(("0", "1", "2", "3")) else "北交所"
-            )
+            market = {"sh": "沪市", "sz": "深市", "bj": "北交所"}[resolve_market(keyword)]
             return [{"code": keyword, "name": name, "market": market}]
     return []
 
@@ -659,7 +726,10 @@ def get_fund_flow(code: str) -> float | None:
 
 # ---- K 线 ---------------------------------------------------------------
 
-_KLINE_CACHE: dict[tuple[str, int], tuple[float, pd.DataFrame]] = {}
+_KLINE_CACHE: dict[tuple[str, int], tuple[float, pd.DataFrame, str]] = {}
+_KLINE_FAILURE_CACHE: OrderedDict[
+    tuple[str, int], tuple[float, str, str]
+] = OrderedDict()
 _KLINE_FLIGHTS: dict[tuple[str, int], Future] = {}
 _KLINE_LOCK = threading.RLock()
 _KLINE_WORKERS = max(1, settings.kline_refresh_workers)
@@ -680,6 +750,17 @@ class KlineDeadlineExceeded(TimeoutError):
 
 class KlineRefreshBusy(RuntimeError):
     """K 线 refresh 容量已满，当前 key 未进入无界等待队列。"""
+
+
+@dataclass(frozen=True)
+class KlineRead:
+    status: Literal["ready", "preparing", "unavailable"]
+    frame: pd.DataFrame | None = None
+    stale: bool = False
+    as_of: str | None = None
+    retry_after_ms: int | None = None
+    reason_code: str | None = None
+    message: str | None = None
 
 
 def _bs_hist_ohlcv(code: str, start: str, end: str) -> list[dict]:
@@ -792,8 +873,11 @@ def _fetch_kline_uncached(code: str, lookback: int = 120) -> pd.DataFrame | None
             df = df.dropna(subset=["open", "close", "high", "low"])
             return df.reset_index(drop=True)
     except Exception as exc:
-        logger.warning("东财K线直连 %s 失败，降级 baostock: %s", code, exc)
+        logger.warning("东财K线直连 %s 失败: %s", code, exc)
 
+    if resolve_market(code) == "bj":
+        logger.info("baostock 不支持北交所 K线 %s，跳过该源", code)
+        return None
     try:
         rows = _bs_hist_ohlcv_bounded(code, start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
     except Exception as exc:
@@ -807,20 +891,111 @@ def _fetch_kline_uncached(code: str, lookback: int = 120) -> pd.DataFrame | None
     return df
 
 
-def _finish_kline_refresh(key: tuple[str, int], future: Future) -> None:
+def _kline_as_of() -> str:
+    return datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _cache_kline_failure(
+    key: tuple[str, int], reason_code: str, message: str,
+) -> None:
+    _KLINE_FAILURE_CACHE[key] = (_KLINE_CLOCK(), reason_code, message)
+    _KLINE_FAILURE_CACHE.move_to_end(key)
+    capacity = max(1, settings.kline_failure_cache_size)
+    while len(_KLINE_FAILURE_CACHE) > capacity:
+        _KLINE_FAILURE_CACHE.popitem(last=False)
+
+
+def _cached_kline_failure(
+    key: tuple[str, int], now: float,
+) -> tuple[str, str] | None:
+    cached = _KLINE_FAILURE_CACHE.get(key)
+    if cached is None:
+        return None
+    if (now - cached[0]) > settings.kline_failure_ttl:
+        _KLINE_FAILURE_CACHE.pop(key, None)
+        return None
+    _KLINE_FAILURE_CACHE.move_to_end(key)
+    return cached[1], cached[2]
+
+
+def _ready_kline(
+    cached: tuple[float, pd.DataFrame, str], *, stale: bool,
+) -> KlineRead:
+    return KlineRead(
+        status="ready",
+        frame=cached[1].copy(deep=True),
+        stale=stale,
+        as_of=cached[2],
+    )
+
+
+def _preparing_kline(code: str) -> KlineRead:
+    return KlineRead(
+        status="preparing",
+        retry_after_ms=settings.kline_retry_after_ms,
+        message=f"{code} K 线正在后台准备，请稍后重试",
+    )
+
+
+def _unavailable_kline(reason_code: str, message: str) -> KlineRead:
+    return KlineRead(
+        status="unavailable",
+        reason_code=reason_code,
+        message=message,
+    )
+
+
+def _log_kline_refresh_warning(message: str, *args) -> None:
+    """后台 callback 的日志不得阻断 flight 清理与 waiter 通知。"""
     try:
-        result = future.result()
-    except Exception as exc:
-        logger.warning("K线后台刷新 %s 失败: %s", key[0], exc)
-        result = None
+        logger.warning(message, *args)
+    except BaseException:
+        pass
+
+
+def _finish_kline_refresh(
+    key: tuple[str, int], future: Future, callback_done: threading.Event,
+) -> None:
+    failure: tuple[str, str] | None = None
     try:
+        try:
+            result = future.result()
+        except BaseException as exc:
+            result = None
+            failure = ("provider_error", f"{key[0]} K 线暂不可用，请稍后重试")
+            _log_kline_refresh_warning("K线后台刷新 %s 失败: %s", key[0], exc)
         with _KLINE_LOCK:
             if result is not None and not result.empty:
-                _KLINE_CACHE[key] = (_KLINE_CLOCK(), result.copy(deep=True))
-            if _KLINE_FLIGHTS.get(key) is future:
-                _KLINE_FLIGHTS.pop(key, None)
+                _KLINE_CACHE[key] = (
+                    _KLINE_CLOCK(), result.copy(deep=True), _kline_as_of(),
+                )
+                _KLINE_FAILURE_CACHE.pop(key, None)
+            else:
+                reason_code, message = failure or (
+                    "no_data", f"{key[0]} 暂无 K 线数据，请稍后重试",
+                )
+                _cache_kline_failure(key, reason_code, message)
+    except BaseException as exc:
+        _log_kline_refresh_warning("K线后台终态写入 %s 失败: %s", key[0], exc)
+        try:
+            with _KLINE_LOCK:
+                _cache_kline_failure(
+                    key,
+                    "provider_error",
+                    f"{key[0]} K 线暂不可用，请稍后重试",
+                )
+        except BaseException:
+            pass
     finally:
-        _KLINE_ADMISSION.release()
+        try:
+            with _KLINE_LOCK:
+                if _KLINE_FLIGHTS.get(key) is future:
+                    _KLINE_FLIGHTS.pop(key, None)
+        finally:
+            try:
+                _KLINE_ADMISSION.release()
+            finally:
+                callback_done.set()
 
 
 def _start_kline_refresh(key: tuple[str, int]) -> Future:
@@ -834,41 +1009,73 @@ def _start_kline_refresh(key: tuple[str, int]) -> Future:
             _KLINE_ADMISSION.release()
             raise
         _KLINE_FLIGHTS[key] = future
-        future.add_done_callback(lambda done: _finish_kline_refresh(key, done))
+        callback_done = threading.Event()
+        setattr(future, "_kline_callback_done", callback_done)
+        future.add_done_callback(
+            lambda done: _finish_kline_refresh(key, done, callback_done)
+        )
     return future
 
 
-def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
-    """以短冷请求 deadline 读取 K 线，复用 TTL/stale cache 与并发 single-flight。
+def read_kline(code: str, lookback: int = 120) -> KlineRead:
+    """以短冷请求 deadline 读取结构化 K 线生命周期。
 
     fresh cache 直接返回；stale cache 立即返回并后台刷新。冷请求超过 deadline
-    抛出 KlineDeadlineExceeded，但唯一后台 flight 会继续填充缓存，后续请求可直接命中。
+    返回 preparing，唯一后台 flight 继续填充成功或短时失败缓存。
     """
+    foreground_deadline = time.monotonic() + max(0.0, settings.kline_cold_deadline)
     key = (code, lookback)
     now = _KLINE_CLOCK()
     with _KLINE_LOCK:
         cached = _KLINE_CACHE.get(key)
         age = (now - cached[0]) if cached else None
         if cached and age is not None and age <= settings.kline_cache_ttl:
-            return cached[1].copy(deep=True)
+            return _ready_kline(cached, stale=False)
+        failure = _cached_kline_failure(key, now)
+        if cached and age is not None and age <= settings.kline_stale_ttl:
+            if failure is None:
+                try:
+                    _start_kline_refresh(key)
+                except KlineRefreshBusy:
+                    pass
+            return _ready_kline(cached, stale=True)
+        if failure is not None:
+            return _unavailable_kline(*failure)
         try:
             future = _start_kline_refresh(key)
         except KlineRefreshBusy:
-            if cached and age is not None and age <= settings.kline_stale_ttl:
-                return cached[1].copy(deep=True)
-            raise
-        if cached and age is not None and age <= settings.kline_stale_ttl:
-            return cached[1].copy(deep=True)
+            return _preparing_kline(code)
     try:
-        result = future.result(timeout=max(0.0, settings.kline_cold_deadline))
+        future.result(timeout=max(0.0, foreground_deadline - time.monotonic()))
     except FutureTimeout:
+        return _preparing_kline(code)
+    except BaseException:
+        pass
+    callback_done = getattr(future, "_kline_callback_done", None)
+    if callback_done is not None and not callback_done.wait(
+        timeout=max(0.0, foreground_deadline - time.monotonic()),
+    ):
+        return _preparing_kline(code)
+    with _KLINE_LOCK:
+        cached = _KLINE_CACHE.get(key)
+        if cached is not None:
+            return _ready_kline(cached, stale=False)
+        failure = _cached_kline_failure(key, _KLINE_CLOCK())
+        if failure is not None:
+            return _unavailable_kline(*failure)
+    return _unavailable_kline(
+        "provider_error", f"{code} K 线暂不可用，请稍后重试",
+    )
+
+
+def get_kline(code: str, lookback: int = 120) -> pd.DataFrame | None:
+    """内部兼容包装：ready 返回表，preparing 抛 deadline，unavailable 返回 None。"""
+    result = read_kline(code, lookback)
+    if result.status == "preparing":
         raise KlineDeadlineExceeded(f"{code} K线冷请求超过前台等待预算")
-    except Exception as exc:
-        logger.warning("K线冷请求 %s 失败: %s", code, exc)
+    if result.status == "unavailable":
         return None
-    if result is None or result.empty:
-        return None
-    return result.copy(deep=True)
+    return result.frame.copy(deep=True) if result.frame is not None else None
 
 
 def _fetch_point_quote(code: str) -> dict | None:

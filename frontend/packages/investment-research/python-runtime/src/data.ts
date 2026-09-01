@@ -157,6 +157,14 @@ function stringValue(input: Readonly<Record<string, unknown>>, key: string): str
   return value
 }
 
+function securityCode(input: Readonly<Record<string, unknown>>, key = 'code'): string {
+  const code = stringValue(input, key)
+  if (!/^\d{6}$/.test(code)) {
+    throw new TypeError('investment data: code must be exactly six digits')
+  }
+  return code
+}
+
 function integer(input: Readonly<Record<string, unknown>>, key: string, fallback: number, min: number, max: number): number {
   const value = optionalNumber(input, key) ?? fallback
   if (!Number.isSafeInteger(value) || value < min || value > max) {
@@ -320,6 +328,17 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     body: (input) => {
       knownKeys(input, ['code', 'lookback'])
       return { code: stringValue(input, 'code'), lookback: integer(input, 'lookback', 120, 30, 500) }
+    },
+  },
+  'market-watch.security-news': {
+    backendId: 'market-watch',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['code', 'limit'])
+      return query('/news/stock', {
+        code: securityCode(input),
+        limit: integer(input, 'limit', 8, 5, 20),
+      })
     },
   },
   'market-watch.scan': {
