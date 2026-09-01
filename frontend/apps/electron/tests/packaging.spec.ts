@@ -1,6 +1,6 @@
 /** Electron packaging keeps the Python sidecar outside the application staging tree. */
 
-import { chmod, cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -8,9 +8,11 @@ import forgeConfig from '../forge.config.ts'
 import { appIdentity } from '../src/app-identity.ts'
 import {
   commandRequiresShell,
+  copyPortablePackageTree,
   createPackagerOptions,
   createPackagingPlan,
   materializePackagingWorkspaceLinks,
+  packagingDirectoryLinkTarget,
   refreshPackagedSidecarDescriptor,
   removePackagingRoot,
   signPackagedMacApplications,
@@ -24,6 +26,14 @@ describe('Electron investment sidecar packaging', () => {
     expect(commandRequiresShell('electron-forge.bat', 'win32')).toBe(true)
     expect(commandRequiresShell('pnpm', 'win32')).toBe(false)
     expect(commandRequiresShell('pnpm.cmd', 'darwin')).toBe(false)
+  })
+
+  it('uses absolute junction targets on Windows and relocatable links elsewhere', () => {
+    const linkPath = join(tmpdir(), 'package', 'app', 'node_modules', 'example')
+    const targetDir = join(tmpdir(), 'package', 'app', 'node_modules', '.portable', 'example')
+
+    expect(packagingDirectoryLinkTarget(linkPath, targetDir, 'win32')).toBe(resolve(targetDir))
+    expect(packagingDirectoryLinkTarget(linkPath, targetDir, 'darwin')).toBe(relative(dirname(linkPath), targetDir))
   })
 
   it('enables bounded descriptor retries when removing the temporary package tree', async () => {
@@ -72,6 +82,7 @@ describe('Electron investment sidecar packaging', () => {
     expect(isAbsolute(plan.sidecarDir)).toBe(true)
     expect(relative(plan.stagingDir, plan.sidecarDir)).toMatch(/^\.\./)
     expect(relative(plan.stagingDir, plan.sidecarCacheDir)).toMatch(/^\.\./)
+    expect(relative(plan.stagingDir, plan.portableStagingDir)).toMatch(/^\.\./)
     const darwinPlan = createPackagingPlan('/tmp/dsh-electron-darwin-test', 'darwin', 'arm64')
     expect(darwinPlan.appSourceDir).toBe(resolve(darwinPlan.deploy.cwd, 'apps/electron'))
     expect(darwinPlan.workspaceDir).toBe(darwinPlan.deploy.cwd)
@@ -218,7 +229,33 @@ describe('Electron investment sidecar packaging', () => {
     }
   })
 
-  it('dereferences Windows pnpm junctions before the temporary deploy tree is removed', () => {
+  it('copies a portable package tree without retaining deploy-time links', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-portable-links-test-'))
+    const stagingDir = join(rootDir, 'app')
+    const packageSource = join(rootDir, 'workspace-package')
+    const packageLink = join(stagingDir, 'node_modules', '@deepseek-ai', 'example')
+    const portableDir = join(rootDir, 'portable')
+    try {
+      await mkdir(join(packageSource, 'lib'), { recursive: true })
+      await mkdir(join(packageSource, 'node_modules', 'excluded'), { recursive: true })
+      await mkdir(dirname(packageLink), { recursive: true })
+      await writeFile(join(packageSource, 'package.json'), '{"name":"@deepseek-ai/example"}')
+      await writeFile(join(packageSource, 'lib', 'index.js'), 'export const value = 1\n')
+      await writeFile(join(packageSource, 'node_modules', 'excluded', 'marker'), 'exclude me')
+      await symlink(packageSource, packageLink, 'dir')
+
+      await copyPortablePackageTree(stagingDir, portableDir)
+
+      const portablePackage = join(portableDir, 'node_modules', '@deepseek-ai', 'example')
+      expect((await lstat(portablePackage)).isSymbolicLink()).toBe(false)
+      expect(await readFile(join(portablePackage, 'lib', 'index.js'), 'utf8')).toBe('export const value = 1\n')
+      expect(await readFile(join(portablePackage, 'node_modules', 'excluded', 'marker'), 'utf8')).toBe('exclude me')
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
+  it('keeps Electron Packager from recursively dereferencing Windows package trees', () => {
     const plan = createPackagingPlan('/tmp/dsh-electron-win32-test', 'win32', 'x64')
 
     const options = createPackagerOptions({
@@ -231,7 +268,7 @@ describe('Electron investment sidecar packaging', () => {
       stagingDir: plan.stagingDir,
     })
 
-    expect(options.derefSymlinks).toBe(true)
+    expect(options.derefSymlinks).toBe(false)
   })
 
   it('ad-hoc signs macOS packages sequentially without the Node signing walker', async () => {

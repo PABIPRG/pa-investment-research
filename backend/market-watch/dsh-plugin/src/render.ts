@@ -84,25 +84,76 @@ export function renderOverview(value: { items?: Array<Row>; trade_date?: string 
 
 // ---- 盘中异动扫描 --------------------------------------------------------
 
-export function renderScan(value: { items?: Array<Row>; kind?: string; trade_date?: string }): string {
-  const items = value.items ?? []
-  const kindMap: Record<string, string> = {
-    gainers: '涨幅榜', volume_ratio: '量比榜', limit: '涨跌停', turnover: '换手榜', amount: '成交额榜',
-  }
-  const label = kindMap[String(value.kind ?? '')] ?? String(value.kind ?? '')
-  if (!items.length) return `**${label}（${value.trade_date ?? ''}）**\n\n暂无数据。`
-  const lines = items.map((it, i) => {
+type ScanRenderValue = {
+  items?: Array<Row>
+  limit_up?: Array<Row>
+  limit_down?: Array<Row>
+  kind?: string
+  trade_date?: string
+  source?: string
+  stale?: boolean
+  complete?: boolean
+  warnings?: string[]
+}
+
+function renderScanRows(items: Array<Row>): string {
+  return items.map((it, i) => {
     const name = `${it.name ?? ''}（${it.code ?? ''}）`
     const chg = pct(it.pct_change)
     const amt = moneyYi(it.amount_yi)
     return `${i + 1}. ${name} ${chg} 成交${amt}`
-  })
-  return `**${label}（${value.trade_date ?? ''}）**\n\n${lines.join('\n')}`
+  }).join('\n')
+}
+
+export function renderScan(value: ScanRenderValue): string {
+  const kindMap: Record<string, string> = {
+    gainers: '涨幅榜', volume_ratio: '量比榜', limit: '涨跌停', turnover: '换手榜', amount: '成交额榜',
+  }
+  const label = kindMap[String(value.kind ?? '')] ?? String(value.kind ?? '')
+  const meta = [
+    value.source ? `来源 ${value.source}` : '',
+    value.stale === true ? '缓存数据' : '',
+    value.complete === false ? '结果不完整' : '',
+  ].filter(Boolean).join(' ｜ ')
+  const warning = value.warnings?.length ? `提示：${value.warnings.join('；')}` : ''
+  const sections = [`**${label}（${value.trade_date ?? ''}）**`]
+  if (meta) sections.push(meta)
+
+  if (value.kind === 'limit') {
+    const up = value.limit_up ?? []
+    const down = value.limit_down ?? []
+    sections.push(`**涨停（${up.length}）**\n${up.length ? renderScanRows(up) : '暂无数据。'}`)
+    sections.push(`**跌停（${down.length}）**\n${down.length ? renderScanRows(down) : '暂无数据。'}`)
+  } else {
+    const items = value.items ?? []
+    sections.push(items.length ? renderScanRows(items) : '暂无数据。')
+  }
+
+  if (warning) sections.push(warning)
+  return sections.join('\n\n')
 }
 
 // ---- 个股技术信号 --------------------------------------------------------
 
 export function renderTechSignal(v: Record<string, unknown>): string {
+  if (v.status === 'preparing') {
+    const message = typeof v.message === 'string' && v.message.trim()
+      ? v.message.trim()
+      : 'K 线数据正在后台准备，请稍后重试。'
+    const retryAfter = typeof v.retry_after_ms === 'number' && v.retry_after_ms > 0
+      ? `建议约 ${Math.max(1, Math.ceil(v.retry_after_ms / 1000))} 秒后重试。`
+      : '请稍后重试。'
+    return `**技术信号正在准备**\n\n${message}\n\n${retryAfter}`
+  }
+
+  if (v.status === 'unavailable') {
+    const message = typeof v.message === 'string' && v.message.trim()
+      ? v.message.trim()
+      : '技术数据暂时不可用。'
+    const retryHint = v.retryable === true ? '\n\n当前状态可以重试。' : ''
+    return `**技术信号暂不可用**\n\n${message}${retryHint}`
+  }
+
   const name = `${v.name ?? ''}（${v.code ?? ''}）`
   const last = v.last as Row | undefined
   const close = last ? last.close : null

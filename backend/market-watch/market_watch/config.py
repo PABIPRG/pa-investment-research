@@ -70,7 +70,11 @@ class Settings:
         # 行情数据
         # 快照是整市分页拉取（55+ 请求），TTL 太短会高频打爆东财 push2 被限流；60s 足够盯盘触发用
         self.quote_cache_ttl = float(os.getenv("MW_QUOTE_CACHE_TTL", "60"))
+        self.scan_cache_ttl = float(os.getenv("MW_SCAN_CACHE_TTL", "15"))
+        self.scan_stale_ttl = float(os.getenv("MW_SCAN_STALE_TTL", "300"))
+        self.scan_cache_size = int(os.getenv("MW_SCAN_CACHE_SIZE", "64"))
         self.fund_flow_ttl = float(os.getenv("MW_FUND_FLOW_TTL", "300"))
+        self.indices_stale_ttl = float(os.getenv("MW_INDICES_STALE_TTL", "300"))
         self.fund_flow_enabled = _true("MW_FUND_FLOW", default=True)
         self.lookback_days = int(os.getenv("MW_LOOKBACK_DAYS", "120"))
         # 新闻速递
@@ -78,6 +82,9 @@ class Settings:
         self.news_interval_min = int(os.getenv("MW_NEWS_INTERVAL_MIN", "60"))
         self.news_top = int(os.getenv("MW_NEWS_TOP", "8"))
         self.stock_news_top = int(os.getenv("MW_STOCK_NEWS_TOP", "3"))
+        self.stock_news_cache_ttl = float(os.getenv("MW_STOCK_NEWS_CACHE_TTL", "60"))
+        self.stock_news_stale_ttl = float(os.getenv("MW_STOCK_NEWS_STALE_TTL", "300"))
+        self.stock_news_cache_size = int(os.getenv("MW_STOCK_NEWS_CACHE_SIZE", "64"))
         self.flash_cache_ttl = float(os.getenv("MW_FLASH_CACHE_TTL", "15"))
         self.flash_stale_ttl = float(os.getenv("MW_FLASH_STALE_TTL", "300"))
         self.flash_first_paint_deadline = float(
@@ -92,6 +99,9 @@ class Settings:
         self.kline_source_timeout = float(os.getenv("MW_KLINE_SOURCE_TIMEOUT", "2"))
         self.kline_baostock_timeout = float(os.getenv("MW_KLINE_BAOSTOCK_TIMEOUT", "2"))
         self.kline_refresh_workers = int(os.getenv("MW_KLINE_REFRESH_WORKERS", "4"))
+        self.kline_failure_ttl = float(os.getenv("MW_KLINE_FAILURE_TTL", "30"))
+        self.kline_failure_cache_size = int(os.getenv("MW_KLINE_FAILURE_CACHE_SIZE", "128"))
+        self.kline_retry_after_ms = int(os.getenv("MW_KLINE_RETRY_AFTER_MS", "1500"))
         self.quote_name_deadline = float(os.getenv("MW_QUOTE_NAME_DEADLINE", "0.3"))
         self.quote_stale_ttl = float(os.getenv("MW_QUOTE_STALE_TTL", "300"))
         # 事件驱动（快讯 → 结构化事件 → 命中自选/持仓预警 → 个性化）

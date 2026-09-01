@@ -22,7 +22,7 @@
 
 | 类型 | 特点 |
 |---|---|
-| 全部同步 | 所有端点均为秒级返回（实时快照 TTL 缓存复用），**无任务式接口、无 SSE** |
+| 同步 HTTP | 所有端点均以 JSON 响应，**无 SSE**；K 线冷请求可用 `202 preparing` 表示后台刷新仍在进行 |
 | 读写混合 | 自选 / 规则为写操作（落本地 JSON store）；行情 / 新闻 / 简报为读或"生成"操作 |
 | 自动降级 | 行情东财→新浪、新闻 LLM→模板、事件 LLM→规则，任何一层挂了接口仍可用 |
 
@@ -41,12 +41,12 @@
 
 | 状态码 | 场景 |
 |---|---|
-| 200 | 成功 |
+| 200 | 成功；技术信号也用 200 表示 `ready` 或已确认的 `unavailable` 业务状态 |
+| 202 | 技术信号 `preparing`：后台刷新仍在进行，按 `retry_after_ms` 重试 |
 | 400 | 业务校验失败（如非交易日调 `/brief/generate`） |
 | 404 | 记录不存在（暂无新闻速递 / 简报 / 某代码无 K 线） |
 | 422 | 请求体校验失败（非法代码、非法 kind、非法运算符等） |
-| 503 | 行情/数据源暂不可用（部分端点降级为 422 提示"请稍后再试"） |
-| 504 | K 线冷请求超过前台等待预算；已准入的后台刷新继续 |
+| 503 | 行情/数据源暂不可用且没有合格缓存，例如扫描实时源全部失败 |
 
 ### 1.4 数据源与降级策略
 
@@ -72,18 +72,22 @@
 | 5 | GET | `/alerts` | 读取盯盘规则列表 | 读写 |
 | 6 | POST | `/alerts` | 创建盯盘规则 | 读写 |
 | 7 | DELETE | `/alerts/{rule_id}` | 删除盯盘规则 | 读写 |
-| 8 | GET | `/overview` | 盯盘面板（自选行情 + 规则命中/逼近） | 轻量 |
-| 9 | POST | `/scan` | 盘中异动扫描 | 轻量 |
-| 10 | POST | `/tech-signal` | 个股技术信号 | 轻量 |
-| 11 | POST | `/news/express` | 跑一轮新闻速递并落库 | 读写 |
-| 12 | GET | `/news/latest` | 最近一份新闻速递 | 轻量 |
-| 13 | GET | `/news/flash` | 实时快讯流（跨源聚合） | 轻量 |
-| 14 | GET | `/news/events` | 结构化投资事件（LLM 抽取） | 轻量 |
-| 15 | GET | `/news/event-alerts` | 事件预警中心（命中自选/持仓） | 轻量 |
-| 16 | POST | `/brief/generate` | 生成盘前/盘后简报 | 读写 |
-| 17 | GET | `/brief/latest` | 最近一份简报 | 轻量 |
-| 18 | GET | `/scheduler/status` | 调度器状态 | 轻量 |
-| 19 | POST | `/scheduler/tick` | 手动跑一轮盯盘评估 | 轻量 |
+| 8 | GET | `/securities/search` | 证券代码或名称搜索 | 轻量 |
+| 9 | POST | `/securities/detail` | 证券详情兼容聚合 | 轻量 |
+| 10 | GET | `/overview` | 盯盘面板（自选行情 + 规则命中/逼近） | 轻量 |
+| 11 | GET | `/indices` | 大盘指数结构化快照 | 轻量 |
+| 12 | POST | `/scan` | 盘中异动扫描 | 轻量 |
+| 13 | POST | `/tech-signal` | 个股技术信号三态合同 | 轻量 |
+| 14 | POST | `/news/express` | 跑一轮新闻速递并落库 | 读写 |
+| 15 | GET | `/news/latest` | 最近一份新闻速递 | 轻量 |
+| 16 | GET | `/news/stock` | 绑定证券代码的个股资讯 | 轻量 |
+| 17 | GET | `/news/flash` | 实时快讯流（跨源聚合） | 轻量 |
+| 18 | GET | `/news/events` | 结构化投资事件（LLM 抽取） | 轻量 |
+| 19 | GET | `/news/event-alerts` | 事件预警中心（命中自选/持仓） | 轻量 |
+| 20 | POST | `/brief/generate` | 生成盘前/盘后简报 | 读写 |
+| 21 | GET | `/brief/latest` | 最近一份简报 | 轻量 |
+| 22 | GET | `/scheduler/status` | 调度器状态 | 轻量 |
+| 23 | POST | `/scheduler/tick` | 手动跑一轮盯盘评估 | 轻量 |
 
 ---
 
@@ -263,7 +267,35 @@ POST /securities/detail
 
 实时行情或技术数据单侧暂不可用时，接口保留另一侧真实数据，并在 `warnings` 中说明缺失项；两侧都不可用时返回 404。
 
-### 5.4 POST /scan —— 盘中异动扫描
+### 5.4 GET /indices —— 大盘指数快照
+
+返回上证指数、深证成指和创业板指。`price`、`pct_change` 等任何非有限数（`NaN`、`Infinity`、`-Infinity`）都会归一化为 `null`，不会破坏 JSON 响应。接口按指数代码保留合格的最近成功项，因此某个指数缺失或上游失败不会拖垮其他指数。
+
+```jsonc
+GET /indices
+// 200
+{
+  "as_of": "2026-09-01 10:01:00",
+  "items": [
+    {
+      "code": "sh000001", "name": "上证指数",
+      "price": 3210.5, "pct_change": 0.8,
+      "as_of": "2026-09-01 10:00:00", "stale": true
+    },
+    {
+      "code": "sz399006", "name": "创业板指",
+      "price": null, "pct_change": -0.4,
+      "as_of": "2026-09-01 10:01:00", "stale": false
+    }
+  ],
+  "stale": true,
+  "warnings": ["指数实时源暂不可用，部分项目已返回最近成功缓存"]
+}
+```
+
+`items[].as_of` 是该项的事实时间；读取缓存时不得改写。`stale` 表示响应中是否存在缓存项，`warnings` 解释字段归一化、缺项或降级。若实时源失败且没有合格缓存，仍返回 200、空 `items` 和非空 `warnings`，由前端仅在指数区域展示不可用状态。
+
+### 5.5 POST /scan —— 盘中异动扫描
 
 **请求体（ScanRequest）**
 
@@ -279,6 +311,7 @@ POST /scan
 // 200（非 limit 类）
 {
   "kind": "gainers", "trade_date": "2026-08-24", "as_of": "2026-08-24T14:02:11",
+  "source": "eastmoney", "stale": false, "complete": true, "warnings": [],
   "items": [
     { "code": "300750", "name": "宁德时代", "price": 218.5, "pct_change": 10.01, "volume_ratio": 3.2, "amount_yi": 88.1, "turnover": 2.9 }
   ]
@@ -286,14 +319,20 @@ POST /scan
 // 200（kind=limit，返回涨跌停两表）
 {
   "kind": "limit", "trade_date": "2026-08-24", "as_of": "2026-08-24T14:02:11",
+  "source": "sina", "stale": false, "complete": false,
+  "warnings": ["东财不可用，已使用新浪备用源"],
   "limit_up":  [ { "...": "同 items 条目" } ],
   "limit_down": [ { "...": "同 items 条目" } ]
 }
-// 422（非法 kind 或行情源暂不可用）
+// 422（非法 kind，属于输入错误）
 { "detail": "kind 必须是 ('gainers', 'volume_ratio', 'limit', 'turnover', 'amount') 之一，收到 'xxx'" }
+// 503（实时源均失败，且没有该扫描键的合格缓存）
+{ "detail": "行情源暂不可用，请稍后再试" }
 ```
 
-### 5.5 POST /tech-signal —— 个股技术信号
+`source` 是本次数据事实来源；`complete=false` 表示备用源只提供了真实能力范围内的结果；`stale=true` 表示返回按 `kind/top_n/min_amount_yi` 隔离的最近成功缓存，此时 `as_of` 保留原始事实时间，`warnings` 说明降级。新浪没有量比能力，`volume_ratio` 主源失败时不会伪造备用结果，而是使用合格缓存或返回 503。
+
+### 5.6 POST /tech-signal —— 个股技术信号
 
 **请求体（TechSignalRequest）**
 
@@ -305,8 +344,9 @@ POST /scan
 ```jsonc
 POST /tech-signal
 { "code": "600519", "lookback": 120 }
-// 200
+// 200 ready
 {
+  "status": "ready", "stale": false,
   "code": "600519", "name": "贵州茅台", "as_of": "2026-08-24 14:02:11",
   "bars": 120,
   "last": { "date": "2026-08-24", "open": 1530.0, "close": 1560.5, "high": 1570.0, "low": 1520.0, "volume": 3200000, "amount": 4900000000 },
@@ -321,13 +361,23 @@ POST /tech-signal
   },
   "signals": [ "MA 多头排列（5/10/20/60: 1542.0/1528.0/1505.0/1480.0）", "MACD 金叉（DIF 0.82 / DEA 0.55）", "支撑 1430.0 / 压力 1580.0（区间位置 0.72）" ]
 }
-// 404（无 K 线数据）
-{ "detail": "600519 无 K 线数据" }
+// 202 preparing：冷请求超过前台等待预算，后台单航班仍在继续
+{
+  "status": "preparing", "code": "920223",
+  "as_of": null, "retry_after_ms": 1500,
+  "message": "920223 K 线正在后台准备，请稍后重试"
+}
+// 200 unavailable：后台已确认不可用，是业务终态而非 HTTP 故障
+{
+  "status": "unavailable", "code": "920223",
+  "as_of": null, "reason_code": "provider_error",
+  "message": "920223 技术数据暂不可用，请稍后重试", "retryable": true
+}
 ```
 
-> 各指标子对象字段不足数据时自动置 `null` / 默认文案（`trend: "数据不足"` 等），`signals` 数组为人类可读信号行（供直接渲染 / LLM 上下文）。
+> 客户端必须按 `status` 分支：`ready` 才展示指标和买卖相关信号；`preparing` 按 `retry_after_ms` 自动继续且不显示红色故障；`unavailable` 展示安全 `message` 和手动重试。各指标子对象字段不足数据时自动置 `null` / 默认文案（`trend: "数据不足"` 等），`signals` 数组为人类可读信号行（供直接渲染 / LLM 上下文）。
 >
-> K 线按 `code+lookback` 使用 60 秒 fresh cache、30 分钟 stale cache 和 single-flight。stale 命中会立即返回并后台刷新；无缓存冷请求最多前台等待 2.5 秒，超时返回 `504`，唯一后台刷新仍会继续，稍后重试可命中缓存。后台最多准入 4 个不同 key，容量已满且没有 stale 时返回 `503`，不会进入无界队列。baostock fallback 在独立子进程运行，超过 2 秒会被父进程终止。技术信号名称补全最多另等 0.3 秒，超时仅使 `name` 为空，不阻塞指标返回。
+> K 线按 `code+lookback` 使用 60 秒 fresh cache、30 分钟 stale cache 和 single-flight。stale 命中会立即以 `ready/stale=true` 返回并后台刷新；无缓存冷请求最多前台等待 2.5 秒，超时返回 `202 preparing`，唯一后台刷新仍会继续。后台最多准入 4 个不同 key；无法准入、无数据或供应商失败时以 `200 unavailable` 给出稳定 `reason_code`，不会进入无界队列。baostock fallback 在独立子进程运行，超过 2 秒会被父进程终止；北交所会显式跳过不支持的 baostock。技术信号名称补全最多另等 0.3 秒，超时仅使 `name` 为空，不阻塞指标返回。
 
 ---
 
@@ -361,7 +411,40 @@ POST /news/express
 { "detail": "暂无新闻速递，先调 POST /news/express" }
 ```
 
-### 6.3 GET /news/flash —— 实时快讯流
+### 6.3 GET /news/stock —— 与证券绑定的个股资讯
+
+**Query**：`code`（必填，6 位证券代码，服务端归一化）、`limit`（5–20，默认 8）。缓存和 single-flight 均按 `code+limit` 隔离，切换证券必须传入新代码；接口不会用全市场快讯填充个股结果。
+
+```jsonc
+GET /news/stock?code=600519&limit=8
+// 200 ready：有结果
+{
+  "status": "ready", "code": "600519", "as_of": "2026-09-01 10:00:00",
+  "items": [{ "title": "公司发布经营数据", "source": "东财", "time": "2026-09-01 09:58:00" }],
+  "complete": true, "message": null
+}
+// 200 ready：合法空结果，与失败严格区分
+{
+  "status": "ready", "code": "600519", "as_of": "2026-09-01 10:00:00",
+  "items": [], "complete": true, "message": null
+}
+// 200 stale：实时源失败，但存在合格缓存；as_of 保持原事实时间
+{
+  "status": "stale", "code": "600519", "as_of": "2026-09-01 09:55:00",
+  "items": [{ "title": "缓存资讯", "source": "东财", "time": "2026-09-01 09:50:00" }],
+  "complete": false, "message": "资讯源暂不可用，已返回最近成功缓存"
+}
+// 200 unavailable：实时源失败且无缓存
+{
+  "status": "unavailable", "code": "600519", "as_of": "2026-09-01 10:00:00",
+  "items": [], "complete": false, "message": "个股资讯暂不可用，请稍后重试"
+}
+// 422：非法代码或 limit 超出 5–20
+```
+
+空态的判定依据是 `status=ready && items=[] && complete=true`；失败态依据是 `status=unavailable`，不能把两者混为一谈，也不能回退到 `/news/flash` 冒充该证券资讯。
+
+### 6.4 GET /news/flash —— 实时快讯流
 
 **Query**：`limit`（5–100，默认 30）、`enrich`（0/1，默认 0）、`personal`（0/1，默认 0）。
 
@@ -387,7 +470,7 @@ GET /news/flash?limit=30
 { "event": { "id": "ev-...", "type": "价格异动", "tickers": [{"name": "宁德时代", "code": "300750"}], "direction": "利好", "summary": "..." }, "matched": "hit" }
 ```
 
-### 6.4 GET /news/events —— 结构化投资事件
+### 6.5 GET /news/events —— 结构化投资事件
 
 快讯 → LLM 抽取（类型/涉及个股/行业/方向/摘要），LLM 不可用自动降级规则抽取。`direction` ∈ `利好` / `利空` / `中性`。
 
@@ -411,7 +494,7 @@ GET /news/events?limit=30
 >
 > **事件流构成 = 全市场快讯抽取 + 持仓/自选逐只定向个股新闻**。定向条目来自东财搜索接口，直接标注已知 code（id 前缀 `ev-stock-`、`tickers[0].code` 命中持仓/自选，`direction`/`type` 用关键词规则判定、不走 LLM），每轮拉取受 `MW_DIRECTED_NEWS_DEADLINE`（默认 3s）总预算约束、随 `MW_EVENT_TTL`（默认 60s）缓存，不占 `event_batch` LLM 配额、不落持久化 `latest[:60]`。命中同一 `item_id` 时定向条目优先。
 
-### 6.5 GET /news/event-alerts —— 事件预警中心
+### 6.6 GET /news/event-alerts —— 事件预警中心
 
 命中自选（`watch`）/ 持仓（`hold`）的事件列表，时间倒序保留 50 条。持仓来源为 trading-core `:8000/holdings`（TTL 60s，失败降级为仅自选）。
 
@@ -583,7 +666,33 @@ interface EventAlertItem {
 }
 ```
 
-### 9.4 简报 / 速递
+### 9.4 实时盯盘可靠性合同
+
+```ts
+interface IndexSnapshot {
+  as_of: string
+  items: Array<{ code: string; name: string; price: number | null; pct_change: number | null; as_of: string; stale: boolean }>
+  stale: boolean
+  warnings: string[]
+}
+interface ScanSnapshotBase {
+  trade_date: string; as_of: string; source: string
+  stale: boolean; complete: boolean; warnings: string[]
+}
+type ScanSnapshot = ScanSnapshotBase & (
+  | { kind: 'gainers' | 'volume_ratio' | 'turnover' | 'amount'; items: QuoteRow[] }
+  | { kind: 'limit'; limit_up: QuoteRow[]; limit_down: QuoteRow[] }
+)
+type TechSignalSnapshot =
+  | { status: 'ready'; code: string; name: string; as_of: string; stale: boolean; bars: number; last: object; indicators: object; signals: unknown[] }
+  | { status: 'preparing'; code: string; as_of: string | null; retry_after_ms: number; message: string }
+  | { status: 'unavailable'; code: string; as_of: string | null; reason_code: string; message: string; retryable: boolean }
+type StockNewsSnapshot =
+  | { status: 'ready' | 'stale'; code: string; as_of: string; items: Array<{ title: string; source: string; time: string }>; complete: boolean; message: string | null }
+  | { status: 'unavailable'; code: string; as_of: string; items: []; complete: false; message: string }
+```
+
+### 9.5 简报 / 速递
 
 ```ts
 interface ExpressRecord {
@@ -609,9 +718,11 @@ interface BriefRecord {
 | 自选增删查 | POST `/watchlist/add`、POST `/watchlist/remove`、GET `/watchlist` |
 | 规则告警管理 | GET/POST `/alerts`、DELETE `/alerts/{id}` |
 | 盯盘面板 | GET `/overview` |
+| 大盘指数 | GET `/indices` |
 | 异动扫描 | POST `/scan` |
 | 技术信号 | POST `/tech-signal` |
 | 新闻速递 | POST `/news/express`、GET `/news/latest` |
+| 个股相关资讯 | GET `/news/stock?code={code}&limit={limit}` |
 | 实时快讯流（首页 / 盯盘页轮询） | GET `/news/flash`（`enrich=1`） |
 | 事件预警中心（首页） | GET `/news/event-alerts` |
 | 事件源（供 trading-core 策略研究消费） | GET `/news/events` |
@@ -631,6 +742,8 @@ interface BriefRecord {
 | `mw_scan` | POST `/scan`（kind: gainers/volume_ratio/limit/turnover/amount） |
 | `mw_tech_signal` | POST `/tech-signal`（code） |
 | `mw_latest_brief` | GET `/brief/latest` |
+
+`mw_tech_signal` 的 output schema 使用互斥 `oneOf`：`status` 分支分别收敛到 `ready/preparing/unavailable`，并按态声明必填字段；preparing 与 unavailable 的 `as_of` 精确允许 `string|null`，ready 保留 `code/name/as_of/stale/bars/last/indicators/signals` 成功字段。`mw_scan` 同样按普通 `items` 与 `limit_up/limit_down` 两种响应形状声明，并要求 `source/stale/complete/warnings`；其 renderer 分别展示普通榜单或涨停/跌停分组，并标记来源、缓存、不完整与警告，避免把备用源或缓存写成实时完整结果。`mw_flash.tier` 只允许 `base|full`。个股资讯由产品运行时按固定操作调用 `/news/stock`；插件不注册 `market-watch.security-news` 或任何接收任意 URL 的工具。
 
 ---
 

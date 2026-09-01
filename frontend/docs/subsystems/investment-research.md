@@ -159,6 +159,14 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 @Remote('readiness') readiness(): InvestmentReadinessSnapshot
 
 /**
+ * Execute one browser-safe, allow-listed investment data operation.
+ * Backend origins and arbitrary paths never cross the Remote boundary.
+ * @param request - Stable operation name and validated JSON input.
+ * @returns The backend's lossless JSON response.
+ */
+@Remote('request-data') requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>
+
+/**
  * Request the launcher to restart the complete application after the Remote acknowledgement is sent.
  * @returns an accepted result, or an actionable unavailable result when this launcher cannot restart.
  */
@@ -171,5 +179,5 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 invariantSnapshot(): ReturnType<InvestmentBackendManager['invariantSnapshot']>
 ```
 
-Source: [`packages/investment-research/python-runtime/src/index.ts:55`](../../packages/investment-research/python-runtime/src/index.ts)
+Source: [`packages/investment-research/python-runtime/src/index.ts:69`](../../packages/investment-research/python-runtime/src/index.ts)
 <!-- END GENERATED cordis-surface -->
