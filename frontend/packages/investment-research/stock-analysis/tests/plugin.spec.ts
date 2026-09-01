@@ -63,6 +63,7 @@ const STOCK_CONTRACTS = [
     parameters: input({
       domain: { type: 'string', description: '要读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] },
       reference: { type: 'string', description: '可选；仅 reports 领域接受 32 位小写十六进制报告 ID，用于读取该报告详情' },
+      strategy_id: { type: 'string', description: '可选；仅 evolution 领域接受安全策略 ID，用于读取单策略进化诊断' },
     }, ['domain']),
     schema: output({ domain: { type: 'string', description: '实际读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] }, resources: { description: '按稳定资源名分组的后端无损 JSON' } }),
   },
@@ -346,6 +347,17 @@ describe('stock-analysis function plugin', () => {
     expect(byName.get('set_watchlist')!.output.render?.({}, { saved: 2 })).toEqual([{ type: 'text', text: '已保存 2 只自选股。' }])
     expect(byName.get('get_watchlist')!.output.render?.({}, { tickers: [] })[0]!.text).toContain('（空）')
     expect(byName.get('get_latest_brief')!.output.render?.({}, {})[0]!.text).toBe('暂无简报')
+  })
+
+  it('labels global and scoped evolution context calls separately', async () => {
+    const byName = new Map((await install()).map(tool => [tool.name, tool]))
+    const tool = byName.get('investment_context')!
+    expect(tool.presentCall?.({ domain: 'evolution' })).toMatchObject({
+      title: '🧭 自进化全局看板',
+    })
+    expect(tool.presentCall?.({ domain: 'evolution', strategy_id: 'strategy-1' })).toMatchObject({
+      title: '🧭 策略进化诊断',
+    })
   })
 
   it('preflights every operation before its adapter HTTP or SSE side effect', async () => {

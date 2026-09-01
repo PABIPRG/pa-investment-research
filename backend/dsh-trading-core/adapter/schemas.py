@@ -349,6 +349,11 @@ class EvolutionRunRequest(BaseModel):
         pattern=r"^[0-9a-f]{32}$",
         description="apply=true 时必填；来自最近一次 apply=false 响应",
     )
+    strategy_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$",
+        description="可选单策略作用域；省略时使用全局进化作用域",
+    )
 
     @model_validator(mode="after")
     def validate_preview_token(self):

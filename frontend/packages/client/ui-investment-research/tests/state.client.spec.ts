@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { InvestmentUiState } from '../src/client/state.ts'
 
 describe('InvestmentUiState', () => {
+  it('从自进化看板携带策略和第4阶段进入策略研究', () => {
+    const state = new InvestmentUiState()
+    state.navigate('framework', {
+      strategyId: 'strat-a',
+      strategyStage: 'evolution',
+      evolutionReturnGroup: 'retired',
+    })
+    expect(state.getSnapshot()).toMatchObject({
+      route: 'framework',
+      selectedStrategyId: 'strat-a',
+      strategyResearchStage: 'evolution',
+      evolutionReturnGroup: 'retired',
+    })
+  })
+
   it('starts on 研究工作台 and keeps module drafts and selected entities independent', () => {
     const state = new InvestmentUiState()
     const listener = vi.fn()
@@ -19,6 +34,8 @@ describe('InvestmentUiState', () => {
       chainQuery: '',
       selectedStockCode: '',
       selectedStrategyId: '',
+      strategyResearchStage: 'form',
+      evolutionReturnGroup: '',
     })
 
     state.setDraft('analysisQuery', '600519')
@@ -42,6 +59,8 @@ describe('InvestmentUiState', () => {
       chainQuery: '半导体',
       selectedStockCode: '300750',
       selectedStrategyId: 'strategy-1',
+      strategyResearchStage: 'form',
+      evolutionReturnGroup: '',
     })
 
     unsubscribe()

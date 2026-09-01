@@ -6,12 +6,13 @@
 依赖：adapter.evolution / adapter.store / adapter.strategies（无网络、无 LLM）。
 """
 
+import copy
 import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("ADAPTER_RUNNER", "fake")
 os.environ.setdefault("BRIEF_SCHEDULE_ENABLED", "false")
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from adapter.behavior_profile import compute_behavior_profile
+from adapter import evolution as evolution_module
 from adapter.app import create_app
 from adapter.config import settings
 from adapter.evolution import (
@@ -138,15 +140,42 @@ class EvolveTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 409)
                 self.assertIn("证据已变化", response.json()["detail"])
 
+    def test_scoped_compatibility_routes_validate_and_forward_strategy_id(self):
+        app = create_app()
+        with TestClient(app) as client:
+            with patch("adapter.evolution.current_preview") as scoped_preview:
+                scoped_preview.return_value = {"preview_status": "none", "actions": []}
+                response = client.get("/evolution/preview?strategy_id=strategy:alpha@v2")
+                self.assertEqual(response.status_code, 200)
+                scoped_preview.assert_called_once_with(strategy_id="strategy:alpha@v2")
+
+            with patch("adapter.evolution.evolve") as scoped_evolve:
+                scoped_evolve.return_value = {"preview_status": "empty", "actions": []}
+                response = client.post("/evolution/run", json={
+                    "apply": False,
+                    "strategy_id": "strategy:alpha@v2",
+                })
+                self.assertEqual(response.status_code, 200)
+                scoped_evolve.assert_called_once_with(
+                    apply=False,
+                    preview_token=None,
+                    strategy_id="strategy:alpha@v2",
+                )
+
+            with patch("adapter.evolution.current_preview") as invalid_preview:
+                response = client.get("/evolution/preview?strategy_id=../unsafe")
+                self.assertEqual(response.status_code, 422)
+                invalid_preview.assert_not_called()
+
     def test_waiting_data_guardrail_never_writes(self):
         store = _store()
         _plant(store, days=1)
-        preview, plan = _preview_and_apply(store)
-        self.assertRegex(preview["preview_token"], r"^[0-9a-f]{32}$")
-        self.assertEqual(preview["state_version"], plan["state_version"])
-        self.assertEqual(plan["status"], "waiting_data")
-        self.assertEqual(plan["count"], 0)
-        # 未写任何动作（好策略未被升级、坏策略未被淘汰）
+        preview = evolve(store, apply=False)
+        self.assertEqual(preview["status"], "waiting_data")
+        self.assertEqual(preview["preview_status"], "blocked")
+        self.assertNotIn("preview_token", preview)
+        self.assertEqual(current_preview(store)["preview_status"], "none")
+        self.assertEqual(store.all("evolution_previews"), {})
         self.assertEqual(store.get("strategies", "strat-bad").get("status"), "active")
 
     def test_evolve_promotes_mutates_and_retires(self):
@@ -210,6 +239,9 @@ class EvolveTests(unittest.TestCase):
             })
         preview = evolve(store, apply=False)
         self.assertEqual(preview["actions"], [])
+        self.assertEqual(preview["preview_status"], "empty")
+        self.assertNotIn("preview_token", preview)
+        self.assertEqual(current_preview(store)["preview_status"], "none")
         per = {p["strategy_id"]: p for p in preview["per_strategy"]}
         self.assertEqual(per["strat-t2"]["decision"], "none")
         self.assertIn("不重复升级", per["strat-t2"]["reason"])
@@ -342,6 +374,74 @@ class OutcomeTests(unittest.TestCase):
 
 
 class StatusTests(unittest.TestCase):
+    def test_invalid_scoped_identifier_is_rejected_before_storage_io(self):
+        store = Mock(spec=JsonStore)
+
+        for operation in (status, attribution, current_preview, evolve):
+            with self.subTest(operation=operation.__name__):
+                with self.assertRaisesRegex(ValueError, "strategy_id"):
+                    operation(store, strategy_id="../unsafe")
+                self.assertEqual(store.method_calls, [])
+
+    def test_scoped_status_exposes_only_target_strategy_without_writes(self):
+        store = _store()
+        _plant(store)
+        store.set("strategies", "strat-child", {
+            "id": "strat-child",
+            "name": "子策略",
+            "kind": "rsi_reversal",
+            "status": "candidate",
+            "source": "evolution",
+            "mutated_from": "strat-good",
+            "evolve": {"state": "candidate", "tier": 1},
+        })
+        before = copy.deepcopy(store.all("strategies"))
+
+        result = status(store, strategy_id="strat-good")
+
+        self.assertEqual(
+            [row["strategy_id"] for row in result["per_strategy"]],
+            ["strat-good"],
+        )
+        self.assertEqual(result["counts"], {
+            "active": 1,
+            "candidate": 0,
+            "mutated": 0,
+            "retired": 0,
+            "watch": 0,
+            "rejected": 0,
+        })
+        self.assertTrue(all(
+            action.get("sid") == "strat-good" or action.get("parent") == "strat-good"
+            for run in result["recent_applied"]
+            for action in run["actions"]
+        ))
+        self.assertEqual(store.all("strategies"), before)
+
+    def test_global_status_exposes_closed_loop_dashboard_contract(self):
+        result = status(_store())
+        for key in (
+            "closed_loop_enabled", "closed_loop_time", "lifecycle",
+            "per_strategy", "recent_applied", "last_applied_at",
+        ):
+            self.assertIn(key, result)
+
+    def test_scoped_read_routes_forward_strategy_id_and_map_missing_to_404(self):
+        app = create_app()
+        with TestClient(app) as client:
+            with patch("adapter.evolution.status") as scoped_status:
+                scoped_status.return_value = {"ready": True}
+                response = client.get("/evolution/status?strategy_id=strat-good")
+                self.assertEqual(response.status_code, 200)
+                scoped_status.assert_called_once_with(strategy_id="strat-good")
+
+            with patch(
+                "adapter.evolution.attribution",
+                side_effect=evolution_module.EvolutionStrategyNotFound("策略不存在"),
+            ):
+                response = client.get("/evolution/attribution?strategy_id=strat-missing")
+                self.assertEqual(response.status_code, 404)
+
     def test_status_counts_lifecycle(self):
         store = _store()
         _plant(store)

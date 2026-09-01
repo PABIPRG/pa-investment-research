@@ -375,6 +375,12 @@ describe('investment data broker', () => {
       operation: 'trading-core.strategy-detail', input: { strategy_id: '../strategy' },
     }, acquire)).rejects.toThrow('strategy_id must be a safe identifier')
     await expect(requestInvestmentData({
+      operation: 'trading-core.evolution-status', input: { strategy_id: '../strategy' },
+    }, acquire)).rejects.toThrow('strategy_id must be a safe identifier')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.evolution-run', input: { apply: false, strategy_id: '../strategy' },
+    }, acquire)).rejects.toThrow('strategy_id must be a safe identifier')
+    await expect(requestInvestmentData({
       operation: 'industry-chain.company', input: { code: '300750/private' },
     }, acquire)).rejects.toThrow('code must be a safe identifier')
     await expect(requestInvestmentData({
@@ -570,6 +576,43 @@ describe('investment data broker', () => {
 
     expect(fetchMock).not.toHaveBeenCalled()
     expect(release).toHaveBeenCalledTimes(2)
+  })
+
+  it('forwards one safe strategy id to evolution status and attribution reads', async () => {
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'http://127.0.0.1:8000',
+      release,
+    }))
+    const calls: Array<[string, string, string | undefined]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init?.method ?? 'GET', init?.body as string | undefined])
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    }))
+
+    await requestInvestmentData({
+      operation: 'trading-core.evolution-status',
+      input: { strategy_id: 'strategy:alpha@v2' },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.evolution-attribution',
+      input: { strategy_id: 'strategy:alpha@v2' },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.evolution-preview',
+      input: { strategy_id: 'strategy:alpha@v2' },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.evolution-run',
+      input: { apply: false, strategy_id: 'strategy:alpha@v2' },
+    }, acquire)
+
+    expect(calls).toEqual([
+      ['http://127.0.0.1:8000/evolution/status?strategy_id=strategy%3Aalpha%40v2', 'GET', undefined],
+      ['http://127.0.0.1:8000/evolution/attribution?strategy_id=strategy%3Aalpha%40v2', 'GET', undefined],
+      ['http://127.0.0.1:8000/evolution/preview?strategy_id=strategy%3Aalpha%40v2', 'GET', undefined],
+      ['http://127.0.0.1:8000/evolution/run', 'POST', '{"apply":false,"strategy_id":"strategy:alpha@v2"}'],
+    ])
   })
 
   it('maps business workflow writes and task polling to fixed trading-core routes', async () => {

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-26-investment-product-lifecycle-workbench.md
-2026-08-26-investment-product-lifecycle-workbench.md: fadd1b4d327d2035d6364295ad7d7b8c0b03e28d
-2026-08-26-investment-product-lifecycle-workbench.zh.md: fa10cabdd8329b6f4d84ebd909c48d2d42a5695e
+2026-08-26-investment-product-lifecycle-workbench.md: 9013b1774255919c7412294964c113e19ced7f59
+2026-08-26-investment-product-lifecycle-workbench.zh.md: 7f114ead24124e5831830edbc7fb70e41b6923b5

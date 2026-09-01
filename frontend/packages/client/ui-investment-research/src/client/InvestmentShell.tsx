@@ -22,11 +22,11 @@ import {
 } from './DetailDialogs.tsx'
 import { parseHoldingsImport } from './holdings-import.ts'
 import {
-  EvolutionPage,
   IndustryChainPage,
   ReportCenter,
   StrategyResearchPage,
 } from './ProductPages.tsx'
+import { EvolutionDashboard } from './EvolutionDashboard.tsx'
 import { ResearchWorkbenchPage } from './ResearchWorkbenchPage.tsx'
 import { PreferenceReviewPage } from './PreferenceReviewPage.tsx'
 import { ResearchFloatingSurface } from './ResearchFloatingSurface.tsx'
@@ -1192,12 +1192,22 @@ export function InvestmentShell({
             onAnalyze={prepareAssistantWithoutReturn}
             initialView={snapshot.route === 'projects' ? 'shadow' : 'pool'}
             onOpenEvolution={() => { navigate('tasks') }}
+            initialStage={snapshot.strategyResearchStage ?? 'form'}
+            onBackEvolution={() => { navigate('tasks', { evolutionReturnGroup: snapshot.evolutionReturnGroup ?? '' }) }}
           />
         )}
         {snapshot.route === 'tasks' && (
-          <EvolutionPage
+          <EvolutionDashboard
             requestData={requestData}
             onAnalyze={prepareAssistantWithoutReturn}
+            initialLifecycleGroup={snapshot.evolutionReturnGroup ?? ''}
+            onOpenStrategy={(strategyId, group) => {
+              navigate('framework', {
+                strategyId,
+                strategyStage: 'evolution',
+                ...(group === undefined ? {} : { evolutionReturnGroup: group }),
+              })
+            }}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
           />
         )}

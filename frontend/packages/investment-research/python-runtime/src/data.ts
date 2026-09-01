@@ -237,6 +237,21 @@ function noInput(path: string, backendId: InvestmentBackendId): RequestSpec {
   }
 }
 
+function evolutionRead(path: string): RequestSpec {
+  return {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['strategy_id'])
+      const strategyId = optionalString(input, 'strategy_id')
+      if (strategyId !== undefined && !STRATEGY_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
+      return query(path, { strategy_id: strategyId })
+    },
+  }
+}
+
 function noInputPost(path: string, backendId: InvestmentBackendId): RequestSpec {
   return {
     backendId,
@@ -888,17 +903,21 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       }
     },
   },
-  'trading-core.evolution-status': noInput('/evolution/status', 'trading-core'),
-  'trading-core.evolution-attribution': noInput('/evolution/attribution', 'trading-core'),
-  'trading-core.evolution-preview': noInput('/evolution/preview', 'trading-core'),
+  'trading-core.evolution-status': evolutionRead('/evolution/status'),
+  'trading-core.evolution-attribution': evolutionRead('/evolution/attribution'),
+  'trading-core.evolution-preview': evolutionRead('/evolution/preview'),
   'trading-core.evolution-run': {
     backendId: 'trading-core',
     method: 'POST',
     path: () => '/evolution/run',
     body: (input) => {
-      knownKeys(input, ['apply', 'preview_token'])
+      knownKeys(input, ['apply', 'preview_token', 'strategy_id'])
       const apply = optionalBoolean(input, 'apply') ?? false
       const previewToken = optionalString(input, 'preview_token')
+      const strategyId = optionalString(input, 'strategy_id')
+      if (strategyId !== undefined && !STRATEGY_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
       if (apply && previewToken === undefined) {
         throw new TypeError('investment data: preview_token is required when apply is true')
       }
@@ -908,7 +927,11 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       if (previewToken !== undefined && !REPORT_IDENTIFIER.test(previewToken)) {
         throw new TypeError('investment data: preview_token must be a 32-character lowercase hexadecimal identifier')
       }
-      return { apply, ...(previewToken === undefined ? {} : { preview_token: previewToken }) }
+      return {
+        apply,
+        ...(previewToken === undefined ? {} : { preview_token: previewToken }),
+        ...(strategyId === undefined ? {} : { strategy_id: strategyId }),
+      }
     },
   },
   'trading-core.personalized-matches': noInput('/personalized/matches', 'trading-core'),

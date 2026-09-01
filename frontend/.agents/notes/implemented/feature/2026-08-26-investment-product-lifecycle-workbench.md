@@ -4,6 +4,8 @@ Status: implemented
 
 English | [中文](2026-08-26-investment-product-lifecycle-workbench.zh.md)
 
+> Evolution update: the [read-only evolution dashboard and one automatic loop decision](2026-09-01-evolution-dashboard-strategy-diagnostics.md) partially supersedes this note's manual preview and confirmation surface. The preview/run protocol below remains historical context and a compatibility contract.
+
 ## Problem
 
 The investment profile exposed real market and portfolio data but presented the remaining research capabilities as unrelated placeholders. Reports produced by asynchronous analysis had no product-wide retrieval point, strategy evidence did not flow into paper validation or evolution, and browser-generated context would have required copying business JSON into the conversation composer. Workspace is an internal Session grouping and tool-scope mechanism rather than the application's persistence location, but it occupied primary navigation, the blank conversation, and Settings.
