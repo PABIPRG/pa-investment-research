@@ -27,6 +27,7 @@ interface CommandSpec {
 interface PackagingPlan {
   appSourceDir: string
   deploy: CommandSpec
+  portableStagingDir: string
   rootDir: string
   sidecar: CommandSpec
   sidecarCacheDir: string
@@ -78,6 +79,7 @@ export function commandRequiresShell(command: string, platform: NodeJS.Platform 
  */
 export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, arch: string): PackagingPlan {
   const stagingDir = join(rootDir, 'app')
+  const portableStagingDir = join(rootDir, 'app-portable')
   const sidecarDir = join(rootDir, 'investment-python')
   const sidecarCacheDir = join(rootDir, 'sidecar-cache')
   const pnpmCommand = platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
@@ -95,6 +97,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
       command: pnpmCommand,
       cwd: workspaceDir,
     },
+    portableStagingDir,
     rootDir,
     sidecar: {
       args: [
@@ -247,11 +250,33 @@ async function copyWorkspacePackage(
   })
 }
 
+/** Resolve a relocatable directory-link target for POSIX or an allowed junction target for Windows. */
+export function packagingDirectoryLinkTarget(
+  linkPath: string,
+  targetDir: string,
+  platform: NodeJS.Platform,
+): string {
+  return platform === 'win32' ? resolve(targetDir) : relative(dirname(linkPath), targetDir)
+}
+
+async function createPackagingDirectoryLink(
+  targetDir: string,
+  linkPath: string,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  await symlink(
+    packagingDirectoryLinkTarget(linkPath, targetDir, platform),
+    linkPath,
+    platform === 'win32' ? 'junction' : 'dir',
+  )
+}
+
 /** Replace legacy pnpm workspace links with relocatable links inside the staged application. */
 export async function materializePackagingWorkspaceLinks(
   stagingDir: string,
   workspaceDir: string,
   appSourceDir: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<number> {
   const links = await collectPackagingWorkspaceLinks(stagingDir, workspaceDir)
   const materializedRoot = join(stagingDir, 'node_modules/.dsh-workspace-links')
@@ -268,13 +293,13 @@ export async function materializePackagingWorkspaceLinks(
 
   const sharedModules = join(materializedRoot, 'node_modules')
   await rm(sharedModules, { force: true, recursive: true })
-  await symlink(relative(materializedRoot, deployedModules), sharedModules, 'dir')
+  await createPackagingDirectoryLink(deployedModules, sharedModules, platform)
 
   await Promise.all(links.map(async ({ linkPath, sourceDir }) => {
     const targetDir = canonicalTargets.get(sourceDir)
     if (targetDir === undefined) throw new Error(`missing materialized workspace target for ${sourceDir}`)
     await rm(linkPath, { force: true, recursive: true })
-    await symlink(relative(dirname(linkPath), targetDir), linkPath, 'dir')
+    await createPackagingDirectoryLink(targetDir, linkPath, platform)
   }))
 
   const workspacePackages = await collectWorkspacePackages(workspaceDir)
@@ -302,12 +327,54 @@ export async function materializePackagingWorkspaceLinks(
         }
         await mkdir(dirname(deployedDependency), { recursive: true })
         await rm(deployedDependency, { force: true, recursive: true })
-        await symlink(relative(dirname(deployedDependency), targetDir), deployedDependency, 'dir')
+        await createPackagingDirectoryLink(targetDir, deployedDependency, platform)
       }
       pending.push(dependencyName)
     }
   }
   return links.length
+}
+
+async function copyPortablePackageEntry(
+  sourcePath: string,
+  destinationPath: string,
+  ancestorDirectories: ReadonlySet<string>,
+): Promise<void> {
+  const sourceMetadata = await lstat(sourcePath)
+  const resolvedSource = sourceMetadata.isSymbolicLink() ? await realpath(sourcePath) : sourcePath
+  const resolvedMetadata = sourceMetadata.isSymbolicLink() ? await lstat(resolvedSource) : sourceMetadata
+  if (resolvedMetadata.isFile()) {
+    await mkdir(dirname(destinationPath), { recursive: true })
+    await copyFile(resolvedSource, destinationPath)
+    await chmod(destinationPath, resolvedMetadata.mode)
+    return
+  }
+  if (!resolvedMetadata.isDirectory()) {
+    throw new TypeError(`deployed package contains an unsupported entry: ${sourcePath}`)
+  }
+
+  const canonicalDirectory = await realpath(resolvedSource)
+  if (ancestorDirectories.has(canonicalDirectory)) {
+    throw new TypeError(`deployed package contains a directory-link cycle: ${sourcePath}`)
+  }
+  const nestedAncestors = new Set(ancestorDirectories)
+  nestedAncestors.add(canonicalDirectory)
+  await mkdir(destinationPath, { mode: resolvedMetadata.mode, recursive: true })
+  const directory = await opendir(resolvedSource)
+  for await (const entry of directory) {
+    await copyPortablePackageEntry(
+      join(resolvedSource, entry.name),
+      join(destinationPath, entry.name),
+      nestedAncestors,
+    )
+  }
+  await chmod(destinationPath, resolvedMetadata.mode)
+}
+
+/** Dereference a deployed application sequentially so Windows packaging memory stays bounded. */
+export async function copyPortablePackageTree(sourceDir: string, destinationDir: string): Promise<void> {
+  await rm(destinationDir, { force: true, recursive: true })
+  await copyPortablePackageEntry(sourceDir, destinationDir, new Set())
 }
 
 /** Remove the temporary package tree with Node's built-in descriptor exhaustion retries. */
@@ -352,10 +419,9 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     appBundleId: appIdentity.appBundleId,
     arch: input.arch,
     asar: false,
-    // Windows pnpm links are directory junctions with absolute targets inside
-    // the temporary deploy tree. Materialize them while Electron Packager
-    // copies the app so Forge can zip the durable output after that tree is removed.
-    derefSymlinks: input.platform === 'win32',
+    // Windows receives a sequentially dereferenced staging tree. Never ask
+    // Packager's unbounded copy walker to expand the pnpm graph itself.
+    derefSymlinks: false,
     dir: input.stagingDir,
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
@@ -518,8 +584,23 @@ async function packageApplication(): Promise<void> {
   const plan = createPackagingPlan(rootDir, process.platform, process.arch)
   try {
     await run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd)
-    if (process.platform === 'darwin') {
-      await materializePackagingWorkspaceLinks(plan.stagingDir, plan.workspaceDir, plan.appSourceDir)
+    let packagingStagingDir = plan.stagingDir
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      const startedAt = Date.now()
+      const materializedLinks = await materializePackagingWorkspaceLinks(
+        plan.stagingDir,
+        plan.workspaceDir,
+        plan.appSourceDir,
+        process.platform,
+      )
+      console.log(`Electron packaging: materialized ${materializedLinks} workspace links in ${Date.now() - startedAt}ms`)
+    }
+    if (process.platform === 'win32') {
+      const startedAt = Date.now()
+      console.log('Electron packaging: creating bounded portable Windows staging tree')
+      await copyPortablePackageTree(plan.stagingDir, plan.portableStagingDir)
+      packagingStagingDir = plan.portableStagingDir
+      console.log(`Electron packaging: portable Windows staging completed in ${Date.now() - startedAt}ms`)
     }
     await run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd)
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
@@ -542,7 +623,7 @@ async function packageApplication(): Promise<void> {
       electronZipDir: dirname(electronZip),
       platform: process.platform,
       sidecarDir: plan.sidecarDir,
-      stagingDir: plan.stagingDir,
+      stagingDir: packagingStagingDir,
       outDir: join(appDir, 'out'),
     }))
     await signPackagedMacApplications(appPaths, process.platform)

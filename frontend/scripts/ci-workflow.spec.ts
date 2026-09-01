@@ -211,25 +211,6 @@ describe('CI workflow', () => {
   })
 })
 
-describe('Investment packaged sidecar workflow', () => {
-  it('gives the Windows Electron packaging step enough Node heap', () => {
-    const workflow: unknown = yaml.load(readFileSync(resolve(root, '../.github/workflows/investment-sidecar.yml'), 'utf8'))
-    if (!isRecord(workflow) || !isRecord(workflow.jobs) || !isRecord(workflow.jobs['package-smoke'])) {
-      throw new TypeError('Investment sidecar workflow must define the package-smoke job')
-    }
-
-    const job = workflow.jobs['package-smoke']
-    if (!Array.isArray(job.steps)) throw new TypeError('Investment sidecar workflow must define package-smoke steps')
-    const windowsBuild = job.steps.find(step => (
-      isRecord(step) && step.name === 'Build test application and sidecar (Windows)'
-    ))
-
-    expect(windowsBuild).toMatchObject({
-      env: { NODE_OPTIONS: '--max-old-space-size=6144' },
-    })
-  })
-})
-
 describe('E2B e2e workflow', () => {
   it('is manual-only and fails loud before running the focused live suite', () => {
     const workflow = loadWorkflow('.github/workflows/e2b-e2e.yml')

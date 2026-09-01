@@ -67,8 +67,6 @@ jobs:
 
       - name: Build test application and sidecar (Windows)
         if: runner.os == 'Windows'
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm run make:electron
 
       - name: Smoke packaged sidecar (macOS)
