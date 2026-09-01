@@ -129,6 +129,38 @@ def _last_applied_at(store: JsonStore) -> str | None:
     return best
 
 
+def _recent_applied(store: JsonStore, limit: int = 5) -> list[dict]:
+    """最近 N 条已成功应用的进化记录摘要，按 applied_at 降序。
+
+    扫 evolution_previews 集合里 preview_status=="applied" 的记录，
+    供前端渲染「最近自动进化」时间线。
+    """
+    recs = store.all(_PREVIEW_COLLECTION) or {}
+    applied = [
+        rec for rec in recs.values()
+        if isinstance(rec, dict) and rec.get("preview_status") == "applied"
+    ]
+    applied.sort(key=lambda r: str(r.get("applied_at") or ""), reverse=True)
+    out: list[dict] = []
+    for rec in applied[:limit]:
+        actions = rec.get("actions") or []
+        out.append(
+            {
+                "applied_at": rec.get("applied_at"),
+                "count": len(actions),
+                "actions": [
+                    {
+                        "type": a.get("type"),
+                        "sid": a.get("sid") or a.get("parent"),
+                        "reason": a.get("reason"),
+                    }
+                    for a in actions
+                ],
+            }
+        )
+    return out
+
+
 def _parse_ts(ts) -> float | None:
     """'%Y-%m-%d %H:%M:%S' → epoch；解析失败返回 None。"""
     if not ts:
@@ -377,28 +409,13 @@ def evolve_auto(store: JsonStore | None = None) -> dict:
     return evolve(store, apply=True, preview_token=token)
 
 
-def _build_preview(store: JsonStore) -> dict:
-    days, n = _shadow_series(store)
-    resp = {
-        "as_of": _now(),
-        "days_of_data": n,
-        "min_days": settings.evolve_min_days,
-        "applied": False,
-        "count": 0,
-        "actions": [],
-        "per_strategy": [],
-        "last_applied_at": _last_applied_at(store),
-    }
-    if n < settings.evolve_min_days:
-        resp["status"] = "waiting_data"
-        resp["data_note"] = (
-            f"影子净值仅 {n} 日，需累积至 {settings.evolve_min_days} 日才执行升降级/变异；"
-            f"当前可先看 /evolution/attribution 归因报告"
-        )
-        return resp
-    resp["status"] = "ready"
+def _per_strategy_decisions(store: JsonStore, attr: dict) -> tuple[list[dict], list[dict]]:
+    """为每个 active 策略生成当前判定条目 + 判定触发的动作列表。
+
+    纯代码搬移自原 _build_preview 的分策略循环，输出逐字节不变，
+    供 _build_preview（preview 预案）与 status（闭环看板）复用。
+    """
     actions: list[dict] = []
-    attr = attribution(store)
     strats = store.all("strategies") or {}
     now = time.time()
     cooldown = settings.evolve_mutate_cooldown_days * 86400
@@ -555,6 +572,30 @@ def _build_preview(store: JsonStore) -> dict:
                 ),
             )
         per_strategy.append(entry)
+    return per_strategy, actions
+
+
+def _build_preview(store: JsonStore) -> dict:
+    days, n = _shadow_series(store)
+    resp = {
+        "as_of": _now(),
+        "days_of_data": n,
+        "min_days": settings.evolve_min_days,
+        "applied": False,
+        "count": 0,
+        "actions": [],
+        "per_strategy": [],
+        "last_applied_at": _last_applied_at(store),
+    }
+    if n < settings.evolve_min_days:
+        resp["status"] = "waiting_data"
+        resp["data_note"] = (
+            f"影子净值仅 {n} 日，需累积至 {settings.evolve_min_days} 日才执行升降级/变异；"
+            f"当前可先看 /evolution/attribution 归因报告"
+        )
+        return resp
+    resp["status"] = "ready"
+    per_strategy, actions = _per_strategy_decisions(store, attribution(store))
     resp["count"] = len(actions)
     resp["actions"] = actions
     resp["per_strategy"] = per_strategy
@@ -678,37 +719,90 @@ def status(store: JsonStore | None = None) -> dict:
         "rejected": 0,
         "mutated": 0,
     }
+    lifecycle: dict[str, list[dict]] = {
+        "active": [], "candidate": [], "mutated": [], "retired": [], "watch": [], "rejected": [],
+    }
     for s in strats.values():
         if not isinstance(s, dict):
             continue
         st = s.get("status")
         ev_state = (s.get("evolve") or {}).get("state")
+        entry = {
+            "strategy_id": s.get("id"),
+            "name": s.get("name"),
+            "kind": s.get("kind"),
+            "tier": int((s.get("evolve") or {}).get("tier") or 1),
+            "symbols": s.get("symbols"),
+            "mutated_from": s.get("mutated_from"),
+            "source": s.get("source"),
+        }
         if s.get("source") == "evolution":
             counts["mutated"] += 1
+            lifecycle["mutated"].append(entry)
         if st == "candidate":
             counts["candidate"] += 1
+            lifecycle["candidate"].append(entry)
         elif st == "active":
             counts["active"] += 1
+            lifecycle["active"].append(entry)
             if ev_state == "watch":
                 counts["watch"] += 1
+                lifecycle["watch"].append(entry)
             elif ev_state == "retired":
                 counts["retired"] += 1
+                lifecycle["retired"].append(entry)
         elif st == "retired":
             counts["retired"] += 1
+            lifecycle["retired"].append(entry)
         elif st == "rejected":
             counts["rejected"] += 1
+            lifecycle["rejected"].append(entry)
     ready = n >= settings.evolve_min_days
+    # 各策略当前判定：ready 前不调 attribution（省冷启动开销），兜底生成「待判定」；
+    # ready 后走共享判定逻辑 + 对未覆盖的 active 策略补「待判定」条目。
+    if ready:
+        per_strategy, _ = _per_strategy_decisions(store, attribution(store))
+    else:
+        per_strategy = []
+    covered = {p["strategy_id"] for p in per_strategy}
+    for s in strats.values():
+        if not isinstance(s, dict) or s.get("status") != "active":
+            continue
+        if s.get("id") in covered:
+            continue
+        ev = s.get("evolve") or {}
+        per_strategy.append(
+            {
+                "strategy_id": s.get("id"),
+                "name": s.get("name"),
+                "kind": s.get("kind"),
+                "tier": int(ev.get("tier") or 1),
+                "symbols": s.get("symbols"),
+                "nav": None,
+                "closed_win_rate_pct": None,
+                "closed_trades": 0,
+                "decision": "none",
+                "reason": "影子数据不足，暂不参与判定",
+                "behavior": "待判定",
+            }
+        )
     return {
         "as_of": _now(),
         "days_of_data": n,
         "min_days": settings.evolve_min_days,
         "ready": ready,
         "counts": counts,
+        "lifecycle": lifecycle,
         "note": (
             None
             if ready
             else f"影子净值仅 {n} 日，自进化待累积至 {settings.evolve_min_days} 日"
         ),
+        "last_applied_at": _last_applied_at(store),
+        "closed_loop_enabled": settings.closed_loop_enabled,
+        "closed_loop_time": settings.closed_loop_time,
+        "per_strategy": per_strategy,
+        "recent_applied": _recent_applied(store, limit=5),
     }
 
 

@@ -21,6 +21,7 @@ from pydantic import ValidationError
 
 from adapter.behavior_profile import compute_behavior_profile
 from adapter.app import create_app
+from adapter.config import settings
 from adapter.evolution import (
     EvolutionPreviewConflict,
     attribution,
@@ -349,6 +350,84 @@ class StatusTests(unittest.TestCase):
         self.assertTrue(st["ready"])
         self.assertGreaterEqual(st["counts"]["mutated"], 2)
         self.assertGreaterEqual(st["counts"]["retired"], 1)
+
+    def test_status_exposes_closed_loop_and_last_applied(self):
+        """闭环看板字段：上次应用时间、下次运行时刻、各策略判定、最近自动进化记录。"""
+        store = _store()
+        _plant(store)
+        _preview_and_apply(store)
+        st = status(store)
+        self.assertIsNotNone(st["last_applied_at"])
+        self.assertEqual(st["closed_loop_time"], "15:35")
+        self.assertEqual(st["closed_loop_enabled"], settings.closed_loop_enabled)
+        # per_strategy 覆盖每个 active 策略且含判定字段
+        actives = [s.get("id") for s in (store.all("strategies") or {}).values()
+                   if isinstance(s, dict) and s.get("status") == "active"]
+        per = {p["strategy_id"]: p for p in st["per_strategy"]}
+        for sid in actives:
+            self.assertIn(sid, per)
+            self.assertIn("behavior", per[sid])
+            self.assertIn("reason", per[sid])
+        # 最近自动进化记录
+        self.assertGreaterEqual(len(st["recent_applied"]), 1)
+        self.assertGreater(st["recent_applied"][0]["count"], 0)
+
+    def test_status_per_strategy_waiting_when_data_insufficient(self):
+        """数据不足时各策略判定为「待判定」，不进归因计算。"""
+        store = _store()
+        store.set("strategies", "strat-only", {
+            "id": "strat-only", "name": "仅此一个", "kind": "momentum",
+            "direction": "利好", "symbols": ["600000"], "params": {"n": 10},
+            "status": "active",
+        })
+        st = status(store)
+        self.assertFalse(st["ready"])
+        per = {p["strategy_id"]: p for p in st["per_strategy"]}
+        self.assertEqual(per["strat-only"]["behavior"], "待判定")
+        self.assertIn("影子数据不足", per["strat-only"]["reason"])
+        self.assertEqual(st["recent_applied"], [])
+
+    def test_status_recent_applied_capped_and_desc(self):
+        """最近自动进化记录按 applied_at 降序且最多 5 条。"""
+        store = _store()
+        _plant(store)
+        import adapter.evolution as ev
+        for i in range(6):
+            store.set("evolution_previews", f"tok{i}", {
+                "preview_status": "applied",
+                "applied_at": f"2026-08-{20 + i:02d} 15:35:00",
+                "actions": [{"type": "promote", "sid": "strat-good", "reason": f"第{i}轮"}],
+            })
+        recs = ev._recent_applied(store, limit=5)
+        self.assertEqual(len(recs), 5)
+        ats = [r["applied_at"] for r in recs]
+        self.assertEqual(ats, sorted(ats, reverse=True))
+        self.assertEqual(recs[0]["count"], 1)
+
+    def test_status_lifecycle_groups_strategies_by_state(self):
+        """闭环运行状态可点开各类别策略列表：active/candidate/mutated/retired 分组正确。"""
+        store = _store()
+        _plant(store)
+        _preview_and_apply(store)  # strat-good 升级、strat-bad 退役、2 个变异候选
+        st = status(store)
+        lc = st["lifecycle"]
+        active_ids = {e["strategy_id"] for e in lc["active"]}
+        candidate_ids = {e["strategy_id"] for e in lc["candidate"]}
+        mutated_ids = {e["strategy_id"] for e in lc["mutated"]}
+        retired_ids = {e["strategy_id"] for e in lc["retired"]}
+        self.assertIn("strat-good", active_ids)
+        self.assertNotIn("strat-bad", active_ids)
+        self.assertIn("strat-bad", retired_ids)
+        self.assertEqual(len(candidate_ids), 2)
+        self.assertEqual(len(mutated_ids), 2)
+        self.assertEqual(candidate_ids, mutated_ids)  # 变异候选同时计入 mutated 与 candidate
+        for entry in lc["candidate"]:
+            self.assertEqual(entry["mutated_from"], "strat-good")
+            self.assertEqual(entry["source"], "evolution")
+        # 计数与列表一致
+        self.assertEqual(st["counts"]["active"], len(active_ids))
+        self.assertEqual(st["counts"]["mutated"], len(mutated_ids))
+        self.assertEqual(st["counts"]["retired"], len(retired_ids))
 
 
 if __name__ == "__main__":

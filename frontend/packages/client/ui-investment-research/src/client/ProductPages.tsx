@@ -227,6 +227,26 @@ const REPORT_TITLE_LABELS: Readonly<Record<string, string>> = {
 
 const STRATEGY_KINDS = new Set(['ma_cross', 'rsi_reversal', 'momentum', 'breakout', 'bollinger', 'volume_breakout'])
 
+const LIFECYCLE_LABELS: Readonly<Record<string, string>> = {
+  active: '生效策略',
+  candidate: '待验证候选',
+  mutated: '变异衍生',
+  retired: '退役策略',
+  watch: '观察中',
+  rejected: '已拒绝',
+}
+
+/** 同一策略出现在多个生命周期分组时，取真实状态（mutated 是来源标注而非状态）。 */
+const LIFECYCLE_PRIORITY: Readonly<Record<string, number>> = {
+  active: 6, watch: 5, candidate: 4, retired: 3, rejected: 2, mutated: 1,
+}
+
+/** 策略稳定标号：取 id 后 6 位，全站统一，方便对话中指认策略。 */
+function strategyLabel(strategyId: string): string {
+  const short = strategyId.replace(/^strat-/, '').slice(0, 6)
+  return short === '' ? strategyId : `#${short}`
+}
+
 /** 回测样本窗口选项（年）。后端按 lookback_years × 366 天取日线，再按 70% 样本内 / 30% 样本外切分。 */
 const BACKTEST_WINDOW_OPTIONS: ReadonlyArray<{ readonly value: number; readonly label: string }> = [
   { value: 0.5, label: '6个月' },
@@ -1088,60 +1108,29 @@ interface EvolutionPageProps {
   readonly onOpenStock?: (code: string) => void
 }
 
-/** Preview-first evolution workflow with a deliberate write confirmation. */
+/** 全自动自进化闭环看板：进页即展示各策略当前判定、闭环运行状态与最近自动进化记录。 */
 export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }: EvolutionPageProps) {
   const status = useDataResource(requestData)
-  const alive = useAliveRef()
   const attribution = useDataResource(requestData)
-  const pendingPreview = useDataResource(requestData)
-  const [preview, setPreview] = useState<Record<string, unknown>>()
-  const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState('')
   const load = useCallback(() => {
     status.run({ operation: 'trading-core.evolution-status' })
     attribution.run({ operation: 'trading-core.evolution-attribution' })
-    pendingPreview.run({ operation: 'trading-core.evolution-preview' })
-  }, [attribution.run, pendingPreview.run, status.run])
+  }, [attribution.run, status.run])
   useEffect(load, [load])
-  useEffect(() => {
-    if (pendingPreview.state.phase !== 'success') return
-    const current = asRecord(pendingPreview.state.value)
-    if (text(current.preview_status, '') === 'pending') setPreview(current)
-  }, [pendingPreview.state.phase, pendingPreview.state.value])
-
-  const evolve = async (apply: boolean): Promise<void> => {
-    if (busy) return
-    const previewToken = text(preview?.preview_token, '')
-    if (apply && !/^[0-9a-f]{32}$/.test(previewToken)) {
-      setNotice('当前预案缺少有效确认令牌，请重新生成预案。')
-      return
-    }
-    setBusy(true); setNotice(apply ? '正在应用已预览的进化动作…' : '正在计算只读进化预案…')
-    try {
-      const result = asRecord(await requestData({
-        operation: 'trading-core.evolution-run',
-        input: apply ? { apply: true, preview_token: previewToken } : { apply: false },
-      }))
-      if (!alive.current) return
-      setPreview(result)
-      setNotice(apply ? '进化动作已应用，策略池状态已刷新。' : '预案已生成；确认前不会写入策略库。')
-      if (apply) load()
-    } catch (reason) {
-      if (alive.current) {
-        if (apply) setPreview(current => current === undefined ? current : { ...current, preview_status: 'invalid' })
-        setNotice(`${apply ? '预案未应用' : '进化计算失败'}：${productErrorText(reason)}`)
-      }
-    } finally {
-      if (alive.current) setBusy(false)
-    }
-  }
 
   const statusRecord = asRecord(status.state.value)
   const counts = asRecord(statusRecord.counts)
   const attributionRecord = asRecord(attribution.state.value)
   const overall = asRecord(attributionRecord.overall)
   const strategyRows = records(attributionRecord.strategies)
-  const unresolvedSymbolKey = [...new Set(strategyRows.flatMap(item => strings(item.symbols)))].sort().join('|')
+  const lifecycle = asRecord(statusRecord.lifecycle)
+  const lifecycleGroups = ['active', 'candidate', 'mutated', 'retired', 'watch', 'rejected']
+    .flatMap(key => records(lifecycle[key]))
+  const unresolvedSymbolKey = [...new Set([
+    ...strategyRows.flatMap(item => strings(item.symbols)),
+    ...records(statusRecord.per_strategy).flatMap(item => strings(item.symbols)),
+    ...lifecycleGroups.flatMap(item => strings(item.symbols)),
+  ])].sort().join('|')
   const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
   useEffect(() => {
     const codes = unresolvedSymbolKey === '' ? [] : unresolvedSymbolKey.split('|')
@@ -1166,49 +1155,161 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
     })()
     return () => { requestState.cancelled = true }
   }, [requestData, unresolvedSymbolKey])
-  const actions = records(preview?.actions)
-  const perStrategy = records(preview?.per_strategy)
-  const previewStatus = text(preview?.preview_status, '')
-  const previewApplied = preview?.applied === true || previewStatus === 'applied'
-    && text(preview?.status, '') !== 'waiting_data'
-    && actions.length > 0
+  const perStrategy = records(statusRecord.per_strategy)
+  const recentApplied = records(statusRecord.recent_applied)
+  const [expandedSid, setExpandedSid] = useState('')
+  const [openLifecycle, setOpenLifecycle] = useState('')
+  const [openDetailSid, setOpenDetailSid] = useState('')
+  const lifecycleEntries = records(lifecycle[openLifecycle])
+  // 全量谱系：6 组按优先级合并去重
+  const fullLineageBySid = new Map<string, { entry: Record<string, unknown>; status: string }>()
+  for (const group of Object.keys(LIFECYCLE_PRIORITY)) {
+    for (const item of records(lifecycle[group])) {
+      const sid = text(item.strategy_id, '')
+      if (sid === '') continue
+      const existing = fullLineageBySid.get(sid)
+      const priority = LIFECYCLE_PRIORITY[group] ?? 0
+      if (existing === undefined || priority > (LIFECYCLE_PRIORITY[existing.status] ?? 0)) {
+        fullLineageBySid.set(sid, { entry: item, status: group })
+      }
+    }
+  }
+  // 链路图只展示生效策略：active 节点 + 沿 mutated_from 上溯的母链（保持母→子演化关系），候选/退役后代不展示
+  const lineageBySid = new Map<string, { entry: Record<string, unknown>; status: string }>()
+  const lineageVisible = new Set<string>()
+  for (const [sid, node] of fullLineageBySid) {
+    if (node.status !== 'active') continue
+    let cursor: string | undefined = sid
+    while (cursor !== undefined && !lineageVisible.has(cursor)) {
+      lineageVisible.add(cursor)
+      cursor = text(fullLineageBySid.get(cursor)?.entry.mutated_from ?? '', '')
+    }
+  }
+  for (const sid of lineageVisible) {
+    const node = fullLineageBySid.get(sid)
+    if (node !== undefined) lineageBySid.set(sid, node)
+  }
+  const lineageChildren = new Map<string, string[]>()
+  for (const [sid, node] of lineageBySid) {
+    const parent = text(node.entry.mutated_from, '')
+    if (parent === '') continue
+    const list = lineageChildren.get(parent)
+    if (list !== undefined) list.push(sid)
+    else lineageChildren.set(parent, [sid])
+  }
+  const lineageRoots = [...lineageBySid.keys()]
+    .filter(sid => text(lineageBySid.get(sid)?.entry.mutated_from ?? '', '') === '')
+  const lineageEdgeCount = [...lineageChildren.values()].reduce((sum, list) => sum + list.length, 0)
+  const attrBySid = new Map<string, Record<string, unknown>>()
+  for (const row of strategyRows) {
+    const sid = text(row.strategy_id, '')
+    if (sid !== '') attrBySid.set(sid, row)
+  }
+  const lastAppliedAt = text(statusRecord.last_applied_at, '')
+  const closedLoopEnabled = statusRecord.closed_loop_enabled === true
+  const closedLoopTime = text(statusRecord.closed_loop_time, '15:35')
   const firstError = [status.state, attribution.state].find(item => item.phase === 'error')
   const days = number(statusRecord.days_of_data) ?? 0
   const minDays = number(statusRecord.min_days) ?? 0
   const readiness = minDays <= 0 ? 0 : Math.min(100, (days / minDays) * 100)
-  const previewAvailable = preview !== undefined && previewStatus === 'pending'
 
   return (
     <div className={css.pageScroll}>
-      <PageHeading title="自进化" description="闭环每日自动应用进化（升级/降级/淘汰/变异）；本页可查看归因证据与判定依据，必要时人工干预确认">
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
-        <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void evolve(false) }}>{busy ? '计算中…' : '生成进化预案'}</button>
+      <PageHeading title="自进化 · 全自动闭环" description="闭环每日自动执行 影子验证 → 归因 → 进化应用 → 候选验证，无需人工确认。本页实时展示各策略当前判定与最近自动进化记录。">
+        <button type="button" className={css.secondaryButton} onClick={load}>刷新</button>
+        <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'evolution' }) }}>AI 复核当前判定</button>
       </PageHeading>
-      <div className={css.evolutionGuide}>闭环已自动应用每日进化；本页可查看归因证据、各策略判定依据，手动确认仅作为干预入口。点击下面的步骤卡即可前往对应区域。</div>
+      <div className={css.evolutionGuide}>闭环在每日收盘后自动运行，自动应用升级/降级/淘汰/变异并验证衍生候选。下方为全自动流程各环节的当前状态，仅作留痕与查看。</div>
       <section className={css.evolutionFlow} aria-label="自进化流程">
-        <div data-state={days > 0 ? 'completed' : 'active'}><span>1</span><strong>累积影子数据</strong><small>{days}/{minDays || '—'} 个交易日</small></div>
-        <button type="button" data-state={strategyRows.length > 0 ? 'completed' : days > 0 ? 'active' : undefined} onClick={() => { document.getElementById('evolution-evidence')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}><span>2</span><strong>查看策略归因</strong><small>{strategyRows.length} 条策略证据 · 点击查看</small></button>
-        <button type="button" data-state={previewAvailable || previewApplied ? 'completed' : statusRecord.ready === true ? 'active' : undefined} disabled={busy} onClick={() => { void evolve(false) }}><span>3</span><strong>生成只读预案</strong><small>升降级、淘汰或变异 · 点击生成</small></button>
-        <button type="button" data-state={previewApplied ? 'completed' : previewAvailable ? 'active' : undefined} disabled={!previewAvailable} onClick={() => { document.getElementById('evolution-preview-title')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) }}><span>4</span><strong>人工确认应用</strong><small>{previewAvailable ? '预案已就绪 · 点击核对' : '生成预案后可操作'}</small></button>
+        <div data-state={days > 0 ? 'completed' : 'active'}><span>1</span><strong>影子验证</strong><small>自动 · {days}/{minDays || '—'} 个交易日</small></div>
+        <div data-state={strategyRows.length > 0 ? 'completed' : days > 0 ? 'active' : undefined}><span>2</span><strong>归因分析</strong><small>自动 · {strategyRows.length} 条策略证据</small></div>
+        <div data-state={lastAppliedAt !== '' ? 'completed' : statusRecord.ready === true ? 'active' : undefined}><span>3</span><strong>进化应用</strong><small>自动 · {lastAppliedAt !== '' ? '上次 ' + lastAppliedAt : '待首次应用'}</small></div>
+        <div data-state={(number(counts.candidate) ?? 0) > 0 ? 'active' : 'completed'}><span>4</span><strong>候选验证</strong><small>自动 · {number(counts.candidate)?.toFixed(0) ?? '—'} 个待验证候选</small></div>
       </section>
-      {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
       {status.state.phase === 'loading' && status.state.value === undefined
         && attribution.state.phase === 'loading' && attribution.state.value === undefined && <BusyRows />}
       <section className={css.moduleGrid} aria-label="进化状态与归因">
         <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><strong>闭环就绪状态</strong><StatusBadge value={statusRecord.ready === true ? 'done' : 'waiting_data'} /></div>
+          <div className={css.sectionHeading}><strong>闭环运行状态</strong><StatusBadge value={closedLoopEnabled ? 'done' : 'waiting_data'} /></div>
           <div className={css.evolutionReadiness}>
             <div><span>数据完成度</span><strong>{Math.round(readiness)}%</strong></div>
             <progress max="100" value={readiness} aria-label="自进化数据完成度" />
-            <small>{text(statusRecord.note, statusRecord.ready === true ? '数据门槛已满足；闭环会自动应用进化，生成预案可查看判定依据。' : '继续运行影子验证以累积真实数据。')}</small>
+            <small>{text(statusRecord.note, statusRecord.ready === true ? '数据门槛已满足；闭环会在收盘后自动应用进化。' : '继续运行影子验证以累积真实数据。')}</small>
           </div>
           <dl className={css.reportMeta}>
-            <div><dt>数据天数</dt><dd>{number(statusRecord.days_of_data)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>生效策略</dt><dd>{number(counts.active)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>变异候选</dt><dd>{number(counts.mutated)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>退役策略</dt><dd>{number(counts.retired)?.toFixed(0) ?? '—'}</dd></div>
+            <div><dt>上次自动应用</dt><dd>{lastAppliedAt === '' ? '尚未应用' : lastAppliedAt}</dd></div>
+            <div><dt>下次自动运行</dt><dd>每日 {closedLoopTime}{!closedLoopEnabled && <StatusBadge value="waiting_data" />}</dd></div>
           </dl>
+          <div className={css.lifecycleNav} aria-label="生命周期分组">
+            {(['active', 'candidate', 'mutated', 'retired'] as const).map((key) => (
+              <button
+                type="button"
+                data-active={openLifecycle === key || undefined}
+                aria-expanded={openLifecycle === key}
+                key={key}
+                onClick={() => { setOpenLifecycle(openLifecycle === key ? '' : key); setOpenDetailSid('') }}
+              >
+                <span>{LIFECYCLE_LABELS[key]}</span>
+                <strong>{number(counts[key])?.toFixed(0) ?? '0'}</strong>
+              </button>
+            ))}
+          </div>
+          {openLifecycle !== '' && (
+            <div className={css.lifecycleList}>
+              {lifecycleEntries.map((item, index) => {
+                const sid = text(item.strategy_id, '')
+                const symbols = strings(item.symbols)
+                const open = openDetailSid === sid
+                const resolvedName = (code: string): string => {
+                  const name = text(securityNames[code], '')
+                  return name === '' || name === code ? code : `${name} · ${code}`
+                }
+                return (
+                  <div className={css.strategyEntry} key={`lc-${sid}-${index}`}>
+                    <button
+                      type="button"
+                      className={css.dataRow}
+                      data-active={open || undefined}
+                      aria-expanded={open}
+                      onClick={() => { setOpenDetailSid(open ? '' : sid) }}
+                    >
+                      <div>
+                        <strong><span className={css.strategyTag}>{strategyLabel(sid)}</span>{strategyTargetLabel(item, securityNames)}</strong>
+                        <small>{strategyKindLabel(item.kind)} · tier {number(item.tier)?.toFixed(0) ?? '1'}</small>
+                      </div>
+                      <span className={css.evolutionEvidenceMeta}>
+                        <small>{symbols.length === 0 ? '暂无标的' : `${symbols.length} 只标的`}</small>
+                      </span>
+                    </button>
+                    {open && (
+                      <div className={css.strategyDetail} role="region" aria-label="策略基础详情">
+                        <div className={css.strategyDetailHead}>
+                          <strong>{strategyTargetLabel(item, securityNames)}</strong>
+                          <span>{strategyKindLabel(item.kind)} · tier {number(item.tier)?.toFixed(0) ?? '1'}</span>
+                        </div>
+                        <div className={css.strategyDetailSymbols}>
+                          <span className={css.strategyDetailSymbolLabel}>关联标的</span>
+                          {symbols.length === 0 && <small className={css.strategyDetailSymbolLabel}>暂无标的</small>}
+                          {symbols.map((code, symbolIndex) => (
+                            <button
+                              type="button"
+                              className={css.strategySymbolChip}
+                              key={`${code}-${symbolIndex}`}
+                              onClick={() => { onOpenStock(code) }}
+                            >
+                              {resolvedName(code)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {lifecycleEntries.length === 0 && <div className={css.emptyPanel}>该类目暂无策略。</div>}
+            </div>
+          )}
         </article>
         <article className={css.moduleCard}>
           <div className={css.sectionHeading}><strong>整体影子归因</strong><span>{number(attributionRecord.days_of_data)?.toFixed(0) ?? '0'} 日</span></div>
@@ -1220,77 +1321,160 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
           </dl>
           {text(attributionRecord.data_note, '') !== '' && <p>{text(attributionRecord.data_note)}</p>}
         </article>
-        <article id="evolution-evidence" className={`${css.moduleCard} ${css.evolutionEvidenceCard}`}>
-          <div className={css.sectionHeading}><strong>分策略证据</strong><span>{strategyRows.length} 项</span></div>
+      </section>
+      <section className={css.moduleGrid} aria-label="策略判定与自动进化记录">
+        <article className={`${css.moduleCard} ${css.strategyStatusCard}`}>
+          <div className={css.sectionHeading}><strong>策略现状</strong><span>{perStrategy.length} 项 · 点击展开详情</span></div>
           <div className={css.dataList}>
-            {strategyRows.slice(0, 10).map((item, index) => {
+            {perStrategy.map((item, index) => {
+              const sid = text(item.strategy_id, '')
               const symbols = strings(item.symbols)
-              const primaryCode = symbols[0]
+              const decision = text(item.decision, '')
+              const badge = decision === '' || decision === 'none' ? text(item.behavior, '带内运行') : decision
+              const attr = attrBySid.get(sid) ?? {}
+              const expanded = expandedSid === sid
+              const resolvedName = (code: string): string => {
+                const name = text(securityNames[code], '')
+                return name === '' || name === code ? code : `${name} · ${code}`
+              }
               return (
-                <button
-                  type="button"
-                  className={css.dataRow}
-                  disabled={primaryCode === undefined}
-                  key={`${text(item.strategy_id)}-${index}`}
-                  onClick={() => { if (primaryCode !== undefined) onOpenStock(primaryCode) }}
-                >
-                  <div>
-                    <strong>{strategyTargetLabel(item, securityNames)}</strong>
-                    <small>{strategyKindLabel(item.kind)} · 回撤 {compactMetric(item.max_drawdown_pct, '%')} · 平仓胜率 {compactMetric(item.closed_win_rate_pct, '%')}</small>
-                  </div>
-                  <span className={css.evolutionEvidenceMeta}><strong>{compactMetric(item.return_pct, '%')}</strong><small>{primaryCode === undefined ? '暂无股票标的' : '查看个股 →'}</small></span>
-                </button>
+                <div className={css.strategyEntry} key={`per-strategy-${sid}-${index}`}>
+                  <button
+                    type="button"
+                    className={css.dataRow}
+                    data-active={expanded || undefined}
+                    aria-expanded={expanded}
+                    onClick={() => { setExpandedSid(expanded ? '' : sid) }}
+                  >
+                    <div>
+                      <strong><span className={css.strategyTag}>{strategyLabel(sid)}</span>{strategyTargetLabel(item, securityNames)}</strong>
+                      <small>{strategyKindLabel(item.kind)} · {text(item.reason, '')}</small>
+                    </div>
+                    <span className={css.evolutionEvidenceMeta}>
+                      <strong><StatusBadge value={badge} /></strong>
+                      <small>净值 {compactMetric(item.nav)} · 收益 {compactMetric(attr.return_pct, '%')}</small>
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div className={css.strategyDetail} role="region" aria-label="策略现状详情">
+                      <div className={css.strategyDetailHead}>
+                        <strong>{strategyTargetLabel(item, securityNames)}</strong>
+                        <span>{strategyKindLabel(item.kind)} · tier {number(item.tier)?.toFixed(0) ?? '1'}</span>
+                        <span>{badge}</span>
+                      </div>
+                      <p className={css.strategyDetailReason}>判定依据：{text(item.reason, '')}</p>
+                      <dl className={css.strategyDetailGrid}>
+                        <div><dt>影子净值</dt><dd>{compactMetric(item.nav)}</dd></div>
+                        <div><dt>累计收益</dt><dd>{compactMetric(attr.return_pct, '%')}</dd></div>
+                        <div><dt>最大回撤</dt><dd>{compactMetric(attr.max_drawdown_pct, '%')}</dd></div>
+                        <div><dt>平仓胜率</dt><dd>{compactMetric(item.closed_win_rate_pct, '%')}</dd></div>
+                        <div><dt>已平仓</dt><dd>{number(item.closed_trades)?.toFixed(0) ?? '0'} 笔</dd></div>
+                      </dl>
+                      <div className={css.strategyDetailSymbols}>
+                        <span className={css.strategyDetailSymbolLabel}>关联标的</span>
+                        {symbols.length === 0 && <small className={css.strategyDetailSymbolLabel}>暂无标的</small>}
+                        {symbols.map((code, symbolIndex) => (
+                          <button
+                            type="button"
+                            className={css.strategySymbolChip}
+                            key={`${code}-${symbolIndex}`}
+                            onClick={() => { onOpenStock(code) }}
+                          >
+                            {resolvedName(code)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )
             })}
-            {strategyRows.length === 0 && attribution.state.phase === 'success' && <Empty>影子证据不足，暂不能归因。</Empty>}
+            {perStrategy.length === 0 && status.state.phase === 'success' && <Empty>暂无生效策略；影子数据达标后自动进入闭环判定。</Empty>}
           </div>
         </article>
       </section>
-      {preview !== undefined && (
-        <section className={css.confirmPanel} aria-labelledby="evolution-preview-title">
-          <div>
-            <h2 id="evolution-preview-title">{previewApplied ? '进化动作已应用' : '进化动作预览'}</h2>
-            <p>{actions.length === 0
-              ? text(preview.data_note, text(preview.note, preview.last_applied_at
-                ? `闭环已自动应用上一轮进化（${text(preview.last_applied_at)}），下方为各策略判定依据。`
-                : '闭环每日自动应用进化；下方为各策略判定依据。'))
-              : previewApplied ? `已按确认预案应用 ${actions.length} 项动作。` : `共 ${actions.length} 项；确认后将写入策略库。`}</p>
+      <section className={css.moduleGrid} aria-label="策略演化链路">
+        <article className={`${css.moduleCard} ${css.lineageCard}`}>
+          <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅生效 · {lineageBySid.size} 个策略 · {lineageEdgeCount} 条衍生</span></div>
+          {lineageRoots.length === 0 && <Empty>暂无生效中的演化链路。</Empty>}
+          <div className={css.lineageTree}>
+            {lineageRoots.map(rootSid => (
+              <LineageNode key={rootSid} sid={rootSid} depth={0} bySid={lineageBySid} childrenByParent={lineageChildren} securityNames={securityNames} onOpenStock={onOpenStock} />
+            ))}
           </div>
+        </article>
+      </section>
+      <section className={css.moduleGrid} aria-label="策略判定与自动进化记录">
+        <article className={`${css.moduleCard} ${css.evolutionEvidenceCard}`}>
+          <div className={css.sectionHeading}><strong>最近自动进化</strong><span>{recentApplied.length} 条</span></div>
           <div className={css.dataList}>
-            {actions.map((item, index) => {
-              const source = strategyRows.find(strategy => text(strategy.strategy_id, '') === text(item.parent, text(item.sid, '')))
-              const actionSymbols = strings(item.symbols)
-              const primaryCode = actionSymbols[0] ?? strings(source?.symbols)[0]
-              const target = source === undefined
-                ? (primaryCode === undefined ? strategyKindLabel(item.kind) : `${securityNames[primaryCode] || '股票'} · ${primaryCode}`)
-                : strategyTargetLabel(source, securityNames)
-              return (
-                <div className={css.dataRow} key={`${text(item.sid)}-${text(item.type)}-${index}`}>
-                  <div><strong>{target}</strong><small>{text(item.reason)}</small></div>
-                  <div className={css.evolutionActionMeta}>
-                    <StatusBadge value={text(item.type)} />
-                    {primaryCode !== undefined && <button type="button" onClick={() => { onOpenStock(primaryCode) }}>查看个股</button>}
-                  </div>
-                </div>
-              )
-            })}
-            {actions.length === 0 && perStrategy.map((item, index) => (
-              <div className={css.dataRow} key={`per-strategy-${text(item.strategy_id)}-${index}`}>
+            {recentApplied.map((item, index) => (
+              <div className={css.dataRow} key={`applied-${text(item.applied_at)}-${index}`}>
                 <div>
-                  <strong>{strategyTargetLabel(item, securityNames)}</strong>
-                  <small>{text(item.reason)}</small>
+                  <strong>{text(item.applied_at, '')} · 自动应用 {number(item.count)?.toFixed(0) ?? '0'} 项动作</strong>
+                  <small>{records(item.actions).map(action => `${text(action.reason, '')}`).join('；')}</small>
                 </div>
                 <span className={css.evolutionEvidenceMeta}>
-                  <strong>净值 {compactMetric(item.nav)}</strong>
-                  <small>{text(item.behavior)}</small>
+                  {records(item.actions).map((action, actionIndex) => (
+                    <StatusBadge key={`${text(item.applied_at)}-${actionIndex}`} value={text(action.type, '')} />
+                  ))}
                 </span>
               </div>
             ))}
+            {recentApplied.length === 0 && status.state.phase === 'success' && <Empty>尚未有自动进化记录；闭环将在数据达标后自动应用进化。</Empty>}
           </div>
-          <div className={css.moduleToolbar}>
-            <button type="button" className={css.secondaryButton} disabled={previewStatus !== 'pending'} onClick={() => { onAnalyze({ kind: 'evolution' }) }}>AI 复核预案</button>
-          </div>
-        </section>
+        </article>
+      </section>
+    </div>
+  )
+}
+
+function LineageNode({
+  sid, depth, bySid, childrenByParent, securityNames, onOpenStock,
+}: {
+  readonly sid: string
+  readonly depth: number
+  readonly bySid: ReadonlyMap<string, { readonly entry: Record<string, unknown>; readonly status: string }>
+  readonly childrenByParent: ReadonlyMap<string, readonly string[]>
+  readonly securityNames: Readonly<Record<string, string>>
+  readonly onOpenStock: (code: string) => void
+}) {
+  const node = bySid.get(sid)
+  if (node === undefined) return null
+  const muted = node.status !== 'active' // 仅生效链路上的非 active 母策略弱化显示
+  const symbols = strings(node.entry.symbols)
+  const primaryCode = symbols[0]
+  const childSids = childrenByParent.get(sid) ?? []
+  return (
+    <div className={css.lineageNode} data-depth={depth} data-muted={muted || undefined}>
+      <div className={css.lineageRow}>
+        <span className={css.lineageConnector} aria-hidden="true" />
+        <button
+          type="button"
+          className={css.lineageLabel}
+          disabled={primaryCode === undefined}
+          onClick={() => { if (primaryCode !== undefined) onOpenStock(primaryCode) }}
+        >
+          <span className={css.strategyTag}>{strategyLabel(sid)}</span>
+          <strong>{text(node.entry.name, strategyTargetLabel(node.entry, securityNames))}</strong>
+          <StatusBadge value={node.status} />
+        </button>
+        <small>{strategyKindLabel(node.entry.kind)} · tier {number(node.entry.tier)?.toFixed(0) ?? '1'} · {strings(node.entry.symbols).length} 只标的</small>
+      </div>
+      {childSids.length > 0 && (
+        <div className={css.lineageChildren}>
+          {childSids.map(childSid => (
+            <LineageNode
+              key={childSid}
+              sid={childSid}
+              depth={depth + 1}
+              bySid={bySid}
+              childrenByParent={childrenByParent}
+              securityNames={securityNames}
+              onOpenStock={onOpenStock}
+            />
+          ))}
+        </div>
       )}
     </div>
   )
