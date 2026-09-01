@@ -126,6 +126,8 @@ export type InvestmentDataOperation =
   | 'trading-core.report'
   | 'trading-core.strategies'
   | 'trading-core.strategy-detail'
+  | 'trading-core.research-chat-context'
+  | 'trading-core.research-chat-context-save'
   | 'trading-core.strategies-hypothesize'
   | 'trading-core.strategy-transition'
   | 'trading-core.strategy-action'

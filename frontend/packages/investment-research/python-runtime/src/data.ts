@@ -95,6 +95,7 @@ function oneOf<const T extends string>(
 }
 
 const PATH_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const STRATEGY_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
 const REPORT_IDENTIFIER = /^[a-f0-9]{32}$/
 
 function pathIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
@@ -104,6 +105,49 @@ function pathIdentifier(input: Readonly<Record<string, unknown>>, key: string): 
     throw new TypeError(`investment data: ${key} must be a safe identifier`)
   }
   return encodeURIComponent(value)
+}
+
+function strategyIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
+  const value = stringValue(input, key)
+  if (!STRATEGY_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be a safe identifier`)
+  }
+  return encodeURIComponent(value)
+}
+
+function nullableStrategyIdentifier(input: Readonly<Record<string, unknown>>, key: string): string | null {
+  const value = input[key]
+  if (value === null) return null
+  if (value === undefined) throw new TypeError(`investment data: ${key} is required`)
+  if (typeof value !== 'string' || !STRATEGY_IDENTIFIER.test(value)) {
+    throw new TypeError(`investment data: ${key} must be null or a safe strategy identifier`)
+  }
+  return value
+}
+
+function requiredRevision(input: Readonly<Record<string, unknown>>, key: string): number {
+  const value = input[key]
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`investment data: ${key} must be a non-negative integer`)
+  }
+  return value
+}
+
+function researchInstrument(value: unknown): Readonly<Record<string, unknown>> | null {
+  if (value === null) return null
+  if (value === undefined) throw new TypeError('investment data: instrument is required')
+  const instrument = record(value, 'instrument')
+  knownKeys(instrument, ['code', 'name', 'market', 'type'])
+  const code = stringValue(instrument, 'code').trim()
+  if (!/^\d{6}$/.test(code)) {
+    throw new TypeError('investment data: instrument.code must be a six-digit security code')
+  }
+  const name = stringValue(instrument, 'name').trim()
+  if (name.length > 80) throw new TypeError('investment data: instrument.name must be at most 80 characters')
+  const market = stringValue(instrument, 'market').trim()
+  if (market.length > 32) throw new TypeError('investment data: instrument.market must be at most 32 characters')
+  const type = oneOf(instrument, 'type', ['stock', 'etf'], true)
+  return { code, name, market, type }
 }
 
 function reportIdentifier(input: Readonly<Record<string, unknown>>, key: string): string {
@@ -681,7 +725,30 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     method: 'GET',
     path: (input) => {
       knownKeys(input, ['strategy_id'])
-      return `/strategies/${pathIdentifier(input, 'strategy_id')}`
+      return `/strategies/${strategyIdentifier(input, 'strategy_id')}`
+    },
+  },
+  'trading-core.research-chat-context': {
+    backendId: 'trading-core',
+    method: 'GET',
+    localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['session_id'])
+      return `/research-chat/contexts/${pathIdentifier(input, 'session_id')}`
+    },
+  },
+  'trading-core.research-chat-context-save': {
+    backendId: 'trading-core',
+    method: 'POST',
+    localOnly: true,
+    path: input => `/research-chat/contexts/${pathIdentifier(input, 'session_id')}`,
+    body: (input) => {
+      knownKeys(input, ['session_id', 'expected_revision', 'strategy_id', 'instrument'])
+      return {
+        expected_revision: requiredRevision(input, 'expected_revision'),
+        strategy_id: nullableStrategyIdentifier(input, 'strategy_id'),
+        instrument: researchInstrument(input.instrument),
+      }
     },
   },
   'trading-core.strategies-hypothesize': {
@@ -701,7 +768,7 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     method: 'POST',
     path: (input) => {
       knownKeys(input, ['strategy_id', 'action'])
-      const strategyId = pathIdentifier(input, 'strategy_id')
+      const strategyId = strategyIdentifier(input, 'strategy_id')
       const action = oneOf(input, 'action', ['activate', 'reject', 'retire'], true)
       return `/strategies/${strategyId}/${action}`
     },
@@ -715,7 +782,7 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       if (!['activate', 'reject', 'retire'].includes(action)) {
         throw new TypeError('investment data: action must be activate, reject, or retire')
       }
-      return `/strategies/${pathIdentifier(input, 'strategy_id')}/${action}`
+      return `/strategies/${strategyIdentifier(input, 'strategy_id')}/${action}`
     },
   },
   'trading-core.strategy-run': {

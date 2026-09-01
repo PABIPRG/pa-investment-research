@@ -18,7 +18,8 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
     return {
       as_of: '2026-08-26 09:31:00', profile_label: '稳健型',
       summary: { n_positions: 1, equal_weight: 1, hhi: 1 },
-      breaches: [{ indicator: 'hhi', severity: '高' }],
+      risk_budget: { single_stock_weight_max: 0.25, hhi_max: 0.3, portfolio_vol_max: 0.18, beta_max: 1 },
+      breaches: [{ indicator: 'hhi', label: '集中度 HHI', value: 1, limit: 0.3, excess: 3.33, severity: '高' }],
     }
   }
   if (operation === 'trading-core.risk-alerts') {
@@ -155,15 +156,443 @@ describe('研究工作台', () => {
     expect(view.queryByText('¥0')).toBeNull()
   })
 
-  it('概览信号提供明确的持仓、风险画像和预警查看入口', async () => {
+  it('投研概览五张卡片在当前页打开对应详情，不再跳转或移动锚点', async () => {
     const view = renderWorkbench()
     await view.findByText('白酒板块经营数据改善')
 
+    const cases = [
+      { trigger: /持仓数量/, dialog: '持仓明细', content: '100 股' },
+      { trigger: /持仓成本金额/, dialog: '持仓成本明细', content: '¥15.0 万' },
+      { trigger: /总资产现价/, dialog: '总资产现价明细', content: '¥14.5 万' },
+      { trigger: /风险画像/, dialog: '风险画像详情', content: '风险数据时间' },
+      { trigger: /需关注预警/, dialog: '组合风险中心', content: '集中度超预算' },
+    ] as const
+
+    for (const item of cases) {
+      const trigger = view.getByRole('button', { name: item.trigger })
+      fireEvent.click(trigger)
+      const dialog = view.getByRole('dialog', { name: item.dialog })
+      expect(within(dialog).getByText(item.content, { exact: false })).toBeTruthy()
+      expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+      fireEvent.click(within(dialog).getByRole('button', { name: `关闭${item.dialog}` }))
+      await waitFor(() => { expect(document.activeElement).toBe(trigger) })
+    }
+  })
+
+  it('持仓明细默认只负责查看，点击导入后再选择单条或批量并保留草稿', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
-    expect(view.navigate).toHaveBeenCalledWith('portfolio')
-    fireEvent.click(view.getByRole('button', { name: /风险画像/ }))
-    expect(view.navigate).toHaveBeenCalledWith('portfolio')
-    expect(view.getByRole('button', { name: /需关注预警/ })).toBeTruthy()
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+
+    expect(within(dialog).getByRole('button', { name: '导入持仓' })).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: '编辑 贵州茅台 600519' })).toBeTruthy()
+    expect(within(dialog).queryByRole('tab', { name: '单条录入' })).toBeNull()
+    expect(within(dialog).queryByRole('tab', { name: '批量导入' })).toBeNull()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    expect(within(dialog).getByRole('button', { name: '返回持仓明细' })).toBeTruthy()
+    const singleTab = within(dialog).getByRole('tab', { name: '单条录入' })
+    expect(singleTab.getAttribute('aria-selected')).toBe('true')
+    await waitFor(() => { expect(document.activeElement).toBe(singleTab) })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '股票代码' }), { target: { value: '000001' } })
+
+    fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+    const source = '股票代码,数量,成本价\n000858,300,135'
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '持仓导入内容' }), { target: { value: source } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '返回持仓明细' }))
+
+    expect(within(dialog).queryByRole('tab', { name: '单条录入' })).toBeNull()
+    const importButton = within(dialog).getByRole('button', { name: '导入持仓' })
+    expect(within(dialog).getByRole('button', { name: '编辑 贵州茅台 600519' })).toBeTruthy()
+    await waitFor(() => { expect(document.activeElement).toBe(importButton) })
+    fireEvent.click(importButton)
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: '股票代码' }).value).toBe('000001')
+    fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+    expect(within(dialog).getByRole<HTMLTextAreaElement>('textbox', { name: '持仓导入内容' }).value).toBe(source)
+  })
+
+  it('在持仓明细内新增持仓，提交完整列表并联动刷新工作台资源', async () => {
+    let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') return { items: savedHoldings }
+      if (request.operation === 'trading-core.holdings-save') {
+        savedHoldings = (request.input?.holdings as typeof savedHoldings).map(item => ({ ...item }))
+        return { saved: savedHoldings.length }
+      }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: request.input?.query, name: '平安银行', market: '深市' }] }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    const callsBeforeSave = (operation: InvestmentDataRequest['operation']) => requestData.mock.calls
+      .filter(([request]) => request.operation === operation).length
+    const holdingsReads = callsBeforeSave('trading-core.holdings')
+    const riskReads = callsBeforeSave('trading-core.risk-portfolio')
+    const alertReads = callsBeforeSave('trading-core.risk-alerts')
+
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '股票代码' }), { target: { value: '000001' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '200' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '成本价' }), { target: { value: '12.5' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存单条持仓' }))
+
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-save',
+        input: {
+          holdings: [
+            { ticker: '600519', quantity: 100, cost_price: 1500 },
+            { ticker: '000001', quantity: 200, cost_price: 12.5 },
+          ],
+        },
+      })
+    })
+    expect(view.getByRole('dialog', { name: '持仓明细' })).toBeTruthy()
+    expect((await within(dialog).findByRole('status')).textContent).toContain('持仓已保存')
+    expect(within(dialog).queryByRole('tab', { name: '单条录入' })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: '导入持仓' })).toBeTruthy()
+    await waitFor(() => {
+      expect(callsBeforeSave('trading-core.holdings')).toBeGreaterThan(holdingsReads)
+      expect(callsBeforeSave('trading-core.risk-portfolio')).toBeGreaterThan(riskReads)
+      expect(callsBeforeSave('trading-core.risk-alerts')).toBeGreaterThan(alertReads)
+    })
+    expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+  })
+
+  it('保存成功到持仓刷新完成前继续以已确认列表为操作基线', async () => {
+    let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
+    let saveCount = 0
+    let holdingsReadCount = 0
+    let releaseRefresh: (() => void) | undefined
+    const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve })
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') {
+        holdingsReadCount += 1
+        const snapshot = savedHoldings.map(item => ({ ...item }))
+        if (saveCount > 0 && holdingsReadCount === 2) await refreshGate
+        return { items: snapshot }
+      }
+      if (request.operation === 'trading-core.holdings-save') {
+        saveCount += 1
+        savedHoldings = (request.input?.holdings as typeof savedHoldings).map(item => ({ ...item }))
+        return { saved: savedHoldings.length }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '股票代码' }), { target: { value: '000001' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '200' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '成本价' }), { target: { value: '12.5' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存单条持仓' }))
+
+    expect((await within(dialog).findByRole('status')).textContent).toContain('持仓已保存')
+    expect(within(dialog).getByText('000001')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: '删除 贵州茅台 600519' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认删除 600519' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-save',
+        input: { holdings: [{ ticker: '000001', quantity: 200, cost_price: 12.5 }] },
+      })
+    })
+    releaseRefresh?.()
+    await waitFor(() => { expect(holdingsReadCount).toBeGreaterThanOrEqual(3) })
+    await waitFor(() => {
+      expect(within(dialog).queryByText('贵州茅台')).toBeNull()
+      expect(within(dialog).getAllByText('000001').length).toBeGreaterThan(0)
+    })
+  })
+
+  it('在持仓明细内编辑并经二次确认删除已有持仓', async () => {
+    let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') return { items: savedHoldings }
+      if (request.operation === 'trading-core.holdings-save') {
+        savedHoldings = (request.input?.holdings as typeof savedHoldings).map(item => ({ ...item }))
+        return { saved: savedHoldings.length }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '编辑 贵州茅台 600519' }))
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '120' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '成本价' }), { target: { value: '1490' } })
+    const saveButton = within(dialog).getByRole('button', { name: '保存持仓' })
+    saveButton.focus()
+    fireEvent.click(saveButton)
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-save',
+        input: { holdings: [{ ticker: '600519', quantity: 120, cost_price: 1490 }] },
+      })
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: '导入持仓' }))
+    })
+
+    const saveCallsAfterEdit = requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-save').length
+    fireEvent.click(within(dialog).getByRole('button', { name: /删除 .*600519/ }))
+    expect(within(dialog).getByText('确认删除该持仓？')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消删除 600519' }))
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-save')).toHaveLength(saveCallsAfterEdit)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /删除 .*600519/ }))
+    const confirmDeleteButton = within(dialog).getByRole('button', { name: '确认删除 600519' })
+    confirmDeleteButton.focus()
+    fireEvent.click(confirmDeleteButton)
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-save', input: { holdings: [] },
+      })
+    })
+    await waitFor(() => {
+      expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: '导入持仓' }))
+    })
+  })
+
+  it('拒绝非法和重复持仓，保存失败时保留草稿供重试', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-save') throw new Error('持仓保存服务暂不可用')
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '股票代码' }), { target: { value: '600519' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '0' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '成本价' }), { target: { value: '12.5' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存单条持仓' }))
+    expect(within(dialog).getByRole('alert').textContent).toContain('数量必须大于 0')
+    expect(requestData).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'trading-core.holdings-save' }))
+
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '200' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存单条持仓' }))
+    expect(within(dialog).getByRole('alert').textContent).toContain('持仓代码不能重复')
+    expect(requestData).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'trading-core.holdings-save' }))
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '股票代码' }), { target: { value: '000001' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存单条持仓' }))
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('持仓保存服务暂不可用')
+    expect(within(dialog).getByRole<HTMLInputElement>('textbox', { name: '股票代码' }).value).toBe('000001')
+    expect(within(dialog).getByRole<HTMLInputElement>('spinbutton', { name: '持仓数量' }).value).toBe('200')
+    expect(view.getByRole('dialog', { name: '持仓明细' })).toBeTruthy()
+  })
+
+  it('持仓保存未完成时禁止重复提交和关闭模态框', async () => {
+    let finishSave: (() => void) | undefined
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-save') {
+        await new Promise<void>((resolve) => { finishSave = resolve })
+        return { saved: 2 }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '股票代码' }), { target: { value: '000001' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '200' } })
+    fireEvent.change(within(dialog).getByRole('spinbutton', { name: '成本价' }), { target: { value: '12.5' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存单条持仓' }))
+
+    await waitFor(() => { expect(finishSave).toBeTypeOf('function') })
+    expect(within(dialog).getByRole('button', { name: '正在保存…' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '关闭持仓明细' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '关闭' }).hasAttribute('disabled')).toBe(true)
+    view.getByRole('button', { name: '刷新数据' }).focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(dialog)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(view.getByRole('dialog', { name: '持仓明细' })).toBeTruthy()
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-save')).toHaveLength(1)
+
+    finishSave?.()
+    expect((await within(dialog).findByRole('status')).textContent).toContain('持仓已保存')
+  })
+
+  it('在持仓明细内粘贴表格预览并整体替换持仓', async () => {
+    let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') return { items: savedHoldings }
+      if (request.operation === 'trading-core.holdings-save') {
+        savedHoldings = (request.input?.holdings as typeof savedHoldings).map(item => ({ ...item }))
+        return { saved: savedHoldings.length }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    const holdingsReads = requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings').length
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+    const source = '股票代码\t数量\t成本价\n000001\t200\t12.5\n000858\t300\t135'
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '持仓导入内容' }), { target: { value: source } })
+
+    expect(within(dialog).getByText('有效 2 条')).toBeTruthy()
+    expect(within(dialog).getByText('错误 0 条')).toBeTruthy()
+    expect(within(dialog).getByText('当前 1 条')).toBeTruthy()
+    expect(within(dialog).getByText('导入后 2 条')).toBeTruthy()
+    expect(within(dialog).getByRole('cell', { name: '000001' })).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('tab', { name: '单条录入' }))
+    fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+    expect(within(dialog).getByRole<HTMLTextAreaElement>('textbox', { name: '持仓导入内容' }).value).toBe(source)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认替换 2 条持仓' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-save',
+        input: {
+          holdings: [
+            { ticker: '000001', quantity: 200, cost_price: 12.5 },
+            { ticker: '000858', quantity: 300, cost_price: 135 },
+          ],
+        },
+      })
+    })
+    expect((await within(dialog).findByRole('status')).textContent).toContain('已批量导入 2 条持仓')
+    expect(within(dialog).queryByRole('tab', { name: '单条录入' })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: '导入持仓' })).toBeTruthy()
+    await waitFor(() => {
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings').length).toBeGreaterThan(holdingsReads)
+    })
+    expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+  })
+
+  it('批量导入统一解析选择文件和拖放文件，并阻止错误数据提交', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => completeResponse(request.operation))
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+
+    const textarea = within(dialog).getByRole<HTMLTextAreaElement>('textbox', { name: '持仓导入内容' })
+    fireEvent.change(textarea, { target: { value: '股票代码,数量,成本价\n600519,0,1500' } })
+    expect(within(dialog).getByText('错误 1 条')).toBeTruthy()
+    expect(within(dialog).getByRole('alert').textContent).toContain('第 2 行：数量必须大于 0')
+    expect(within(dialog).getByRole('button', { name: '确认替换 0 条持仓' }).hasAttribute('disabled')).toBe(true)
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings-save')).toBe(false)
+
+    const selected = new File(['股票代码,数量,成本价\n000001,200,12.5'], '持仓.csv', { type: 'text/csv' })
+    Object.defineProperty(selected, 'text', { value: vi.fn(async () => '股票代码,数量,成本价\n000001,200,12.5') })
+    fireEvent.change(within(dialog).getByLabelText('选择持仓文件'), { target: { files: [selected] } })
+    await waitFor(() => { expect(textarea.value).toContain('000001,200,12.5') })
+    expect(within(dialog).getByText('有效 1 条')).toBeTruthy()
+
+    const dropped = new File(['股票代码\t数量\t成本价\n000858\t300\t135'], '持仓.tsv', { type: 'text/tab-separated-values' })
+    Object.defineProperty(dropped, 'text', { value: vi.fn(async () => '股票代码\t数量\t成本价\n000858\t300\t135') })
+    fireEvent.drop(within(dialog).getByRole('button', { name: '拖放持仓文件' }), { dataTransfer: { files: [dropped] } })
+    await waitFor(() => { expect(textarea.value).toContain('000858\t300\t135') })
+    expect(within(dialog).getByRole('cell', { name: '000858' })).toBeTruthy()
+  })
+
+  it('批量导入保存失败保留草稿，保存期间锁定切换和关闭', async () => {
+    let rejectSave: ((reason: Error) => void) | undefined
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-save') {
+        await new Promise<void>((_resolve, reject) => { rejectSave = reject })
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
+    fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+    const source = '股票代码,数量,成本价\n000001,200,12.5'
+    fireEvent.change(within(dialog).getByRole('textbox', { name: '持仓导入内容' }), { target: { value: source } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认替换 1 条持仓' }))
+
+    await waitFor(() => { expect(rejectSave).toBeTypeOf('function') })
+    expect(within(dialog).getByRole('tab', { name: '单条录入' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '返回持仓明细' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '正在批量保存…' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '关闭持仓明细' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(view.getByRole('dialog', { name: '持仓明细' })).toBeTruthy()
+
+    rejectSave?.(new Error('批量保存服务暂不可用'))
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('批量保存服务暂不可用')
+    expect(within(dialog).getByRole<HTMLTextAreaElement>('textbox', { name: '持仓导入内容' }).value).toBe(source)
+  })
+
+  it('查看完整风险详情在当前页打开风险中心，并展示预算与全部预警', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+
+    const trigger = view.getByRole('button', { name: '查看完整风险详情 →' })
+    fireEvent.click(trigger)
+
+    const dialog = view.getByRole('dialog', { name: '组合风险中心' })
+    expect(within(dialog).getByText('风险预算')).toBeTruthy()
+    expect(within(dialog).getByText('单股预算上限')).toBeTruthy()
+    expect(within(dialog).getByText('25.0%')).toBeTruthy()
+    expect(within(dialog).getByText('组合波动预算上限')).toBeTruthy()
+    expect(within(dialog).getByText('18.0%')).toBeTruthy()
+    expect(within(dialog).getByText('预算突破')).toBeTruthy()
+    expect(within(dialog).getByText('当前值 1.000')).toBeTruthy()
+    expect(within(dialog).getByText('预算上限 0.300')).toBeTruthy()
+    expect(within(dialog).getByText('集中度超预算')).toBeTruthy()
+    expect(within(dialog).getByText('画像预算提示')).toBeTruthy()
+    expect(within(dialog).getByText('组合风险引擎')).toBeTruthy()
+    expect(within(dialog).getByText('600519')).toBeTruthy()
+    expect(within(dialog).getByRole('heading', { name: '研究建议' })).toBeTruthy()
+    expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => { expect(view.queryByRole('dialog', { name: '组合风险中心' })).toBeNull() })
+    await waitFor(() => { expect(document.activeElement).toBe(trigger) })
+  })
+
+  it('资源未加载或失败时展示真实状态，不把未知数据误报为空', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') throw new Error('持仓服务离线')
+      if (request.operation === 'trading-core.risk-portfolio') throw new Error('风险服务离线')
+      if (request.operation === 'trading-core.risk-alerts') throw new Error('预警服务离线')
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('持仓暂不可用')
+
+    const holdingsTrigger = view.getByRole('button', { name: /持仓数量/ })
+    fireEvent.click(holdingsTrigger)
+    const holdingsDialog = view.getByRole('dialog', { name: '持仓明细' })
+    expect(within(holdingsDialog).getByText('持仓详情暂不可用')).toBeTruthy()
+    expect(within(holdingsDialog).queryByText(/尚未保存持仓/)).toBeNull()
+    fireEvent.click(within(holdingsDialog).getByRole('button', { name: '关闭持仓明细' }))
+
+    const riskTrigger = view.getByRole('button', { name: /需关注预警/ })
+    fireEvent.click(riskTrigger)
+    const riskDialog = view.getByRole('dialog', { name: '组合风险中心' })
+    expect(within(riskDialog).getByText('组合风险暂不可用')).toBeTruthy()
+    expect(within(riskDialog).getByText('风险预警暂不可用')).toBeTruthy()
+    const alertHeading = within(riskDialog).getByRole('heading', { name: '全部预警' }).parentElement!
+    expect(within(alertHeading).getByText('—')).toBeTruthy()
+    expect(within(alertHeading).queryByText('0 条')).toBeNull()
+    expect(within(riskDialog).queryByText(/当前没有风险预警/)).toBeNull()
   })
 
   it('显式反馈显示当前选择、支持纠正，并只发送白名单上下文', async () => {

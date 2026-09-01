@@ -267,6 +267,7 @@ def _compute_portfolio_risk(store, profile_key: str) -> dict:
         "as_of": as_of,
         "profile": key,
         "profile_label": p["label"],
+        "risk_budget": dict(budget),
         "summary": {
             "n_positions": n,
             "equal_weight": round(w, 4),

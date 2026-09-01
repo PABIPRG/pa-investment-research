@@ -687,14 +687,19 @@ export function InvestmentShell({
   const [switchingSessionId, setSwitchingSessionId] = useState<SessionId | undefined>()
   const [historyClosing, setHistoryClosing] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  const [materialsOpen, setMaterialsOpen] = useState(false)
   const historyTriggerRef = useRef<HTMLButtonElement>(null)
   const reportTriggerRef = useRef<HTMLButtonElement>(null)
   const assistantTriggerRef = useRef<HTMLButtonElement>(null)
+  const materialsTriggerRef = useRef<HTMLButtonElement>(null)
+  const materialsCloseRef = useRef<HTMLButtonElement>(null)
+  const materialsDrawerRef = useRef<HTMLElement>(null)
   const workbenchRef = useRef<HTMLElement>(null)
   const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
   const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
   const assistantMode = snapshot.assistantMode
+  const conversationPrimary = snapshot.route === 'portfolio'
   const assistantModule = snapshot.assistantModule
   const colorScheme = useActiveColorScheme()
 
@@ -723,14 +728,21 @@ export function InvestmentShell({
     if (isAnalysisRoute) setAnalysisVisited(true)
   }, [isAnalysisRoute])
   useEffect(() => {
-    document.body.dataset.investmentAssistantMode = assistantMode
-    if (assistantMode === 'closed') document.body.dataset.investmentWorkbenchActive = ''
-    else delete document.body.dataset.investmentWorkbenchActive
+    document.body.dataset.investmentAssistantMode = conversationPrimary ? 'closed' : assistantMode
+    if (conversationPrimary) {
+      document.body.dataset.investmentConversationPrimary = ''
+      delete document.body.dataset.investmentWorkbenchActive
+    } else {
+      delete document.body.dataset.investmentConversationPrimary
+      if (assistantMode === 'closed') document.body.dataset.investmentWorkbenchActive = ''
+      else delete document.body.dataset.investmentWorkbenchActive
+    }
     return () => {
       delete document.body.dataset.investmentWorkbenchActive
       delete document.body.dataset.investmentAssistantMode
+      delete document.body.dataset.investmentConversationPrimary
     }
-  }, [assistantMode])
+  }, [assistantMode, conversationPrimary])
   useEffect(() => {
     const previous = previousAssistantModeRef.current
     previousAssistantModeRef.current = assistantMode
@@ -741,14 +753,45 @@ export function InvestmentShell({
   useEffect(() => {
     const workbench = workbenchRef.current
     if (workbench === null) return
-    if (assistantMode === 'expanded') {
+    if (conversationPrimary || assistantMode === 'expanded') {
       workbench.setAttribute('inert', '')
       workbench.setAttribute('aria-hidden', 'true')
     } else {
       workbench.removeAttribute('inert')
       workbench.removeAttribute('aria-hidden')
     }
-  }, [assistantMode])
+  }, [assistantMode, conversationPrimary])
+  useEffect(() => {
+    if (!conversationPrimary) setMaterialsOpen(false)
+  }, [conversationPrimary])
+  useEffect(() => {
+    if (!materialsOpen) return
+    materialsCloseRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMaterialsOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+      const controls = [...(materialsDrawerRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ) ?? [])]
+      if (controls.length === 0) return
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first?.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      materialsTriggerRef.current?.focus()
+    }
+  }, [materialsOpen])
   useEffect(() => {
     if (assistantMode === 'closed') return
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -803,11 +846,51 @@ export function InvestmentShell({
     }
   }, [openSession, switchingSessionId])
 
+  const startNewConversation = useCallback((): void => {
+    if (startingSession) return
+    setStartingSession(true)
+    setSessionError(null)
+    setHistory(false)
+    void startSession()
+      .catch(() => { setSessionError('新对话创建失败，请稍后重试。') })
+      .finally(() => { setStartingSession(false) })
+  }, [setHistory, startSession, startingSession])
+
   return (
     <>
       <header className={css.topbar}>
         <GlobalStockSearch requestData={requestData} navigate={navigate} trackTelemetry={trackTelemetry} />
         <div className={css.topActions} role="group" aria-label="页面操作">
+          {conversationPrimary && (
+            <>
+              <button
+                type="button"
+                className={css.primaryButton}
+                disabled={startingSession}
+                aria-busy={startingSession}
+                aria-label="新对话"
+                onClick={startNewConversation}
+              ><PlusIcon /><span className={css.actionLabel}>{startingSession ? '创建中…' : '新对话'}</span></button>
+              <button
+                ref={historyTriggerRef}
+                type="button"
+                className={css.secondaryButton}
+                aria-label="历史对话"
+                aria-haspopup="dialog"
+                aria-expanded={snapshot.historyOpen}
+                onClick={() => { setHistoryClosing(false); setHistory(true) }}
+              ><HistoryIcon /><span className={css.actionLabel}>历史对话</span></button>
+              <button
+                ref={materialsTriggerRef}
+                type="button"
+                className={css.secondaryButton}
+                aria-label="投研资料"
+                aria-haspopup="dialog"
+                aria-expanded={materialsOpen}
+                onClick={() => { setMaterialsOpen(true) }}
+              ><ReportIcon /><span className={css.actionLabel}>投研资料</span></button>
+            </>
+          )}
           <button
             ref={reportTriggerRef}
             type="button"
@@ -839,7 +922,7 @@ export function InvestmentShell({
       )}
       {sessionError !== null && <div className={css.sessionError} role="alert">{sessionError}</div>}
 
-      <main ref={workbenchRef} className={css.workbench}>
+      <main ref={workbenchRef} className={css.workbench} hidden={conversationPrimary}>
         {analysisVisited && (
           <div className={css.routeSurface} hidden={!isAnalysisRoute}>
             <SmartAnalysisPage
@@ -879,14 +962,6 @@ export function InvestmentShell({
             onAnalyze={prepareAssistant}
           />
         )}
-        {snapshot.route === 'portfolio' && (
-          <PortfolioPage
-            requestData={requestData}
-            onAnalyze={prepareAssistant}
-            onViewStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
-            trackTelemetry={trackTelemetry}
-          />
-        )}
         {(snapshot.route === 'framework' || snapshot.route === 'projects') && (
           <StrategyResearchPage
             requestData={requestData}
@@ -917,25 +992,19 @@ export function InvestmentShell({
         )}
       </main>
 
-      <AssistantFloatingSurface
-        mode={assistantMode}
-        module={assistantModule}
-        starting={startingSession}
-        historyOpen={snapshot.historyOpen}
-        launcherRef={assistantTriggerRef}
-        historyRef={historyTriggerRef}
-        onMode={setAssistantMode}
-        onNew={() => {
-          if (startingSession) return
-          setStartingSession(true)
-          setSessionError(null)
-          setHistory(false)
-          void startSession()
-            .catch(() => { setSessionError('新对话创建失败，请稍后重试。') })
-            .finally(() => { setStartingSession(false) })
-        }}
-        onHistory={() => { setHistoryClosing(false); setHistory(true) }}
-      />
+      {!conversationPrimary && (
+        <AssistantFloatingSurface
+          mode={assistantMode}
+          module={assistantModule}
+          starting={startingSession}
+          historyOpen={snapshot.historyOpen}
+          launcherRef={assistantTriggerRef}
+          historyRef={historyTriggerRef}
+          onMode={setAssistantMode}
+          onNew={startNewConversation}
+          onHistory={() => { setHistoryClosing(false); setHistory(true) }}
+        />
+      )}
 
       {snapshot.historyOpen && (
         <HistoryDrawer
@@ -952,6 +1021,27 @@ export function InvestmentShell({
       )}
       {snapshot.reportsOpen && (
         <ReportCenter requestData={requestData} onClose={closeReports} onAnalyze={prepareAssistant} />
+      )}
+      {conversationPrimary && materialsOpen && (
+        <div
+          className={`${css.drawerBackdrop} ${css.researchMaterialsBackdrop}`}
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setMaterialsOpen(false) }}
+        >
+          <aside ref={materialsDrawerRef} className={css.researchMaterialsDrawer} role="dialog" aria-modal="true" aria-labelledby="research-materials-title">
+            <div className={css.drawerHead}>
+              <div><strong id="research-materials-title">投研资料</strong><span>持仓、自选、风险、事件与偏好</span></div>
+              <button ref={materialsCloseRef} type="button" aria-label="关闭投研资料" onClick={() => { setMaterialsOpen(false) }}>×</button>
+            </div>
+            <div className={css.researchMaterialsBody}>
+              <PortfolioPage
+                requestData={requestData}
+                onAnalyze={prepareAssistant}
+                onViewStock={(code) => { setMaterialsOpen(false); navigate('stock-detail', { stockCode: code }) }}
+                trackTelemetry={trackTelemetry}
+              />
+            </div>
+          </aside>
+        </div>
       )}
     </>
   )

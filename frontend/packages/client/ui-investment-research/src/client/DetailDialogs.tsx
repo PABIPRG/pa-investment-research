@@ -14,18 +14,21 @@ interface DetailDialogProps {
   readonly children: ReactNode
   readonly actions?: ReactNode
   readonly wide?: boolean
+  readonly closeDisabled?: boolean
 }
 
 /** Shared, keyboard-safe modal shell for product details and evidence. */
 export function DetailDialog({
-  title, description, eyebrow, onClose, children, actions, wide = false,
+  title, description, eyebrow, onClose, children, actions, wide = false, closeDisabled = false,
 }: DetailDialogProps) {
   const titleId = useId()
   const dialogRef = useRef<HTMLElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
+  const closeDisabledRef = useRef(closeDisabled)
 
   useEffect(() => { onCloseRef.current = onClose }, [onClose])
+  useEffect(() => { closeDisabledRef.current = closeDisabled }, [closeDisabled])
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     closeRef.current?.focus()
@@ -33,17 +36,24 @@ export function DetailDialog({
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
-        onCloseRef.current()
+        if (!closeDisabledRef.current) onCloseRef.current()
         return
       }
       if (event.key !== 'Tab') return
       const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
         'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       )
-      if (focusable === undefined || focusable.length === 0) return
+      if (focusable === undefined || focusable.length === 0) {
+        event.preventDefault()
+        dialogRef.current?.focus()
+        return
+      }
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      if (dialogRef.current?.contains(document.activeElement) !== true) {
+        event.preventDefault()
+        if (event.shiftKey) last?.focus(); else first?.focus()
+      } else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
     }
     document.addEventListener('keydown', handleKeyDown)
@@ -57,7 +67,7 @@ export function DetailDialog({
     <div
       className={css.detailBackdrop}
       role="presentation"
-      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !closeDisabled) onClose() }}
     >
       <section
         ref={dialogRef}
@@ -65,6 +75,7 @@ export function DetailDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
       >
         <header className={css.detailDialogHeader}>
           <div>
@@ -72,7 +83,7 @@ export function DetailDialog({
             <h2 id={titleId}>{title}</h2>
             {description !== undefined && <p>{description}</p>}
           </div>
-          <button ref={closeRef} type="button" aria-label={`关闭${title}`} onClick={onClose}>×</button>
+          <button ref={closeRef} type="button" aria-label={`关闭${title}`} disabled={closeDisabled} onClick={onClose}>×</button>
         </header>
         <div className={css.detailDialogBody}>{children}</div>
         {actions !== undefined && <footer className={css.detailDialogActions}>{actions}</footer>}
@@ -94,7 +105,7 @@ function scalar(value: unknown): string {
   return typeof value === 'string' && value.trim() !== '' ? value : '—'
 }
 
-function riskSource(source: string): { label: string; explanation: string } {
+export function riskSource(source: string): { label: string; explanation: string } {
   const map: Record<string, { label: string; explanation: string }> = {
     portfolio: { label: '组合风险引擎', explanation: '依据当前已保存持仓及组合风险预算计算。' },
     profile: { label: '投资画像预算', explanation: '依据当前投资画像对应的波动、集中度等预算口径生成。' },
@@ -105,7 +116,7 @@ function riskSource(source: string): { label: string; explanation: string } {
   return map[source] ?? { label: source === '' ? '风险预警服务' : source, explanation: '由后端风险预警服务返回，页面未补造指标。' }
 }
 
-function riskSuggestions(item: Record<string, unknown>): string[] {
+export function riskSuggestions(item: Record<string, unknown>): string[] {
   const severity = text(item.severity, '低')
   const source = text(item.source, '')
   const codes = strings(item.codes)

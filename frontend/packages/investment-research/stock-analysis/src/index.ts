@@ -16,6 +16,7 @@ import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 import Schema from '@deepseek-ai/schemastery'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { PythonBackendDefinition, PythonBackendLease } from '@deepseek-ai/dsh-investment-python-runtime'
 import {
   consumeSse,
@@ -32,6 +33,12 @@ import {
   type InvestmentContextDomain,
 } from './client.ts'
 import { createBriefPusher } from './brief-pusher.ts'
+import {
+  INVESTMENT_RESEARCH_CONTEXT_PROMPT,
+  renderInvestmentResearchContext,
+  resolveInvestmentResearchContext,
+  type InvestmentResearchContextResult,
+} from './research-context.ts'
 import {
   renderBrief,
   renderBriefCard,
@@ -93,7 +100,7 @@ export const Config: Schema<Config> = Schema.object({
   pushSessions: Schema.array(Schema.string()).description('播报目标会话 id；空 = 所有活跃会话').default([]),
 })
 
-export const inject = ['tools', 'agents', 'investmentPythonRuntime']
+export const inject = ['tools', 'agents', 'investmentPythonRuntime', 'systemPrompt']
 
 /** 风险偏好参数（三个流式工具共用）。缺省用适配器已保存偏好。 */
 const RISK_PROFILE_PARAM = {
@@ -129,6 +136,11 @@ async function runStreamingTask(
 
 async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Promise<() => Promise<void>> {
   const toolDisposers: Array<() => void> = []
+  const disposeResearchPrompt = ctx.systemPrompt.section({
+    name: 'tool:investment-research-context',
+    order: 111,
+    text: INVESTMENT_RESEARCH_CONTEXT_PROMPT,
+  })
   const disposePusher = createBriefPusher(ctx, {
     adapterBaseUrl: resolvedConfig.adapterBaseUrl,
     enableInChatPush: resolvedConfig.enableInChatPush,
@@ -155,7 +167,11 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
     try {
       await disposeFrom(0)
     } finally {
-      await disposePusher?.()
+      try {
+        await disposePusher?.()
+      } finally {
+        disposeResearchPrompt()
+      }
     }
   }
 
@@ -680,6 +696,76 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
         },
       }),
     )
+
+    register(
+      defineTool({
+        name: 'investment_research_context',
+        description: '读取当前对话在“我的投研”中已确认的策略与投资标的，并返回策略详情、推荐状态、适用性和风险提示。参数固定为空；会话 ID 只取自当前工具执行上下文，不接受模型传入。只读，不执行交易，也不改变策略状态。',
+        parameters: {},
+        output: {
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              status: { type: 'string', description: '上下文读取状态', enum: ['ready', 'empty', 'invalid', 'unavailable'] as const },
+              context_revision: { type: 'number', description: '会话选择的服务端修订号' },
+              context_updated_at: { type: 'string', description: '会话选择的最近更新时间' },
+              strategy: { type: 'json', description: '策略池中的最新策略详情；未选择或已失效时为空' },
+              instrument: { type: 'json', description: '用户在输入框下方确认的投资标的；未选择时为空' },
+              recommended: { type: 'boolean', description: '仅 active 且 passed 时为 true' },
+              compatibility: { type: 'string', description: '策略与标的的适用关系', enum: ['not_applicable', 'direct', 'method_only'] as const },
+              warnings: {
+                type: 'array',
+                description: '需要模型向用户明确披露的风险提示',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    code: { type: 'string', enum: ['STRATEGY_NOT_RECOMMENDED', 'STRATEGY_NOT_FOUND', 'METHOD_TRANSFER', 'CONTEXT_UNAVAILABLE'] as const },
+                    message: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+          render: (_args, value) => [{
+            type: 'text',
+            text: renderInvestmentResearchContext(value as unknown as InvestmentResearchContextResult),
+          }],
+        },
+        presentCall: () => ({ card: 'generic', title: '🧭 读取当前会话投研上下文', kind: 'other' }),
+        presentResult: (_args, result) => {
+          const value = result as unknown as Partial<InvestmentResearchContextResult>
+          if (!['ready', 'empty', 'invalid', 'unavailable'].includes(value.status ?? '')) {
+            return {
+              card: 'generic',
+              title: '当前会话投研上下文已读取',
+              content: [{ type: 'text', text: '已读取输入框下方确认的策略与标的。' }],
+            }
+          }
+          const title = value.status === 'ready'
+            ? ((value.warnings?.length ?? 0) > 0 ? '当前投研上下文含风险提示' : '当前投研上下文已读取')
+            : value.status === 'empty'
+              ? '当前会话尚未选择投研上下文'
+              : value.status === 'invalid'
+                ? '当前会话策略已失效'
+                : '当前投研上下文读取失败'
+          return {
+            card: 'generic',
+            title,
+            content: [{ type: 'text', text: renderInvestmentResearchContext(value as InvestmentResearchContextResult) }],
+          }
+        },
+        async execute(_args, exec) {
+          ctx.investmentPythonRuntime.assertCapability('trading-core', 'non-llm')
+          return resolveInvestmentResearchContext(
+            resolvedConfig.adapterBaseUrl,
+            exec.agent?.session.header.id,
+            exec.signal,
+          )
+        },
+      }),
+    )
     return disposeFeatures
   } catch (error) {
     await disposeFeatures()
@@ -740,7 +826,7 @@ export async function apply(ctx: Context, config: Config = {}): Promise<void> {
       }
       disposeFeatures = await setupFeatures(ctx, resolvedConfig)
       disposeCapability = ctx.investmentPythonRuntime.registerCapability({
-        backendId: 'trading-core', toolCount: 10, llm: 'required',
+        backendId: 'trading-core', toolCount: 11, llm: 'required',
       })
       return disposeResources
     } catch (error) {
