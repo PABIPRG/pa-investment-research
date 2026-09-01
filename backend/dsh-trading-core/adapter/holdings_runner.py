@@ -35,6 +35,13 @@ TRADING_DAYS = 252
 _industry_ok = True
 # baostock 全局 socket 非线程安全：本模块内部串行访问
 _bs_lock = threading.Lock()
+# 会话复用：同一进程内一次 login 服务短时间内的所有查询，空闲超时才 logout。
+# baostock 对高频 login/logout 会临时封 IP（服务端报「黑名单用户，请与管理员联系」），
+# 复用从源头规避；引擎 dataflows 封装不共享本锁、可能中途 logout 本会话——
+# _bs_hist 查询失败时检测到会话失效，重登一次自愈。
+_BS_SESSION_IDLE = 60.0
+_bs_session_held = False
+_bs_session_last_use = 0.0
 
 # 持仓 deep 要保留市场、社媒、新闻、基本面四分析师覆盖，但不额外增加辩论轮次。
 HOLDINGS_ENGINE_DEPTH = "standard"
@@ -64,6 +71,56 @@ def _a_share_code(ticker: str) -> str:
     return f"sh.{t}"
 
 
+def _bs_ensure_session(bs) -> None:
+    """确保一个可用的 baostock 会话：复用未超时的旧会话，否则重登。
+
+    baostock 登录是幂等的（已登录再 login 直接成功），但这里跟踪会话归属，
+    只在需要时 login，且空闲超时才 logout，避免高频 login/logout 触发服务端封禁。
+    """
+    global _bs_session_held, _bs_session_last_use
+    now = time.time()
+    if _bs_session_held and (now - _bs_session_last_use) <= _BS_SESSION_IDLE:
+        return
+    if _bs_session_held:  # 会话超时，先断开旧连接再重登
+        try:
+            bs.logout()
+        except Exception:  # noqa: BLE001
+            pass
+        _bs_session_held = False
+    lg = bs.login()
+    if lg.error_code != "0":
+        raise HoldingDataError(f"baostock 登录失败: {lg.error_msg}")
+    _bs_session_held = True
+    _bs_session_last_use = now
+
+
+def _bs_query(bs, code: str, start: str, end: str, names: list) -> list:
+    """在已登录会话上执行一次前复权日线查询并解析行。查询失败抛 HoldingDataError。"""
+    rs = bs.query_history_k_data_plus(
+        code, ",".join(names),
+        start_date=start, end_date=end, frequency="d", adjustflag="2",
+    )
+    rows = []
+    while rs.error_code == "0" and rs.next():
+        r = rs.get_row_data()
+        if not r or not r[0]:
+            continue
+        row: dict = {"date": r[0]}
+        for i, name in enumerate(names[1:], start=1):
+            raw = r[i] if i < len(r) else ""
+            if raw in ("", None):
+                row[name] = None
+            else:
+                try:
+                    row[name] = float(raw)
+                except (TypeError, ValueError):
+                    row[name] = None
+        rows.append(row)
+    if rs.error_code != "0":
+        raise HoldingDataError(f"baostock 查询失败({code}): {rs.error_msg}")
+    return rows
+
+
 def _bs_hist(code: str, start: str, end: str, fields: str = "date,close") -> list:
     """带锁 baostock 前复权日线，返回 [{"date", <各列>}, ...] 升序。
 
@@ -79,35 +136,15 @@ def _bs_hist(code: str, start: str, end: str, fields: str = "date,close") -> lis
         raise ValueError(f"baostock fields 必须以 date 开头: {fields!r}")
 
     with _bs_lock:
-        lg = bs.login()
-        if lg.error_code != "0":
-            raise HoldingDataError(f"baostock 登录失败: {lg.error_msg}")
+        _bs_ensure_session(bs)
         try:
-            rs = bs.query_history_k_data_plus(
-                code, fields,
-                start_date=start, end_date=end, frequency="d", adjustflag="2",
-            )
-            rows = []
-            while rs.error_code == "0" and rs.next():
-                r = rs.get_row_data()
-                if not r or not r[0]:
-                    continue
-                row: dict = {"date": r[0]}
-                for i, name in enumerate(names[1:], start=1):
-                    raw = r[i] if i < len(r) else ""
-                    if raw in ("", None):
-                        row[name] = None
-                    else:
-                        try:
-                            row[name] = float(raw)
-                        except (TypeError, ValueError):
-                            row[name] = None
-                rows.append(row)
-            if rs.error_code != "0":
-                raise HoldingDataError(f"baostock 查询失败({code}): {rs.error_msg}")
-            return rows
-        finally:
-            bs.logout()
+            return _bs_query(bs, code, start, end, names)
+        except HoldingDataError:
+            # 会话疑似被其它 baostock 封装（引擎 dataflows）logout → 重登重试一次
+            logger.warning("baostock 查询失败(%s)，会话失效重置重试", code)
+            _bs_session_held = False
+            _bs_ensure_session(bs)
+            return _bs_query(bs, code, start, end, names)
 
 
 def _fetch_hist(ticker: str) -> "tuple[list, str]":

@@ -34,6 +34,10 @@ logger = logging.getLogger("adapter.shadow")
 # 覆盖指标 warmup（ma slow 最大 120 根）+ 跟踪窗口
 _HIST_LOOKBACK_DAYS = 400
 
+# 拉行情失败重试：baostock 登录日期不匹配/瞬时网络抖动是瞬时的，短暂退避后重试一次
+_FETCH_RETRIES = 2
+_FETCH_RETRY_DELAY = 1.0
+
 
 def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
@@ -104,9 +108,19 @@ class ShadowRunner:
     # ---- 数据 ---------------------------------------------------------
 
     def _fetch_hist(self, sym: str, start: str, end: str) -> list:
-        from .holdings_runner import _a_share_code, _bs_hist
+        from .holdings_runner import HoldingDataError, _a_share_code, _bs_hist
 
-        return _bs_hist(_a_share_code(sym), start, end, fields="date,open,high,low,close,volume")
+        code = _a_share_code(sym)
+        fields = "date,open,high,low,close,volume"
+        for attempt in range(_FETCH_RETRIES):
+            try:
+                return _bs_hist(code, start, end, fields=fields)
+            except HoldingDataError:
+                if attempt == _FETCH_RETRIES - 1:
+                    raise
+                logger.warning("拉行情 %s 失败（第 %d 次），%ss 后重试…",
+                               sym, attempt + 1, _FETCH_RETRY_DELAY)
+                time.sleep(_FETCH_RETRY_DELAY)
 
     def _active_strategies(self, strategy_id: str | None) -> list[dict]:
         if strategy_id:
@@ -273,6 +287,11 @@ class ShadowRunner:
             )
 
         equity_sum = sum(r["equity"] for r in symbol_results.values())
+        # 拉数失败的符号按闲置现金计入（等权子账户已为它预留 1/n 资本，失败不吞掉）。
+        # 否则 equity 只算成功符号、资本按全量符号等分，NAV 被机械性压低
+        # （如 12 符号中 8 成功 → equity 8×capital_per → nav 恰 0.667）。
+        if symbol_errors:
+            equity_sum += capital_per * len(symbol_errors)
         nav = equity_sum / float(rec["initial_capital"]) if rec["initial_capital"] else None
         return {
             "name": s.get("name"), "kind": kind, "symbols": symbols,
