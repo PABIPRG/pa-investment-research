@@ -1124,7 +1124,9 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
 
 ### 4.33 GET /evolution/status —— 自进化闭环状态
 
-闭环就绪度 + 策略生命周期统计（`GET`，无参）。
+闭环就绪度、生命周期、当前判定和最近自动应用记录。省略 `strategy_id` 时返回全局看板；
+传入安全的 `strategy_id`（`^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$`，兼容 `strategy@v1` 修订号）时，只返回目标策略及解释
+`mutated_from` 母子链所需的生命周期节点。目标不存在返回 `404`，非法标识返回 `422`，不会回退全局数据。
 
 ```json
 // 200
@@ -1132,16 +1134,22 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
   "ready": false,
   "counts": { "candidate": 1, "active": 1, "watch": 0, "retired": 0,
               "rejected": 0, "mutated": 0 },
+  "lifecycle": { "active": [], "candidate": [], "mutated": [], "retired": [], "watch": [], "rejected": [] },
+  "per_strategy": [], "recent_applied": [], "last_applied_at": null,
+  "closed_loop_enabled": false, "closed_loop_time": "15:35",
   "note": "影子净值仅 1 日，自进化待累积至 5 日" }
 ```
 
 - `days_of_data`：shadow_equity 有效净值日数；`min_days`：进化阈值（默认 5，`EVOLVE_MIN_DAYS`）。
 - `ready = days_of_data >= min_days`。不足时只出归因报告，`/evolution/run` 返回 `waiting_data` 不动作。
 - `counts.watch` = 自进化降级观察中的策略；`counts.mutated` = 变异回流产生的 candidate 后代。
+- scoped `per_strategy` 只包含目标策略；非 active 策略返回 `decision=none` 和只读说明。
+- scoped `recent_applied` 只保留 `sid` 命中目标或 `parent` 为目标的动作；读取和重新评估均不写策略、预案或执行记录。
 
 ### 4.34 GET /evolution/attribution —— S→T 策略归因（只读）
 
-影子组合整体归因 + 每策略贡献分解（`GET`，无参，永不写库）。
+影子组合整体归因 + 每策略贡献分解（`GET`，永不写库）。可选 `strategy_id` 与 status 使用同一
+安全校验；携带时 `days_of_data`、`overall` 和 `strategies` 全部仅由目标策略的有效影子证据计算。
 
 ```json
 // 200
@@ -1161,6 +1169,10 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
 - `strategies` 已按影子收益降序；数据不足时 `data_note` 给提示、`overall`/`strategies` 仍返回当前可得值。
 
 ### 4.35 POST /evolution/run —— T→W→H 进化（升降级/淘汰 + 变异回流）
+
+该接口保留给旧客户端和运维兼容流程；产品 UI 不调用 preview 或 run。生产写入由启用的统一自动闭环
+调用 `evolve_auto()` 完成影子验证、归因、进化应用、候选验证与推送，并通过 `recent_applied` 留痕。
+页面“重新评估”只是重新读取 scoped status/attribution，不生成预案、不应用动作，也不改变策略状态。
 
 ```json
 // 请求
@@ -1191,12 +1203,14 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
 | `mutate` | 升级策略 + 样本外达标 + 变异冷却期外（`EVOLVE_MUTATE_COOLDOWN_DAYS`，默认 7） | 参数轻变异 + 标的子集 → 新 `candidate` 写回策略池（`source=evolution`、`mutated_from` 指向父），走既有 E→G→H→I 再验证 |
 
 **护栏**：
-- 数据不足（`days_of_data < min_days`）→ `status=waiting_data` + `count=0`，**永不写库**。
+- 数据不足（`days_of_data < min_days`）→ `status=waiting_data`、`preview_status=blocked`、`count=0`，
+  不生成令牌，**永不写库**；就绪但无动作时为 `preview_status=empty`，同样不可应用。
 - 变异只从「样本外 `win_rate_pct ≥ 50` + 影子升级」的 active 策略出发，小步参数扰动；
   同一父策略冷却期内不重复变异（幂等）。
 - 阈值全部走 `.env`（`EVOLVE_*`，见 §6.12）；`apply=true` 后再次 dry-run 可见已生效状态。
 - **R→S→U→K outcome 版**：`GET /personalized/profile` 的 `behavior.outcome` 即用户参与/激活策略的
   影子 outcome → `outcome_delta`（决策受验证→微调行为激进度），与 `/evolution/run` 相互独立。
+- scoped 兼容调用可在 query 或请求体携带同一个安全 `strategy_id`；作用域不一致、标识非法或目标不存在时拒绝，绝不回退到全局执行。
 
 ---
 
@@ -1758,6 +1772,9 @@ interface EvolutionStatus {         // GET /evolution/status
         // 各生命周期分组策略列表（供前端点开计数查看具体策略）
 }
 
+// GET /evolution/status?strategy_id=<safe-id>：per_strategy 仅目标策略，recent_applied 仅相关动作，
+// lifecycle 仅目标与必要母子链；GET /evolution/attribution 使用相同 scope。不存在返回 404。
+
 interface EvolutionPerStrategy {            // /evolution/status → per_strategy[]
   strategy_id: string; name: string; kind: string; tier: number
   symbols: string[]; nav: number | null
@@ -1798,6 +1815,10 @@ interface EvolutionAction {         // POST /evolution/run → actions[]
 // POST /evolution/run 顶层：as_of, days_of_data, min_days, applied, status
 //   ('ready' | 'waiting_data'), count, actions[], data_note?
 ```
+
+产品合同：全局看板只读无 `strategy_id` 的 status/attribution；策略研究第 4 步只读携带同一
+`strategy_id` 的 scoped status/attribution。`POST /evolution/run` 及 preview 仅为兼容合同，统一写入路径是
+闭环调度器的 `evolve_auto()`；调度器按交易日门禁和分段异常隔离执行，并把已应用动作写入审计时间线。
 
 **策略 `evolve` 字段**（写进 strategies 集合，前端 `GET /strategies` 可读）：
 `{ state: 'active'|'watch'|'retired', tier: 1|2, updated_at, note?, mutated_at? }`。

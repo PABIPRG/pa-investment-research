@@ -924,10 +924,12 @@
   overflow-x: auto;
   padding: 0;
 }
-.lifecycleStrip > span { flex: 1 0 150px; display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 9px; min-height: 66px; box-sizing: border-box; padding: 10px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); }
-.lifecycleStrip > span > b { grid-row: 1 / 3; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; color: var(--dsw-alias-label-primary-foreground); background: var(--dsw-alias-label-caption); font: 700 var(--investment-font-caption) ui-monospace, monospace; }
-.lifecycleStrip > span > strong { align-self: end; font-size: var(--investment-font-secondary); }
-.lifecycleStrip > span > small { align-self: start; margin-top: 2px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); font-weight: 400; }
+.lifecycleStrip > :is(span, button) { flex: 1 0 150px; display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 9px; min-height: 66px; box-sizing: border-box; padding: 10px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); text-align: left; }
+.lifecycleStrip > button { cursor: pointer; font: inherit; }
+.lifecycleStrip > button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.lifecycleStrip > :is(span, button) > b { grid-row: 1 / 3; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; color: var(--dsw-alias-label-primary-foreground); background: var(--dsw-alias-label-caption); font: 700 var(--investment-font-caption) ui-monospace, monospace; }
+.lifecycleStrip > :is(span, button) > strong { align-self: end; font-size: var(--investment-font-secondary); }
+.lifecycleStrip > :is(span, button) > small { align-self: start; margin-top: 2px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); font-weight: 400; }
 .lifecycleStrip > i { flex: none; align-self: center; color: var(--dsw-alias-label-caption); font-size: 1rem; font-style: normal; }
 .lifecycleStrip > [data-state='active'] { color: var(--dsw-alias-state-business-primary); border-color: var(--investment-primary); background: var(--dsw-alias-state-business-tertiary); }
 .lifecycleStrip > [data-state='active'] > b { background: var(--investment-primary); }

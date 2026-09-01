@@ -6,7 +6,7 @@
 
 ## 工具
 
-插件注册 `analyze_stock`、`analyze_holdings` 和 `market_brief`，用于流式分析或简报生成；还注册 `set_watchlist`、`set_holdings`、`get_watchlist`、`set_risk_profile`、`get_risk_profile` 和 `get_latest_brief`，用于由 endpoint 支持的已保存状态。只读工具 `investment_context` 让模型以 `portfolio`、`strategy`、`shadow`、`evolution`、`reports` 或 `industry` 领域枚举按需读取最新持久化上下文。其可选 `reference` 参数仅对 `reports` 领域开放，且必须是 32 位小写十六进制报告 ID；合法引用会在常规报告摘要上下文之外追加该报告的完整详情。工具不接收上下文 JSON、URL 或路径，也不读取浏览器本地状态。包插件声明其面向模型的 schema。
+插件注册 `analyze_stock`、`analyze_holdings` 和 `market_brief`，用于流式分析或简报生成；还注册 `set_watchlist`、`set_holdings`、`get_watchlist`、`set_risk_profile`、`get_risk_profile` 和 `get_latest_brief`，用于由 endpoint 支持的已保存状态。只读工具 `investment_context` 让模型以 `portfolio`、`strategy`、`shadow`、`evolution`、`reports` 或 `industry` 领域枚举按需读取最新持久化上下文。其可选 `reference` 参数仅对 `reports` 领域开放，且必须是 32 位小写十六进制报告 ID；可选 `strategy_id` 仅对 `evolution` 领域开放，用于固定单策略的 status/attribution 诊断。合法报告引用会在常规报告摘要上下文之外追加该报告的完整详情。工具不接收上下文 JSON、URL 或路径，也不读取浏览器本地状态。包插件声明其面向模型的 schema。
 
 `analyze_stock` 暴露以下延迟与覆盖档位：
 
@@ -34,7 +34,7 @@
 
 ## 后端行为与生命周期
 
-`analyze_stock` 发起 `POST /analyze`；`analyze_holdings` 发起 `POST /holdings/analyze`；`market_brief` 发起 `POST /brief`。每个任务随后以 SSE 读取 `GET /analyze/<taskId>/stream`。插件通过 `exec.agent.inject()` 将 `stage` 消息映射为带插件来源的用户消息，且不唤醒 agent；它将 `result` 载荷保留为无损 JSON，并从该载荷渲染结果卡和 Markdown 报告。轻量状态工具通过 endpoint 的 JSON 路由访问自选列表、持仓、风险偏好和最新简报。`investment_context` 只访问代码内固定的 trading-core 路由，并以稳定资源名聚合后端返回值：组合域读取持仓与风险，策略域读取策略池，影子域读取状态、持仓和净值，自进化域读取状态、归因和当前待确认预案，产业域读取事件影响。报告域始终读取 `/reports?limit=20`；带经验证的报告引用时，还会读取 `/reports/<reportId>` 并以 `report_detail` 资源名返回，让模型获得所选报告的分节正文，而不只是摘要行。
+`analyze_stock` 发起 `POST /analyze`；`analyze_holdings` 发起 `POST /holdings/analyze`；`market_brief` 发起 `POST /brief`。每个任务随后以 SSE 读取 `GET /analyze/<taskId>/stream`。插件通过 `exec.agent.inject()` 将 `stage` 消息映射为带插件来源的用户消息，且不唤醒 agent；它将 `result` 载荷保留为无损 JSON，并从该载荷渲染结果卡和 Markdown 报告。轻量状态工具通过 endpoint 的 JSON 路由访问自选列表、持仓、风险偏好和最新简报。`investment_context` 只访问代码内固定的 trading-core 路由，并以稳定资源名聚合后端返回值：组合域读取持仓与风险，策略域读取策略池，影子域读取状态、持仓和净值，自进化域只读状态与归因，并可通过经验证的 `strategy_id` 收敛到单策略诊断；AI 只解释已有证据，不请求预览或执行进化，产业域读取事件影响。报告域始终读取 `/reports?limit=20`；带经验证的报告引用时，还会读取 `/reports/<reportId>` 并以 `report_detail` 资源名返回，让模型获得所选报告的分节正文，而不只是摘要行。
 
 插件激活时注册 `trading-core`，只把显式设置的 `ADAPTER_RUNNER` 转发给 owned managed 子进程，并在注册工具前获取经过验证的 lease。所有工具注册和可选的简报轮询定时器均位于 Cordis effect 中。dispose 时先移除它们，再释放 lease 并注销 backend 定义。进程创建与终止仍归 Runtime 持有。
 

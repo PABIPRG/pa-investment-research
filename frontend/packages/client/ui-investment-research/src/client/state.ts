@@ -1,4 +1,5 @@
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
+import type { EvolutionLifecycleGroup } from './evolution-types.ts'
 
 export type InvestmentRoute =
   | 'dashboard'
@@ -15,6 +16,7 @@ export type InvestmentRoute =
 
 export type AssistantDisplayMode = 'closed' | 'docked' | 'expanded'
 export type AssistantModule = 'general' | 'stock' | 'industry' | 'portfolio' | 'strategy' | 'watch'
+export type StrategyResearchStage = 'form' | 'backtest' | 'shadow' | 'evolution'
 
 export interface InvestmentUiSnapshot {
   readonly route: InvestmentRoute
@@ -29,6 +31,10 @@ export interface InvestmentUiSnapshot {
   readonly chainQuery: string
   readonly selectedStockCode: string
   readonly selectedStrategyId: string
+  /** Always populated by InvestmentUiState; optional for legacy snapshot providers. */
+  readonly strategyResearchStage?: StrategyResearchStage
+  /** Always populated by InvestmentUiState; optional for legacy snapshot providers. */
+  readonly evolutionReturnGroup?: EvolutionLifecycleGroup
 }
 
 export type InvestmentDraftKey = 'analysisQuery' | 'backtestQuery' | 'watchQuery' | 'chainQuery'
@@ -36,6 +42,8 @@ export type InvestmentDraftKey = 'analysisQuery' | 'backtestQuery' | 'watchQuery
 export interface InvestmentNavigationContext {
   readonly stockCode?: string
   readonly strategyId?: string
+  readonly strategyStage?: StrategyResearchStage
+  readonly evolutionReturnGroup?: EvolutionLifecycleGroup
 }
 
 const INITIAL: InvestmentUiSnapshot = Object.freeze({
@@ -50,6 +58,8 @@ const INITIAL: InvestmentUiSnapshot = Object.freeze({
   chainQuery: '',
   selectedStockCode: '',
   selectedStrategyId: '',
+  strategyResearchStage: 'form',
+  evolutionReturnGroup: '',
 })
 
 /** One profile-local navigation source shared by the sidebar and overlay surfaces. */
@@ -77,6 +87,9 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
       // must never leak into paper validation.
       selectedStrategyId: context.strategyId
         ?? (nextRoute === 'projects' ? '' : this.snapshot.selectedStrategyId),
+      strategyResearchStage: context.strategyStage
+        ?? (nextRoute === 'framework' ? 'form' : this.snapshot.strategyResearchStage ?? 'form'),
+      evolutionReturnGroup: context.evolutionReturnGroup ?? this.snapshot.evolutionReturnGroup ?? '',
     })
   }
 
@@ -123,7 +136,9 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
       && next.watchQuery === this.snapshot.watchQuery
       && next.chainQuery === this.snapshot.chainQuery
       && next.selectedStockCode === this.snapshot.selectedStockCode
-      && next.selectedStrategyId === this.snapshot.selectedStrategyId) return
+      && next.selectedStrategyId === this.snapshot.selectedStrategyId
+      && next.strategyResearchStage === this.snapshot.strategyResearchStage
+      && next.evolutionReturnGroup === this.snapshot.evolutionReturnGroup) return
     this.snapshot = Object.freeze(next)
     for (const listener of [...this.listeners]) listener()
   }

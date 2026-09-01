@@ -30,6 +30,7 @@
 
 import hashlib
 import json
+import re
 import secrets
 import threading
 import time
@@ -44,68 +45,180 @@ _PREVIEW_COLLECTION = "evolution_previews"
 _CURRENT_PREVIEW_KEY = "_current"
 _PREVIEW_TTL_SECONDS = 30 * 60
 _EVOLUTION_LOCK = threading.Lock()
+_STRATEGY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
 
 
 class EvolutionPreviewConflict(RuntimeError):
     """待确认预案已失效、已提交或与当前业务状态不一致。"""
 
 
-def _source_version(store: JsonStore) -> str:
-    """绑定所有会影响进化动作的持久化输入与阈值。"""
-    payload = {
+class EvolutionStrategyNotFound(LookupError):
+    """指定的策略不存在，禁止回退到全局进化数据。"""
+
+
+def _validate_strategy_id(strategy_id: str | None) -> None:
+    """在任何 scoped 存储访问前拒绝非法策略标识。"""
+    if strategy_id is not None and not _STRATEGY_ID_PATTERN.fullmatch(strategy_id):
+        raise ValueError("strategy_id must be a safe identifier")
+
+
+def _scope_key(strategy_id: str | None) -> str:
+    return "global" if strategy_id is None else f"strategy:{strategy_id}"
+
+
+def _current_preview_key(strategy_id: str | None) -> str:
+    return f"_current:{_scope_key(strategy_id)}"
+
+
+def _preview_scope(strategy_id: str | None) -> dict:
+    return {
+        "scope_kind": "global" if strategy_id is None else "strategy",
+        **({} if strategy_id is None else {"strategy_id": strategy_id}),
+    }
+
+
+def _record_scope(record: dict) -> dict:
+    if record.get("scope_kind") == "strategy":
+        return {"scope_kind": "strategy", "strategy_id": record.get("strategy_id")}
+    return {"scope_kind": "global"}
+
+
+def _settings_payload() -> dict:
+    return {
+        "min_days": settings.evolve_min_days,
+        "retire_nav": settings.evolve_retire_nav,
+        "retire_closed_win": settings.evolve_retire_closed_win,
+        "demote_nav": settings.evolve_demote_nav,
+        "promote_nav": settings.evolve_promote_nav,
+        "mutate_cooldown_days": settings.evolve_mutate_cooldown_days,
+        "mutate_branches": settings.evolve_mutate_branches,
+    }
+
+
+def _hash_source_payload(payload: dict) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _legacy_source_version(store: JsonStore) -> str:
+    return _hash_source_payload({
         "strategies": store.all("strategies") or {},
         "shadow_equity": store.all("shadow_equity") or {},
         "shadows": store.all("shadows") or {},
-        "settings": {
-            "min_days": settings.evolve_min_days,
-            "retire_nav": settings.evolve_retire_nav,
-            "retire_closed_win": settings.evolve_retire_closed_win,
-            "demote_nav": settings.evolve_demote_nav,
-            "promote_nav": settings.evolve_promote_nav,
-            "mutate_cooldown_days": settings.evolve_mutate_cooldown_days,
-            "mutate_branches": settings.evolve_mutate_branches,
-        },
-    }
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        "settings": _settings_payload(),
+    })
+
+
+def _record_source_version(
+    store: JsonStore,
+    record: dict,
+    strategy_id: str | None,
+) -> str:
+    if strategy_id is None and "scope_kind" not in record:
+        return _legacy_source_version(store)
+    return _source_version(store, strategy_id)
+
+
+def _source_version(store: JsonStore, strategy_id: str | None = None) -> str:
+    """绑定所有会影响进化动作的持久化输入与阈值。"""
+    if strategy_id is None:
+        strategies = store.all("strategies") or {}
+        shadow_equity = store.all("shadow_equity") or {}
+        shadows = store.all("shadows") or {}
+    else:
+        strategies = {strategy_id: _strategy_record(store, strategy_id)}
+        shadow_equity = _scoped_shadow_series(store, strategy_id)[0]
+        shadows = {
+            f"trades:{strategy_id}": store.get("shadows", f"trades:{strategy_id}") or []
+        }
+    return _hash_source_payload({
+        "scope": _preview_scope(strategy_id),
+        "strategies": strategies,
+        "shadow_equity": shadow_equity,
+        "shadows": shadows,
+        "settings": _settings_payload(),
+    })
 
 
 def _public_preview(record: dict) -> dict:
     return {key: value for key, value in record.items() if not key.startswith("_")}
 
 
-def _store_preview(store: JsonStore, response: dict, state_version: str) -> dict:
+def _store_preview(
+    store: JsonStore,
+    response: dict,
+    state_version: str,
+    strategy_id: str | None,
+) -> dict:
     token = secrets.token_hex(16)
     now = time.time()
     record = {
         **response,
+        **_preview_scope(strategy_id),
         "preview_token": token,
         "state_version": state_version,
         "preview_status": "pending",
         "expires_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now + _PREVIEW_TTL_SECONDS)),
         "_expires_at_epoch": now + _PREVIEW_TTL_SECONDS,
     }
-    previous = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
-    if isinstance(previous, str):
+    current_key = _current_preview_key(strategy_id)
+    previous_tokens = [store.get(_PREVIEW_COLLECTION, current_key)]
+    if strategy_id is None:
+        previous_tokens.append(store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY))
+    for previous in previous_tokens:
+        if not isinstance(previous, str):
+            continue
         old = store.get(_PREVIEW_COLLECTION, previous)
-        if isinstance(old, dict) and old.get("preview_status") == "pending":
+        if (
+            isinstance(old, dict)
+            and old.get("preview_status") == "pending"
+            and _record_scope(old) == _preview_scope(strategy_id)
+        ):
             store.update(_PREVIEW_COLLECTION, previous, preview_status="superseded")
     store.set(_PREVIEW_COLLECTION, token, record)
-    store.set(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY, token)
+    store.set(_PREVIEW_COLLECTION, current_key, token)
+    if strategy_id is None:
+        store.delete(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
     return _public_preview(record)
 
 
-def current_preview(store: JsonStore | None = None) -> dict:
+def _discard_current_preview(store: JsonStore, strategy_id: str | None) -> None:
+    current_key = _current_preview_key(strategy_id)
+    token = store.get(_PREVIEW_COLLECTION, current_key)
+    if strategy_id is None and not isinstance(token, str):
+        token = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+    if isinstance(token, str):
+        record = store.get(_PREVIEW_COLLECTION, token)
+        if isinstance(record, dict) and record.get("preview_status") == "pending":
+            store.update(_PREVIEW_COLLECTION, token, preview_status="superseded")
+    store.delete(_PREVIEW_COLLECTION, current_key)
+    if strategy_id is None:
+        store.delete(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+
+
+def current_preview(
+    store: JsonStore | None = None,
+    strategy_id: str | None = None,
+) -> dict:
     """返回模型可读取的当前待确认预案及其有效性，不暴露内部存储字段。"""
+    _validate_strategy_id(strategy_id)
     store = store or JsonStore()
-    token = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+    if strategy_id is not None:
+        _strategy_record(store, strategy_id)
+    token = store.get(_PREVIEW_COLLECTION, _current_preview_key(strategy_id))
+    if strategy_id is None and not isinstance(token, str):
+        token = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
     record = store.get(_PREVIEW_COLLECTION, token) if isinstance(token, str) else None
-    if not isinstance(record, dict) or record.get("preview_status") != "pending":
+    if (
+        not isinstance(record, dict)
+        or record.get("preview_status") != "pending"
+        or _record_scope(record) != _preview_scope(strategy_id)
+    ):
         return {"preview_status": "none", "actions": [], "count": 0}
     result = _public_preview(record)
     if time.time() > float(record.get("_expires_at_epoch") or 0):
         return {**result, "preview_status": "expired", "valid": False}
-    valid = record.get("state_version") == _source_version(store)
+    valid = record.get("state_version") == _record_source_version(store, record, strategy_id)
     return {**result, "preview_status": "pending" if valid else "stale", "valid": valid}
 
 
@@ -113,52 +226,44 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _last_applied_at(store: JsonStore) -> str | None:
+def _last_applied_at(store: JsonStore, strategy_id: str | None = None) -> str | None:
     """最近一次成功应用的进化时间（YYYY-MM-DD HH:MM:SS）；从未应用返回 None。
 
     扫 evolution_previews 集合里 preview_status=="applied" 的记录取最大 applied_at，
     不依赖当前指针（指针会被新的 pending 预案顶掉）。
     """
-    best: str | None = None
-    for rec in (store.all(_PREVIEW_COLLECTION) or {}).values():
-        if not isinstance(rec, dict) or rec.get("preview_status") != "applied":
-            continue
-        ts = str(rec.get("applied_at") or "")
-        if ts and (best is None or ts > best):
-            best = ts
-    return best
+    rows = _recent_applied(store, strategy_id=strategy_id, limit=1)
+    return None if not rows else str(rows[0].get("applied_at") or "") or None
 
 
-def _recent_applied(store: JsonStore, limit: int = 5) -> list[dict]:
+def _recent_applied(
+    store: JsonStore,
+    strategy_id: str | None = None,
+    limit: int = 5,
+) -> list[dict]:
     """最近 N 条已成功应用的进化记录摘要，按 applied_at 降序。
 
     扫 evolution_previews 集合里 preview_status=="applied" 的记录，
     供前端渲染「最近自动进化」时间线。
     """
-    recs = store.all(_PREVIEW_COLLECTION) or {}
-    applied = [
-        rec for rec in recs.values()
-        if isinstance(rec, dict) and rec.get("preview_status") == "applied"
-    ]
-    applied.sort(key=lambda r: str(r.get("applied_at") or ""), reverse=True)
-    out: list[dict] = []
-    for rec in applied[:limit]:
-        actions = rec.get("actions") or []
-        out.append(
-            {
-                "applied_at": rec.get("applied_at"),
-                "count": len(actions),
-                "actions": [
-                    {
-                        "type": a.get("type"),
-                        "sid": a.get("sid") or a.get("parent"),
-                        "reason": a.get("reason"),
-                    }
-                    for a in actions
-                ],
-            }
-        )
-    return out
+    rows: list[dict] = []
+    for record in (store.all(_PREVIEW_COLLECTION) or {}).values():
+        if not isinstance(record, dict) or record.get("preview_status") != "applied":
+            continue
+        actions = [action for action in record.get("actions") or [] if isinstance(action, dict)]
+        if strategy_id is not None:
+            actions = [action for action in actions if (
+                action.get("sid") == strategy_id or action.get("parent") == strategy_id
+            )]
+        if not actions:
+            continue
+        rows.append({
+            "applied_at": record.get("applied_at"),
+            "count": len(actions),
+            "actions": actions,
+        })
+    rows.sort(key=lambda row: str(row.get("applied_at") or ""), reverse=True)
+    return rows[:limit]
 
 
 def _parse_ts(ts) -> float | None:
@@ -197,6 +302,44 @@ def _shadow_series(store: JsonStore) -> tuple[list[dict], int]:
     return days, len(days)
 
 
+def _strategy_record(store: JsonStore, strategy_id: str) -> dict:
+    _validate_strategy_id(strategy_id)
+    record = store.get("strategies", strategy_id)
+    if not isinstance(record, dict):
+        raise EvolutionStrategyNotFound(f"策略 {strategy_id} 不存在")
+    return record
+
+
+def _scoped_shadow_series(
+    store: JsonStore,
+    strategy_id: str | None,
+) -> tuple[list[dict], int]:
+    """返回全局或单策略有效影子净值序列。"""
+    if strategy_id is None:
+        return _shadow_series(store)
+    _strategy_record(store, strategy_id)
+    scoped: list[dict] = []
+    for date in sorted((store.all("shadow_equity") or {})):
+        day = store.get("shadow_equity", date)
+        if not isinstance(day, dict):
+            continue
+        strategy = (day.get("strategies") or {}).get(strategy_id)
+        if not isinstance(strategy, dict):
+            continue
+        try:
+            nav = float(strategy.get("nav") or 0)
+        except (TypeError, ValueError):
+            continue
+        if nav <= 0:
+            continue
+        scoped.append({
+            "date": date,
+            "overall_nav": nav,
+            "strategies": {strategy_id: strategy},
+        })
+    return scoped, len(scoped)
+
+
 def _per_strategy_series(days: list[dict]) -> dict[str, list[dict]]:
     """每策略影子净值序列 → {sid: [{date, nav}]}（正数只收，非法跳过）。"""
     out: dict[str, list[dict]] = {}
@@ -231,10 +374,14 @@ def _closed_trades(store: JsonStore, sid: str) -> list[dict]:
 # ---- S→T 归因 ------------------------------------------------------------
 
 
-def attribution(store: JsonStore | None = None) -> dict:
+def attribution(
+    store: JsonStore | None = None,
+    strategy_id: str | None = None,
+) -> dict:
     """S→T：影子组合整体归因 + 每策略贡献分解（只读，永不写库）。"""
+    _validate_strategy_id(strategy_id)
     store = store or JsonStore()
-    days, n = _shadow_series(store)
+    days, n = _scoped_shadow_series(store, strategy_id)
     base = {
         "as_of": _now(),
         "days_of_data": n,
@@ -258,9 +405,17 @@ def attribution(store: JsonStore | None = None) -> dict:
             if len(days) >= 2
             else None
         ),
-        "strategy_count": len({sid for d in days for sid in (d.get("strategies") or {})}),
+        "strategy_count": (
+            1
+            if strategy_id is not None
+            else len({sid for d in days for sid in (d.get("strategies") or {})})
+        ),
     }
-    strats = store.all("strategies") or {}
+    strats = (
+        {strategy_id: _strategy_record(store, strategy_id)}
+        if strategy_id is not None
+        else store.all("strategies") or {}
+    )
     series = _per_strategy_series(days)
     per = []
     for sid, pts in series.items():
@@ -356,6 +511,7 @@ def evolve(
     store: JsonStore | None = None,
     apply: bool = False,
     preview_token: str | None = None,
+    strategy_id: str | None = None,
 ) -> dict:
     """T→W→H 主循环。写入只能应用已绑定当时状态的精确预案。
 
@@ -365,17 +521,32 @@ def evolve(
       - nav ≤ demote_nav          → watch（降级观察，仍跑影子、不推荐）
       - nav ≥ promote_nav         → tier=2（升级）+ 若样本外达标且在冷却期外 → 变异回流候选
     """
+    _validate_strategy_id(strategy_id)
     store = store or JsonStore()
     if apply:
-        return _apply_preview(store, preview_token)
+        return _apply_preview(store, preview_token, strategy_id)
 
     with _EVOLUTION_LOCK:
-        version_before = _source_version(store)
-        response = _build_preview(store)
-        version_after = _source_version(store)
+        version_before = _source_version(store, strategy_id)
+        response = _build_preview(store, strategy_id)
+        version_after = _source_version(store, strategy_id)
         if version_before != version_after:
             raise EvolutionPreviewConflict("进化数据在生成预案时已变化，请重新生成后再确认")
-        return _store_preview(store, response, version_after)
+        if response.get("status") != "ready":
+            _discard_current_preview(store, strategy_id)
+            return {
+                **response,
+                **_preview_scope(strategy_id),
+                "preview_status": "blocked",
+            }
+        if not response.get("actions"):
+            _discard_current_preview(store, strategy_id)
+            return {
+                **response,
+                **_preview_scope(strategy_id),
+                "preview_status": "empty",
+            }
+        return _store_preview(store, response, version_after, strategy_id)
 
 
 def evolve_auto(store: JsonStore | None = None) -> dict:
@@ -409,21 +580,29 @@ def evolve_auto(store: JsonStore | None = None) -> dict:
     return evolve(store, apply=True, preview_token=token)
 
 
-def _per_strategy_decisions(store: JsonStore, attr: dict) -> tuple[list[dict], list[dict]]:
+def _per_strategy_decisions(
+    store: JsonStore,
+    attr: dict,
+    strategy_id: str | None = None,
+) -> tuple[list[dict], list[dict]]:
     """为每个 active 策略生成当前判定条目 + 判定触发的动作列表。
 
     纯代码搬移自原 _build_preview 的分策略循环，输出逐字节不变，
     供 _build_preview（preview 预案）与 status（闭环看板）复用。
     """
     actions: list[dict] = []
-    strats = store.all("strategies") or {}
+    strats = (
+        {strategy_id: _strategy_record(store, strategy_id)}
+        if strategy_id is not None
+        else store.all("strategies") or {}
+    )
     now = time.time()
     cooldown = settings.evolve_mutate_cooldown_days * 86400
     per_strategy: list[dict] = []
     for s in attr["strategies"]:
         sid = s["strategy_id"]
         rec = strats.get(sid) or {}
-        if not isinstance(rec, dict) or rec.get("status") != "active":
+        if not isinstance(rec, dict):
             continue
         ev = rec.get("evolve") or {}
         nav = s["nav"]
@@ -443,6 +622,13 @@ def _per_strategy_decisions(store: JsonStore, attr: dict) -> tuple[list[dict], l
             "reason": "",
             "behavior": "带内运行",
         }
+        if rec.get("status") != "active":
+            entry.update(
+                behavior="不参与当前判定",
+                reason=f"策略当前状态为 {rec.get('status') or 'unknown'}，仅展示历史证据",
+            )
+            per_strategy.append(entry)
+            continue
         # 1) 淘汰（净值跌破淘汰线）
         if nav is not None and nav <= settings.evolve_retire_nav and ev.get("state") != "retired":
             reason = f"影子净值 {nav:.4f} ≤ 淘汰线 {settings.evolve_retire_nav}"
@@ -575,8 +761,8 @@ def _per_strategy_decisions(store: JsonStore, attr: dict) -> tuple[list[dict], l
     return per_strategy, actions
 
 
-def _build_preview(store: JsonStore) -> dict:
-    days, n = _shadow_series(store)
+def _build_preview(store: JsonStore, strategy_id: str | None = None) -> dict:
+    days, n = _scoped_shadow_series(store, strategy_id)
     resp = {
         "as_of": _now(),
         "days_of_data": n,
@@ -585,7 +771,7 @@ def _build_preview(store: JsonStore) -> dict:
         "count": 0,
         "actions": [],
         "per_strategy": [],
-        "last_applied_at": _last_applied_at(store),
+        "last_applied_at": _last_applied_at(store, strategy_id),
     }
     if n < settings.evolve_min_days:
         resp["status"] = "waiting_data"
@@ -595,35 +781,50 @@ def _build_preview(store: JsonStore) -> dict:
         )
         return resp
     resp["status"] = "ready"
-    per_strategy, actions = _per_strategy_decisions(store, attribution(store))
+    per_strategy, actions = _per_strategy_decisions(
+        store,
+        attribution(store, strategy_id),
+        strategy_id,
+    )
     resp["count"] = len(actions)
     resp["actions"] = actions
     resp["per_strategy"] = per_strategy
     return resp
 
 
-def _apply_preview(store: JsonStore, preview_token: str | None) -> dict:
+def _apply_preview(
+    store: JsonStore,
+    preview_token: str | None,
+    strategy_id: str | None,
+) -> dict:
     if not isinstance(preview_token, str) or not preview_token:
         raise EvolutionPreviewConflict("确认应用必须携带预览令牌，请先重新生成预案")
     with _EVOLUTION_LOCK:
+        if strategy_id is not None:
+            _strategy_record(store, strategy_id)
         record = store.get(_PREVIEW_COLLECTION, preview_token)
         if not isinstance(record, dict):
             raise EvolutionPreviewConflict("预案不存在，请重新生成")
+        if _record_scope(record) != _preview_scope(strategy_id):
+            raise EvolutionPreviewConflict("预案作用域与本次请求不一致，请重新生成")
         preview_status = record.get("preview_status")
         if preview_status != "pending":
             raise EvolutionPreviewConflict(f"预案已{preview_status or '失效'}，不能重复提交")
-        current = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+        current_key = _current_preview_key(strategy_id)
+        current = store.get(_PREVIEW_COLLECTION, current_key)
+        if strategy_id is None and not isinstance(current, str):
+            current = store.get(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
         if current != preview_token:
-            store.update(_PREVIEW_COLLECTION, preview_token, preview_status="superseded")
             raise EvolutionPreviewConflict("已生成更新的预案，请确认最新预案")
         if time.time() > float(record.get("_expires_at_epoch") or 0):
             store.update(_PREVIEW_COLLECTION, preview_token, preview_status="expired")
             raise EvolutionPreviewConflict("预案已过期，请重新生成")
-        if record.get("state_version") != _source_version(store):
-            store.update(_PREVIEW_COLLECTION, preview_token, preview_status="stale")
+        if record.get("state_version") != _record_source_version(store, record, strategy_id):
             raise EvolutionPreviewConflict("策略或影子证据已变化，未应用旧预案；请重新生成")
 
         actions = record.get("actions") or []
+        if record.get("status") != "ready" or not actions:
+            raise EvolutionPreviewConflict("预案没有可应用的进化动作，请重新生成")
         store.update(_PREVIEW_COLLECTION, preview_token, preview_status="applying")
         try:
             for action in actions:
@@ -639,7 +840,9 @@ def _apply_preview(store: JsonStore, preview_token: str | None) -> dict:
             applied=True,
             applied_at=applied_at,
         )
-        store.delete(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
+        store.delete(_PREVIEW_COLLECTION, current_key)
+        if strategy_id is None:
+            store.delete(_PREVIEW_COLLECTION, _CURRENT_PREVIEW_KEY)
         return {
             **_public_preview(record),
             "preview_status": "applied",
@@ -706,67 +909,102 @@ def _apply_action(store: JsonStore, a: dict) -> None:
         store.set("strategies", a["sid"], rec)
 
 
-def status(store: JsonStore | None = None) -> dict:
-    """闭环状态：数据是否就绪 + 生命周期统计。"""
-    store = store or JsonStore()
-    _, n = _shadow_series(store)
-    strats = store.all("strategies") or {}
-    counts = {
-        "candidate": 0,
-        "active": 0,
-        "watch": 0,
-        "retired": 0,
-        "rejected": 0,
-        "mutated": 0,
+def _lifecycle_entry(record: dict) -> dict:
+    return {
+        "strategy_id": record.get("id"),
+        "name": record.get("name"),
+        "kind": record.get("kind"),
+        "tier": int((record.get("evolve") or {}).get("tier") or 1),
+        "symbols": record.get("symbols"),
+        "mutated_from": record.get("mutated_from"),
+        "source": record.get("source"),
     }
-    lifecycle: dict[str, list[dict]] = {
-        "active": [], "candidate": [], "mutated": [], "retired": [], "watch": [], "rejected": [],
-    }
-    for s in strats.values():
-        if not isinstance(s, dict):
+
+
+def _lifecycle(
+    store: JsonStore,
+    strategy_id: str | None = None,
+) -> dict[str, list[dict]]:
+    groups = {key: [] for key in (
+        "active", "candidate", "mutated", "retired", "watch", "rejected",
+    )}
+    for record in (store.all("strategies") or {}).values():
+        if not isinstance(record, dict):
             continue
-        st = s.get("status")
-        ev_state = (s.get("evolve") or {}).get("state")
-        entry = {
-            "strategy_id": s.get("id"),
-            "name": s.get("name"),
-            "kind": s.get("kind"),
-            "tier": int((s.get("evolve") or {}).get("tier") or 1),
-            "symbols": s.get("symbols"),
-            "mutated_from": s.get("mutated_from"),
-            "source": s.get("source"),
-        }
-        if s.get("source") == "evolution":
-            counts["mutated"] += 1
-            lifecycle["mutated"].append(entry)
-        if st == "candidate":
-            counts["candidate"] += 1
-            lifecycle["candidate"].append(entry)
-        elif st == "active":
-            counts["active"] += 1
-            lifecycle["active"].append(entry)
-            if ev_state == "watch":
-                counts["watch"] += 1
-                lifecycle["watch"].append(entry)
-            elif ev_state == "retired":
-                counts["retired"] += 1
-                lifecycle["retired"].append(entry)
-        elif st == "retired":
-            counts["retired"] += 1
-            lifecycle["retired"].append(entry)
-        elif st == "rejected":
-            counts["rejected"] += 1
-            lifecycle["rejected"].append(entry)
+        entry = _lifecycle_entry(record)
+        status_value = str(record.get("status") or "")
+        evolve_state = str((record.get("evolve") or {}).get("state") or "")
+        if record.get("source") == "evolution":
+            groups["mutated"].append(entry)
+        if status_value in groups:
+            groups[status_value].append(entry)
+        if status_value == "active" and evolve_state in {"watch", "retired"}:
+            groups[evolve_state].append(entry)
+    if strategy_id is None:
+        return groups
+    _strategy_record(store, strategy_id)
+    all_entries = {
+        str(entry.get("strategy_id")): entry
+        for entries in groups.values()
+        for entry in entries
+    }
+    related = {strategy_id}
+    changed = True
+    while changed:
+        changed = False
+        for sid, entry in all_entries.items():
+            parent = str(entry.get("mutated_from") or "")
+            if sid in related and parent and parent not in related:
+                related.add(parent)
+                changed = True
+            if parent in related and sid not in related:
+                related.add(sid)
+                changed = True
+    return {
+        key: [entry for entry in entries if str(entry.get("strategy_id")) in related]
+        for key, entries in groups.items()
+    }
+
+
+def status(
+    store: JsonStore | None = None,
+    strategy_id: str | None = None,
+) -> dict:
+    """闭环状态：数据是否就绪 + 生命周期统计。"""
+    _validate_strategy_id(strategy_id)
+    store = store or JsonStore()
+    _, n = _scoped_shadow_series(store, strategy_id)
+    strats = (
+        {strategy_id: _strategy_record(store, strategy_id)}
+        if strategy_id is not None
+        else store.all("strategies") or {}
+    )
+    lifecycle = _lifecycle(store, strategy_id)
+    counts = {
+        key: (
+            len(entries)
+            if strategy_id is None
+            else sum(
+                str(entry.get("strategy_id")) == strategy_id
+                for entry in entries
+            )
+        )
+        for key, entries in lifecycle.items()
+    }
     ready = n >= settings.evolve_min_days
     # 各策略当前判定：ready 前不调 attribution（省冷启动开销），兜底生成「待判定」；
     # ready 后走共享判定逻辑 + 对未覆盖的 active 策略补「待判定」条目。
     if ready:
-        per_strategy, _ = _per_strategy_decisions(store, attribution(store))
+        per_strategy, _ = _per_strategy_decisions(
+            store,
+            attribution(store, strategy_id),
+            strategy_id,
+        )
     else:
         per_strategy = []
     covered = {p["strategy_id"] for p in per_strategy}
     for s in strats.values():
-        if not isinstance(s, dict) or s.get("status") != "active":
+        if not isinstance(s, dict):
             continue
         if s.get("id") in covered:
             continue
@@ -782,8 +1020,14 @@ def status(store: JsonStore | None = None) -> dict:
                 "closed_win_rate_pct": None,
                 "closed_trades": 0,
                 "decision": "none",
-                "reason": "影子数据不足，暂不参与判定",
-                "behavior": "待判定",
+                "reason": (
+                    "影子数据不足，暂不参与判定"
+                    if s.get("status") == "active"
+                    else f"策略当前状态为 {s.get('status') or 'unknown'}，仅展示历史证据"
+                ),
+                "behavior": (
+                    "待判定" if s.get("status") == "active" else "不参与当前判定"
+                ),
             }
         )
     return {
@@ -798,11 +1042,11 @@ def status(store: JsonStore | None = None) -> dict:
             if ready
             else f"影子净值仅 {n} 日，自进化待累积至 {settings.evolve_min_days} 日"
         ),
-        "last_applied_at": _last_applied_at(store),
+        "last_applied_at": _last_applied_at(store, strategy_id),
         "closed_loop_enabled": settings.closed_loop_enabled,
         "closed_loop_time": settings.closed_loop_time,
         "per_strategy": per_strategy,
-        "recent_applied": _recent_applied(store, limit=5),
+        "recent_applied": _recent_applied(store, strategy_id=strategy_id, limit=5),
     }
 
 

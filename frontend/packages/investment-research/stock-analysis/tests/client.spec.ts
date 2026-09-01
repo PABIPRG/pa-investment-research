@@ -102,7 +102,6 @@ describe('stock-analysis adapter client', () => {
       `${BASE}/shadow/equity?limit=30`,
       `${BASE}/evolution/status`,
       `${BASE}/evolution/attribution`,
-      `${BASE}/evolution/preview`,
       `${BASE}/reports?limit=20`,
       `${BASE}/personalized/impact?limit=20`,
     ])
@@ -110,7 +109,7 @@ describe('stock-analysis adapter client', () => {
       ['portfolio', ['holdings', 'portfolio_risk', 'risk_alerts']],
       ['strategy', ['strategies']],
       ['shadow', ['status', 'positions', 'equity']],
-      ['evolution', ['status', 'attribution', 'preview']],
+      ['evolution', ['status', 'attribution']],
       ['reports', ['reports']],
       ['industry', ['impact']],
     ])
@@ -148,6 +147,21 @@ describe('stock-analysis adapter client', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  it('reads scoped evolution status and attribution without preview', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      calls.push(url)
+      return response({ source: url })
+    }))
+
+    await getInvestmentContext(BASE, 'evolution', undefined, { strategyId: 'strategy:alpha@v2' })
+
+    expect(calls).toEqual([
+      `${BASE}/evolution/status?strategy_id=strategy%3Aalpha%40v2`,
+      `${BASE}/evolution/attribution?strategy_id=strategy%3Aalpha%40v2`,
+    ])
+  })
+
   it('reads a selected report detail through a validated fixed route', async () => {
     const calls: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -159,7 +173,7 @@ describe('stock-analysis adapter client', () => {
       BASE,
       'reports',
       new AbortController().signal,
-      reportId,
+      { reference: reportId },
     )
 
     expect(calls).toEqual([
@@ -177,10 +191,14 @@ describe('stock-analysis adapter client', () => {
     vi.stubGlobal('fetch', fetch)
     const signal = new AbortController().signal
 
-    await expect(getInvestmentContext(BASE, 'reports', signal, '../risk_profile'))
+    await expect(getInvestmentContext(BASE, 'reports', signal, { reference: '../risk_profile' }))
       .rejects.toThrow('32 位小写十六进制报告 ID')
-    await expect(getInvestmentContext(BASE, 'portfolio', signal, 'a'.repeat(32)))
+    await expect(getInvestmentContext(BASE, 'portfolio', signal, { reference: 'a'.repeat(32) }))
       .rejects.toThrow('只有报告上下文支持资源引用')
+    await expect(getInvestmentContext(BASE, 'evolution', signal, { strategyId: '../unsafe' }))
+      .rejects.toThrow('策略 ID 格式不安全')
+    await expect(getInvestmentContext(BASE, 'portfolio', signal, { strategyId: 'strategy-1' }))
+      .rejects.toThrow('只有自进化上下文支持策略 ID')
     expect(fetch).not.toHaveBeenCalled()
   })
 

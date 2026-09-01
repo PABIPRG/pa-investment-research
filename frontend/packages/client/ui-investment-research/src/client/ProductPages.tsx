@@ -6,6 +6,8 @@ import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
+import { StrategyEvolutionDiagnostics } from './StrategyEvolutionDiagnostics.tsx'
+import type { StrategyResearchStage } from './state.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
 import css from './InvestmentShell.module.css'
 
@@ -633,25 +635,39 @@ interface StrategyResearchPageProps {
   readonly onAnalyze: (intent: AssistantIntent) => void
   readonly initialView?: 'pool' | 'shadow'
   readonly onOpenEvolution?: () => void
+  readonly initialStage?: StrategyResearchStage
+  readonly onBackEvolution?: () => void
+}
+
+export const STRATEGY_EVOLUTION_HANDOFF_KEY = 'dsh.investment.strategy-evolution-handoff.v2'
+
+function evolutionHandoffSuppressed(): boolean {
+  try {
+    return JSON.parse(window.localStorage.getItem(STRATEGY_EVOLUTION_HANDOFF_KEY) ?? 'null')?.suppressed === true
+  } catch {
+    return false
+  }
 }
 
 /** Event hypotheses, evidence and lifecycle decisions backed by the strategy store. */
 export function StrategyResearchPage({
   requestData, selectedStrategyId, onSelectStrategy, onOpenShadow, onOpenReports, onAnalyze,
-  initialView = 'pool', onOpenEvolution = () => {},
+  initialView = 'pool', onOpenEvolution = () => {}, initialStage = 'form', onBackEvolution = onOpenEvolution,
 }: StrategyResearchPageProps) {
   const strategies = useDataResource(requestData)
   const alive = useAliveRef()
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState('')
   const [reportReady, setReportReady] = useState(false)
-  const [view, setView] = useState<'pool' | 'shadow'>(initialView)
+  const [view, setView] = useState<'pool' | 'shadow' | 'evolution'>(initialStage === 'evolution' ? 'evolution' : initialView)
+  const [evolutionEducationOpen, setEvolutionEducationOpen] = useState(false)
+  const [suppressEvolutionEducation, setSuppressEvolutionEducation] = useState(false)
   const [filter, setFilter] = useState<StrategyFilter>('all')
   const [backtestYears, setBacktestYears] = useState<number>(2)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
   const [hypothesisPreview, setHypothesisPreview] = useState<StrategyHypothesisPreview>()
   const [hypothesisStatus, setHypothesisStatus] = useState('')
-  useEffect(() => { setView(initialView) }, [initialView])
+  useEffect(() => { setView(initialStage === 'evolution' ? 'evolution' : initialView) }, [initialStage, initialView])
   const load = useCallback(() => {
     strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
   }, [strategies.run])
@@ -694,6 +710,7 @@ export function StrategyResearchPage({
     counts[category] += 1
     return counts
   }, { verified: 0, unverified: 0, failed: 0, archived: 0 })
+  const selectedItem = items.find(item => text(item.id, '') === selectedStrategyId)
 
   const previewHypotheses = async (): Promise<void> => {
     if (busyAction !== '') return
@@ -794,6 +811,44 @@ export function StrategyResearchPage({
     }
   }
 
+  const openEvolutionDiagnostics = (): void => {
+    if (selectedStrategyId === '') {
+      setNotice('请先选择策略后进入进化诊断。')
+      return
+    }
+    if (evolutionHandoffSuppressed()) {
+      setView('evolution')
+      return
+    }
+    setSuppressEvolutionEducation(false)
+    setEvolutionEducationOpen(true)
+  }
+
+  const continueEvolutionDiagnostics = (): void => {
+    if (suppressEvolutionEducation) {
+      try {
+        window.localStorage.setItem(STRATEGY_EVOLUTION_HANDOFF_KEY, JSON.stringify({ suppressed: true }))
+      } catch {
+        // Browser storage is optional; the read-only diagnostics remains available.
+      }
+    }
+    setEvolutionEducationOpen(false)
+    setView('evolution')
+  }
+
+  if (view === 'evolution') {
+    const selectedStatus = text(selectedItem?.status, '')
+    return <div className={css.pageScroll}><StrategyEvolutionDiagnostics
+      requestData={requestData}
+      strategyId={selectedStrategyId}
+      strategyLabel={text(selectedItem?.name, selectedStrategyId || '未选择策略')}
+      strategyStatus={selectedStatus}
+      archived={strategyCategory(selectedItem ?? {}) === 'archived'}
+      onAnalyze={onAnalyze}
+      onBack={onBackEvolution}
+    /></div>
+  }
+
   return (
     <div className={css.pageScroll}>
       <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
@@ -825,7 +880,7 @@ export function StrategyResearchPage({
           <span data-state="active"><b>1</b><strong>事件形成假设</strong><small>从真实市场事件生成候选</small></span><i aria-hidden="true">→</i>
           <span><b>2</b><strong>样本外回测</strong><small>用未参与构建的数据验证</small></span><i aria-hidden="true">→</i>
           <span><b>3</b><strong>影子验证</strong><small>纸面账户跟踪真实行情</small></span><i aria-hidden="true">→</i>
-          <span><b>4</b><strong>进化观察</strong><small>归因后人工确认升降级</small></span>
+          <button type="button" onClick={openEvolutionDiagnostics}><b>4</b><strong>进化诊断</strong><small>查看最新判定；动作由统一闭环执行</small></button>
         </div>
       </section>
       {view === 'pool' ? <>
@@ -949,6 +1004,19 @@ export function StrategyResearchPage({
           }}
           onConfirm={() => { void confirmHypotheses() }}
         />
+      )}
+      {evolutionEducationOpen && (
+        <div className={css.dialogBackdrop} role="presentation">
+          <section className={css.moduleCard} role="dialog" aria-modal="true" aria-label="进入当前策略的进化诊断">
+            <h2>进入当前策略的进化诊断</h2>
+            <p>这里仅展示当前策略证据、预计判定和自动执行历史；所有动作由统一自动闭环执行。</p>
+            <label><input type="checkbox" checked={suppressEvolutionEducation} onChange={event => { setSuppressEvolutionEducation(event.target.checked) }} />以后不再提示（仅保存在此浏览器）</label>
+            <div className={css.moduleToolbar}>
+              <button type="button" className={css.secondaryButton} onClick={() => { setEvolutionEducationOpen(false) }}>取消</button>
+              <button type="button" className={css.primaryButton} onClick={continueEvolutionDiagnostics}>继续进入</button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   )

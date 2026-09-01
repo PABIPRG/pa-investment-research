@@ -726,25 +726,46 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     # ---- 自进化闭环（S_shadow→T→W→H + R→S→U→K outcome 版）-----------------
 
     @app.get("/evolution/status", response_model=dict)
-    def evolution_status():
+    def evolution_status(
+        strategy_id: Optional[str] = Query(
+            default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$"
+        ),
+    ):
         """自进化闭环状态：影子数据是否就绪 + 策略生命周期统计。"""
         from . import evolution
 
-        return evolution.status()
+        try:
+            return evolution.status(strategy_id=strategy_id)
+        except evolution.EvolutionStrategyNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/evolution/attribution", response_model=dict)
-    def evolution_attribution():
+    def evolution_attribution(
+        strategy_id: Optional[str] = Query(
+            default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$"
+        ),
+    ):
         """T 归因（S_shadow→T）：影子组合整体 + 每策略 收益/回撤/平仓胜率（只读）。"""
         from . import evolution
 
-        return evolution.attribution()
+        try:
+            return evolution.attribution(strategy_id=strategy_id)
+        except evolution.EvolutionStrategyNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/evolution/preview", response_model=dict)
-    def evolution_preview():
+    def evolution_preview(
+        strategy_id: Optional[str] = Query(
+            default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$"
+        ),
+    ):
         """当前待确认进化预案，供产品页与模型以同一上下文复核。"""
         from . import evolution
 
-        return evolution.current_preview()
+        try:
+            return evolution.current_preview(strategy_id=strategy_id)
+        except evolution.EvolutionStrategyNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/evolution/run", response_model=dict)
     def evolution_run(req: EvolutionRunRequest):
@@ -755,7 +776,13 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         from . import evolution
 
         try:
-            return evolution.evolve(apply=req.apply, preview_token=req.preview_token)
+            return evolution.evolve(
+                apply=req.apply,
+                preview_token=req.preview_token,
+                strategy_id=req.strategy_id,
+            )
+        except evolution.EvolutionStrategyNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         except evolution.EvolutionPreviewConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

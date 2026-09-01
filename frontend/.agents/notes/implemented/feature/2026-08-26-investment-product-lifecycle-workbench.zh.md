@@ -4,6 +4,8 @@ Status: implemented
 
 [English](2026-08-26-investment-product-lifecycle-workbench.md) | 中文
 
+> 自进化更新：[自进化只读看板与唯一自动闭环决策](2026-09-01-evolution-dashboard-strategy-diagnostics.md)部分取代本记录中的人工预案与确认界面。下文 preview/run 协议继续作为历史背景和兼容合同保留。
+
 ## Problem
 
 投研 Profile 已能展示真实行情和持仓数据，但其余研究能力仍以互不关联的占位页呈现。异步分析产生的报告没有产品级统一入口，策略证据无法连续进入影子验证与自进化，浏览器若自行提供模型上下文就需要把业务 JSON 复制进会话输入框。工作区其实是内部会话归组和工具作用域机制，并不是应用持久数据的位置，却占据了主导航、空白对话和设置页的显著位置。

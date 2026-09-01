@@ -5,7 +5,7 @@ export type AssistantIntent =
   | { readonly kind: 'watch'; readonly code?: string }
   | { readonly kind: 'strategy'; readonly strategyId?: string }
   | { readonly kind: 'shadow'; readonly strategyId?: string }
-  | { readonly kind: 'evolution' }
+  | { readonly kind: 'evolution'; readonly strategyId?: string }
   | { readonly kind: 'reports'; readonly reportId?: string }
   | { readonly kind: 'industry'; readonly reference?: string }
   | { readonly kind: 'prompt'; readonly prompt: string }
@@ -44,7 +44,10 @@ export function assistantPrompt(intent: AssistantIntent): string {
     return `请调用 investment_context 工具读取 shadow 上下文，解释${target === undefined || target === '' ? '当前影子验证结果' : `策略 ${target} 的影子验证结果`}，并给出继续验证、退回研究或进入进化观察的建议。`
   }
   if (intent.kind === 'evolution') {
-    return '请调用 investment_context 工具读取 evolution 上下文，审阅当前归因与进化动作。区分证据、建议和会写入策略库的变更，不要自动执行写入。'
+    const target = intent.strategyId?.trim()
+    return target === undefined || target === ''
+      ? '请调用 investment_context 工具读取 evolution 上下文，解释闭环状态、生命周期、策略判定和最近自动动作；只解释现有证据，不请求写入。'
+      : `请调用 investment_context 工具读取 evolution 上下文，并把 strategy_id 设为 ${target}，解释策略 ${target} 的证据、预计判定和自动进化历史；下一次统一自动闭环会按届时最新证据重新判定，不请求写入。`
   }
   if (intent.kind === 'reports') {
     const target = intent.reportId?.trim()

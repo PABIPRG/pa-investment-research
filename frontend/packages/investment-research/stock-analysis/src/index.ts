@@ -652,6 +652,10 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
             type: 'string',
             description: '可选；仅 reports 领域接受 32 位小写十六进制报告 ID，用于读取该报告详情',
           },
+          strategy_id: {
+            type: 'string',
+            description: '可选；仅 evolution 领域接受安全策略 ID，用于读取单策略进化诊断',
+          },
         },
         output: {
           schema: {
@@ -673,7 +677,9 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
         },
         presentCall: args => ({
           card: 'generic',
-          title: `🧭 读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain]}上下文`,
+          title: args.domain === 'evolution'
+            ? (typeof args.strategy_id === 'string' ? '🧭 策略进化诊断' : '🧭 自进化全局看板')
+            : `🧭 读取${INVESTMENT_CONTEXT_LABELS[args.domain as InvestmentContextDomain]}上下文`,
           kind: 'other',
           rawInput: args,
         }),
@@ -691,7 +697,10 @@ async function setupFeatures(ctx: Context, resolvedConfig: ResolvedConfig): Prom
             resolvedConfig.adapterBaseUrl,
             stringValue(args.domain) as InvestmentContextDomain,
             exec.signal,
-            typeof args.reference === 'string' ? args.reference : undefined,
+            {
+              ...(typeof args.reference === 'string' ? { reference: args.reference } : {}),
+              ...(typeof args.strategy_id === 'string' ? { strategyId: args.strategy_id } : {}),
+            },
           )
         },
       }),

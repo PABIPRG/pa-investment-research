@@ -55,9 +55,12 @@ export type {
 export { InvestmentUiState } from './state.ts'
 export { assistantPrompt } from './assistant-intent.ts'
 export type { AssistantIntent } from './assistant-intent.ts'
+export { EvolutionDashboard } from './EvolutionDashboard.tsx'
+export { StrategyEvolutionDiagnostics } from './StrategyEvolutionDiagnostics.tsx'
+export type { EvolutionDashboardProps, EvolutionLifecycleGroup, EvolutionRequestData, StrategyEvolutionDiagnosticsProps } from './evolution-types.ts'
 export type {
   AssistantDisplayMode, AssistantModule, InvestmentDraftKey, InvestmentNavigationContext,
-  InvestmentRoute, InvestmentUiSnapshot,
+  InvestmentRoute, InvestmentUiSnapshot, StrategyResearchStage,
 } from './state.ts'
 
 /** Services required by the profile-scoped investment shell. */
@@ -194,7 +197,11 @@ export function apply(ctx: ClientContext): void {
         }
       }
       if (intent.kind === 'evolution') {
-        return { targetType: 'strategy', targetId: 'evolution-review', context: { analysis_kind: 'evolution' } }
+        const strategyId = intent.strategyId?.trim() ?? ''
+        return {
+          targetType: 'strategy', targetId: strategyId || 'evolution-review',
+          context: { ...(strategyId === '' ? {} : { strategy_id: strategyId }), analysis_kind: 'evolution' },
+        }
       }
       if (intent.kind === 'reports') {
         return { targetType: 'report', targetId: intent.reportId?.trim() || 'report-center', context: { analysis_kind: 'reports' } }
