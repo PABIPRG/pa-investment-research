@@ -1744,6 +1744,38 @@ interface EvolutionStatus {         // GET /evolution/status
   counts: { candidate: number; active: number; watch: number
             retired: number; rejected: number; mutated: number }
   note: string | null
+  last_applied_at: string | null            // 最近一次自动应用进化时间（YYYY-MM-DD HH:MM:SS）
+  closed_loop_enabled: boolean              // CLOSED_LOOP_ENABLED
+  closed_loop_time: string                  // CLOSED_LOOP_TIME，默认 "15:35"
+  per_strategy: EvolutionPerStrategy[]      // 各 active 策略当前判定（含行为/原因/净值）
+  recent_applied: EvolutionApplied[]        // 最近 5 条自动进化应用记录（时间线）
+  lifecycle: { active: EvolutionLifecycleEntry[]
+              candidate: EvolutionLifecycleEntry[]
+              mutated: EvolutionLifecycleEntry[]
+              retired: EvolutionLifecycleEntry[]
+              watch: EvolutionLifecycleEntry[]
+              rejected: EvolutionLifecycleEntry[] }
+        // 各生命周期分组策略列表（供前端点开计数查看具体策略）
+}
+
+interface EvolutionPerStrategy {            // /evolution/status → per_strategy[]
+  strategy_id: string; name: string; kind: string; tier: number
+  symbols: string[]; nav: number | null
+  closed_win_rate_pct: number | null; closed_trades: number
+  decision: 'promote' | 'demote' | 'retire' | 'none'
+  behavior: string   // 升级 / 淘汰 / 降级观察 / 带内运行 / 待判定 / 已升级 / 降级观察中 / 升级+变异
+  reason: string
+}
+
+interface EvolutionApplied {                // /evolution/status → recent_applied[]
+  applied_at: string; count: number
+  actions: { type: string; sid: string; reason: string }[]
+}
+
+interface EvolutionLifecycleEntry {        // /evolution/status → lifecycle.<group>[]
+  strategy_id: string; name: string; kind: string; tier: number
+  symbols: string[]; mutated_from?: string; source?: string
+        // mutated 分组含全部变异衍生策略（source==="evolution"），mutated_from 标注父策略
 }
 
 interface StrategyAttribution {     // GET /evolution/attribution → strategies[]

@@ -934,6 +934,52 @@
 .evolutionActionMeta > button { min-height: var(--investment-compact-control-height); padding: 0 8px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; color: var(--investment-primary); background: transparent; font-size: 0.8571rem; cursor: pointer; }
 .evolutionActionMeta > button:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
 .evolutionActionMeta > button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.strategyStatusCard { grid-column: 1 / -1; }
+.strategyStatusCard .dataList { border: 0; background: transparent; }
+.strategyStatusCard .dataRow { border: 1px solid var(--dsw-alias-border-l1); border-bottom: 0; }
+.strategyStatusCard .dataRow:first-child { border-top-left-radius: 10px; border-top-right-radius: 10px; }
+.strategyEntry:last-child .dataRow { border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
+.strategyDetail { border: 1px solid var(--dsw-alias-border-l1); border-top: 0; border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; padding: 12px 14px; background: var(--dsw-alias-bg-layer-2); }
+.strategyDetailHead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.strategyDetailHead strong { font-size: 0.9286rem; }
+.strategyDetailHead span { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.strategyDetailReason { margin: 0 0 10px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.6; }
+.strategyDetailGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px 14px; margin: 0 0 12px; }
+.strategyDetailGrid div { display: grid; gap: 2px; }
+.strategyDetailGrid dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.strategyDetailGrid dd { margin: 0; font-size: 0.9286rem; font-weight: 650; }
+.strategyDetailSymbols { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.strategySymbolChip { min-height: 26px; padding: 0 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px; color: var(--investment-primary); background: var(--dsw-alias-bg-base); font-size: 0.8571rem; cursor: pointer; }
+.strategySymbolChip:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.strategySymbolChip:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.strategyDetailSymbolLabel { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); white-space: nowrap; }
+.lifecycleNav { display: grid; gap: 0; margin-top: 10px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; overflow: hidden; }
+.lifecycleNav button { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; min-height: 40px; box-sizing: border-box; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); color: inherit; background: var(--dsw-alias-bg-base); text-align: left; cursor: pointer; transition: background 140ms ease; }
+.lifecycleNav button:last-child { border-bottom: 0; }
+.lifecycleNav button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.lifecycleNav button:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--investment-primary); outline-offset: -2px; }
+.lifecycleNav button[data-active='true'] { background: var(--investment-selected-surface); }
+.lifecycleNav button span { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.lifecycleNav button strong { font-size: 0.9286rem; }
+.lifecycleList { margin-top: 8px; }
+.lifecycleList .dataRow { border: 1px solid var(--dsw-alias-border-l1); border-bottom: 0; }
+.lifecycleList .strategyEntry:last-child .dataRow { border-bottom: 1px solid var(--dsw-alias-border-l1); border-bottom-left-radius: 10px; border-bottom-right-radius: 10px; }
+.lifecycleList .strategyDetail { border-top: 0; }
+.strategyTag { display: inline-flex; align-items: center; min-height: 18px; padding: 0 6px; margin-right: 6px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 5px; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2); font: 600 var(--investment-font-caption) ui-monospace, monospace; vertical-align: middle; white-space: nowrap; }
+.lineageCard { grid-column: 1 / -1; }
+.lineageTree { display: grid; gap: 0; }
+.lineageNode { display: grid; gap: 0; }
+.lineageRow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 40px; padding: 4px 0; }
+.lineageConnector { justify-self: center; align-self: stretch; width: 12px; border-left: 2px solid var(--dsw-alias-border-l2); border-bottom: 2px solid var(--dsw-alias-border-l2); border-bottom-left-radius: 6px; }
+.lineageNode[data-depth='0'] > .lineageRow > .lineageConnector { border-left: 0; border-bottom: 0; }
+.lineageChildren { margin-left: 22px; padding-left: 8px; border-left: 2px solid var(--dsw-alias-border-l2); }
+.lineageLabel { display: inline-flex; align-items: center; gap: 8px; min-width: 0; box-sizing: border-box; padding: 4px 8px; border: 1px solid transparent; border-radius: 7px; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.lineageLabel:hover:not(:disabled) { border-color: var(--dsw-alias-border-l2); background: var(--dsw-alias-interactive-bg-hover); }
+.lineageLabel:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.lineageLabel:disabled { cursor: default; }
+.lineageLabel strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lineageRow > small { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); white-space: nowrap; }
+.lineageNode[data-muted] .lineageLabel { opacity: 0.55; }
 
 .detailBackdrop {
   position: fixed;
