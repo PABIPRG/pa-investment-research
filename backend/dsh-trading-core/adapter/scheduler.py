@@ -90,7 +90,7 @@ def _run_event_generation(store: JsonStore) -> dict:
     同事件同策略不重复生成，每天只产生新事件候选。事件源失败 fail-open 返回空。
     """
     from .strategies import create_candidates, fetch_events, generate_hypotheses
-    events = fetch_events(limit=settings.event_generation_limit)
+    events = fetch_events(limit=settings.event_generation_limit, timeout=20.0)
     if not events:
         return {"n_events": 0, "candidates": [], "note": "事件源暂无事件"}
     hypotheses = generate_hypotheses(events)
