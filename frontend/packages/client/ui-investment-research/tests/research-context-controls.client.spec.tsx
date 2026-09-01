@@ -125,17 +125,21 @@ describe('investment composer research context controls', () => {
     expect(screen.getByText('已失效')).toBeTruthy()
   })
 
-  it('shows accurate context load failure and retries in place', async () => {
+  it('keeps context load failures compact, hides transport details, and retries in place', async () => {
     let attempts = 0
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation !== 'trading-core.research-chat-context') throw new Error('unexpected operation')
       attempts += 1
-      if (attempts === 1) throw new Error('backend unavailable')
+      if (attempts === 1) {
+        throw new Error('investment Runtime Client: request-data failed: HTTP 404: {"detail":"Not Found"}')
+      }
       return { exists: false, context: null }
     })
     renderControls(requestData)
 
-    expect((await screen.findByRole('alert')).textContent).toContain('上下文读取失败')
+    const alert = await screen.findByRole('alert', { name: '投研上下文暂不可用' })
+    expect(alert.textContent).not.toContain('request-data')
+    expect(alert.textContent).not.toContain('HTTP 404')
     fireEvent.click(screen.getByRole('button', { name: '重试读取投研上下文' }))
     await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
     expect(attempts).toBe(2)

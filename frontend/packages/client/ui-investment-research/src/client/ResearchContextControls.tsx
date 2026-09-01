@@ -444,21 +444,33 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
         )}
       </div>
       {entry.phase === 'loading' && <span className={css.researchContextStatus} role="status">正在恢复投研上下文…</span>}
-      {entry.phase === 'error' && (
+      {entry.phase === 'error' && entry.errorAction === 'load' && (
+        <span
+          className={css.researchContextError}
+          data-compact="true"
+          role="alert"
+          aria-label="投研上下文暂不可用"
+          title="投研上下文暂不可用"
+        >
+          <button
+            type="button"
+            aria-label="重试读取投研上下文"
+            title="投研上下文暂不可用，点击重试"
+            onClick={() => { void researchChatContext.load(sessionId, { refresh: true }).catch(() => {}) }}
+          ><span aria-hidden="true">!</span></button>
+        </span>
+      )}
+      {entry.phase === 'error' && entry.errorAction !== 'load' && (
         <span className={css.researchContextError} role="alert">
-          {entry.errorAction === 'load'
-            ? `上下文读取失败：${entry.error}`
-            : entry.errorAction === 'conflict'
-              ? entry.error
-              : `保存失败，已保留上次选择：${entry.error}`}
+          {entry.errorAction === 'conflict'
+            ? entry.error
+            : `保存失败，已保留上次选择：${entry.error}`}
           {entry.errorAction !== 'conflict' && (
             <button
               type="button"
-              aria-label={entry.errorAction === 'load' ? '重试读取投研上下文' : '重试保存投研上下文'}
+              aria-label="重试保存投研上下文"
               onClick={() => {
-                if (entry.errorAction === 'load') {
-                  void researchChatContext.load(sessionId, { refresh: true }).catch(() => {})
-                } else if (retryTarget !== undefined) {
+                if (retryTarget !== undefined) {
                   void researchChatContext.save(sessionId, retryTarget).catch(() => {})
                 }
               }}

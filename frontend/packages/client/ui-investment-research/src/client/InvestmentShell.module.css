@@ -133,6 +133,8 @@
 .researchContextStatus { color: var(--dsw-alias-label-tertiary); }
 .researchContextError { color: var(--dsw-alias-state-error-primary); }
 .researchContextError button, .searchError button { padding: 1px 5px; border: 1px solid currentColor; border-radius: 5px; color: inherit; background: transparent; cursor: pointer; }
+.researchContextError[data-compact='true'] { flex: none; }
+.researchContextError[data-compact='true'] button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 7px; font-weight: 700; }
 .topActions {
   grid-column: 3;
   display: flex;
