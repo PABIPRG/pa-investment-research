@@ -10,6 +10,7 @@ import {
 import {
   WorkbenchOverviewDialog,
 } from './WorkbenchOverviewDialog.tsx'
+import { KycProfilePanel } from './KycProfilePanel.tsx'
 import type {
   WorkbenchDetailKind, WorkbenchHoldingInput, WorkbenchPositionDetail,
 } from './WorkbenchOverviewDialog.tsx'
@@ -45,7 +46,10 @@ function useWorkbenchResource(requestData: RequestData) {
 
   useEffect(() => () => { generation.current += 1 }, [])
 
-  const run = useCallback((request: InvestmentDataRequest, options?: { trailing?: boolean }): void => {
+  const run = useCallback((
+    request: InvestmentDataRequest,
+    options?: { readonly trailing?: boolean; readonly fresh?: boolean },
+  ): void => {
     const key = JSON.stringify(request)
     const current = ++generation.current
     setState(previous => ({
@@ -54,7 +58,7 @@ function useWorkbenchResource(requestData: RequestData) {
       value: previous.loaded && settledKey.current === key ? previous.value : undefined,
       error: '',
     }))
-    let flight = flights.current.get(key)
+    let flight = options?.fresh === true ? undefined : flights.current.get(key)
     if (flight === undefined || options?.trailing === true) {
       const previous = flight
       flight = previous === undefined
@@ -312,6 +316,7 @@ export function ResearchWorkbenchPage({
   const holdings = useWorkbenchResource(requestData)
   const risk = useWorkbenchResource(requestData)
   const alerts = useWorkbenchResource(requestData)
+  const kyc = useWorkbenchResource(requestData)
   const cards = useWorkbenchResource(requestData)
   const matches = useWorkbenchResource(requestData)
   const quotes = useWorkbenchResource(requestData)
@@ -336,8 +341,9 @@ export function ResearchWorkbenchPage({
     holdings.run({ operation: 'trading-core.holdings' }, options)
     risk.run({ operation: 'trading-core.risk-portfolio' }, options)
     alerts.run({ operation: 'trading-core.risk-alerts' }, options)
+    kyc.run({ operation: 'trading-core.kyc-profile' }, options)
     matches.run({ operation: 'trading-core.personalized-matches' }, options)
-  }, [alerts.run, holdings.run, matches.run, refreshVersion, risk.run])
+  }, [alerts.run, holdings.run, kyc.run, matches.run, refreshVersion, risk.run])
 
   useEffect(() => {
     cards.run({
@@ -371,14 +377,14 @@ export function ResearchWorkbenchPage({
   const strategyValue = asRecord(matches.state.value)
   const strategyItems = records(strategyValue.items)
   const missingHoldingCodes = positions
-    .filter(item => {
+    .filter((item) => {
       const code = text(item.ticker, '')
       const name = text(item.name, '').trim()
       return name === '' || name === code
     })
     .map(item => text(item.ticker, ''))
   const knownCardCodes = new Set(allCards.flatMap(card => records(card.tickers))
-    .filter(item => {
+    .filter((item) => {
       const code = text(item.code, '')
       const name = text(item.name, '').trim()
       return code !== '' && name !== '' && name !== code
@@ -408,7 +414,7 @@ export function ResearchWorkbenchPage({
   const actionableAlerts = alertItems.filter(item => (
     text(item.source, '') !== 'profile' && text(item.severity, '低') !== '低'
   ))
-  const allBusy = [holdings, risk, alerts, cards, matches].some(resource => resource.busy)
+  const allBusy = [holdings, risk, alerts, kyc, cards, matches].some(resource => resource.busy)
 
   const saveHoldings = useCallback(async (next: readonly WorkbenchHoldingInput[]): Promise<void> => {
     await requestData({
@@ -702,6 +708,21 @@ export function ResearchWorkbenchPage({
             {alerts.state.loaded && alertItems.length === 0 && <div className={css.dashboardGood}>当前没有风险预警</div>}
             <button type="button" className={css.dashboardTextButton} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-center') }}>查看完整风险详情 →</button>
           </section>
+
+          <KycProfilePanel
+            value={kyc.state.value}
+            loaded={kyc.state.loaded}
+            busy={kyc.busy}
+            error={kyc.state.error}
+            requestData={requestData}
+            onRetry={() => { kyc.run({ operation: 'trading-core.kyc-profile' }) }}
+            onChanged={() => {
+              kyc.run({ operation: 'trading-core.kyc-profile' }, { fresh: true })
+              risk.run({ operation: 'trading-core.risk-portfolio' }, { fresh: true })
+              alerts.run({ operation: 'trading-core.risk-alerts' }, { fresh: true })
+              matches.run({ operation: 'trading-core.personalized-matches' }, { fresh: true })
+            }}
+          />
 
           <section className={css.dashboardPanel} aria-labelledby="dashboard-strategies-title" aria-busy={matches.busy}>
             <div className={css.dashboardPanelHead}>

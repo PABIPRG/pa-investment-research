@@ -34,6 +34,15 @@
   box-shadow: var(--dsw-shadow-lv3);
 }
 
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .content {
   display: flex;
   flex-direction: column;
@@ -100,4 +109,10 @@
   justify-content: flex-end;
   gap: 8px;
   padding: 0 24px;
+}
+
+@media (max-width: 680px) {
+  .root {
+    padding: 12px;
+  }
 }

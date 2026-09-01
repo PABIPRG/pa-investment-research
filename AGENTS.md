@@ -6,6 +6,14 @@
 
 ## 多 Agent 与 Git worktree
 
+### 角色与调度契约
+
+- 每个顶层 Codex 任务在启动前必须由调度方明确标注且只标注一种角色：`read-only`（只读分析）、`worktree-writer`（独立开发）或 `local-integrator`（本地主工作区集成与共享服务验证）。未明确角色时一律按 `read-only` 处理，不得修改文件。
+- `worktree-writer` 必须在任务提交前从本仓库已保存的 Git 项目中选择 Worktree 环境和起始分支，由 Codex 创建并绑定专属 worktree。不得用临时 Local 任务、同目录 fork、浏览器反馈任务或其他共享当前工作目录的入口承载并行写入任务。
+- 调度方必须随写入任务提供：角色、worktree 绝对路径、起始分支或基准提交、目标特性分支名、允许修改的文件范围、验证命令，以及需要使用的端口或其他共享资源。缺少 worktree 绝对路径或基准信息时，`worktree-writer` 不具备写入权限。
+- `local-integrator` 是唯一允许写入本地主工作区并操作共享开发服务的角色；同一仓库同一时间最多只能有一个 `local-integrator`。该角色只能用于串行集成、解决冲突、最终验证或用户明确要求在 Local 中完成的工作，不得与其他 Local 写入任务并行。
+- 任务若已经以 Local 环境启动，但其目标属于独立开发或并行开发，Agent 必须停止写入并请求调度方重新派发到 Worktree，或者由用户/调度方执行 Handoff。不得采用“先在 Local 修改，完成后再迁移”的方式规避隔离要求。
+
 ### 并行写入边界
 
 - 多个 Agent 并行修改代码时，必须遵守“一项独立任务 = 一个独立特性分支 = 一个独立 worktree = 一个独立顶层 Codex 会话”；不得让不同任务的写入 Agent 共用工作目录，也不得通过反复执行 `git switch` 或 `git checkout` 争用同一 worktree 的 `HEAD`。Codex 托管 worktree 可以按产品默认方式临时使用专属 detached `HEAD`，但提交或推送前必须创建符合本仓库命名规则的唯一特性分支。
@@ -16,10 +24,18 @@
 
 ### 启动、执行与收尾
 
-- 所有写入 Agent 在修改文件前必须检查并核对 `pwd`、`git rev-parse --show-toplevel`、`git branch --show-current`、`git status --short` 和 `git worktree list --porcelain`；实际目录、分支或 detached `HEAD` 基准与任务分配不一致时，立即停止并报告，不得自行切换分支修复。
+- 所有写入 Agent 在修改文件前必须检查并核对 `pwd`、`git rev-parse --show-toplevel`、`git rev-parse --git-dir`、`git rev-parse --git-common-dir`、`git branch --show-current`、`git status --short` 和 `git worktree list --porcelain`；实际目录、分支或 detached `HEAD` 基准与任务分配不一致时，立即停止并报告，不得自行切换分支修复。
+- `worktree-writer` 必须确认 `git rev-parse --show-toplevel` 与获分配的 worktree 绝对路径完全一致，并确认当前 `HEAD` 与获分配的起始分支或基准提交相符。若实际位于本地主工作区、路径未分配、基准不符或同一 worktree 已有其他写入任务，立即停止并报告“当前任务未获得独立 worktree，请重新派发”，不得继续编辑或测试性写入。
+- `local-integrator` 在写入前必须确认该角色由调度方明确分配，并确认没有其他任务正在写入本地主工作区；无法确认时按 `read-only` 处理。
 - 任务执行中的开发 Agent 不得为了进入其他任务而执行 `git switch`、`git checkout`，也不得自行创建、移动、删除或清理 worktree。调度或集成流程确需执行这些操作时，必须先确认目标、工作区状态和现有未提交修改。
 - 发现当前 worktree 中存在来源不明或与任务无关的未提交修改时，不得覆盖、暂存、提交或清理；若无法绕开，应停止并报告。
 - 提交、推送、创建 PR、合并以及 worktree 清理仍须遵守下方 Git 工作流和用户授权边界。清理 worktree 前必须确认工作区干净，且需要保留的改动已经安全进入提交或其他可恢复载体。
+
+### 共享服务与端口
+
+- 本地默认开发端口 `3080` 及其对应的常驻服务只由 `local-integrator` 管理。`worktree-writer` 不得启动、停止、重启或杀死该共享服务，也不得用自己的构建产物覆盖共享服务正在读取的产物。
+- `worktree-writer` 需要运行服务级验证时，调度方必须为其分配唯一端口和必要的独立缓存、数据库或临时目录；未分配时只运行不占用共享资源的构建、单元测试或一次性检查，不启动常驻服务。
+- 需要在本地默认服务上进行最终联调时，`worktree-writer` 应提交验证结果并交由 `local-integrator` 串行集成、重建和重启；不得跨 worktree 直接操作共享服务。
 
 ## Git 工作流
 
