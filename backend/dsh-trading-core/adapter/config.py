@@ -92,6 +92,9 @@ class Settings:
         self.closed_loop_enabled = os.getenv("CLOSED_LOOP_ENABLED", "false").lower() == "true"
         self.closed_loop_time = os.getenv("CLOSED_LOOP_TIME", "15:35")          # 闭环每日时刻（收盘后）
         self.candidate_auto_reject = os.getenv("CANDIDATE_AUTO_REJECT", "true").lower() == "true"
+        # 闭环 Step 0：拉事件 → 生成新策略候选（并入闭环，幂等 md5 去重）
+        self.event_generation_enabled = os.getenv("EVENT_GENERATION_ENABLED", "true").lower() == "true"
+        self.event_generation_limit = int(os.getenv("EVENT_GENERATION_LIMIT", "20"))
 
     def llm_available(self) -> bool:
         return bool(self.deepseek_api_key)

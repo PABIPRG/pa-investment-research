@@ -58,14 +58,16 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
 
         with patch("adapter.scheduler.JsonStore", return_value=store), \
                 patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler._run_event_generation") as event_gen, \
                 patch("adapter.shadow.ShadowRunner") as shadow, \
                 patch("adapter.evolution.evolve_auto", side_effect=fake_evolve_auto), \
                 patch("adapter.push.PusherManager") as pusher:
+            event_gen.side_effect = lambda s: calls.append("event") or {"n_events": 0, "candidates": []}
             shadow.return_value.run.side_effect = fake_shadow_run
             pusher.return_value.push.side_effect = fake_push
             _run_closed_loop_job()
 
-        self.assertEqual(calls, ["shadow", "evolve", "push"])
+        self.assertEqual(calls, ["event", "shadow", "evolve", "push"])
 
     def test_candidate_auto_backtest_routes_passed_failed_pending(self):
         store = _temp_store()
@@ -90,6 +92,7 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
 
         with patch("adapter.scheduler.JsonStore", return_value=store), \
                 patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler._run_event_generation", return_value={"n_events": 0, "candidates": []}), \
                 patch("adapter.shadow.ShadowRunner") as shadow, \
                 patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
                 patch("adapter.strategies.StrategyBacktestRunner") as btr, \
@@ -115,6 +118,7 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
 
         with patch("adapter.scheduler.JsonStore", return_value=store), \
                 patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler._run_event_generation", return_value={"n_events": 0, "candidates": []}), \
                 patch("adapter.shadow.ShadowRunner") as shadow, \
                 patch("adapter.evolution.evolve_auto", return_value={
                     "status": "ready", "count": 2, "actions": actions,
@@ -129,6 +133,41 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
         self.assertIn("自进化闭环日报", title)
         self.assertIn("升级 s1", content)
         self.assertIn("变异 s2", content)
+
+    def test_event_generation_runs_and_counts_in_report(self):
+        """闭环 Step 0：拉事件生成新候选，且计入推送日报。"""
+        store = _temp_store()
+        pushed: list[tuple[str, str]] = []
+        with patch("adapter.scheduler.JsonStore", return_value=store), \
+                patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler._run_event_generation",
+                      return_value={"n_events": 3, "n_hypotheses": 2, "candidates": ["s-a", "s-b"]}), \
+                patch("adapter.shadow.ShadowRunner") as shadow, \
+                patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
+                patch("adapter.strategies.StrategyBacktestRunner") as btr, \
+                patch("adapter.push.PusherManager") as pusher:
+            shadow.return_value.run.return_value = {"skipped": False, "overall_nav": 1.0, "strategies": {}}
+            btr.return_value.run.side_effect = lambda params, cb: {"verification_status": "pending"}
+            pusher.return_value.push.side_effect = lambda title, content: pushed.append((title, content)) or []
+            _run_closed_loop_job()
+
+        self.assertEqual(len(pushed), 1)
+        self.assertIn("事件生成：3 事件 → 新增 2 候选", pushed[0][1])
+
+    def test_event_generation_disabled_skips_step(self):
+        store = _temp_store()
+        with patch("adapter.scheduler.JsonStore", return_value=store), \
+                patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler.settings.event_generation_enabled", False), \
+                patch("adapter.scheduler._run_event_generation") as event_gen, \
+                patch("adapter.shadow.ShadowRunner") as shadow, \
+                patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
+                patch("adapter.push.PusherManager") as pusher:
+            shadow.return_value.run.return_value = {"skipped": False, "overall_nav": 1.0, "strategies": {}}
+            pusher.return_value.push.return_value = []
+            _run_closed_loop_job()
+
+        event_gen.assert_not_called()
 
 
 class SetupSchedulerGatingTests(unittest.TestCase):
