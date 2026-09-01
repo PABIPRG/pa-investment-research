@@ -31,6 +31,29 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
       ],
     }
   }
+  if (operation === 'trading-core.kyc-profile') {
+    return {
+      status: 'adjusted',
+      inferred_profile: 'balanced',
+      effective_profile: 'aggressive',
+      effective_label: '进取型',
+      score: 9,
+      answers: [
+        { qid: 'horizon', label: '1-3年', score: 3 },
+        { qid: 'loss_tolerance', label: '10%左右', score: 3 },
+        { qid: 'goal', label: '长期稳健增值', score: 3 },
+      ],
+      manual_adjust: { risk_tolerance: 0.8, horizon_years: 5, note: '' },
+      tiers: { quick: ['horizon', 'loss_tolerance', 'goal'], full: ['horizon', 'loss_tolerance', 'goal'] },
+      question_bank: {
+        horizon: { qid: 'horizon', title: '你计划持有这笔资金多久？', options: [{ label: '1-3年', score: 3 }] },
+        loss_tolerance: { qid: 'loss_tolerance', title: '你能承受多大亏损？', options: [{ label: '10%左右', score: 3 }] },
+        goal: { qid: 'goal', title: '你的投资目标是？', options: [{ label: '长期稳健增值', score: 3 }] },
+      },
+      profile_labels: { conservative: '保守型', balanced: '稳健型', aggressive: '进取型' },
+      profiles_detail: { aggressive: { risk_budget: { single_stock_weight_max: 0.4 } } },
+    }
+  }
   if (operation === 'trading-core.personalized-cards') {
     return {
       as_of: '2026-08-26 09:33:00',
@@ -85,16 +108,23 @@ function renderWorkbench(requestData = vi.fn(async (request: InvestmentDataReque
   return { ...view, requestData, navigate, onAnalyze, onOpenReports, trackTelemetry }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((settle) => { resolve = settle })
+  return { promise, resolve }
+}
+
 describe('研究工作台', () => {
-  it('并行读取五类真实数据，并展示真实 cards 与 match_reasons DTO', async () => {
+  it('并行读取七类真实数据，并展示真实 cards、KYC 与 match_reasons DTO', async () => {
     const view = renderWorkbench()
 
     expect(view.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
-    await waitFor(() => { expect(view.requestData).toHaveBeenCalledTimes(6) })
+    await waitFor(() => { expect(view.requestData).toHaveBeenCalledTimes(7) })
     expect(view.requestData.mock.calls.map(([request]) => request.operation)).toEqual(expect.arrayContaining([
       'trading-core.holdings',
       'trading-core.risk-portfolio',
       'trading-core.risk-alerts',
+      'trading-core.kyc-profile',
       'trading-core.personalized-cards',
       'trading-core.personalized-matches',
       'market-watch.quotes-batch',
@@ -115,6 +145,123 @@ describe('研究工作台', () => {
     expect(view.getByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeTruthy()
     expect(view.getByText('集中度超预算')).toBeTruthy()
     expect(view.getByRole('button', { name: /命中持仓：贵州茅台.*600519/ })).toBeTruthy()
+  })
+
+  it('在风险预警后、策略匹配前展示独立 KYC 画像区', async () => {
+    const view = renderWorkbench()
+
+    const kycHeading = await view.findByRole('heading', { name: 'KYC 风险画像' })
+    const alertsSection = view.getByRole('heading', { name: '风险预警' }).closest('section')!
+    const kycSection = kycHeading.closest('section')!
+    const strategiesSection = view.getByRole('heading', { name: '策略匹配' }).closest('section')!
+
+    expect(view.requestData).toHaveBeenCalledWith({ operation: 'trading-core.kyc-profile' })
+    expect(alertsSection.compareDocumentPosition(kycSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(kycSection.compareDocumentPosition(strategiesSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(kycSection).getByText('问卷推断')).toBeTruthy()
+    expect(within(kycSection).getByText('稳健型')).toBeTruthy()
+    expect(within(kycSection).getByText('当前生效')).toBeTruthy()
+    expect(within(kycSection).getByText('进取型')).toBeTruthy()
+  })
+
+  it('KYC 失败时保留其他区域并只重试画像资源', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.kyc-profile') throw new Error('画像服务繁忙')
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+
+    const kycError = await view.findByText('风险画像暂不可用')
+    const kycSection = kycError.closest('section')!
+    expect(within(kycSection).getByText('画像服务繁忙')).toBeTruthy()
+    expect(view.getByText('贵州茅台')).toBeTruthy()
+    expect(view.getByText('集中度超预算')).toBeTruthy()
+    expect(view.getByText('稳健画像与策略风险需求匹配')).toBeTruthy()
+
+    fireEvent.click(within(kycSection).getByRole('button', { name: '重试' }))
+    await waitFor(() => {
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.kyc-profile')).toHaveLength(2)
+    })
+    for (const operation of [
+      'trading-core.holdings',
+      'trading-core.risk-portfolio',
+      'trading-core.risk-alerts',
+      'trading-core.personalized-cards',
+      'trading-core.personalized-matches',
+    ]) {
+      expect(requestData.mock.calls.filter(([request]) => request.operation === operation)).toHaveLength(1)
+    }
+  })
+
+  it('KYC 更新成功后只刷新画像及其风险和策略依赖', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.kyc-questionnaire') {
+        return { profile: 'balanced', label: '稳健型', score: 9, inferred_profile: 'balanced' }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByRole('heading', { name: 'KYC 风险画像' })
+
+    fireEvent.click(view.getByRole('button', { name: '重做风险测评' }))
+    const dialog = view.getByRole('dialog', { name: '风险测评' })
+    for (const label of ['1-3年', '10%左右', '长期稳健增值']) {
+      fireEvent.click(within(dialog).getByRole('radio', { name: label }))
+    }
+    fireEvent.click(within(dialog).getByRole('button', { name: '提交并应用画像' }))
+
+    await waitFor(() => {
+      for (const operation of [
+        'trading-core.kyc-profile',
+        'trading-core.risk-portfolio',
+        'trading-core.risk-alerts',
+        'trading-core.personalized-matches',
+      ]) {
+        expect(requestData.mock.calls.filter(([request]) => request.operation === operation)).toHaveLength(2)
+      }
+    })
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.personalized-cards')).toHaveLength(1)
+  })
+
+  it('KYC 写入后的依赖刷新不复用写入前的在途读取', async () => {
+    const dependencies = new Set<InvestmentDataRequest['operation']>([
+      'trading-core.kyc-profile',
+      'trading-core.risk-portfolio',
+      'trading-core.risk-alerts',
+      'trading-core.personalized-matches',
+    ])
+    const counts = new Map<InvestmentDataRequest['operation'], number>()
+    const staleReads = new Map<InvestmentDataRequest['operation'], ReturnType<typeof deferred<unknown>>>()
+    const requestData = vi.fn((request: InvestmentDataRequest): Promise<unknown> => {
+      const count = (counts.get(request.operation) ?? 0) + 1
+      counts.set(request.operation, count)
+      if (request.operation === 'trading-core.kyc-questionnaire') {
+        return Promise.resolve({ profile: 'balanced', label: '稳健型' })
+      }
+      if (dependencies.has(request.operation) && count === 2) {
+        const pending = deferred<unknown>()
+        staleReads.set(request.operation, pending)
+        return pending.promise
+      }
+      return Promise.resolve(completeResponse(request.operation))
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByRole('heading', { name: 'KYC 风险画像' })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(7) })
+
+    fireEvent.click(view.getByRole('button', { name: '刷新数据' }))
+    await waitFor(() => {
+      for (const operation of dependencies) expect(counts.get(operation)).toBe(2)
+    })
+    fireEvent.click(view.getByRole('button', { name: '重做风险测评' }))
+    const dialog = view.getByRole('dialog', { name: '风险测评' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '提交并应用画像' }))
+
+    await waitFor(() => {
+      for (const operation of dependencies) expect(counts.get(operation)).toBe(3)
+    })
+    for (const [operation, pending] of staleReads) pending.resolve(completeResponse(operation))
   })
 
   it('持仓 name 为空时经 security-search 反查中文名，与代码一起展示', async () => {

@@ -27,6 +27,9 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@radix-ui/react-dialog": "1.1.23",
+    "@radix-ui/react-progress": "1.1.16",
+    "@radix-ui/react-radio-group": "1.4.7",
     "@shikijs/langs": "^4.3.1",
     "@types/mdast": "^4.0.4",
     "anser": "^2.3.5",

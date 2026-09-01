@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Button, ConnectionBanner, Input, Menu, Modal, Pill } from '@deepseek-ai/dsh-client-ui-primitives'
 import { POINTER_GRACE_MS } from '../src/pointer-grace.ts'
@@ -380,7 +380,7 @@ describe('Menu', () => {
 })
 
 describe('Modal', () => {
-  it('is absent while closed; Escape and mask click call onClose', () => {
+  it('is absent while closed; Escape and mask click call onClose', async () => {
     const onClose = vi.fn()
     const { rerender } = render(
       <Modal open={false} onClose={onClose} title="Create new workspace">body</Modal>)
@@ -402,9 +402,12 @@ describe('Modal', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
     // Mask is the presentation sibling behind the dialog.
-    const mask = document.querySelector('[aria-hidden="true"]') as HTMLElement
-    fireEvent.click(mask)
-    expect(onClose).toHaveBeenCalledTimes(2)
+    const mask = dialog.previousElementSibling as HTMLElement
+    expect(mask).not.toBeNull()
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0) }) })
+    fireEvent.pointerDown(mask, { button: 0, ctrlKey: false })
+    fireEvent.click(mask, { button: 0, ctrlKey: false })
+    await waitFor(() => { expect(onClose).toHaveBeenCalledTimes(2) })
   })
 })
 
