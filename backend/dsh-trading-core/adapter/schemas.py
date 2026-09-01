@@ -32,9 +32,9 @@ class AnalyzeRequest(BaseModel):
 class HoldingItem(BaseModel):
     """单只持仓：代码 + 数量 + 成本价（手动结构化输入）。"""
 
-    ticker: str = Field(description="股票代码（如 600519）")
+    ticker: str = Field(pattern=r"^\d{6}$", description="六位股票代码（如 600519）")
     quantity: float = Field(gt=0, description="持仓数量（股）")
-    cost_price: float = Field(ge=0, description="持仓成本价（元）")
+    cost_price: float = Field(gt=0, description="持仓成本价（元）")
 
 
 class HoldingsRequest(BaseModel):
@@ -128,6 +128,44 @@ class StrategyRunRequest(BaseModel):
     )
     min_oos_trades: int = Field(
         default=4, ge=1, le=100, description="样本外最低成交数（不足保持 candidate）"
+    )
+
+
+class ResearchChatInstrument(BaseModel):
+    """聊天式我的投研中由证券搜索确认的单一主要标的。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    code: str = Field(pattern=r"^\d{6}$", description="六位 A 股或场内 ETF 代码")
+    name: str = Field(min_length=1, max_length=80, description="证券展示名称")
+    market: str = Field(min_length=1, max_length=32, description="证券市场展示名称")
+    type: Literal["stock", "etf"] = Field(description="当前支持的标的类型")
+
+    @field_validator("name", "market")
+    @classmethod
+    def strip_display_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("展示文本不能为空")
+        return stripped
+
+
+class ResearchChatContextSaveRequest(BaseModel):
+    """完整替换一个会话的已确认策略与标的上下文。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0, description="客户端最后确认的修订号")
+    strategy_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$",
+        description="策略池中的稳定策略标识；null 表示清除",
+    )
+    instrument: Optional[ResearchChatInstrument] = Field(
+        default=None,
+        description="证券搜索确认的主要标的；null 表示清除",
     )
 
 

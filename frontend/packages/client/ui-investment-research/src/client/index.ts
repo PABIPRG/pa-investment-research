@@ -5,16 +5,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import {
   InvestmentShell,
-  InvestmentAssistantModuleSelect,
   InvestmentBrand,
   InvestmentNewSession,
   InvestmentWelcome,
   InvestmentSidebar,
   assistantModulePrompt,
   type InvestmentShellInjected,
-  type InvestmentAssistantModuleInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
+import {
+  InvestmentComposerContextControls,
+  type InvestmentComposerContextInjected,
+} from './ResearchContextControls.tsx'
+import { ResearchChatContextController } from './research-chat-context.ts'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import {
   createLocalTelemetry, type LocalTelemetryEvent, type LocalTelemetrySurface,
@@ -29,9 +32,10 @@ import {
 } from './state.ts'
 
 export {
-  InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentNewSession,
+  InvestmentBrand, InvestmentNewSession,
   InvestmentShell, InvestmentSidebar, InvestmentWelcome,
 } from './InvestmentShell.tsx'
+export { InvestmentComposerContextControls } from './ResearchContextControls.tsx'
 export type {
   InvestmentAssistantModuleInjected,
   InvestmentAssistantModuleProps,
@@ -43,6 +47,11 @@ export type {
   InvestmentSidebarInjected,
   InvestmentSidebarProps,
 } from './InvestmentShell.tsx'
+export { ResearchChatContextController } from './research-chat-context.ts'
+export type {
+  ResearchChatContext, ResearchChatContextEntry, ResearchChatContextTarget,
+  ResearchChatInstrument,
+} from './research-chat-context.ts'
 export { InvestmentUiState } from './state.ts'
 export { assistantPrompt } from './assistant-intent.ts'
 export type { AssistantIntent } from './assistant-intent.ts'
@@ -62,6 +71,7 @@ export function apply(ctx: ClientContext): void {
   const requestData: InvestmentShellInjected['requestData'] = request => (
     ctx.investmentResearchRuntimeClient.requestData(request)
   )
+  const researchChatContext = new ResearchChatContextController(requestData)
   const telemetry = createLocalTelemetry(requestData)
   let cancelPendingDraft: (() => void) | undefined
 
@@ -83,6 +93,8 @@ export function apply(ctx: ClientContext): void {
       document.title = previousTitle
     }
   }, 'ui-investment-research: profile marker')
+
+  ctx.effect(() => () => { researchChatContext.dispose() }, 'ui-investment-research: research chat context')
 
   // Workspace remains an internal session-grouping and tool-scope abstraction
   // in this product. On a truly empty first run, create one ordinary Session at
@@ -332,13 +344,15 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject('conversation.input.left', () => ctx.slots.register({
     name: 'conversation.input.left',
-    id: 'investment-assistant-module',
+    id: 'investment-research-context',
     order: -100,
-    inject: (): InvestmentAssistantModuleInjected => ({
+    inject: (): InvestmentComposerContextInjected => ({
       hooks: { investmentUi: state },
       setAssistantModule: selectAssistantModule,
+      researchChatContext,
+      requestData,
     }),
-  }, InvestmentAssistantModuleSelect))
+  }, InvestmentComposerContextControls))
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay',

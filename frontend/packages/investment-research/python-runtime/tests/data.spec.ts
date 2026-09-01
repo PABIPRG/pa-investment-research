@@ -456,6 +456,122 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledTimes(4)
   })
 
+  it('maps research chat context reads and saves to fixed local routes', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
+      new Response(JSON.stringify({ revision: 3 }), { status: 200 })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'http://127.0.0.1:8000', ownership: 'attached' as const, release,
+    }))
+
+    await requestInvestmentData({
+      operation: 'trading-core.research-chat-context',
+      input: { session_id: 'session:alpha' },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.research-chat-context-save',
+      input: {
+        session_id: 'session:alpha',
+        expected_revision: 2,
+        strategy_id: 'strategy:trend@v2',
+        instrument: {
+          code: '510300', name: '沪深300ETF', market: '沪市 ETF', type: 'etf',
+        },
+      },
+    }, acquire)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:8000/research-chat/contexts/session%3Aalpha',
+      { method: 'GET' },
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:8000/research-chat/contexts/session%3Aalpha',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expected_revision: 2,
+          strategy_id: 'strategy:trend@v2',
+          instrument: {
+            code: '510300', name: '沪深300ETF', market: '沪市 ETF', type: 'etf',
+          },
+        }),
+      },
+    )
+    expect(acquire).toHaveBeenCalledTimes(2)
+    expect(release).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects unsafe research chat context inputs before acquiring', async () => {
+    const acquire = vi.fn()
+
+    await expect(requestInvestmentData({
+      operation: 'trading-core.research-chat-context',
+      input: { session_id: '../session' },
+    }, acquire)).rejects.toThrow('session_id must be a safe identifier')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.research-chat-context-save',
+      input: {
+        session_id: 'session-1', expected_revision: 0, strategy_id: null,
+        instrument: { code: 'BTC', name: 'Bitcoin', market: 'crypto', type: 'crypto' },
+      },
+    }, acquire)).rejects.toThrow('instrument.code must be a six-digit security code')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.research-chat-context-save',
+      input: {
+        session_id: 'session-1', expected_revision: 0, strategy_id: null,
+        instrument: null, arbitrary_url: 'https://example.com',
+      },
+    }, acquire)).rejects.toThrow('unknown input key')
+
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it('uses the strategy-id schema for detail routes including @ revisions', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response('{"id":"strategy@v1"}'))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'http://127.0.0.1:8000', ownership: 'attached' as const, release,
+    }))
+
+    await requestInvestmentData({
+      operation: 'trading-core.strategy-detail', input: { strategy_id: 'strategy@v1' },
+    }, acquire)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8000/strategies/strategy%40v1', { method: 'GET' },
+    )
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('blocks research chat context operations in external backend mode', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({
+      baseUrl: 'https://external.example', ownership: 'external' as const, release,
+    }))
+
+    await expect(requestInvestmentData({
+      operation: 'trading-core.research-chat-context',
+      input: { session_id: 'session-1' },
+    }, acquire)).rejects.toThrow('requires a local backend')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.research-chat-context-save',
+      input: {
+        session_id: 'session-1', expected_revision: 0, strategy_id: null, instrument: null,
+      },
+    }, acquire)).rejects.toThrow('requires a local backend')
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledTimes(2)
+  })
+
   it('maps business workflow writes and task polling to fixed trading-core routes', async () => {
     const release = vi.fn(async () => {})
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ task_id: 'task-1' }), { status: 200 }))

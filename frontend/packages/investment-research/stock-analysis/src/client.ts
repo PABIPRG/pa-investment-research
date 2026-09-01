@@ -133,6 +133,39 @@ export function getLatestBrief(baseUrl: string, signal?: AbortSignal): Promise<u
   return httpJson(baseUrl, '/brief/latest', 'GET', undefined, signal)
 }
 
+const RESEARCH_CHAT_SESSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+const RESEARCH_CHAT_STRATEGY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/
+
+/** Read the strategy/target selection persisted for one trusted conversation session. */
+export function getResearchChatContext(
+  baseUrl: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  if (!RESEARCH_CHAT_SESSION_PATTERN.test(sessionId)) {
+    throw new TypeError('会话 ID 格式无效')
+  }
+  return httpJson(
+    baseUrl,
+    `/research-chat/contexts/${encodeURIComponent(sessionId)}`,
+    'GET',
+    undefined,
+    signal,
+  )
+}
+
+/** Read the latest strategy record for one already-validated strategy identifier. */
+export function getStrategyDetail(
+  baseUrl: string,
+  strategyId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  if (!RESEARCH_CHAT_STRATEGY_PATTERN.test(strategyId)) {
+    throw new TypeError('策略 ID 格式无效')
+  }
+  return httpJson(baseUrl, `/strategies/${encodeURIComponent(strategyId)}`, 'GET', undefined, signal)
+}
+
 /**
  * Read the adapter-owned global risk profile.
  * @param baseUrl - Adapter origin.

@@ -42,12 +42,19 @@ from .schemas import (
     PersonalizedInteractionRequest,
     EvolutionRunRequest,
     RiskProfileRequest,
+    ResearchChatContextSaveRequest,
     ShadowRunRequest,
     StrategyRunRequest,
     WatchlistRequest,
 )
 from .scheduler import setup_scheduler
 from .store import JsonStore
+from .research_chat_context import (
+    ResearchChatRevisionConflict,
+    ResearchChatStrategyNotFound,
+    get_research_chat_context,
+    save_research_chat_context,
+)
 
 logger = logging.getLogger("adapter.app")
 
@@ -458,6 +465,43 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         ]
         rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         return {"count": len(rows), "items": rows[: max(1, min(limit, 200))]}
+
+    # ---- 聊天式我的投研会话上下文 --------------------------------------
+
+    @app.get("/research-chat/contexts/{session_id}", response_model=dict)
+    async def research_chat_context_get(
+        session_id: str = ApiPath(
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        ),
+    ):
+        """读取当前会话最后确认的策略与标的选择。"""
+        context = get_research_chat_context(JsonStore(), session_id)
+        return {"exists": context is not None, "context": context}
+
+    @app.post("/research-chat/contexts/{session_id}", response_model=dict)
+    async def research_chat_context_save(
+        req: ResearchChatContextSaveRequest,
+        session_id: str = ApiPath(
+            min_length=1,
+            max_length=128,
+            pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        ),
+    ):
+        """以修订号保护完整替换当前会话的策略与标的选择。"""
+        try:
+            return save_research_chat_context(JsonStore(), session_id, req)
+        except ResearchChatRevisionConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "revision_conflict",
+                    "current_revision": exc.current_revision,
+                },
+            ) from exc
+        except ResearchChatStrategyNotFound as exc:
+            raise HTTPException(status_code=404, detail="策略不存在") from exc
 
     @app.get("/strategies/{sid}", response_model=dict)
     async def strategies_get(sid: str):

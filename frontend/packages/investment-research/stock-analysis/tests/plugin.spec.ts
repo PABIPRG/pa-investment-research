@@ -12,7 +12,10 @@ type RegisteredTool = {
   }
   presentCall?: (args: unknown) => unknown
   presentResult?: (args: unknown, result: unknown) => unknown
-  execute: (args: Record<string, unknown>, exec: { signal: AbortSignal; agent?: { inject(message: unknown): void } }) => Promise<unknown>
+  execute: (args: Record<string, unknown>, exec: {
+    signal: AbortSignal
+    agent?: { inject(message: unknown): void; session?: { header: { id: string } } }
+  }) => Promise<unknown>
 }
 
 const riskProfile = {
@@ -63,6 +66,27 @@ const STOCK_CONTRACTS = [
     }, ['domain']),
     schema: output({ domain: { type: 'string', description: '实际读取的投研领域', enum: ['portfolio', 'strategy', 'shadow', 'evolution', 'reports', 'industry'] }, resources: { description: '按稳定资源名分组的后端无损 JSON' } }),
   },
+  {
+    name: 'investment_research_context',
+    description: '读取当前对话在“我的投研”中已确认的策略与投资标的，并返回策略详情、推荐状态、适用性和风险提示。参数固定为空；会话 ID 只取自当前工具执行上下文，不接受模型传入。只读，不执行交易，也不改变策略状态。',
+    parameters: input({}),
+    schema: output({
+      status: { type: 'string', description: '上下文读取状态', enum: ['ready', 'empty', 'invalid', 'unavailable'] },
+      context_revision: { type: 'number', description: '会话选择的服务端修订号' },
+      context_updated_at: { type: 'string', description: '会话选择的最近更新时间' },
+      strategy: { description: '策略池中的最新策略详情；未选择或已失效时为空' },
+      instrument: { description: '用户在输入框下方确认的投资标的；未选择时为空' },
+      recommended: { type: 'boolean', description: '仅 active 且 passed 时为 true' },
+      compatibility: { type: 'string', description: '策略与标的的适用关系', enum: ['not_applicable', 'direct', 'method_only'] },
+      warnings: {
+        type: 'array', description: '需要模型向用户明确披露的风险提示',
+        items: output({
+          code: { type: 'string', enum: ['STRATEGY_NOT_RECOMMENDED', 'STRATEGY_NOT_FOUND', 'METHOD_TRANSFER', 'CONTEXT_UNAVAILABLE'] },
+          message: { type: 'string' },
+        }),
+      },
+    }),
+  },
 ] as const
 
 afterEach(() => vi.unstubAllGlobals())
@@ -83,6 +107,7 @@ async function install(config: Plugin.Config = {
     },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
     agents: { roots: () => [] },
+    systemPrompt: { section() { return () => {} } },
   } as never, config)
   return tools
 }
@@ -99,6 +124,7 @@ async function installWithPreflight(assertCapability: (backendId: string, use: s
     },
     tools: { register(tool: RegisteredTool) { tools.push(tool); return () => {} } },
     agents: { roots: () => [] },
+    systemPrompt: { section() { return () => {} } },
   } as never, { backendMode: 'external', backendBaseUrl: 'http://adapter.test', enableInChatPush: false })
   return tools
 }
@@ -107,9 +133,55 @@ describe('stock-analysis function plugin', () => {
   it('has only the preserved named function-plugin API', () => {
     const config: Plugin.Config = {}
     expect(Plugin.name).toBe('investment-stock-analysis')
-    expect(Plugin.inject).toEqual(['tools', 'agents', 'investmentPythonRuntime'])
+    expect(Plugin.inject).toEqual(['tools', 'agents', 'investmentPythonRuntime', 'systemPrompt'])
     expect(Plugin.apply).toBeTypeOf('function')
     expect(config).toEqual({})
+  })
+
+  it('reads the confirmed strategy and target from the exact executing session', async () => {
+    const requests: string[] = []
+    const strategy = {
+      id: 'strategy-1', name: '稳健趋势', status: 'active', verification_status: 'passed',
+      symbols: ['600519'],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      requests.push(url)
+      if (url.endsWith('/research-chat/contexts/session%3A1')) {
+        return new Response(JSON.stringify({
+          exists: true,
+          context: {
+            schema_version: 1,
+            session_id: 'session:1',
+            strategy_id: 'strategy-1',
+            instrument: { code: '600519', name: '贵州茅台', market: '沪市', type: 'stock' },
+            revision: 2,
+            updated_at: '2026-09-01T02:00:00Z',
+          },
+        }))
+      }
+      if (url.endsWith('/strategies/strategy-1')) return new Response(JSON.stringify(strategy))
+      return new Response('not found', { status: 404 })
+    }))
+    const tool = (await install()).find(candidate => candidate.name === 'investment_research_context')
+
+    expect(tool).toBeDefined()
+    await expect(tool!.execute({}, {
+      signal: new AbortController().signal,
+      agent: { inject() {}, session: { header: { id: 'session:1' } } },
+    })).resolves.toEqual({
+      status: 'ready',
+      context_revision: 2,
+      context_updated_at: '2026-09-01T02:00:00Z',
+      strategy,
+      instrument: { code: '600519', name: '贵州茅台', market: '沪市', type: 'stock' },
+      recommended: true,
+      compatibility: 'direct',
+      warnings: [],
+    })
+    expect(requests).toEqual([
+      'http://adapter.test/research-chat/contexts/session%3A1',
+      'http://adapter.test/strategies/strategy-1',
+    ])
   })
 
   it('keeps schema names and maps every tool argument to the existing adapter endpoint', async () => {
@@ -142,6 +214,7 @@ describe('stock-analysis function plugin', () => {
       get_risk_profile: {},
       get_latest_brief: {},
       investment_context: { domain: 'reports' },
+      investment_research_context: {},
     }
     const callViews = {
       analyze_stock: { card: 'generic', title: '📈 分析 600519', kind: 'other', rawInput: presentationArgs.analyze_stock },
@@ -154,18 +227,21 @@ describe('stock-analysis function plugin', () => {
       get_risk_profile: { card: 'generic', title: '🎯 读取风险偏好', kind: 'other' },
       get_latest_brief: { card: 'generic', title: '📥 读取最近简报', kind: 'other' },
       investment_context: { card: 'generic', title: '🧭 读取报告上下文', kind: 'other', rawInput: presentationArgs.investment_context },
+      investment_research_context: { card: 'generic', title: '🧭 读取当前会话投研上下文', kind: 'other' },
     }
     const resultTitles = {
       analyze_stock: 'AI 多智能体分析完成', analyze_holdings: '持仓风险分析完成', market_brief: '市场简报已生成',
       set_watchlist: '自选列表已更新', set_holdings: '持仓已保存', get_watchlist: '自选列表',
       set_risk_profile: '风险偏好已更新', get_risk_profile: '风险偏好', get_latest_brief: '最近简报',
       investment_context: '投研上下文已读取',
+      investment_research_context: '当前会话投研上下文已读取',
     }
     const resultText = {
       analyze_stock: '分析完成。查看模型回复中的完整决策与分步报告。', analyze_holdings: '组合市值/浮盈/集中度/逐股风险已生成。',
       market_brief: '查看模型回复中的完整简报与机会点。', set_watchlist: '已保存 0 只自选股。', set_holdings: '已保存 0 条持仓。',
       get_watchlist: '[]', set_risk_profile: '', get_risk_profile: '', get_latest_brief: '暂无简报',
       investment_context: '已按需读取报告上下文。',
+      investment_research_context: '已读取输入框下方确认的策略与标的。',
     }
     for (const tool of tools) {
       const args = presentationArgs[tool.name]!
@@ -195,6 +271,11 @@ describe('stock-analysis function plugin', () => {
       get_risk_profile: {},
       get_latest_brief: { id: 'b1', period: 'post_market', dsh_pushed: true },
       investment_context: { domain: 'reports', resources: { reports: { count: 1 } } },
+      investment_research_context: {
+        status: 'ready', strategy: { name: '稳健趋势' },
+        instrument: { code: '600519', name: '贵州茅台', market: '沪市', type: 'stock' },
+        recommended: true, compatibility: 'direct', warnings: [],
+      },
     }
     const renderedText = {
       analyze_stock: '## — · 600519\n\n| 目标价 | 置信度 | 风险分 |\n|---|---|---|\n| ¥— | — | — |',
@@ -202,6 +283,7 @@ describe('stock-analysis function plugin', () => {
       set_holdings: '已保存 0 条持仓。', get_watchlist: '自选股：（空）', set_risk_profile: '已切换风险偏好：—（）',
       get_risk_profile: '当前风险偏好：未知（）', get_latest_brief: '最近简报：盘后 · （dsh 已播报：是）',
       investment_context: '已读取报告上下文：\n{\n  "reports": {\n    "count": 1\n  }\n}',
+      investment_research_context: '当前会话：稳健趋势 · 贵州茅台（600519）；适用性：direct。',
     }
     for (const [toolName, value] of Object.entries(outputValues)) {
       const tool = byName.get(toolName)!
@@ -227,6 +309,7 @@ describe('stock-analysis function plugin', () => {
     await byName.get('get_risk_profile')!.execute({}, exec)
     await byName.get('get_latest_brief')!.execute({}, exec)
     await byName.get('investment_context')!.execute({ domain: 'reports' }, exec)
+    await byName.get('investment_research_context')!.execute({}, exec)
 
     const defaults = new Map((await install({})).map(tool => [tool.name, tool]))
     await defaults.get('analyze_stock')!.execute({ ticker: '600519' }, exec)
@@ -285,9 +368,11 @@ describe('stock-analysis function plugin', () => {
     await byName.get('get_risk_profile')!.execute({}, exec)
     await byName.get('get_latest_brief')!.execute({}, exec)
     await byName.get('investment_context')!.execute({ domain: 'reports' }, exec)
+    await byName.get('investment_research_context')!.execute({}, exec)
     expect(assertCapability.mock.calls).toEqual([
       ['trading-core', 'llm-required'], ['trading-core', 'llm-required'], ['trading-core', 'llm-required'],
       ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
+      ['trading-core', 'non-llm'],
       ['trading-core', 'non-llm'],
       ['trading-core', 'non-llm'], ['trading-core', 'non-llm'], ['trading-core', 'non-llm'],
     ])
@@ -331,6 +416,7 @@ describe('stock-analysis function plugin', () => {
       },
       tools: { register(tool: Record<string, unknown>) { rawTools.push(tool); return () => {} } },
       agents: { roots: () => [] },
+      systemPrompt: { section() { return () => {} } },
     } as never, {})
 
     const byName = new Map(rawTools.map(tool => [tool.name as string, tool]))

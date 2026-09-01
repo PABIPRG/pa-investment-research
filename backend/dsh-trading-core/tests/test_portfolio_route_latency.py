@@ -161,6 +161,20 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
         self.assertEqual(first["summary"]["n_positions"], 1)
         self.assertEqual(revised["summary"]["n_positions"], 3)
 
+    def test_portfolio_response_includes_complete_budget_without_requiring_a_breach(self):
+        store = _store()
+        _seed_holdings(store, tuple(f"6005{index:02d}" for index in range(10)))
+
+        result = risk_engine.portfolio_risk(store)
+
+        self.assertEqual(result["breaches"], [])
+        self.assertEqual(result["risk_budget"], {
+            "portfolio_vol_max": 0.18,
+            "hhi_max": 0.30,
+            "single_stock_weight_max": 0.25,
+            "beta_max": 1.00,
+        })
+
     def test_same_size_atomic_replacement_changes_revision_immediately(self):
         store = _store()
         _seed_holdings(store, ("600519",))

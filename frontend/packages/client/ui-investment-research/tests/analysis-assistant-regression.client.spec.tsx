@@ -2,6 +2,7 @@
 import { createElement, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import packageManifest from '../package.json' with { type: 'json' }
 import {
   InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentShell,
 } from '../src/client/InvestmentShell.tsx'
@@ -16,6 +17,7 @@ afterEach(() => {
   cleanup()
   delete document.body.dataset.investmentAssistantMode
   delete document.body.dataset.investmentWorkbenchActive
+  delete document.body.dataset.investmentConversationPrimary
 })
 
 const INITIAL: InvestmentUiSnapshot = {
@@ -142,6 +144,25 @@ function chooseAssistantModule(label: string): void {
 }
 
 describe('智能分析与全局 AI 助理回归', () => {
+  it('我的投研把共享对话设为主界面并提供会话与资料入口', () => {
+    renderHarness()
+    fireEvent.click(screen.getByRole('button', { name: '测试路由到我的投研' }))
+
+    expect(document.body.dataset.investmentConversationPrimary).toBe('')
+    expect(document.body.dataset.investmentWorkbenchActive).toBeUndefined()
+    expect(screen.queryByTestId('assistant-panel')).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开 AI 研究助理' })).toBeNull()
+    expect(screen.getByRole('button', { name: '新对话' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '历史对话' })).toBeTruthy()
+    const materialsTrigger = screen.getByRole<HTMLButtonElement>('button', { name: '投研资料' })
+    fireEvent.click(materialsTrigger)
+    expect(screen.getByRole('dialog', { name: '投研资料' })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '关闭投研资料' }))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '投研资料' })).toBeNull()
+    expect(document.activeElement).toBe(materialsTrigger)
+  })
+
   it('在产品标识中展示当前候选版本', () => {
     render(createElement(InvestmentBrand, {
       compact: false,
@@ -149,7 +170,7 @@ describe('智能分析与全局 AI 助理回归', () => {
       startSession: vi.fn(),
     } as never))
 
-    expect(screen.getByText('0.1.0-rc.9 · 智能投研系统')).toBeTruthy()
+    expect(screen.getByText(`${packageManifest.version} · 智能投研系统`)).toBeTruthy()
   })
 
   it('始终保留结构化智能分析工作台，并在助理模式切换时保留两份业务输入', () => {

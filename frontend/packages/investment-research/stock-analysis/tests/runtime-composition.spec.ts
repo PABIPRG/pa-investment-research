@@ -56,6 +56,7 @@ function context(options: { acquireError?: Error; registerErrorAt?: number; capa
       },
     },
     agents: { roots: () => [] },
+    systemPrompt: { section() { return () => {} } },
   }
   return {
     ctx: ctx as never,
@@ -69,7 +70,7 @@ function context(options: { acquireError?: Error; registerErrorAt?: number; capa
 }
 
 describe('stock-analysis runtime composition', () => {
-  it('declares only credential references, config-selected runner, and publishes after all ten tools', async () => {
+  it('declares only credential references, config-selected runner, and publishes after all eleven tools', async () => {
     process.env.ADAPTER_RUNNER = 'ambient-sentinel-value'
     const mounted = context()
     await Plugin.apply(mounted.ctx, {
@@ -99,9 +100,9 @@ describe('stock-analysis runtime composition', () => {
       'runtime:acquire:trading-core',
       'tool:register:analyze_stock',
     ])
-    expect(mounted.tools).toHaveLength(10)
-    expect(mounted.capability()).toEqual({ backendId: 'trading-core', toolCount: 10, llm: 'required' })
-    expect(mounted.events.indexOf('capability:register')).toBeGreaterThan(mounted.events.lastIndexOf('tool:register:investment_context'))
+    expect(mounted.tools).toHaveLength(11)
+    expect(mounted.capability()).toEqual({ backendId: 'trading-core', toolCount: 11, llm: 'required' })
+    expect(mounted.events.indexOf('capability:register')).toBeGreaterThan(mounted.events.lastIndexOf('tool:register:investment_research_context'))
     expect(JSON.stringify(mounted.definition())).not.toContain('ambient-sentinel-value')
     expect(Object.keys(Plugin.Config.dict ?? {})).not.toContain('ADAPTER_RUNNER')
 
@@ -156,8 +157,9 @@ describe('stock-analysis runtime composition', () => {
     const mounted = context({ capabilityError: new Error('capability registration failed') })
     await expect(Plugin.apply(mounted.ctx, {})).rejects.toThrow('capability registration failed')
     expect(mounted.tool('analyze_stock')).toBeUndefined()
-    expect(mounted.events.slice(-13)).toEqual([
+    expect(mounted.events.slice(-14)).toEqual([
       'capability:register',
+      'tool:dispose:investment_research_context',
       'tool:dispose:investment_context',
       'tool:dispose:get_latest_brief', 'tool:dispose:get_risk_profile', 'tool:dispose:set_risk_profile',
       'tool:dispose:get_watchlist', 'tool:dispose:set_holdings', 'tool:dispose:set_watchlist',
@@ -171,7 +173,7 @@ describe('stock-analysis runtime composition', () => {
     await Plugin.apply(mounted.ctx, {})
     await mounted.dispose()
     const cleanup = mounted.events.slice(mounted.events.findIndex(event => event.startsWith('tool:dispose')))
-    expect(cleanup.filter(event => event.startsWith('tool:dispose'))).toHaveLength(10)
+    expect(cleanup.filter(event => event.startsWith('tool:dispose'))).toHaveLength(11)
     expect(cleanup.at(-3)).toBe('capability:dispose')
     expect(cleanup.at(-2)).toBe('lease:release')
     expect(cleanup.at(-1)).toBe('runtime:unregister')

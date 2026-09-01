@@ -5,6 +5,8 @@
 - job 内先 `tool_trade_date_hist_sina()` 判交易日（官方日历，**不能用 get_market_status 启发式**）
 - (period, trade_date) 幂等：已存在则跳过，避免重启/重复触发重复生成与重复推送
 - 生成后经 PusherManager 推送（企业微信 + Server酱），单通道失败不影响其它
+- 另有 shadow_daily 影子验证，与 closed_loop_daily 全自动闭环
+  （拉事件→生成候选 → 影子 → 自动进化 → 候选回测激活 → 推送）
 
 挂载：adapter/app.py lifespan 里 setup_scheduler()，退出时 shutdown()。
 """
@@ -81,8 +83,23 @@ def _run_shadow_job() -> None:
         logger.error("影子验证失败: %s", exc)
 
 
+def _run_event_generation(store: JsonStore) -> dict:
+    """Step 0：拉市场事件 → 假设 → 候选落池（EVENT_GENERATION_ENABLED 控制）。
+
+    幂等天然成立：create_candidates 按 md5(事件id+kind+排序symbols) 去重，
+    同事件同策略不重复生成，每天只产生新事件候选。事件源失败 fail-open 返回空。
+    """
+    from .strategies import create_candidates, fetch_events, generate_hypotheses
+    events = fetch_events(limit=settings.event_generation_limit)
+    if not events:
+        return {"n_events": 0, "candidates": [], "note": "事件源暂无事件"}
+    hypotheses = generate_hypotheses(events)
+    ids = create_candidates(events, hypotheses)
+    return {"n_events": len(events), "n_hypotheses": len(hypotheses), "candidates": ids}
+
+
 def _run_closed_loop_job() -> None:
-    """全自动自进化闭环：shadow → 自动进化 → 衍生候选自动回测激活 → 推送。
+    """全自动自进化闭环：拉事件生成候选 → shadow → 自动进化 → 候选回测激活 → 推送。
 
     每个交易日跑一次；任一环节异常不拖垮整轮，进度由日志 + 推送日报留痕。
     候选回测只用 verification_status 仍为 pending 的（passed/failed 天然跳过），
@@ -98,6 +115,18 @@ def _run_closed_loop_job() -> None:
     logger.info("🔁 自进化闭环（%s）…", today)
     store = JsonStore()
     lines: list[str] = []
+    # Step 0：拉事件 → 生成新策略候选（并入闭环，EVENT_GENERATION_ENABLED 控制）
+    try:
+        if settings.event_generation_enabled:
+            gen = _run_event_generation(store)
+            ids = gen.get("candidates") or []
+            lines.append(
+                f"事件生成：{gen.get('n_events')} 事件 → 新增 {len(ids)} 候选"
+                + (f"（{gen.get('note')}）" if gen.get("note") else "")
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("闭环事件生成失败: %s", exc)
+        lines.append(f"事件生成：失败 {exc}")
     try:
         # Step A：影子验证（幂等，同日已跑自动 skipped）
         from .shadow import ShadowRunner
