@@ -108,6 +108,39 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
         self.assertEqual(store.get("strategies", "s-pend")["status"], "candidate")
         self.assertEqual(store.get("strategies", "s-skip")["status"], "candidate")
 
+    def test_stale_failed_candidates_cleaned_up(self):
+        """已回测失败但仍留 candidate 池的候选 → 闭环自动淘汰（不重跑回测）。"""
+        store = _temp_store()
+        for sid, vs in [("s-old-fail", "failed"), ("s-pend", "pending"), ("s-passed", "passed")]:
+            store.set("strategies", sid, {
+                "id": sid, "name": sid, "kind": "momentum", "direction": "利好",
+                "symbols": ["600000"], "params": {"n": 10},
+                "status": "candidate", "verification_status": vs, "backtest": {},
+            })
+        backtested: list[str] = []
+        pushed: list[tuple[str, str]] = []
+
+        with patch("adapter.scheduler.JsonStore", return_value=store), \
+                patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler._run_event_generation", return_value={"n_events": 0, "candidates": []}), \
+                patch("adapter.shadow.ShadowRunner") as shadow, \
+                patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
+                patch("adapter.strategies.StrategyBacktestRunner") as btr, \
+                patch("adapter.push.PusherManager") as pusher:
+            shadow.return_value.run.return_value = {"skipped": False, "overall_nav": 1.0, "strategies": {}}
+            btr.return_value.run.side_effect = lambda params, cb: backtested.append(params["strategy_id"]) or {"verification_status": "pending"}
+            pusher.return_value.push.side_effect = lambda title, content: pushed.append((title, content)) or []
+            _run_closed_loop_job()
+
+        # 只有 pending 的 s-pend 走回测；passed 的 s-passed 天然跳过；failed 的 s-old-fail 直接清理不重跑
+        self.assertEqual(backtested, ["s-pend"])
+        self.assertEqual(store.get("strategies", "s-old-fail")["status"], "rejected")
+        self.assertEqual(store.get("strategies", "s-pend")["status"], "candidate")
+        self.assertEqual(store.get("strategies", "s-passed")["status"], "candidate")
+        # 日报记录清理数
+        self.assertEqual(len(pushed), 1)
+        self.assertIn("清理 1 条失败遗留", pushed[0][1])
+
     def test_evolve_actions_appear_in_push_content(self):
         store = _temp_store()
         actions = [

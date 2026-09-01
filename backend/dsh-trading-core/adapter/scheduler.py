@@ -192,8 +192,24 @@ def _run_closed_loop_job() -> None:
                     logger.info("候选 %s 回测未达标 → 淘汰", sid)
             except Exception as exc:  # noqa: BLE001 — 单候选失败不拖垮整轮
                 logger.warning("候选 %s 自动回测失败: %s", sid, exc)
+        # 兜底清理：verification_status=failed 但仍留 candidate 池的（手动回测或历史遗留）。
+        # 上面候选循环只回测 pending，已 failed 的天然跳过，导致这类候选长期占用候选池——
+        # 闭环在此一并淘汰（CANDIDATE_AUTO_REJECT=off 时保留）。
+        stale_failed = [
+            sid for sid, s in (store.all("strategies") or {}).items()
+            if isinstance(s, dict) and s.get("status") == "candidate"
+            and s.get("verification_status") == "failed"
+        ]
+        for sid in stale_failed:
+            if settings.candidate_auto_reject:
+                transition_strategy(store, sid, "reject")
+                rejected.append(sid)
+                logger.info("候选 %s 已回测失败 → 自动淘汰（清理候选池）", sid)
+            else:
+                logger.info("候选 %s 已回测失败但 CANDIDATE_AUTO_REJECT=off，保留", sid)
+        suffix = f"（含清理 {len(stale_failed)} 条失败遗留）" if stale_failed else ""
         lines.append(
-            f"候选验证：回测 {len(candidates)} 条，激活 {len(activated)}，淘汰 {len(rejected)}"
+            f"候选验证：回测 {len(candidates)} 条，激活 {len(activated)}，淘汰 {len(rejected)}{suffix}"
         )
     except Exception as exc:  # noqa: BLE001
         logger.error("闭环候选验证失败: %s", exc)
