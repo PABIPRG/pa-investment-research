@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import {
   EvolutionPage,
@@ -192,83 +192,75 @@ describe('投研产品闭环', () => {
     expect(screen.queryByText('9.99')).toBeNull()
   })
 
-  it('无进化动作时保持写入禁用，且绝不请求 apply=true', async () => {
-    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
-      if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: {} }
-      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
-      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
-      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
+  it('全自动闭环：只请求状态与归因，不引导人工确认，进页即展示各策略判定', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
         return {
-          status: 'ready', preview_status: 'pending', preview_token: '1'.repeat(32),
-          actions: [], note: '暂无满足条件的动作',
+          ready: true, days_of_data: 5, min_days: 5, counts: { active: 1, candidate: 2 },
+          closed_loop_enabled: true, closed_loop_time: '15:35',
+          last_applied_at: '2026-08-31 16:35:44',
+          per_strategy: [{
+            strategy_id: 'strat-1', name: '利空·rsi_reversal·600519', kind: 'rsi_reversal',
+            symbols: ['600519'], nav: 1.05, closed_win_rate_pct: 80, closed_trades: 3,
+            decision: 'promote', behavior: '升级', reason: '影子净值 1.05 ≥ 升级线 1.03',
+          }],
+          recent_applied: [],
         }
+      }
+      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '600519', name: '贵州茅台' }] }
       }
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
     render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
-    expect(screen.queryByRole('button', { name: '确认并应用' })).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: '生成进化预案' }))
-    const confirm = await screen.findByRole<HTMLButtonElement>('button', { name: '确认并应用' })
-    expect(confirm.disabled).toBe(true)
-    fireEvent.click(confirm)
-
-    expect(requestData).toHaveBeenCalledWith({
-      operation: 'trading-core.evolution-run', input: { apply: false },
+    await waitFor(() => {
+      const ops = requestData.mock.calls.map(([request]) => request.operation)
+      expect(ops).toContain('trading-core.evolution-status')
+      expect(ops).toContain('trading-core.evolution-attribution')
     })
-    expect(requestData.mock.calls.some(([request]) => (
-      request.operation === 'trading-core.evolution-run' && request.input?.apply === true
-    ))).toBe(false)
+    // 无任何人工确认/生成预案按钮
+    expect(screen.queryByRole('button', { name: '确认并应用' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '生成进化预案' })).toBeNull()
+    // 从未请求 evolution-run
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.evolution-run')).toBe(false)
+    // 进页即展示各策略判定
+    expect(screen.getByText(/影子净值 1\.05 ≥ 升级线 1\.03/)).toBeTruthy()
+    expect(screen.getAllByText('升级').length).toBeGreaterThan(0)
+    // 闭环运行状态
+    expect(screen.getByText('每日 15:35')).toBeTruthy()
+    expect(screen.getByText('2026-08-31 16:35:44')).toBeTruthy()
   })
 
-  it('有进化动作时也先只读预览，用户明确确认后才 apply=true', async () => {
-    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
-      if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: { active: 1 } }
+  it('最近自动进化时间线渲染各轮动作', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
+        return {
+          ready: true, counts: { active: 1 },
+          closed_loop_enabled: true, closed_loop_time: '15:35',
+          last_applied_at: '2026-08-31 16:35:44',
+          per_strategy: [],
+          recent_applied: [{
+            applied_at: '2026-08-31 16:35:44', count: 2,
+            actions: [
+              { type: 'promote', sid: 'strat-1', reason: '升级：影子净值越线' },
+              { type: 'mutate', sid: 'kid-1', reason: '变异衍生新候选' },
+            ],
+          }],
+        }
+      }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
-      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
-      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
-        return {
-          status: 'ready', preview_status: 'pending', preview_token: '2'.repeat(32),
-          actions: [{ sid: 'strategy-active-1', strategy_name: '事件驱动策略', type: 'promote', reason: '样本外证据稳定' }],
-        }
-      }
-      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === true) {
-        return {
-          status: 'ready', preview_status: 'applied', applied: true,
-          preview_token: '2'.repeat(32),
-          actions: [{ sid: 'strategy-active-1', strategy_name: '事件驱动策略', type: 'promote', reason: '样本外证据稳定' }],
-        }
-      }
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
     render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(3) })
-    fireEvent.click(screen.getByRole('button', { name: '生成进化预案' }))
-
-    const confirm = await screen.findByRole<HTMLButtonElement>('button', { name: '确认并应用' })
-    expect(confirm.disabled).toBe(false)
-    expect(screen.getByText('样本外证据稳定')).toBeTruthy()
-    const beforeConfirmation = requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.evolution-run')
-    expect(beforeConfirmation.map(([request]) => request.input)).toEqual([{ apply: false }])
-
-    fireEvent.click(confirm)
-    await waitFor(() => {
-      const writes = requestData.mock.calls.filter(([request]) => (
-        request.operation === 'trading-core.evolution-run' && request.input?.apply === true
-      ))
-      expect(writes).toHaveLength(1)
-    })
-    const evolutionCalls = requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.evolution-run')
-    expect(evolutionCalls.map(([request]) => request.input)).toEqual([
-      { apply: false },
-      { apply: true, preview_token: '2'.repeat(32) },
-    ])
-    const applied = await screen.findByRole<HTMLButtonElement>('button', { name: '已应用' })
-    expect(applied.disabled).toBe(true)
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'AI 复核预案' }).disabled).toBe(true)
+    expect(await screen.findByText('2026-08-31 16:35:44 · 自动应用 2 项动作')).toBeTruthy()
+    expect(screen.getByText(/升级：影子净值越线/)).toBeTruthy()
+    expect(screen.getByText(/变异衍生新候选/)).toBeTruthy()
+    // statusLabel 将 promote/mutate 映射为中文
+    expect(screen.getByText('升级')).toBeTruthy()
+    expect(screen.getByText('生成变体')).toBeTruthy()
   })
 
   it('进化状态读取失败时明确告知并可同步重试', async () => {
@@ -280,7 +272,6 @@ describe('投研产品闭环', () => {
         return { ready: true, counts: { active: 1 } }
       }
       if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
-      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
@@ -292,11 +283,20 @@ describe('投研产品闭环', () => {
     await waitFor(() => { expect(screen.queryByRole('alert')).toBeNull() })
   })
 
-  it('分策略证据展示股票名称并可进入个股详情', async () => {
+  it('策略现状：点击策略行展开详情而非跳个股，详情内标的才进入个股详情', async () => {
     const onOpenStock = vi.fn()
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.evolution-status') {
-        return { ready: true, days_of_data: 5, min_days: 5, counts: { active: 1 } }
+        return {
+          ready: true, days_of_data: 5, min_days: 5, counts: { active: 1 },
+          closed_loop_enabled: true, closed_loop_time: '15:35',
+          per_strategy: [{
+            strategy_id: 'strat-1', name: '利空·rsi_reversal·600519', kind: 'rsi_reversal',
+            symbols: ['600519'], nav: 1.05, closed_win_rate_pct: 66.7, closed_trades: 3,
+            decision: 'none', behavior: '带内运行', reason: '影子净值 1.05 处于带内，无升降级动作',
+          }],
+          recent_applied: [],
+        }
       }
       if (request.operation === 'trading-core.evolution-attribution') {
         return {
@@ -307,7 +307,6 @@ describe('投研产品闭环', () => {
           }],
         }
       }
-      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
       if (request.operation === 'market-watch.security-search') {
         return { items: [{ code: '600519', name: '贵州茅台' }] }
       }
@@ -315,35 +314,129 @@ describe('投研产品闭环', () => {
     })
 
     render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} onOpenStock={onOpenStock} />)
-    const stock = await screen.findByRole('button', { name: /贵州茅台.*600519/ })
-    expect(screen.queryByText(/rsi_reversal/)).toBeNull()
-    fireEvent.click(stock)
+    // 策略行展示判定与依据（非个股跳转按钮）
+    const row = await screen.findByRole('button', { name: /贵州茅台.*600519/ })
+    fireEvent.click(row)
+    // 点击策略行展开策略现状详情，不跳个股
+    const detail = await screen.findByRole('region', { name: '策略现状详情' })
+    expect(within(detail).getByText(/判定依据：影子净值 1\.05 处于带内/)).toBeTruthy()
+    expect(within(detail).getByText('累计收益')).toBeTruthy()
+    expect(within(detail).getByText('最大回撤')).toBeTruthy()
+    expect(onOpenStock).not.toHaveBeenCalled()
+    // 详情内关联标的位置才可进入个股详情
+    fireEvent.click(within(detail).getByRole('button', { name: /贵州茅台.*600519/ }))
     expect(onOpenStock).toHaveBeenCalledWith('600519')
   })
 
-  it('服务端拒绝失效预案后不允许继续确认', async () => {
-    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
-      if (request.operation === 'trading-core.evolution-status') return { ready: true, counts: { active: 1 } }
-      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
-      if (request.operation === 'trading-core.evolution-preview') return { preview_status: 'none', actions: [] }
-      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === false) {
+  it('数据不足时各策略判定显示待判定', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
         return {
-          status: 'ready', preview_status: 'pending', preview_token: '3'.repeat(32),
-          actions: [{ sid: 'strategy-active-1', type: 'promote', reason: '预案动作' }],
+          ready: false, days_of_data: 2, min_days: 5, counts: { active: 1 },
+          closed_loop_enabled: true, closed_loop_time: '15:35',
+          per_strategy: [{
+            strategy_id: 'strat-1', name: '利空·rsi_reversal·600519', kind: 'rsi_reversal',
+            symbols: ['600519'], nav: null, closed_win_rate_pct: null, closed_trades: 0,
+            decision: 'none', behavior: '待判定', reason: '影子数据不足，暂不参与判定',
+          }],
+          recent_applied: [],
         }
       }
-      if (request.operation === 'trading-core.evolution-run' && request.input?.apply === true) {
-        throw new Error('investment data: HTTP 409: 策略或影子证据已变化')
+      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '600519', name: '贵州茅台' }] }
       }
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
     render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
-    fireEvent.click(await screen.findByRole('button', { name: '生成进化预案' }))
-    const confirm = await screen.findByRole<HTMLButtonElement>('button', { name: '确认并应用' })
-    fireEvent.click(confirm)
-    expect(await screen.findByText(/409.*证据已变化/)).toBeTruthy()
-    expect(confirm.disabled).toBe(true)
+    expect(await screen.findByText('待判定')).toBeTruthy()
+    expect(screen.getByText(/影子数据不足，暂不参与判定/)).toBeTruthy()
+  })
+
+  it('闭环运行状态：点击生命周期计数展开对应策略列表并可进入标的', async () => {
+    const onOpenStock = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
+        return {
+          ready: true, days_of_data: 5, min_days: 5,
+          counts: { active: 1, candidate: 1, mutated: 1, retired: 1 },
+          closed_loop_enabled: true, closed_loop_time: '15:35',
+          lifecycle: {
+            active: [{ strategy_id: 'strat-1', name: '利空·rsi_reversal·600519', kind: 'rsi_reversal', tier: 1, symbols: ['600519'] }],
+            candidate: [{ strategy_id: 'kid-1', name: '变体·600519', kind: 'rsi_reversal', tier: 1, symbols: ['600519'], mutated_from: 'strat-1', source: 'evolution' }],
+            mutated: [{ strategy_id: 'kid-1', name: '变体·600519', kind: 'rsi_reversal', tier: 1, symbols: ['600519'] }],
+            retired: [{ strategy_id: 'strat-old', name: '旧策略', kind: 'momentum', tier: 1, symbols: [] }],
+          },
+          per_strategy: [],
+          recent_applied: [],
+        }
+      }
+      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '600519', name: '贵州茅台' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} onOpenStock={onOpenStock} />)
+    // 点击「待验证候选」计数展开对应策略列表
+    fireEvent.click(await screen.findByRole('button', { name: /待验证候选/ }))
+    const candidateRow = await screen.findByRole('button', { name: /贵州茅台.*600519/ })
+    expect(candidateRow).toBeTruthy()
+    // 列表项点击展开策略基础详情，再点标的进个股（不整行跳个股）
+    fireEvent.click(candidateRow)
+    const detail = await screen.findByRole('region', { name: '策略基础详情' })
+    fireEvent.click(within(detail).getByRole('button', { name: /贵州茅台.*600519/ }))
+    expect(onOpenStock).toHaveBeenCalledWith('600519')
+    // 点击「退役策略」计数展开对应策略（链路区也显示同一策略，故用 findAll）
+    fireEvent.click(screen.getByRole('button', { name: /退役策略/ }))
+    expect((await screen.findAllByText('旧策略')).length).toBeGreaterThan(0)
+  })
+
+  it('策略演化链路：仅展示生效策略及其母链，过滤候选/退役后代', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.evolution-status') {
+        return {
+          ready: true, counts: { active: 1, candidate: 1, mutated: 1, retired: 1 },
+          closed_loop_enabled: true, closed_loop_time: '15:35',
+          lifecycle: {
+            active: [
+              { strategy_id: 'strat-f6e7d8c9b0', name: '生效变体', kind: 'rsi_reversal', tier: 2, symbols: ['600519'], mutated_from: 'strat-a1b2c3d4e5', source: 'evolution' },
+            ],
+            candidate: [
+              { strategy_id: 'strat-9a8b7c6d5e', name: '待验证变体', kind: 'momentum', tier: 1, symbols: ['600519'], mutated_from: 'strat-f6e7d8c9b0', source: 'evolution' },
+            ],
+            mutated: [
+              { strategy_id: 'strat-9a8b7c6d5e', name: '待验证变体', kind: 'momentum', tier: 1, symbols: ['600519'], mutated_from: 'strat-f6e7d8c9b0', source: 'evolution' },
+            ],
+            retired: [
+              { strategy_id: 'strat-a1b2c3d4e5', name: '退役母策略', kind: 'rsi_reversal', tier: 1, symbols: ['600519'] },
+            ],
+            watch: [], rejected: [],
+          },
+          per_strategy: [],
+          recent_applied: [],
+        }
+      }
+      if (request.operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (request.operation === 'market-watch.security-search') {
+        return { items: [{ code: '600519', name: '贵州茅台' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<EvolutionPage requestData={requestData as never} onAnalyze={() => {}} />)
+    expect(await screen.findByText('策略演化链路')).toBeTruthy()
+    // 生效策略 + 沿母链上溯的退役母策略，同屏可见
+    expect(screen.getByText('仅生效 · 2 个策略 · 1 条衍生')).toBeTruthy()
+    expect(screen.getByText('#a1b2c3')).toBeTruthy()
+    expect(screen.getByText('退役母策略')).toBeTruthy()
+    expect(screen.getByText('#f6e7d8')).toBeTruthy()
+    expect(screen.getByText('生效变体')).toBeTruthy()
+    // 候选后代（待验证变体）不进入链路图
+    expect(screen.queryByText('#9a8b7c')).toBeNull()
+    expect(screen.queryByText('待验证变体')).toBeNull()
   })
 
   it('从统一报告列表读取 sections 详情并以 report intent 交给 AI 复核', async () => {
