@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { InvestmentComposerContextControls } from '../src/client/ResearchContextControls.tsx'
 import { ResearchChatContextController } from '../src/client/research-chat-context.ts'
@@ -230,7 +230,7 @@ describe('investment composer research context controls', () => {
 
     fireEvent.scroll(screen.getByRole('list'))
     fireEvent.scroll(window)
-    fireEvent(visualViewport, new Event('scroll'))
+    act(() => { visualViewport.dispatchEvent(new Event('scroll')) })
     expect(requestAnimationFrame).not.toHaveBeenCalled()
     expect(scrollIntoView).toHaveBeenCalledTimes(2)
 
@@ -241,7 +241,7 @@ describe('investment composer research context controls', () => {
     expect(scrollIntoView.mock.contexts[2]).toBe(confirm)
 
     visualViewport.height = 484
-    fireEvent(visualViewport, new Event('resize'))
+    act(() => { visualViewport.dispatchEvent(new Event('resize')) })
     flushAnimationFrames()
     expect(scrollIntoView).toHaveBeenCalledTimes(4)
     expect(scrollIntoView.mock.contexts[3]).toBe(confirm)
