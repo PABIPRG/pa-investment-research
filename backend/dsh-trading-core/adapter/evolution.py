@@ -623,11 +623,8 @@ def _per_strategy_decisions(
             "behavior": "带内运行",
         }
         if rec.get("status") != "active":
-            entry.update(
-                behavior="不参与当前判定",
-                reason=f"策略当前状态为 {rec.get('status') or 'unknown'}，仅展示历史证据",
-            )
-            per_strategy.append(entry)
+            # 策略现状只展示已激活运行的策略：非 active（候选/变体/退役/拒绝）
+            # 曾跑过影子留下的历史证据不进判定列表，避免看板堆满「不参与当前判定」。
             continue
         # 1) 淘汰（净值跌破淘汰线）
         if nav is not None and nav <= settings.evolve_retire_nav and ev.get("state") != "retired":
@@ -1006,6 +1003,8 @@ def status(
     for s in strats.values():
         if not isinstance(s, dict):
             continue
+        if s.get("status") != "active":
+            continue  # 策略现状只展示已激活运行的策略，候选/变体等不进入列表
         if s.get("id") in covered:
             continue
         ev = s.get("evolve") or {}
