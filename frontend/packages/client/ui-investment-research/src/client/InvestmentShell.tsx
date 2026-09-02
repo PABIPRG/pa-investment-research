@@ -13,7 +13,7 @@ import type { SidebarSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-sideba
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
-import type { AssistantIntent } from './assistant-intent.ts'
+import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import { SmartAnalysisPage } from './AnalysisPage.tsx'
 import { asRecord, compactMoney, money, number, percent, productErrorText, records, text } from './data.ts'
 import { useQuotePolling } from './quote-polling.ts'
@@ -166,7 +166,11 @@ export interface InvestmentShellInjected extends UiInjected {
   searchSessions: (query: string, signal: AbortSignal) => Promise<readonly SessionSearchResultItem[]>
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
   archiveSession: (sessionId: SessionId) => Promise<void>
-  prepareAssistant: (intent: AssistantIntent, module?: AssistantModule) => void
+  prepareAssistant: (
+    intent: AssistantIntent,
+    module?: AssistantModule,
+    sourceSurface?: 'floating' | 'primary',
+  ) => Promise<void>
   toggleTheme: () => void
 }
 
@@ -712,6 +716,9 @@ export function InvestmentShell({
 }: InvestmentShellProps) {
   const snapshot = useInvestmentUi(s => s)
   const [startingSession, setStartingSession] = useState(false)
+  const assistantConversationQueueRef = useRef(Promise.resolve())
+  const assistantConversationPendingKeysRef = useRef(new Set<string>())
+  const assistantConversationRequestGenerationRef = useRef(0)
   const [switchingSessionId, setSwitchingSessionId] = useState<SessionId | undefined>()
   const [historyClosing, setHistoryClosing] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
@@ -784,48 +791,90 @@ export function InvestmentShell({
     updateResearchSurface({ subject, mode: 'docked', suspendedByAssistant: false })
   }, [queueResearchAfterAssistantClose, updateResearchReturnTarget, updateResearchSurface])
 
+  const startAssistantConversation = useCallback((
+    intent: AssistantIntent,
+    module: AssistantModule | undefined,
+    onReady: () => void,
+  ): void => {
+    const key = `${module ?? 'default'}:${assistantPrompt(intent)}`
+    if (assistantConversationPendingKeysRef.current.has(key)) return
+    const hasPendingConversation = assistantConversationPendingKeysRef.current.size > 0
+    const sourceSurface = conversationPrimary ? 'primary' : 'floating'
+    const requestGeneration = assistantConversationRequestGenerationRef.current + 1
+    assistantConversationRequestGenerationRef.current = requestGeneration
+    assistantConversationPendingKeysRef.current.add(key)
+    setStartingSession(true)
+    const run = async (): Promise<void> => {
+      if (requestGeneration === assistantConversationRequestGenerationRef.current) setSessionError(null)
+      if (hasPendingConversation) {
+        await prepareAssistant(intent, module, sourceSurface)
+      } else {
+        await (module === undefined ? prepareAssistant(intent) : prepareAssistant(intent, module))
+      }
+    }
+    const pending = hasPendingConversation ? assistantConversationQueueRef.current.then(run) : run()
+    assistantConversationQueueRef.current = pending.catch(() => {})
+    void pending
+      .then(() => {
+        if (requestGeneration === assistantConversationRequestGenerationRef.current) setSessionError(null)
+        onReady()
+      })
+      .catch(() => {
+        if (requestGeneration === assistantConversationRequestGenerationRef.current) {
+          setSessionError('新对话创建失败，请稍后重试。')
+        }
+      })
+      .finally(() => {
+        assistantConversationPendingKeysRef.current.delete(key)
+        if (assistantConversationPendingKeysRef.current.size === 0) setStartingSession(false)
+      })
+  }, [conversationPrimary, prepareAssistant])
+
   const prepareAssistantWithoutReturn = useCallback((
     intent: AssistantIntent,
     module?: AssistantModule,
   ): void => {
-    pendingResearchActivationRef.current = undefined
-    assistantExitReasonRef.current = 'none'
-    updateResearchReturnTarget(undefined)
-    const current = researchSurfaceRef.current
-    if (current.subject !== undefined && current.mode !== 'closed') {
-      updateResearchSurface({ ...current, mode: 'closed', suspendedByAssistant: true })
-    }
-    if (module === undefined) prepareAssistant(intent)
-    else prepareAssistant(intent, module)
-  }, [prepareAssistant, updateResearchReturnTarget, updateResearchSurface])
+    startAssistantConversation(intent, module, () => {
+      pendingResearchActivationRef.current = undefined
+      assistantExitReasonRef.current = 'none'
+      updateResearchReturnTarget(undefined)
+      const current = researchSurfaceRef.current
+      if (current.subject !== undefined && current.mode !== 'closed') {
+        updateResearchSurface({ ...current, mode: 'closed', suspendedByAssistant: true })
+      }
+    })
+  }, [startAssistantConversation, updateResearchReturnTarget, updateResearchSurface])
 
   const prepareAssistantFromResearch = useCallback((intent: AssistantIntent): void => {
     const current = researchSurfaceRef.current
     if (current.subject === undefined || current.mode === 'closed') return
-    pendingResearchActivationRef.current = undefined
-    assistantExitReasonRef.current = 'none'
-    updateResearchReturnTarget({ subject: current.subject, restoreMode: 'docked' })
-    updateResearchSurface({ ...current, suspendedByAssistant: true })
-    prepareAssistant(intent)
-  }, [prepareAssistant, updateResearchReturnTarget, updateResearchSurface])
+    const subject = current.subject
+    startAssistantConversation(intent, undefined, () => {
+      pendingResearchActivationRef.current = undefined
+      assistantExitReasonRef.current = 'none'
+      updateResearchReturnTarget({ subject, restoreMode: 'docked' })
+      updateResearchSurface({ ...current, suspendedByAssistant: true })
+    })
+  }, [startAssistantConversation, updateResearchReturnTarget, updateResearchSurface])
 
   const prepareAssistantFromOpportunity = useCallback((subject: ResearchSubject): void => {
-    pendingResearchActivationRef.current = undefined
-    assistantExitReasonRef.current = 'none'
-    updateResearchReturnTarget({ subject, restoreMode: 'docked' })
-    updateResearchSurface({ subject, mode: 'docked', suspendedByAssistant: true })
-    prepareAssistant({
+    startAssistantConversation({
       kind: 'stock',
       code: subject.code,
       ...(subject.name === undefined ? {} : { name: subject.name }),
+    }, undefined, () => {
+      pendingResearchActivationRef.current = undefined
+      assistantExitReasonRef.current = 'none'
+      updateResearchReturnTarget(undefined)
+      updateResearchSurface(INITIAL_RESEARCH_SURFACE)
     })
-  }, [prepareAssistant, updateResearchReturnTarget, updateResearchSurface])
+  }, [startAssistantConversation, updateResearchReturnTarget, updateResearchSurface])
 
   const closeAssistant = useCallback((): void => {
     const target = researchReturnTargetRef.current
     if (target !== undefined) {
       updateResearchReturnTarget(undefined)
-      queueResearchAfterAssistantClose({ subject: target.subject, mode: 'minimized' }, 'direct-close')
+      queueResearchAfterAssistantClose({ subject: target.subject, mode: target.restoreMode }, 'direct-close')
       return
     }
     pendingResearchActivationRef.current = undefined
@@ -937,7 +986,7 @@ export function InvestmentShell({
         updateResearchReturnTarget(undefined)
         updateResearchSurface({
           subject: target.subject,
-          mode: 'minimized',
+          mode: target.restoreMode,
           suspendedByAssistant: false,
         })
       } else if (reason === 'none') {
@@ -1165,7 +1214,7 @@ export function InvestmentShell({
         {snapshot.route === 'opportunity' && (
           <OpportunityPage
             requestData={requestData}
-            initialQuery={snapshot.selectedStockCode || snapshot.watchQuery}
+            initialQuery={snapshot.watchQuery}
             activeCode={researchSurface.mode === 'closed' ? '' : researchSurface.subject?.code ?? ''}
             researchTriggerRef={researchTriggerRef}
             pageScrollRef={opportunityScrollRef}
@@ -1178,7 +1227,10 @@ export function InvestmentShell({
           <StockDetailPage
             requestData={requestData}
             code={snapshot.selectedStockCode}
-            onBack={() => { navigate('opportunity') }}
+            onBack={() => {
+              setModuleDraft('watchQuery', snapshot.selectedStockCode)
+              navigate('opportunity')
+            }}
             onAnalyze={prepareAssistantWithoutReturn}
           />
         )}
@@ -1192,6 +1244,7 @@ export function InvestmentShell({
             onAnalyze={prepareAssistantWithoutReturn}
             initialView={snapshot.route === 'projects' ? 'shadow' : 'pool'}
             onOpenEvolution={() => { navigate('tasks') }}
+            onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
             initialStage={snapshot.strategyResearchStage ?? 'form'}
             onBackEvolution={() => { navigate('tasks', { evolutionReturnGroup: snapshot.evolutionReturnGroup ?? '' }) }}
           />
@@ -1311,7 +1364,7 @@ export function InvestmentShell({
             <div className={css.researchMaterialsBody}>
               <PortfolioPage
                 requestData={requestData}
-                onAnalyze={prepareAssistant}
+                onAnalyze={prepareAssistantWithoutReturn}
                 onViewStock={(code) => { setMaterialsOpen(false); navigate('stock-detail', { stockCode: code }) }}
                 trackTelemetry={trackTelemetry}
               />
@@ -1654,83 +1707,83 @@ export function OpportunityPage({
             <span>，或直接带入智能分析。</span>
           </p>
           <section className={css.cardList} aria-busy={scan.busy} aria-labelledby="market-scan-title">
-        <div className={css.sectionHeading}>
-          <strong id="market-scan-title">市场扫描</strong>
-          <ResourceLabel state={scan.state} settled={`${rows.length} 个结果`} />
-        </div>
-        {scan.state.error !== '' && (
-          <ErrorCard
-            title={scan.state.loaded ? '市场扫描更新失败' : '市场扫描暂不可用'}
-            message={scan.state.error}
-            retry={() => { scan.run({ operation: 'market-watch.scan', input: { kind, top_n: 12 } }) }}
-            retained={scan.state.loaded}
-          />
-        )}
-        {!scan.state.loaded && scan.state.error === '' && <LoadingSkeleton rows={5} />}
-        {scan.state.loaded && (
-          <>
-            <div className={css.scanFacts} role="note" aria-label="扫描数据事实">
-              <span>来源：{scanSource}</span>
-              <span>数据时间：{scanAsOf}</span>
-              {scanStale && <strong>缓存数据</strong>}
-              {scanIncomplete && <strong>结果不完整</strong>}
-              {scanWarnings.map((warning, index) => (
-                <span className={css.scanFactWarning} key={`${warning}-${index}`}>提示：{warning}</span>
-              ))}
+            <div className={css.sectionHeading}>
+              <strong id="market-scan-title">市场扫描</strong>
+              <ResourceLabel state={scan.state} settled={`${rows.length} 个结果`} />
             </div>
-            {rows.map((row, index) => {
-              const subject = researchSubject(row)
-              const rawCode = text(row.code, '').trim()
-              const code = subject?.code ?? (rawCode || `row-${index}`)
-              const name = subject?.name ?? code
-              const pctChange = number(row.pct_change)
-              const amountYi = number(row.amount_yi)
-              const active = subject !== undefined && subject.code === normalizedActiveCode
-              return (
-                <article
-                  key={`${code}-${index}`}
-                  className={active ? css.stockCardActive : css.stockCard}
-                  aria-label={`${name} ${code}`}
-                >
-                  <button
-                    type="button"
-                    className={css.stockCardMain}
-                    aria-label={`打开${name}研究`}
-                    aria-current={active ? 'true' : undefined}
-                    disabled={subject === undefined}
-                    onClick={(event) => {
-                      if (subject === undefined) return
-                      if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
-                      onOpenResearch(subject)
-                    }}
-                  >
-                    <span className={css.stockCardIdentity}><strong>{name}</strong><span>{code}</span></span>
-                    <span className={pctChange !== undefined && pctChange < 0 ? css.negative : css.positive}>
-                      {percent(row.pct_change)}
-                    </span>
-                    <dl>
-                      <div><dt>现价</dt><dd>{money(row.price)}</dd></div>
-                      <div><dt>量比</dt><dd>{number(row.volume_ratio)?.toFixed(2) ?? '—'}</dd></div>
-                      <div><dt>成交额</dt><dd>{amountYi === undefined ? '—' : `${amountYi.toFixed(2)} 亿`}</dd></div>
-                    </dl>
-                  </button>
-                  <div className={css.stockCardActions}>
-                    <button
-                      type="button"
-                      disabled={subject === undefined}
-                      onClick={(event) => {
-                        if (subject === undefined) return
-                        if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
-                        onAnalyzeResearch(subject)
-                      }}
-                    >智能分析</button>
-                  </div>
-                </article>
-              )
-            })}
-            {rows.length === 0 && <div className={css.emptyState}>当前扫描没有返回结果</div>}
-          </>
-        )}
+            {scan.state.error !== '' && (
+              <ErrorCard
+                title={scan.state.loaded ? '市场扫描更新失败' : '市场扫描暂不可用'}
+                message={scan.state.error}
+                retry={() => { scan.run({ operation: 'market-watch.scan', input: { kind, top_n: 12 } }) }}
+                retained={scan.state.loaded}
+              />
+            )}
+            {!scan.state.loaded && scan.state.error === '' && <LoadingSkeleton rows={5} />}
+            {scan.state.loaded && (
+              <>
+                <div className={css.scanFacts} role="note" aria-label="扫描数据事实">
+                  <span>来源：{scanSource}</span>
+                  <span>数据时间：{scanAsOf}</span>
+                  {scanStale && <strong>缓存数据</strong>}
+                  {scanIncomplete && <strong>结果不完整</strong>}
+                  {scanWarnings.map((warning, index) => (
+                    <span className={css.scanFactWarning} key={`${warning}-${index}`}>提示：{warning}</span>
+                  ))}
+                </div>
+                {rows.map((row, index) => {
+                  const subject = researchSubject(row)
+                  const rawCode = text(row.code, '').trim()
+                  const code = subject?.code ?? (rawCode || `row-${index}`)
+                  const name = subject?.name ?? code
+                  const pctChange = number(row.pct_change)
+                  const amountYi = number(row.amount_yi)
+                  const active = subject !== undefined && subject.code === normalizedActiveCode
+                  return (
+                    <article
+                      key={`${code}-${index}`}
+                      className={active ? css.stockCardActive : css.stockCard}
+                      aria-label={`${name} ${code}`}
+                    >
+                      <button
+                        type="button"
+                        className={css.stockCardMain}
+                        aria-label={`打开${name}研究`}
+                        aria-current={active ? 'true' : undefined}
+                        disabled={subject === undefined}
+                        onClick={(event) => {
+                          if (subject === undefined) return
+                          if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
+                          onOpenResearch(subject)
+                        }}
+                      >
+                        <span className={css.stockCardIdentity}><strong>{name}</strong><span>{code}</span></span>
+                        <span className={pctChange !== undefined && pctChange < 0 ? css.negative : css.positive}>
+                          {percent(row.pct_change)}
+                        </span>
+                        <dl>
+                          <div><dt>现价</dt><dd>{money(row.price)}</dd></div>
+                          <div><dt>量比</dt><dd>{number(row.volume_ratio)?.toFixed(2) ?? '—'}</dd></div>
+                          <div><dt>成交额</dt><dd>{amountYi === undefined ? '—' : `${amountYi.toFixed(2)} 亿`}</dd></div>
+                        </dl>
+                      </button>
+                      <div className={css.stockCardActions}>
+                        <button
+                          type="button"
+                          disabled={subject === undefined}
+                          onClick={(event) => {
+                            if (subject === undefined) return
+                            if (researchTriggerRef !== undefined) researchTriggerRef.current = event.currentTarget
+                            onAnalyzeResearch(subject)
+                          }}
+                        >智能分析</button>
+                      </div>
+                    </article>
+                  )
+                })}
+                {rows.length === 0 && <div className={css.emptyState}>当前扫描没有返回结果</div>}
+              </>
+            )}
           </section>
         </div>
         <aside className={css.marketNewsRail} aria-label="市场资讯栏">
