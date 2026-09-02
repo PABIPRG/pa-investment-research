@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
-import { SmartAnalysisPage } from './AnalysisPage.tsx'
+import { ANALYSIS_MODULES, SmartAnalysisPage } from './AnalysisPage.tsx'
 import { asRecord, compactMoney, money, number, percent, productErrorText, records, text } from './data.ts'
 import { useQuotePolling } from './quote-polling.ts'
 import {
@@ -540,51 +540,84 @@ const ASSISTANT_MODULE_OPTIONS: readonly { id: AssistantModule; label: string; n
   ...RESEARCH_EXPERTS.map(expert => ({ id: expert.id, label: expert.label, note: expert.role })),
 ]
 
+const GENERAL_ANALYSIS_MODULE_OPTION = {
+  id: 'general', label: '不指定模块', note: '直接提出开放式研究问题', prompt: '',
+} as const
+
+const ANALYSIS_MODULE_OPTIONS: readonly {
+  id: AssistantModule
+  label: string
+  note: string
+  prompt: string
+}[] = [
+  GENERAL_ANALYSIS_MODULE_OPTION,
+  ...ANALYSIS_MODULES.map(module => ({
+    id: module.assistantModule,
+    label: module.title,
+    note: module.summary,
+    prompt: module.assistantPrompt,
+  })),
+]
+
 export interface InvestmentAssistantModuleInjected {
   hooks: { investmentUi: HostObservable<InvestmentUiSnapshot> }
-  setAssistantModule: (module: AssistantModule) => void
+  setAssistantModule: (module: AssistantModule, promptOverride?: string) => void
 }
 
 export type InvestmentAssistantModuleProps = PropsRuntime<'conversation.input.left'>
   & InjectFace<InvestmentAssistantModuleInjected>
+  & {
+    readonly catalog?: 'experts' | 'analysis-modules'
+    readonly visibleWhenClosed?: boolean
+  }
 
 /** Profile-specific research scope picker in the shared composer tool row. */
 export function InvestmentAssistantModuleSelect({
-  useInvestmentUi, setAssistantModule,
+  useInvestmentUi, setAssistantModule, catalog = 'experts', visibleWhenClosed = false,
 }: InvestmentAssistantModuleProps) {
   const mode = useInvestmentUi(snapshot => snapshot.assistantMode)
   const module = useInvestmentUi(snapshot => snapshot.assistantModule)
   const [open, setOpen] = useState(false)
-  const selected = ASSISTANT_MODULE_OPTIONS.find(item => item.id === module) ?? GENERAL_ASSISTANT_OPTION
+  const options = catalog === 'analysis-modules' ? ANALYSIS_MODULE_OPTIONS : ASSISTANT_MODULE_OPTIONS
+  const fallback = catalog === 'analysis-modules' ? GENERAL_ANALYSIS_MODULE_OPTION : GENERAL_ASSISTANT_OPTION
+  const selected = options.find(item => item.id === module) ?? fallback
+  const selectedLabel = catalog === 'analysis-modules' && selected.id === 'general' ? '未选择' : selected.label
 
   useEffect(() => {
     if (mode === 'closed') setOpen(false)
   }, [mode])
 
-  if (mode === 'closed') return null
+  if (mode === 'closed' && !visibleWhenClosed) return null
   return (
     <Menu
       open={open}
-      items={ASSISTANT_MODULE_OPTIONS.map(item => ({ id: item.id, label: item.label }))}
+      items={options.map(item => ({ id: item.id, label: item.label }))}
       selectedId={module}
       side="top"
       compact
       onClose={() => { setOpen(false) }}
       onSelect={(id) => {
         setOpen(false)
-        setAssistantModule(id as AssistantModule)
+        const selectedOption = options.find(item => item.id === id)
+        setAssistantModule(
+          id as AssistantModule,
+          catalog === 'analysis-modules' && selectedOption !== undefined
+            && 'prompt' in selectedOption && typeof selectedOption.prompt === 'string'
+            ? selectedOption.prompt
+            : undefined,
+        )
       }}
       anchor={(
         <button
           type="button"
-          className={css.assistantModuleTrigger}
-          aria-label={`研究模块，当前：${selected.label}`}
+          className={catalog === 'analysis-modules' ? css.researchContextTrigger : css.assistantModuleTrigger}
+          aria-label={`研究模块，当前：${selectedLabel}`}
           title={selected.note}
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => { setOpen(current => !current) }}
         >
-          <span>{selected.label}</span>
+          <span>{catalog === 'analysis-modules' && selected.id === 'general' ? '选模块' : selected.label}</span>
           <i className={open ? css.assistantModuleChevronOpen : undefined} aria-hidden="true">
             <IconChevronDownOutline14 />
           </i>
@@ -598,6 +631,16 @@ export function InvestmentAssistantModuleSelect({
 export function assistantModulePrompt(module: AssistantModule): string {
   if (module === 'general') return ''
   return RESEARCH_EXPERTS.find(expert => expert.id === module)?.prompt ?? ''
+}
+
+/** Replace only blank or still-automatic drafts when the selected module changes. */
+export function nextAssistantModuleDraft(
+  currentDraft: string,
+  previousAutomaticPrompt: string | undefined,
+  nextPrompt: string,
+): string | undefined {
+  if (currentDraft.trim() === '' || currentDraft === previousAutomaticPrompt) return nextPrompt
+  return undefined
 }
 
 function AssistantFloatingSurface({
@@ -749,6 +792,7 @@ export function InvestmentShell({
   const researchReturnTargetRef = useRef(researchReturnTarget)
   const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
+  const [dashboardView, setDashboardView] = useState<'workbench' | 'preferences'>('workbench')
   const assistantMode = snapshot.assistantMode
   const assistantModeRef = useRef(assistantMode)
   assistantModeRef.current = assistantMode
@@ -929,6 +973,9 @@ export function InvestmentShell({
   useEffect(() => {
     if (isAnalysisRoute) setAnalysisVisited(true)
   }, [isAnalysisRoute])
+  useEffect(() => {
+    if (snapshot.route !== 'dashboard') setDashboardView('workbench')
+  }, [snapshot.route])
   useEffect(() => {
     document.body.dataset.investmentAssistantMode = conversationPrimary ? 'closed' : assistantMode
     if (conversationPrimary) {
@@ -1202,12 +1249,21 @@ export function InvestmentShell({
             />
           </div>
         )}
-        {snapshot.route === 'dashboard' && (
+        {snapshot.route === 'dashboard' && dashboardView === 'workbench' && (
           <ResearchWorkbenchPage
             requestData={requestData}
             navigate={navigate}
             onAnalyze={prepareAssistantWithoutReturn}
+            onOpenPreferences={() => { setDashboardView('preferences') }}
             onOpenReports={() => { setReports(true) }}
+            trackTelemetry={trackTelemetry}
+          />
+        )}
+        {snapshot.route === 'dashboard' && dashboardView === 'preferences' && (
+          <PreferenceReviewPage
+            requestData={requestData}
+            onBack={() => { setDashboardView('workbench') }}
+            backLabel="← 返回研究工作台"
             trackTelemetry={trackTelemetry}
           />
         )}
@@ -2228,7 +2284,7 @@ function HoldingsImportDialog({
   return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body)
 }
 
-/** My Research owns both the portfolio overview and the local preference review. */
+/** My Research portfolio overview. Preference review now belongs to Research Workbench. */
 export function PortfolioPage({
   requestData, onAnalyze, onViewStock = () => {}, trackTelemetry = NOOP_TELEMETRY,
 }: {
@@ -2237,34 +2293,22 @@ export function PortfolioPage({
   onViewStock?: (code: string) => void
   trackTelemetry?: TrackLocalTelemetry
 }) {
-  const [view, setView] = useState<'portfolio' | 'preferences'>('portfolio')
-  if (view === 'preferences') {
-    return (
-      <PreferenceReviewPage
-        requestData={requestData}
-        trackTelemetry={trackTelemetry}
-        onBack={() => { setView('portfolio') }}
-      />
-    )
-  }
   return (
     <PortfolioOverviewPage
       requestData={requestData}
       onAnalyze={onAnalyze}
       onViewStock={onViewStock}
       trackTelemetry={trackTelemetry}
-      onOpenPreferences={() => { setView('preferences') }}
     />
   )
 }
 
 /** Portfolio workbench with independently settling holdings, risk, and alert regions. */
-function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelemetry, onOpenPreferences }: {
+function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelemetry }: {
   requestData: RequestData
   onAnalyze: (intent: AssistantIntent) => void
   onViewStock: (code: string) => void
   trackTelemetry: TrackLocalTelemetry
-  onOpenPreferences: () => void
 }) {
   const [nonce, setNonce] = useState(0)
   const [importOpen, setImportOpen] = useState(false)
@@ -2354,7 +2398,6 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   return (
     <div className={css.pageScroll}>
       <PageHeader title="我的投研" description="汇总后端已保存的持仓、风险预算与真实预警结果，承接研究到组合决策">
-        <button type="button" className={css.secondaryButton} onClick={onOpenPreferences}>偏好复盘</button>
         <button type="button" className={css.secondaryButton} onClick={() => { setNotice(''); setImportOpen(true) }}>
           <ImportIcon /><span className={css.actionLabel}>导入持仓</span>
         </button>

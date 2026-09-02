@@ -303,6 +303,7 @@ interface ResearchWorkbenchPageProps {
   readonly requestData: RequestData
   readonly navigate: (route: InvestmentRoute, context?: InvestmentNavigationContext) => void
   readonly onAnalyze: (intent: AssistantIntent) => void
+  readonly onOpenPreferences: () => void
   readonly onOpenReports: () => void
   readonly trackTelemetry: TrackLocalTelemetry
 }
@@ -311,7 +312,7 @@ type EventBucket = 'all' | 'holdings' | 'watchlist' | 'strategy'
 
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
-  requestData, navigate, onAnalyze, onOpenReports, trackTelemetry,
+  requestData, navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
   const holdings = useWorkbenchResource(requestData)
   const risk = useWorkbenchResource(requestData)
@@ -468,6 +469,7 @@ export function ResearchWorkbenchPage({
           <p>聚合今天最值得关注的事件、组合风险与下一步研究动作</p>
         </div>
         <div>
+          <button type="button" className={css.secondaryButton} onClick={onOpenPreferences}>偏好复盘</button>
           <button
             type="button"
             className={css.secondaryButton}

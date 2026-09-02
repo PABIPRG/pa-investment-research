@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { PreferenceReviewPage } from '../src/client/PreferenceReviewPage.tsx'
-import { PortfolioPage } from '../src/client/InvestmentShell.tsx'
 
 afterEach(() => {
   cleanup()
@@ -52,23 +51,19 @@ function deferred<T>() {
 }
 
 describe('偏好复盘', () => {
-  it('可从我的投研进入复盘并返回组合概览', async () => {
-    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
-      if (request.operation === 'trading-core.local-learning-review') return review(7)
-      if (request.operation === 'trading-core.holdings') return { items: [] }
-      if (request.operation === 'trading-core.risk-portfolio') return { summary: {}, breaches: [] }
-      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
-      if (request.operation === 'trading-core.personalized-cards') return { cards: [] }
-      if (request.operation === 'market-watch.watchlist') return { items: [] }
-      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
-      return {}
-    })
-    render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+  it('支持由研究工作台提供返回文案与动作', async () => {
+    const onBack = vi.fn()
+    render(
+      <PreferenceReviewPage
+        requestData={async () => review(7)}
+        onBack={onBack}
+        backLabel="← 返回研究工作台"
+        trackTelemetry={async () => {}}
+      />,
+    )
 
-    fireEvent.click(await screen.findByRole('button', { name: '偏好复盘' }))
-    expect(await screen.findByRole('heading', { name: '偏好复盘' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '← 返回我的投研' }))
-    expect(await screen.findByRole('heading', { name: '我的投研' })).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: '← 返回研究工作台' }))
+    expect(onBack).toHaveBeenCalledOnce()
   })
 
   it('展示证据、漏斗和独立显式风险，并切换 7/30 天窗口', async () => {

@@ -18,7 +18,7 @@ interface AnalysisTaskState {
   readonly taskId?: string
 }
 
-interface AnalysisModuleDefinition {
+export interface AnalysisModuleDefinition {
   readonly id: AnalysisTaskKind
   readonly assistantModule: AssistantModule
   readonly title: string
@@ -31,7 +31,7 @@ interface AnalysisModuleDefinition {
   readonly assistantPrompt: string
 }
 
-const ANALYSIS_MODULES: readonly AnalysisModuleDefinition[] = [
+export const ANALYSIS_MODULES: readonly AnalysisModuleDefinition[] = [
   {
     id: 'stock', assistantModule: 'stock', title: '个股多智能体分析', eyebrow: '证券研究',
     summary: '由基本面、估值、技术面、产业链与风险角色协同，对单一证券形成可追溯结论。',

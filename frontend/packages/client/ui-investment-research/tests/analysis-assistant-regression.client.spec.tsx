@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import packageManifest from '../package.json' with { type: 'json' }
 import {
-  InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentShell,
+  InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentShell, nextAssistantModuleDraft,
 } from '../src/client/InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from '../src/client/assistant-intent.ts'
 import type {
@@ -116,6 +116,11 @@ function renderHarness(
       />
       <button
         type="button"
+        aria-label="测试路由到研究工作台"
+        onClick={() => { setSnapshot(current => ({ ...current, route: 'dashboard' })) }}
+      />
+      <button
+        type="button"
         aria-label="测试路由到我的投研"
         onClick={() => { setSnapshot(current => ({ ...current, route: 'portfolio' })) }}
       />
@@ -144,6 +149,41 @@ function chooseAssistantModule(label: string): void {
 }
 
 describe('智能分析与全局 AI 助理回归', () => {
+  it('模块切换只替换自动提示，并允许回到开放式提问', () => {
+    const stockPrompt = '个股模块自动提示'
+    const briefPrompt = '市场简报模块自动提示'
+
+    expect(nextAssistantModuleDraft('', undefined, stockPrompt)).toBe(stockPrompt)
+    expect(nextAssistantModuleDraft(stockPrompt, stockPrompt, briefPrompt)).toBe(briefPrompt)
+    expect(nextAssistantModuleDraft(briefPrompt, briefPrompt, '')).toBe('')
+    expect(nextAssistantModuleDraft('我自己输入的研究问题', stockPrompt, briefPrompt)).toBeUndefined()
+  })
+
+  it('从研究工作台进入偏好复盘并返回工作台', async () => {
+    renderHarness(async (request) => {
+      if (request.operation === 'trading-core.local-learning-review') {
+        return {
+          window_days: 7,
+          status: { enabled: true, retention_days: 90, event_count: 0, feedback_count: 0 },
+          enough_data: false,
+          overview: {},
+          funnel: {},
+          insights: [],
+          recent_activity: [],
+          explicit_risk_profile: { key: 'balanced', label: '稳健型', behavior_adjustment: 0 },
+        }
+      }
+      return defaultRequestData(request)
+    })
+    fireEvent.click(screen.getByRole('button', { name: '测试路由到研究工作台' }))
+
+    fireEvent.click(screen.getByRole('button', { name: '偏好复盘' }))
+    expect(await screen.findByRole('heading', { name: '偏好复盘' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '← 返回研究工作台' }))
+    expect(screen.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
+  })
+
   it('我的投研把共享对话设为主界面并提供会话与资料入口', () => {
     renderHarness()
     fireEvent.click(screen.getByRole('button', { name: '测试路由到我的投研' }))
