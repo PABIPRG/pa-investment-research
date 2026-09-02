@@ -95,11 +95,16 @@ interface HarnessOptions {
   readonly initial?: Partial<InvestmentUiSnapshot>
   readonly mobile?: boolean
   readonly requestData?: RequestData
+  readonly prepareAssistantGate?: (intent: AssistantIntent, module: AssistantModule) => Promise<void>
 }
 
 function renderHarness(options: HarnessOptions = {}) {
   installBrowserDoubles(options.mobile)
-  const prepareAssistant = vi.fn<(intent: AssistantIntent, module?: AssistantModule) => void>()
+  const prepareAssistant = vi.fn<(
+    intent: AssistantIntent,
+    module?: AssistantModule,
+    sourceSurface?: 'floating' | 'primary',
+  ) => void>()
   const requestData = vi.fn<RequestData>(options.requestData ?? (async request => defaultResponse(request)))
   const initial = { ...INITIAL, ...options.initial }
 
@@ -114,8 +119,14 @@ function renderHarness(options: HarnessOptions = {}) {
     const setAssistantMode = (assistantMode: AssistantDisplayMode): void => {
       setSnapshot(current => ({ ...current, assistantMode }))
     }
-    const openAssistant = (intent: AssistantIntent, module: AssistantModule = 'general'): void => {
-      prepareAssistant(intent, module)
+    const openAssistant = async (
+      intent: AssistantIntent,
+      module: AssistantModule = 'general',
+      sourceSurface?: 'floating' | 'primary',
+    ): Promise<void> => {
+      if (sourceSurface === undefined) prepareAssistant(intent, module)
+      else prepareAssistant(intent, module, sourceSurface)
+      await options.prepareAssistantGate?.(intent, module)
       setComposerDraft(assistantPrompt(intent))
       setSnapshot(current => ({
         ...current,
@@ -199,6 +210,11 @@ function renderHarness(options: HarnessOptions = {}) {
           aria-label="外部打开报告"
           onClick={() => { setSnapshot(current => ({ ...current, reportsOpen: true })) }}
         />
+        <button
+          type="button"
+          aria-label="外部进入我的投研"
+          onClick={() => { setSnapshot(current => ({ ...current, route: 'portfolio' })) }}
+        />
       </>
     )
   }
@@ -270,6 +286,15 @@ describe('Shell 右侧表面协调', () => {
     expect(mobile420).toContain(".assistantLauncher[data-placement='research-minimized'] { right: max(14px, env(safe-area-inset-right)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 62px); }")
   })
 
+  it('实时盯盘按工作区实际宽度收起资讯栏，避免侧栏挤压扫描卡片', () => {
+    expect(SHELL_CSS).toContain('.pageScroll { container-type: inline-size;')
+    expect(SHELL_CSS).toContain('@container (max-width: 860px)')
+    expect(SHELL_CSS).toMatch(
+      /@container \(max-width: 860px\)[\s\S]*?\.opportunityWorkspace \{ grid-template-columns: minmax\(0, 1fr\); \}/u,
+    )
+    expect(SHELL_CSS).toMatch(/@container \(max-width: 860px\)[\s\S]*?\.marketNewsRail \{ position: relative; top: auto;/u)
+  })
+
   it('研究 expanded 时继续隐藏 AI launcher', async () => {
     renderHarness()
     await waitForScan()
@@ -289,52 +314,126 @@ describe('Shell 右侧表面协调', () => {
     expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
   })
 
-  it('扫描项直接智能分析创建该证券返回目标，显式返回 docked 后关闭会聚焦原按钮', async () => {
+  it('进入实时盯盘时不把历史选股自动打开为研究窗', async () => {
+    renderHarness({ initial: { selectedStockCode: '600519' } })
+    await waitForScan()
+
+    expect(screen.queryByRole('complementary', { name: '600519证券研究窗' })).toBeNull()
+    expect(screen.getByRole('button', { name: '打开贵州茅台研究' }).hasAttribute('aria-current')).toBe(false)
+    expect(screen.getByRole('button', { name: '打开 AI 研究助理' })).toBeTruthy()
+  })
+
+  it('扫描项直接智能分析不创建隐藏研究窗或恢复入口', async () => {
     const { prepareAssistant } = renderHarness()
     await waitForScan()
 
     const card = screen.getByRole('article', { name: '贵州茅台 600519' })
     const analyze = within(card).getByRole('button', { name: '智能分析' })
-    analyze.focus()
-    const focus = vi.spyOn(analyze, 'focus')
-    focus.mockClear()
     fireEvent.click(analyze)
+    await screen.findByTestId('assistant-panel')
 
     expect(prepareAssistant).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' }, 'general')
     expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' }).value).toContain('贵州茅台（600519）')
     expect(screen.getByTestId('assistant-panel').getAttribute('data-mode')).toBe('docked')
-    fireEvent.click(screen.getByRole('button', { name: '返回证券详情' }))
-    expect(researchSurface('贵州茅台').getAttribute('data-mode')).toBe('docked')
+    expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: '关闭研究窗' }))
-    flushAnimationFrames()
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
-    expect(document.activeElement).toBe(analyze)
+    fireEvent.click(screen.getByRole('button', { name: '关闭 AI 研究助理' }))
+    expect(screen.queryByRole('button', { name: '恢复贵州茅台研究窗' })).toBeNull()
+    expect(screen.queryByRole('complementary', { name: '贵州茅台证券研究窗' })).toBeNull()
   })
 
-  it('已有研究窗时扫描项直接分析另一证券，直接关闭 AI 后恢复新证券 minimized', async () => {
+  it('不同证券的智能分析在首个会话创建中会排队，不静默丢弃后续意图', async () => {
+    let releaseFirst: (() => void) | undefined
+    const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const { prepareAssistant } = renderHarness({
+      prepareAssistantGate: intent => intent.kind === 'stock' && intent.code === '600519'
+        ? firstPending
+        : Promise.resolve(),
+    })
+    await waitForScan()
+
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+    fireEvent.click(within(screen.getByRole('article', { name: '平安银行 000001' }))
+      .getByRole('button', { name: '智能分析' }))
+
+    expect(prepareAssistant).toHaveBeenCalledOnce()
+    releaseFirst?.()
+    await waitFor(() => {
+      expect(prepareAssistant).toHaveBeenCalledTimes(2)
+    })
+    expect(prepareAssistant).toHaveBeenLastCalledWith(
+      { kind: 'stock', code: '000001', name: '平安银行' },
+      'general',
+      'floating',
+    )
+  })
+
+  it('排队意图保留点击时的浮动表面归属，不被等待期间的主对话导航改写', async () => {
+    let releaseFirst: (() => void) | undefined
+    const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const { prepareAssistant } = renderHarness({
+      prepareAssistantGate: intent => intent.kind === 'stock' && intent.code === '600519'
+        ? firstPending
+        : Promise.resolve(),
+    })
+    await waitForScan()
+
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+    fireEvent.click(within(screen.getByRole('article', { name: '平安银行 000001' }))
+      .getByRole('button', { name: '智能分析' }))
+    fireEvent.click(screen.getByRole('button', { name: '外部进入我的投研' }))
+    releaseFirst?.()
+
+    await waitFor(() => { expect(prepareAssistant).toHaveBeenCalledTimes(2) })
+    expect(prepareAssistant).toHaveBeenLastCalledWith(
+      { kind: 'stock', code: '000001', name: '平安银行' },
+      'general',
+      'floating',
+    )
+  })
+
+  it('首个排队意图失败后，后续成功意图会清除旧错误并正常展示', async () => {
+    let rejectFirst: ((reason: Error) => void) | undefined
+    const firstPending = new Promise<void>((_resolve, reject) => { rejectFirst = reject })
+    renderHarness({
+      prepareAssistantGate: intent => intent.kind === 'stock' && intent.code === '600519'
+        ? firstPending
+        : Promise.resolve(),
+    })
+    await waitForScan()
+
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+    fireEvent.click(within(screen.getByRole('article', { name: '平安银行 000001' }))
+      .getByRole('button', { name: '智能分析' }))
+    rejectFirst?.(new Error('create failed'))
+
+    await waitFor(() => {
+      expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' }).value).toContain('平安银行（000001）')
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('已有研究窗时扫描项直接分析另一证券，关闭 AI 后不暂存任一研究窗', async () => {
     const { prepareAssistant } = renderHarness()
     await waitForScan()
     fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
 
     const nextCard = screen.getByRole('article', { name: '平安银行 000001' })
     const analyze = within(nextCard).getByRole('button', { name: '智能分析' })
-    analyze.focus()
-    const focus = vi.spyOn(analyze, 'focus')
-    focus.mockClear()
     fireEvent.click(analyze)
+    await screen.findByTestId('assistant-panel')
 
     expect(prepareAssistant).toHaveBeenCalledWith({ kind: 'stock', code: '000001', name: '平安银行' }, 'general')
     expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' }).value).toContain('平安银行（000001）')
     expect(screen.queryByRole('complementary', { name: '贵州茅台证券研究窗' })).toBeNull()
-    expect(screen.getByRole('button', { name: '返回证券详情' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '关闭 AI 研究助理' }))
-    fireEvent.click(screen.getByRole('button', { name: '恢复平安银行研究窗' }))
-    fireEvent.click(screen.getByRole('button', { name: '关闭研究窗' }))
-    flushAnimationFrames()
-    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
-    expect(document.activeElement).toBe(analyze)
+    expect(screen.queryByRole('button', { name: '恢复平安银行研究窗' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '恢复贵州茅台研究窗' })).toBeNull()
   })
 
   it('研究进入 AI 后显式返回同一证券 docked，先展示旧值并后台刷新已完成资源', async () => {
@@ -348,6 +447,7 @@ describe('Shell 右侧表面协调', () => {
     })
 
     fireEvent.click(screen.getByRole('button', { name: '带入智能分析' }))
+    await screen.findByRole('button', { name: '返回证券详情' })
     expect(screen.queryByRole('complementary', { name: '贵州茅台证券研究窗' })).toBeNull()
     expect(screen.getByRole('button', { name: '返回证券详情' })).toBeTruthy()
 
@@ -360,16 +460,18 @@ describe('Shell 右侧表面协调', () => {
     })
   })
 
-  it('研究进入 AI 后直接关闭恢复同一证券 minimized', async () => {
+  it('研究进入 AI 后直接关闭自动恢复同一证券 docked', async () => {
     renderHarness()
     await waitForScan()
     fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
     fireEvent.click(screen.getByRole('button', { name: '带入智能分析' }))
+    await screen.findByRole('button', { name: '返回证券详情' })
 
     fireEvent.click(screen.getByRole('button', { name: '关闭 AI 研究助理' }))
 
     expect(screen.queryByTestId('assistant-panel')).toBeNull()
-    expect(screen.getByRole('button', { name: '恢复贵州茅台研究窗' })).toBeTruthy()
+    expect(researchSurface('贵州茅台').getAttribute('data-mode')).toBe('docked')
+    expect(screen.queryByRole('button', { name: '恢复贵州茅台研究窗' })).toBeNull()
     expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
   })
 
@@ -512,6 +614,7 @@ describe('Shell 右侧表面协调', () => {
     pageScroll.scrollTop = 271
     fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
     fireEvent.click(screen.getByRole('button', { name: '带入智能分析' }))
+    await screen.findByRole('button', { name: '返回证券详情' })
     fireEvent.click(screen.getByRole('button', { name: '近全屏展开 AI 助理' }))
 
     fireEvent.click(screen.getByRole('button', { name: '返回证券详情' }))
@@ -547,23 +650,24 @@ describe('Shell 右侧表面协调', () => {
   it.each([
     ['直接关闭', '关闭 AI 研究助理'],
     ['外部关闭', '外部关闭 AI'],
-  ] as const)('移动端 expanded AI %s 后恢复 minimized 且不遗留 modal 资源', async (_, closerName) => {
+  ] as const)('移动端 expanded AI %s 后自动恢复研究窗且不遗留 AI modal 资源', async (_, closerName) => {
     renderHarness({ mobile: true })
     await waitForScan()
     const workbench = document.querySelector('main')
     if (workbench === null) throw new Error('真实工作台不存在')
     fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
     fireEvent.click(screen.getByRole('button', { name: '带入智能分析' }))
+    await screen.findByRole('button', { name: '返回证券详情' })
     fireEvent.click(screen.getByRole('button', { name: '近全屏展开 AI 助理' }))
     expect(workbench.getAttribute('aria-hidden')).toBe('true')
 
     fireEvent.click(screen.getByRole('button', { name: closerName }))
 
-    expect(screen.getByRole('button', { name: '恢复贵州茅台研究窗' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '打开 AI 研究助理' }).dataset.placement).toBe('research-minimized')
-    expect(document.body.style.overflow).toBe('')
-    expect(workbench.hasAttribute('inert')).toBe(false)
-    expect(workbench.hasAttribute('aria-hidden')).toBe(false)
+    expect(screen.queryByRole('button', { name: '恢复贵州茅台研究窗' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '贵州茅台证券研究窗' })).toBeTruthy()
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(workbench.inert).toBe(true)
+    expect(workbench.getAttribute('aria-hidden')).toBe('true')
   })
 
   it('移动端完整往返保留滚动、锁与原触发焦点，AI 切换时不抢回背景', async () => {
@@ -584,6 +688,7 @@ describe('Shell 右侧表面协调', () => {
     expect(workbench.getAttribute('aria-hidden')).toBe('true')
 
     fireEvent.click(screen.getByRole('button', { name: '带入智能分析' }))
+    await screen.findByRole('button', { name: '返回证券详情' })
     flushAnimationFrames()
     expect(document.activeElement).not.toBe(trigger)
     expect(screen.getByTestId('assistant-panel')).toBeTruthy()

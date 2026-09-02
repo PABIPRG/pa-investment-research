@@ -20,6 +20,101 @@ function renderStrategyPage(
 }
 
 describe('策略研究产品事实与确认流程', () => {
+  it('生命周期按所选策略证据高亮，并为每个阶段提供可操作入口', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return {
+          items: [{
+            id: 'strategy-with-backtest', name: '已回测候选', status: 'candidate',
+            verification_status: 'pending', backtest: { out_of_sample: { n_evaluated: 6 } },
+          }],
+        }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+    const props = {
+      requestData: requestData as never,
+      selectedStrategyId: 'strategy-with-backtest',
+      onSelectStrategy: () => {},
+      onOpenShadow: () => {},
+      onOpenReports: () => {},
+      onAnalyze: () => {},
+    }
+
+    const view = render(<StrategyResearchPage {...props} />)
+    await screen.findByText('已回测候选')
+
+    const lifecycle = screen.getByRole('navigation', { name: '策略生命周期步骤' })
+    const formation = within(lifecycle).getByRole('button', { name: /1.*事件形成假设/u })
+    const backtest = within(lifecycle).getByRole('button', { name: /2.*样本外回测/u })
+    expect(within(lifecycle).getByRole('button', { name: /3.*影子验证/u })).toBeTruthy()
+    expect(within(lifecycle).getByRole('button', { name: /4.*进化诊断/u })).toBeTruthy()
+    expect(formation.hasAttribute('aria-current')).toBe(false)
+    expect(backtest.getAttribute('aria-current')).toBe('step')
+
+    const lifecycleHelp = [
+      [formation, '从真实市场事件形成候选；点击查看全部候选。'],
+      [backtest, '候选产生回测证据后进入；点击筛选待验证策略。'],
+      [within(lifecycle).getByRole('button', { name: /3.*影子验证/u }), '回测通过并激活后进入；点击打开纸面账户验证。'],
+      [within(lifecycle).getByRole('button', { name: /4.*进化诊断/u }), '影子验证积累证据后查看判定；进入前需先选择策略。'],
+    ] as const
+    for (const [button, help] of lifecycleHelp) {
+      fireEvent.mouseEnter(button)
+      const tooltip = screen.getByRole('tooltip')
+      expect(tooltip.textContent).toBe(help)
+      expect(tooltip.style.position).toBe('absolute')
+      expect(button.getAttribute('aria-describedby')).toBe(tooltip.id)
+      fireEvent.mouseLeave(button)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+    }
+
+    fireEvent.focus(backtest)
+    expect(screen.getByRole('tooltip').textContent).toContain('候选产生回测证据后进入')
+    fireEvent.blur(backtest)
+
+    fireEvent.click(backtest)
+    expect(screen.getByRole('button', { name: '未验证 1' }).getAttribute('aria-pressed')).toBe('true')
+
+    view.rerender(<StrategyResearchPage {...props} selectedStrategyId="" />)
+    expect(lifecycle.querySelector('[aria-current="step"]')).toBeNull()
+  })
+
+  it('策略归档需要二次确认，确认后以 retire 迁移并进入已归档分类', async () => {
+    let archived = false
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return {
+          items: [{
+            id: 'strategy-to-archive', name: '待归档策略',
+            status: archived ? 'retired' : 'active',
+            verification_status: archived ? 'archived' : 'passed',
+          }],
+        }
+      }
+      if (request.operation === 'trading-core.strategy-transition') {
+        archived = true
+        return { id: 'strategy-to-archive', status: 'retired', verification_status: 'archived' }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    const card = (await screen.findByText('待归档策略')).closest('article')
+    expect(card).not.toBeNull()
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '归档' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '归档策略' })
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.strategy-transition')).toBe(false)
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认归档' }))
+
+    await screen.findByText('策略已归档，历史证据仍可在“已归档”中查看。')
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'trading-core.strategy-transition',
+      input: { strategy_id: 'strategy-to-archive', action: 'retire' },
+    })
+    expect(screen.getByRole('button', { name: '已归档 1' })).toBeTruthy()
+  })
+
   it('查看详情只打开临时内容，后续策略动作才选择工作对象', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.strategies') {
@@ -286,7 +381,9 @@ describe('策略研究产品事实与确认流程', () => {
       screen.getByText('可回测策略').closest('article') as HTMLElement,
     ).getByRole('button', { name: '运行回测' })
     // 等待回测结束后按钮重新可用（回测中按钮会消失并置为 disabled）
-    const awaitIdle = async () => { await waitFor(() => expect((runButton() as HTMLButtonElement).disabled).toBe(false)) }
+    const awaitIdle = async () => {
+      await waitFor(() => { expect((runButton() as HTMLButtonElement).disabled).toBe(false) })
+    }
 
     // 默认 2 年
     fireEvent.click(runButton())

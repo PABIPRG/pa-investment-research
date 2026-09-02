@@ -58,7 +58,7 @@ function renderHarness(
     const setAssistantMode = (assistantMode: AssistantDisplayMode): void => {
       setSnapshot(current => ({ ...current, assistantMode }))
     }
-    const openAssistant = (intent: AssistantIntent, module: AssistantModule = 'general'): void => {
+    const openAssistant = async (intent: AssistantIntent, module: AssistantModule = 'general'): Promise<void> => {
       prepareAssistant(intent, module)
       setComposerDraft(assistantPrompt(intent))
       setSnapshot(current => ({

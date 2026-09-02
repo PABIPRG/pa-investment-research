@@ -126,16 +126,139 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'ui-investment-research: implicit first session')
 
-  const navigate = (route: InvestmentRoute, context: InvestmentNavigationContext = {}): void => {
-    state.navigate(route, context)
-    ctx.layout.closeDetails()
-  }
-
   const setDraft = (sessionId: SessionId, prompt: string): boolean => {
     const scope = ctx.sessions.scope(sessionId)
     if (scope === undefined) return false
     ctx.conversation.input.for(scope).setDraft(prompt)
     return true
+  }
+
+  const openConversationSession = async (sessionId: SessionId): Promise<void> => {
+    ctx.sessions.open(sessionId)
+    const binding = ctx.sessions.binding(sessionId)
+    if (binding === undefined) throw new Error(`unknown session "${sessionId}"`)
+    const session = binding.session
+    const current = session.getSnapshot()
+    if (current.openState === 'open') return
+    if (current.openState === 'error') {
+      throw new Error(current.openError?.message ?? 'session open failed')
+    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      let unsubscribe = (): void => {}
+      let timeout = 0
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timeout)
+        unsubscribe()
+        if (error === undefined) resolve()
+        else reject(error)
+      }
+      const check = (): void => {
+        const snapshot = session.getSnapshot()
+        if (snapshot.openState === 'open') finish()
+        else if (snapshot.openState === 'error') {
+          finish(new Error(snapshot.openError?.message ?? 'session open failed'))
+        }
+      }
+      unsubscribe = session.subscribe(check)
+      timeout = window.setTimeout(() => { finish(new Error('session open timed out')) }, 20_000)
+      check()
+    })
+  }
+
+  let floatingAssistantSessionId: SessionId | undefined
+  let primaryAssistantSessionId: SessionId | undefined
+  let activeConversationSurface: 'floating' | 'primary' = 'floating'
+  let navigationGeneration = 0
+  let conversationSwitchRunning = false
+  let pendingNavigation: {
+    readonly generation: number
+    readonly route: InvestmentRoute
+    readonly context: InvestmentNavigationContext
+    readonly surface: 'floating' | 'primary'
+  } | undefined
+
+  const sessionForSurface = (surface: 'floating' | 'primary'): SessionId | undefined => (
+    surface === 'primary' ? primaryAssistantSessionId : floatingAssistantSessionId
+  )
+
+  const rememberSurfaceSession = (surface: 'floating' | 'primary', sessionId: SessionId): void => {
+    if (surface === 'primary') primaryAssistantSessionId = sessionId
+    else floatingAssistantSessionId = sessionId
+  }
+
+  const restoreActiveSurfaceAfter = async (
+    sourceSurface: 'floating' | 'primary',
+    sourceSessionId: SessionId,
+  ): Promise<void> => {
+    rememberSurfaceSession(sourceSurface, sourceSessionId)
+    if (activeConversationSurface === sourceSurface) return
+    const activeSessionId = sessionForSurface(activeConversationSurface)
+    if (activeSessionId !== undefined && ctx.sessions.list.getSnapshot().current !== activeSessionId) {
+      await openConversationSession(activeSessionId)
+    }
+  }
+
+  const ensureConversationSurface = async (nextSurface: 'floating' | 'primary'): Promise<void> => {
+    let target = sessionForSurface(nextSurface)
+    const current = ctx.sessions.list.getSnapshot().current
+    if (nextSurface !== activeConversationSurface && current !== undefined && current !== target) {
+      rememberSurfaceSession(activeConversationSurface, current)
+    }
+
+    if (target !== undefined) {
+      if (current !== target) await openConversationSession(target)
+      return
+    }
+
+    if (nextSurface === 'floating') {
+      if (current !== undefined) floatingAssistantSessionId = current
+      return
+    }
+
+    target = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
+    if (target === undefined || !setDraft(target, '')) {
+      throw new Error('investment primary conversation session is unavailable')
+    }
+    primaryAssistantSessionId = target
+  }
+
+  const flushPendingNavigation = (): void => {
+    if (conversationSwitchRunning) return
+    conversationSwitchRunning = true
+    void (async () => {
+      while (pendingNavigation !== undefined) {
+        const request = pendingNavigation
+        pendingNavigation = undefined
+        try {
+          await ensureConversationSurface(request.surface)
+        } catch (reason) {
+          console.warn('investment conversation surface switch failed:', reason)
+          continue
+        }
+        if (request.generation !== navigationGeneration) continue
+        activeConversationSurface = request.surface
+        state.navigate(request.route, request.context)
+        ctx.layout.closeDetails()
+      }
+    })().finally(() => {
+      conversationSwitchRunning = false
+      if (pendingNavigation !== undefined) flushPendingNavigation()
+    })
+  }
+
+  const navigate = (route: InvestmentRoute, context: InvestmentNavigationContext = {}): void => {
+    const generation = ++navigationGeneration
+    const nextSurface = route === 'portfolio' ? 'primary' : 'floating'
+    if (!conversationSwitchRunning && nextSurface === activeConversationSurface) {
+      state.navigate(route, context)
+      ctx.layout.closeDetails()
+      return
+    }
+    pendingNavigation = { generation, route, context, surface: nextSurface }
+    flushPendingNavigation()
   }
 
   const applyModulePromptToBlankDraft = (module: AssistantModule): void => {
@@ -154,7 +277,11 @@ export function apply(ctx: ClientContext): void {
     applyModulePromptToBlankDraft(module)
   }
 
-  const prepareAssistant = (intent: AssistantIntent, moduleOverride?: AssistantModule): void => {
+  const prepareAssistant = async (
+    intent: AssistantIntent,
+    moduleOverride?: AssistantModule,
+    sourceSurfaceOverride?: 'floating' | 'primary',
+  ): Promise<void> => {
     const currentRoute = state.getSnapshot().route
     const surface: LocalTelemetrySurface = currentRoute === 'stock-detail'
       ? 'stock_detail'
@@ -218,36 +345,18 @@ export function apply(ctx: ClientContext): void {
         : intent.kind === 'strategy' || intent.kind === 'shadow' || intent.kind === 'evolution' ? 'strategy'
           : intent.kind === 'watch' ? 'watch'
             : intent.kind === 'industry' ? 'industry' : 'general')
-    state.openAssistant(module)
-    ctx.layout.closeDetails()
-    const current = ctx.sessions.list.getSnapshot().current
-    if (current !== undefined && setDraft(current, prompt)) return
-
     cancelPendingDraft?.()
-    let settled = false
-    let timer = 0
-    let unsubscribe = (): void => {}
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timer)
-      unsubscribe()
-      cancelPendingDraft = undefined
+    cancelPendingDraft = undefined
+    const sourceSurface = sourceSurfaceOverride ?? activeConversationSurface
+    const fresh = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
+    if (fresh === undefined || !setDraft(fresh, prompt)) {
+      throw new Error('investment assistant fresh session is unavailable')
     }
-    const tryApply = (): void => {
-      const next = ctx.sessions.list.getSnapshot().current
-      if (next !== undefined && setDraft(next, prompt)) finish()
+    await restoreActiveSurfaceAfter(sourceSurface, fresh)
+    if (activeConversationSurface === sourceSurface) {
+      state.openAssistant(module)
+      ctx.layout.closeDetails()
     }
-    unsubscribe = ctx.sessions.list.subscribe(tryApply)
-    timer = window.setTimeout(finish, 8_000)
-    cancelPendingDraft = finish
-    void ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
-      .then(tryApply)
-      .catch((reason: unknown) => {
-        console.warn('investment assistant session failed:', reason)
-        finish()
-      })
-    tryApply()
   }
 
   const shared = {
@@ -268,46 +377,36 @@ export function apply(ctx: ClientContext): void {
     setModuleDraft: (key: InvestmentDraftKey, value: string) => { state.setDraft(key, value) },
     selectStrategy: (strategyId) => { state.selectStrategy(strategyId) },
     startSession: async () => {
+      const sourceSurface = activeConversationSurface
       cancelPendingDraft?.()
       cancelPendingDraft = undefined
       state.setAssistantModule('general')
       state.openAssistant('general')
       const fresh = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
-      if (fresh !== undefined) setDraft(fresh, '')
+      if (fresh !== undefined) {
+        setDraft(fresh, '')
+        await restoreActiveSurfaceAfter(sourceSurface, fresh)
+      }
     },
     openSession: async (sessionId) => {
-      ctx.sessions.open(sessionId)
-      const binding = ctx.sessions.binding(sessionId)
-      if (binding === undefined) throw new Error(`unknown session "${sessionId}"`)
-      const session = binding.session
-      const current = session.getSnapshot()
-      if (current.openState === 'open') return
-      if (current.openState === 'error') {
-        throw new Error(current.openError?.message ?? 'session open failed')
-      }
-      await new Promise<void>((resolve, reject) => {
-        let settled = false
-        let unsubscribe = (): void => {}
-        let timeout = 0
-        const finish = (error?: Error): void => {
-          if (settled) return
-          settled = true
-          window.clearTimeout(timeout)
-          unsubscribe()
-          if (error === undefined) resolve()
-          else reject(error)
-        }
-        const check = (): void => {
-          const snapshot = session.getSnapshot()
-          if (snapshot.openState === 'open') finish()
-          else if (snapshot.openState === 'error') {
-            finish(new Error(snapshot.openError?.message ?? 'session open failed'))
+      const sourceSurface = activeConversationSurface
+      const sourceSessionId = ctx.sessions.list.getSnapshot().current
+      try {
+        await openConversationSession(sessionId)
+        await restoreActiveSurfaceAfter(sourceSurface, sessionId)
+      } catch (reason) {
+        const restoreSessionId = activeConversationSurface === sourceSurface
+          ? sourceSessionId
+          : sessionForSurface(activeConversationSurface)
+        if (restoreSessionId !== undefined && ctx.sessions.list.getSnapshot().current !== restoreSessionId) {
+          try {
+            await openConversationSession(restoreSessionId)
+          } catch (restoreReason) {
+            console.warn('investment conversation session restore failed:', restoreReason)
           }
         }
-        unsubscribe = session.subscribe(check)
-        timeout = window.setTimeout(() => { finish(new Error('session open timed out')) }, 20_000)
-        check()
-      })
+        throw reason
+      }
     },
     searchSessions: async (query, signal) => {
       const result = await ctx.sessions.search(query, signal)

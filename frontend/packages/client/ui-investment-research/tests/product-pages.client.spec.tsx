@@ -122,6 +122,112 @@ describe('投研产品闭环', () => {
     expect(screen.queryByText(/正式结果已进入投研报告/)).toBeNull()
   })
 
+  it('影子验证用范围说明展示全部生效策略，不再伪装成可点击流程', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.shadow-status') return {}
+      if (request.operation === 'trading-core.shadow-positions') return { items: [] }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+    />)
+
+    const scope = await screen.findByLabelText('当前影子验证范围')
+    expect(within(scope).getByText('全部生效策略')).toBeTruthy()
+    expect(within(scope).getByText('每条生效策略独立使用纸面账户记账')).toBeTruthy()
+    expect(screen.queryByLabelText('当前验证对象')).toBeNull()
+  })
+
+  it('纸面持仓展示证券与策略名称，并可进入个股详情', async () => {
+    const onOpenStock = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.shadow-status') {
+        return { trade_date: '2026-08-28', strategy_count: 1, ran_at: '2026-08-28 14:00:32', overall_nav: 1 }
+      }
+      if (request.operation === 'trading-core.shadow-positions') {
+        return { items: [{ strategy_id: 'strat-1', symbol: '600101', qty: 100, avg_cost: 12.5 }] }
+      }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      if (request.operation === 'market-watch.security-search') {
+        expect(request.input).toEqual({ query: '600101', limit: 8 })
+        return { items: [{ code: '600101', name: '明星电力' }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      strategyNames={{ 'strat-1': '电力事件策略' }}
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+      onOpenStock={onOpenStock}
+    />)
+
+    const position = await screen.findByRole('button', { name: '查看明星电力 · 600101个股详情' })
+    expect(position.textContent).toContain('600101 · 电力事件策略')
+    expect(position.textContent).toContain('100 股')
+    expect(position.textContent).toContain('成本 ¥12.50')
+    fireEvent.click(position)
+    expect(onOpenStock).toHaveBeenCalledWith('600101')
+  })
+
+  it('已选策略时明确区分全局运行摘要与单策略证据', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.shadow-status') {
+        return { trade_date: '2026-08-28', strategy_count: 3, ran_at: '2026-08-28 14:00:32', overall_nav: 1.08 }
+      }
+      if (request.operation === 'trading-core.shadow-positions') return { items: [] }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId="strat-1"
+      strategyNames={{ 'strat-1': '电力事件策略' }}
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+    />)
+
+    expect(await screen.findByRole('region', { name: '全部策略最近运行' })).toBeTruthy()
+    expect(screen.getByText('下方持仓与净值仅展示“电力事件策略”')).toBeTruthy()
+  })
+
+  it('证券代码缺失的纸面持仓不可点击', async () => {
+    const onOpenStock = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.shadow-status') return {}
+      if (request.operation === 'trading-core.shadow-positions') {
+        return { items: [{ strategy_id: 'strat-1', symbol: '', qty: 10, avg_cost: 12.5 }] }
+      }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      strategyNames={{ 'strat-1': '无代码策略' }}
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+      onOpenStock={onOpenStock}
+    />)
+
+    expect(await screen.findByText('证券代码缺失')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /无代码策略.*个股详情/u })).toBeNull()
+    expect(onOpenStock).not.toHaveBeenCalled()
+  })
+
   it('影子首屏未返回真实数据前不伪造等待状态或零持仓', () => {
     const requestData = vi.fn(() => new Promise(() => {}))
     const view = render(<ShadowValidationPage
@@ -656,7 +762,7 @@ describe('投研产品闭环', () => {
           searchSessions={() => Promise.resolve([])}
           renameSession={() => Promise.resolve()}
           archiveSession={() => Promise.resolve()}
-          prepareAssistant={() => {}}
+          prepareAssistant={async () => {}}
           toggleTheme={() => {}}
         />
       </>
@@ -710,6 +816,22 @@ describe('投研产品闭环', () => {
         return { items: [{ code: '600519', name: '贵州茅台', industry: '白酒', exchange: 'SH', is_subject: true }], count: 1 }
       }
       if (request.operation === 'industry-chain.chain') {
+        if (request.input?.code === '600000') {
+          return {
+            center: {
+              id: 'cn-600000', code: '600000', name: '高粱供应商', industry: '农业',
+              material_count: 4, supplier_count: 6, product_count: 3, customer_count: 5,
+            },
+            up_levels: [{
+              level: -1,
+              nodes: [{ id: 'seed-1', code: '000998', expandable: true, name: '种业公司', share: 22, type: 'direct', via: '高粱种子', note: '上游种源供应' }],
+            }],
+            down_levels: [{
+              level: 1,
+              nodes: [{ id: 'cn-600519', code: '600519', expandable: true, name: '贵州茅台', share: 18, type: 'direct', via: '高粱', note: '核心原料采购方' }],
+            }],
+          }
+        }
         return {
           center: {
             id: 'cn-600519', code: '600519', name: '贵州茅台', industry: '白酒',
@@ -723,6 +845,25 @@ describe('投研产品闭环', () => {
             level: 1,
             nodes: [{ id: 'customer-1', code: null, expandable: false, name: '经销渠道', share: 12, type: 'direct', via: '高端白酒', note: null }],
           }],
+        }
+      }
+      if (request.operation === 'industry-chain.entity') {
+        if (request.input?.key === '600000') {
+          return {
+            code: '600000', name: '高粱供应商', industry: '农业', market_cap_display: '420 亿元',
+            supplier_count: 6, customer_count: 5, metrics: [{ label: '产能', value: '80 万吨' }],
+          }
+        }
+        if (request.input?.key === 'customer-1') {
+          return {
+            id: 'customer-1', name: '经销渠道', appearance_count: 9,
+            as_customer: [{ company_code: '600519', company_name: '贵州茅台', item: '高端白酒', share: 12, type: 'direct' }],
+            as_supplier: [], metrics: [{ label: '覆盖区域', value: '31 省' }], related: [],
+          }
+        }
+        return {
+          code: '600519', name: '贵州茅台', industry: '白酒', market_cap_display: '2.1 万亿元',
+          supplier_count: 5, customer_count: 4, metrics: [{ label: '毛利率', value: '91.2%' }],
         }
       }
       if (request.operation === 'trading-core.personalized-impact') {
@@ -766,22 +907,62 @@ describe('投研产品闭环', () => {
     })
     fireEvent.click(await screen.findByRole('button', { name: /^贵州茅台/ }))
     await waitFor(() => {
-      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.chain', input: { code: '600519' } })
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'industry-chain.chain',
+        input: { code: '600519', depth_up: 3, depth_down: 3, top_up: 5, top_down: 5 },
+      })
     })
-    expect(await screen.findByText('高粱供应商')).toBeTruthy()
-    expect(screen.getByText('经销渠道')).toBeTruthy()
-    expect(screen.getByText('高端白酒')).toBeTruthy()
-    expect(screen.getByText('上游第 1 层')).toBeTruthy()
+    expect((await screen.findAllByText('高粱供应商')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('经销渠道').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/高端白酒/u).length).toBeGreaterThan(0)
+    expect(screen.getByLabelText('小窗可缩放、可拖动节点的产业链物理图谱')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '高粱供应商 600000，上游第 1 层' })).toBeTruthy()
+    expect(await screen.findByText('91.2%')).toBeTruthy()
+    const compactGraph = screen.getByLabelText('小窗可缩放、可拖动节点的产业链物理图谱')
+    fireEvent.click(screen.getByRole('button', { name: '放大图谱' }))
+    const compactTransform = await waitFor(() => {
+      const transform = compactGraph.querySelector(':scope > g')?.getAttribute('transform')
+      expect(transform).toBeTruthy()
+      return transform
+    })
     fireEvent.click(screen.getByRole('button', { name: '放大查看' }))
     expect(screen.getByRole('dialog', { name: '贵州茅台 · 600519' })).toBeTruthy()
-    expect(screen.getByLabelText('可缩放、可拖动节点的产业链物理图谱')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /高粱供应商上游 · 600000/ }))
+    const expandedGraph = screen.getByLabelText('可缩放、可拖动节点的产业链物理图谱')
+    expect(expandedGraph.querySelector(':scope > g')?.getAttribute('transform')).toBe(compactTransform)
+    const capturePointer = vi.fn()
+    Object.defineProperty(expandedGraph, 'setPointerCapture', {
+      configurable: true,
+      value: capturePointer,
+    })
+    fireEvent.pointerDown(screen.getByRole('button', { name: '贵州茅台 600519，当前视角' }), {
+      button: 0,
+      pointerId: 11,
+    })
+    expect(capturePointer).not.toHaveBeenCalled()
+    const canvasTransform = expandedGraph.querySelector(':scope > g')?.getAttribute('transform')
+    const supplierTransform = screen.getByRole('button', { name: '高粱供应商 600000，上游第 1 层' })
+      .getAttribute('transform')
+    expect(screen.getByLabelText('产业链视角与已加载路径')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看节点详情：高粱供应商 600000' }))
+    expect(screen.getByRole('dialog', { name: '高粱供应商 · 600000' })).toBeTruthy()
+    expect(expandedGraph.querySelector(':scope > g')?.getAttribute('transform')).toBe(canvasTransform)
+    expect(screen.getByRole('button', { name: '高粱供应商 600000，当前视角' }).getAttribute('transform'))
+      .toBe(supplierTransform)
+    expect(screen.getByText('上下游以此节点为起点')).toBeTruthy()
+    expect(await screen.findByText('80 万吨')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '展开上游完整链路' }))
     await waitFor(() => {
-      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.chain', input: { code: '600000' } })
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'industry-chain.chain',
+        input: { code: '600000', depth_up: 3, depth_down: 3, top_up: 5, top_down: 5 },
+      })
     })
     expect(screen.getByRole('button', { name: '高粱供应商' }).getAttribute('aria-current')).toBe('page')
+    const expandedTransformBeforeClose = expandedGraph.querySelector(':scope > g')?.getAttribute('transform')
     fireEvent.click(screen.getByRole('button', { name: '关闭' }))
     expect(screen.queryByRole('dialog', { name: '贵州茅台 · 600519' })).toBeNull()
+    expect(screen.getByLabelText('小窗可缩放、可拖动节点的产业链物理图谱')
+      .querySelector(':scope > g')?.getAttribute('transform')).toBe(expandedTransformBeforeClose)
     fireEvent.click(await screen.findByRole('button', { name: '查看圣达生物 · 603079个股详情' }))
     expect(onOpenStock).toHaveBeenCalledWith('603079')
     expect(await screen.findByRole('button', { name: '查看天元宠物 · 301335个股详情' })).toBeTruthy()
@@ -801,7 +982,7 @@ describe('投研产品闭环', () => {
     />)
     expect(await screen.findByText('2026-08-26 15:30:00')).toBeTruthy()
     expect(screen.getByText('已完成')).toBeTruthy()
-    expect(screen.getByText('100')).toBeTruthy()
+    expect(screen.getByText('100 股')).toBeTruthy()
   })
 
   it('产业链搜索复用全市场证券目录，并为无图谱证券提供个股入口', async () => {
@@ -832,6 +1013,73 @@ describe('投研产品闭环', () => {
     expect(screen.getByText('暂无产业链图谱 · 查看个股')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /沪深300ETF.*510300/ }))
     expect(onOpenStock).toHaveBeenCalledWith('510300')
+  })
+
+  it('小窗物理图可查看实体关系、继续上下钻并通过已加载路径返回', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'industry-chain.data-status') {
+        return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000 }
+      }
+      if (request.operation === 'industry-chain.stats') return { subject_count: 3, total_nodes: 3, total_edges: 2, relationships: 1 }
+      if (request.operation === 'industry-chain.companies') {
+        return { items: [{ code: '600519', name: '贵州茅台', industry: '白酒' }] }
+      }
+      if (request.operation === 'market-watch.security-search') return { items: [] }
+      if (request.operation === 'trading-core.personalized-impact') return { events: [] }
+      if (request.operation === 'industry-chain.entity') {
+        return {
+          code: '600000', name: '高粱供应商', industry: '农业', market_cap_display: '420 亿元',
+          supplier_count: 6, customer_count: 5,
+          as_supplier: [{ company_code: '601111', company_name: '下游客户', item: '高粱', share: 16 }],
+          as_customer: [{ company_code: '000998', company_name: '种业公司', item: '种子', share: 8 }],
+          metrics: [{ label: '产能', value: '80 万吨' }],
+        }
+      }
+      if (request.operation === 'industry-chain.chain') {
+        const code = typeof request.input?.code === 'string' ? request.input.code : ''
+        if (code === '601111') {
+          return { center: { code, name: '下游客户', industry: '食品' }, up_levels: [], down_levels: [] }
+        }
+        return {
+          center: { code: '600519', name: '贵州茅台', industry: '白酒' },
+          up_levels: [{ level: -1, nodes: [{ id: 'supplier-1', code: '600000', name: '高粱供应商', via: '高粱', type: 'direct', share: 18 }] }],
+          down_levels: [],
+        }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<IndustryChainPage
+      requestData={requestData as never}
+      query="600519"
+      onQuery={() => {}}
+      onAnalyze={() => {}}
+      onOpenStock={() => {}}
+    />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /^贵州茅台/u }))
+    const supplier = await screen.findByRole('button', { name: '查看节点详情：高粱供应商 600000' })
+    fireEvent.click(supplier)
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.entity', input: { key: '600000' } })
+    })
+    const relations = await screen.findByRole('region', { name: '实体关联公司' })
+    expect(screen.getByText('80 万吨')).toBeTruthy()
+    fireEvent.click(within(relations).getByRole('button', { name: /下游客户.*下钻/u }))
+
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'industry-chain.chain',
+        input: { code: '601111', depth_up: 3, depth_down: 3, top_up: 5, top_down: 5 },
+      })
+    })
+    const path = screen.getByRole('navigation', { name: '产业链视角与已加载路径' })
+    expect(within(path).getByRole('button', { name: '下游客户' }).getAttribute('aria-current')).toBe('page')
+    fireEvent.click(within(path).getByRole('button', { name: '贵州茅台' }))
+    expect(within(path).getByRole('button', { name: '贵州茅台' }).getAttribute('aria-current')).toBe('page')
+    expect(requestData.mock.calls.filter(([request]) => (
+      request.operation === 'industry-chain.chain' && request.input?.code === '600519'
+    ))).toHaveLength(1)
   })
 
   it('影子验证切页后停止长任务轮询且不再读取结果', async () => {

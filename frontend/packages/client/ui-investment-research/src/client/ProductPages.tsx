@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type {
+  PointerEvent as ReactPointerEvent, ReactNode, SetStateAction, WheelEvent as ReactWheelEvent,
+} from 'react'
 import { createPortal } from 'react-dom'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
+import { useSecurityNames } from './security-names.ts'
 import { StrategyEvolutionDiagnostics } from './StrategyEvolutionDiagnostics.tsx'
 import type { StrategyResearchStage } from './state.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
@@ -332,6 +335,7 @@ function reportTimeLabel(value: unknown): string {
 
 type StrategyCategory = 'verified' | 'unverified' | 'failed' | 'archived'
 type StrategyFilter = 'all' | StrategyCategory
+type LifecycleHelpStage = 1 | 2 | 3 | 4
 
 const STRATEGY_CATEGORY_LABELS: Record<StrategyFilter, string> = {
   all: '全部',
@@ -339,6 +343,13 @@ const STRATEGY_CATEGORY_LABELS: Record<StrategyFilter, string> = {
   unverified: '未验证',
   failed: '验证未通过',
   archived: '已归档',
+}
+
+const LIFECYCLE_HELP: Record<LifecycleHelpStage, string> = {
+  1: '从真实市场事件形成候选；点击查看全部候选。',
+  2: '候选产生回测证据后进入；点击筛选待验证策略。',
+  3: '回测通过并激活后进入；点击打开纸面账户验证。',
+  4: '影子验证积累证据后查看判定；进入前需先选择策略。',
 }
 
 function strategyCategory(item: Record<string, unknown>): StrategyCategory {
@@ -626,6 +637,43 @@ function StrategyDetailDialog({
   )
 }
 
+function ArchiveStrategyDialog({
+  item, busy, onClose, onConfirm,
+}: {
+  item: Record<string, unknown>
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const id = text(item.id, '未返回')
+  return (
+    <DetailDialog
+      title="归档策略"
+      description="归档后将停止后续回测、影子验证与推荐，但会保留历史证据和投研记录。"
+      eyebrow="需要二次确认"
+      closeDisabled={busy}
+      onClose={onClose}
+      actions={<>
+        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" className={css.dangerButton} disabled={busy} onClick={onConfirm}>
+          {busy ? '归档中…' : '确认归档'}
+        </button>
+      </>}
+    >
+      <p>策略：<strong>{strategyTargetLabel(item, {})}</strong></p>
+      <p className={css.detailFootnote}>策略标识：{id}</p>
+    </DetailDialog>
+  )
+}
+
+function strategyLifecycleStage(item: Record<string, unknown>): StrategyResearchStage {
+  const status = text(item.status, '')
+  if (strategyCategory(item) === 'archived' || status === 'watch' || status === 'retired') return 'evolution'
+  if (status === 'active') return 'shadow'
+  if (Object.keys(asRecord(item.backtest)).length > 0) return 'backtest'
+  return 'form'
+}
+
 interface StrategyResearchPageProps {
   readonly requestData: InvestmentRequestData
   readonly selectedStrategyId: string
@@ -635,6 +683,7 @@ interface StrategyResearchPageProps {
   readonly onAnalyze: (intent: AssistantIntent) => void
   readonly initialView?: 'pool' | 'shadow'
   readonly onOpenEvolution?: () => void
+  readonly onOpenStock?: (code: string) => void
   readonly initialStage?: StrategyResearchStage
   readonly onBackEvolution?: () => void
 }
@@ -643,7 +692,9 @@ export const STRATEGY_EVOLUTION_HANDOFF_KEY = 'dsh.investment.strategy-evolution
 
 function evolutionHandoffSuppressed(): boolean {
   try {
-    return JSON.parse(window.localStorage.getItem(STRATEGY_EVOLUTION_HANDOFF_KEY) ?? 'null')?.suppressed === true
+    return asRecord(JSON.parse(
+      window.localStorage.getItem(STRATEGY_EVOLUTION_HANDOFF_KEY) ?? 'null',
+    )).suppressed === true
   } catch {
     return false
   }
@@ -652,7 +703,8 @@ function evolutionHandoffSuppressed(): boolean {
 /** Event hypotheses, evidence and lifecycle decisions backed by the strategy store. */
 export function StrategyResearchPage({
   requestData, selectedStrategyId, onSelectStrategy, onOpenShadow, onOpenReports, onAnalyze,
-  initialView = 'pool', onOpenEvolution = () => {}, initialStage = 'form', onBackEvolution = onOpenEvolution,
+  initialView = 'pool', onOpenEvolution = () => {}, onOpenStock = () => {},
+  initialStage = 'form', onBackEvolution = onOpenEvolution,
 }: StrategyResearchPageProps) {
   const strategies = useDataResource(requestData)
   const alive = useAliveRef()
@@ -665,8 +717,10 @@ export function StrategyResearchPage({
   const [filter, setFilter] = useState<StrategyFilter>('all')
   const [backtestYears, setBacktestYears] = useState<number>(2)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
+  const [archiveItem, setArchiveItem] = useState<Record<string, unknown>>()
   const [hypothesisPreview, setHypothesisPreview] = useState<StrategyHypothesisPreview>()
   const [hypothesisStatus, setHypothesisStatus] = useState('')
+  const [lifecycleHelpStage, setLifecycleHelpStage] = useState<LifecycleHelpStage>()
   useEffect(() => { setView(initialStage === 'evolution' ? 'evolution' : initialView) }, [initialStage, initialView])
   const load = useCallback(() => {
     strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
@@ -704,6 +758,11 @@ export function StrategyResearchPage({
     })()
     return () => { requestState.cancelled = true }
   }, [requestData, unresolvedSymbolKey])
+  const strategyNames = Object.fromEntries(items.map((item, index) => {
+    const id = text(item.id, `strategy-${index}`)
+    const target = strategyTargetLabel(item, securityNames)
+    return [id, target === '' ? text(item.name, '未命名策略') : target]
+  }))
   const filteredItems = filter === 'all' ? items : items.filter(item => strategyCategory(item) === filter)
   const categoryCounts = items.reduce<Record<StrategyCategory, number>>((counts, item) => {
     const category = strategyCategory(item)
@@ -711,6 +770,9 @@ export function StrategyResearchPage({
     return counts
   }, { verified: 0, unverified: 0, failed: 0, archived: 0 })
   const selectedItem = items.find(item => text(item.id, '') === selectedStrategyId)
+  const currentLifecycleStage = selectedItem === undefined
+    ? undefined
+    : view === 'shadow' ? 'shadow' : strategyLifecycleStage(selectedItem)
 
   const previewHypotheses = async (): Promise<void> => {
     if (busyAction !== '') return
@@ -811,6 +873,26 @@ export function StrategyResearchPage({
     }
   }
 
+  const archiveStrategy = async (strategyId: string): Promise<void> => {
+    if (busyAction !== '') return
+    setBusyAction(`archive:${strategyId}`)
+    setNotice('正在归档策略…')
+    try {
+      await requestData({
+        operation: 'trading-core.strategy-transition', input: { strategy_id: strategyId, action: 'retire' },
+      })
+      if (!alive.current) return
+      setArchiveItem(undefined)
+      if (text(detailItem?.id, '') === strategyId) setDetailItem(undefined)
+      setNotice('策略已归档，历史证据仍可在“已归档”中查看。')
+      load()
+    } catch (reason) {
+      if (alive.current) setNotice(`归档失败：${productErrorText(reason)}`)
+    } finally {
+      if (alive.current) setBusyAction('')
+    }
+  }
+
   const openEvolutionDiagnostics = (): void => {
     if (selectedStrategyId === '') {
       setNotice('请先选择策略后进入进化诊断。')
@@ -876,12 +958,57 @@ export function StrategyResearchPage({
           <div><h2 id="strategy-lifecycle-title">策略生命周期</h2><small>每条策略都沿着真实证据逐步推进，不会自动进入下一阶段</small></div>
           {view === 'pool' && <span>新建方式：点击右上角“从事件新建策略”</span>}
         </div>
-        <div className={css.lifecycleStrip} aria-label="策略生命周期步骤">
-          <span data-state="active"><b>1</b><strong>事件形成假设</strong><small>从真实市场事件生成候选</small></span><i aria-hidden="true">→</i>
-          <span><b>2</b><strong>样本外回测</strong><small>用未参与构建的数据验证</small></span><i aria-hidden="true">→</i>
-          <span><b>3</b><strong>影子验证</strong><small>纸面账户跟踪真实行情</small></span><i aria-hidden="true">→</i>
-          <button type="button" onClick={openEvolutionDiagnostics}><b>4</b><strong>进化诊断</strong><small>查看最新判定；动作由统一闭环执行</small></button>
-        </div>
+        <nav className={css.lifecycleStrip} aria-label="策略生命周期步骤">
+          <button
+            type="button"
+            aria-current={currentLifecycleStage === 'form' ? 'step' : undefined}
+            aria-describedby={lifecycleHelpStage === 1 ? 'strategy-lifecycle-tooltip' : undefined}
+            data-state={currentLifecycleStage === 'form' ? 'active' : undefined}
+            onMouseEnter={() => { setLifecycleHelpStage(1) }}
+            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+            onFocus={() => { setLifecycleHelpStage(1) }}
+            onBlur={() => { setLifecycleHelpStage(undefined) }}
+            onClick={() => { setView('pool'); setFilter('all') }}
+          ><b>1</b><strong>事件形成假设</strong><small>创建或查看事件候选</small></button><i aria-hidden="true">→</i>
+          <button
+            type="button"
+            aria-current={currentLifecycleStage === 'backtest' ? 'step' : undefined}
+            aria-describedby={lifecycleHelpStage === 2 ? 'strategy-lifecycle-tooltip' : undefined}
+            data-state={currentLifecycleStage === 'backtest' ? 'active' : undefined}
+            onMouseEnter={() => { setLifecycleHelpStage(2) }}
+            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+            onFocus={() => { setLifecycleHelpStage(2) }}
+            onBlur={() => { setLifecycleHelpStage(undefined) }}
+            onClick={() => { setView('pool'); setFilter('unverified') }}
+          ><b>2</b><strong>样本外回测</strong><small>查看待验证策略与回测证据</small></button><i aria-hidden="true">→</i>
+          <button
+            type="button"
+            aria-current={currentLifecycleStage === 'shadow' ? 'step' : undefined}
+            aria-describedby={lifecycleHelpStage === 3 ? 'strategy-lifecycle-tooltip' : undefined}
+            data-state={currentLifecycleStage === 'shadow' ? 'active' : undefined}
+            onMouseEnter={() => { setLifecycleHelpStage(3) }}
+            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+            onFocus={() => { setLifecycleHelpStage(3) }}
+            onBlur={() => { setLifecycleHelpStage(undefined) }}
+            onClick={() => { setView('shadow') }}
+          ><b>3</b><strong>影子验证</strong><small>进入纸面账户验证</small></button><i aria-hidden="true">→</i>
+          <button
+            type="button"
+            aria-current={currentLifecycleStage === 'evolution' ? 'step' : undefined}
+            aria-describedby={lifecycleHelpStage === 4 ? 'strategy-lifecycle-tooltip' : undefined}
+            data-state={currentLifecycleStage === 'evolution' ? 'active' : undefined}
+            onMouseEnter={() => { setLifecycleHelpStage(4) }}
+            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+            onFocus={() => { setLifecycleHelpStage(4) }}
+            onBlur={() => { setLifecycleHelpStage(undefined) }}
+            onClick={openEvolutionDiagnostics}
+          ><b>4</b><strong>进化诊断</strong><small>查看最新判定与闭环历史</small></button>
+        </nav>
+        {lifecycleHelpStage !== undefined && (
+          <div className={css.lifecycleTooltip} id="strategy-lifecycle-tooltip" role="tooltip" style={{ position: 'absolute' }}>
+            {LIFECYCLE_HELP[lifecycleHelpStage]}
+          </div>
+        )}
       </section>
       {view === 'pool' ? <>
         <div className={css.contextHint}>AI 评审会自动读取当前策略上下文；页面只保存策略标识，不会复制或覆盖策略内容。</div>
@@ -955,6 +1082,11 @@ export function StrategyResearchPage({
                     </button>
                   )}
                   <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
+                  {category !== 'archived' && (
+                    <button type="button" className={css.dangerButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setArchiveItem(item) }}>
+                      {busyAction === `archive:${id}` ? '归档中…' : '归档'}
+                    </button>
+                  )}
                   <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>进入影子验证</button>
                 </div>
               </article>
@@ -969,6 +1101,8 @@ export function StrategyResearchPage({
           onOpenEvolution={onOpenEvolution}
           onOpenReports={onOpenReports}
           onAnalyze={onAnalyze}
+          onOpenStock={onOpenStock}
+          strategyNames={strategyNames}
         />
       )}
       {detailItem !== undefined && (
@@ -993,6 +1127,14 @@ export function StrategyResearchPage({
           }}
         />
       )}
+      {archiveItem !== undefined && (
+        <ArchiveStrategyDialog
+          item={archiveItem}
+          busy={busyAction === `archive:${text(archiveItem.id, '')}`}
+          onClose={() => { if (busyAction === '') setArchiveItem(undefined) }}
+          onConfirm={() => { void archiveStrategy(text(archiveItem.id, '')) }}
+        />
+      )}
       {hypothesisPreview !== undefined && (
         <HypothesisPreviewDialog
           preview={hypothesisPreview}
@@ -1010,7 +1152,7 @@ export function StrategyResearchPage({
           <section className={css.moduleCard} role="dialog" aria-modal="true" aria-label="进入当前策略的进化诊断">
             <h2>进入当前策略的进化诊断</h2>
             <p>这里仅展示当前策略证据、预计判定和自动执行历史；所有动作由统一自动闭环执行。</p>
-            <label><input type="checkbox" checked={suppressEvolutionEducation} onChange={event => { setSuppressEvolutionEducation(event.target.checked) }} />以后不再提示（仅保存在此浏览器）</label>
+            <label><input type="checkbox" checked={suppressEvolutionEducation} onChange={(event) => { setSuppressEvolutionEducation(event.target.checked) }} />以后不再提示（仅保存在此浏览器）</label>
             <div className={css.moduleToolbar}>
               <button type="button" className={css.secondaryButton} onClick={() => { setEvolutionEducationOpen(false) }}>取消</button>
               <button type="button" className={css.primaryButton} onClick={continueEvolutionDiagnostics}>继续进入</button>
@@ -1028,12 +1170,15 @@ interface ShadowValidationPageProps {
   readonly onOpenEvolution: () => void
   readonly onOpenReports: () => void
   readonly onAnalyze: (intent: AssistantIntent) => void
+  readonly onOpenStock?: (code: string) => void
+  readonly strategyNames?: Readonly<Record<string, string>>
   readonly embedded?: boolean
 }
 
 /** Paper-account evidence; no real order is placed from this UI. */
 export function ShadowValidationPage({
-  requestData, selectedStrategyId, onOpenEvolution, onOpenReports, onAnalyze, embedded = false,
+  requestData, selectedStrategyId, onOpenEvolution, onOpenReports, onAnalyze,
+  onOpenStock = () => {}, strategyNames = {}, embedded = false,
 }: ShadowValidationPageProps) {
   const status = useDataResource(requestData)
   const alive = useAliveRef()
@@ -1094,6 +1239,8 @@ export function ShadowValidationPage({
   const statusRecord = asRecord(status.state.value)
   const positionItems = records(asRecord(positions.state.value).items)
   const equityItems = records(asRecord(equity.state.value).items)
+  const positionNames = useSecurityNames(requestData, positionItems.map(item => text(item.symbol, text(item.code))))
+  const selectedStrategyName = strategyNames[selectedStrategyId]?.trim() ?? ''
   const firstError = [status.state, positions.state, equity.state].find(item => item.phase === 'error')
   const initialLoading = [status.state, positions.state, equity.state]
     .some(item => item.phase === 'loading' && item.value === undefined)
@@ -1111,15 +1258,31 @@ export function ShadowValidationPage({
       <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
       <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</button>
     </PageHeading>}
-    <div className={css.lifecycleStrip} aria-label="当前验证对象">
-      <span>策略研究</span><b aria-hidden="true">→</b><span>{selectedStrategyId === '' ? '全部生效策略' : selectedStrategyId}</span><b aria-hidden="true">→</b><span>自进化</span>
+    <div className={css.shadowScopeBar} aria-label="当前影子验证范围">
+      <div>
+        <span>当前验证范围</span>
+        <strong>{selectedStrategyId === '' ? '全部生效策略' : selectedStrategyName || '已选策略'}</strong>
+        <small>{selectedStrategyId === '' ? '每条生效策略独立使用纸面账户记账' : '只展示这条策略的持仓与净值证据'}</small>
+      </div>
+      <span>真实行情 · 虚拟资金 · 不会下单</span>
     </div>
     {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
     {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
     {initialLoading && <BusyRows />}
-    {!initialLoading && <section className={css.moduleGrid} aria-label="影子验证概览">
-      <article className={css.moduleCard}>
-        <div className={css.sectionHeading}><strong>最近运行</strong><StatusBadge value={text(statusRecord.trade_date, '') === '' ? 'waiting_data' : 'done'} /></div>
+    {!initialLoading && <>
+      <section
+        className={css.shadowRunSummary}
+        aria-label={selectedStrategyId === '' ? '最近一次影子验证结果' : '全部策略最近运行'}
+      >
+        <div className={css.sectionHeading}>
+          <div>
+            <strong>{selectedStrategyId === '' ? '最近运行' : '全部策略最近运行'}</strong>
+            {selectedStrategyId !== '' && (
+              <small>下方持仓与净值仅展示“{selectedStrategyName || '已选策略'}”</small>
+            )}
+          </div>
+          <StatusBadge value={text(statusRecord.trade_date, '') === '' ? 'waiting_data' : 'done'} />
+        </div>
         <dl className={css.reportMeta}>
           <div><dt>交易日</dt><dd>{text(statusRecord.trade_date)}</dd></div>
           <div><dt>策略数</dt><dd>{number(statusRecord.strategy_count)?.toFixed(0) ?? '—'}</dd></div>
@@ -1127,37 +1290,73 @@ export function ShadowValidationPage({
           <div><dt>组合净值</dt><dd>{compactMetric(statusRecord.overall_nav)}</dd></div>
         </dl>
         {text(statusRecord.note, '') !== '' && <p>{text(statusRecord.note)}</p>}
-      </article>
-      <article className={css.moduleCard}>
-        <div className={css.sectionHeading}><strong>纸面持仓</strong><span>{positionItems.length} 项</span></div>
-        <div className={css.dataList}>
-          {positionItems.slice(0, 12).map((item, index) => (
-            <div className={css.dataRow} key={`${text(item.strategy_id)}-${text(item.symbol)}-${index}`}>
-              <div><strong>{text(item.symbol, text(item.code))}</strong><small>{text(item.strategy_id)}</small></div>
-              <span>{number(item.qty ?? item.quantity)?.toLocaleString('zh-CN') ?? money(item.market_value)}</span>
-            </div>
-          ))}
-          {positionItems.length === 0 && positions.state.phase === 'success' && <Empty>当前没有纸面持仓。</Empty>}
-        </div>
-      </article>
-      <article className={css.moduleCard}>
-        <div className={css.sectionHeading}><strong>净值证据</strong><span>{equityItems.length} 日</span></div>
-        <div className={css.dataList}>
-          {equityItems.slice(0, 12).map((item, index) => {
-            const strategy = asRecord(item.strategy)
-            const nav = selectedStrategyId === '' ? item.overall_nav : strategy.nav
-            return (
-              <div className={css.dataRow} key={`${text(item.date)}-${index}`}>
-                <span>{text(item.date)}</span>
-                <strong>{compactMetric(nav)}</strong>
-              </div>
-            )
-          })}
-          {equityItems.length === 0 && equity.state.phase === 'success' && <Empty>尚无净值历史，需要先运行影子验证。</Empty>}
-        </div>
-      </article>
-    </section>}
-    <div className={css.moduleToolbar}>
+      </section>
+      <section className={css.shadowEvidenceGrid} aria-label="影子验证证据">
+        <article className={css.shadowEvidenceCard}>
+          <div className={css.sectionHeading}>
+            <div><strong>纸面持仓</strong><small>点击证券可查看个股详情</small></div><span>{positionItems.length} 项</span>
+          </div>
+          <div className={css.dataList}>
+            {positionItems.slice(0, 12).map((item, index) => {
+              const code = text(item.symbol, text(item.code, '')).trim()
+              const canOpenStock = /^[0-9]{6,8}$/u.test(code)
+              const resolvedName = positionNames[code]?.trim() ?? ''
+              const name = canOpenStock
+                ? resolvedName === '' || resolvedName === code ? code : resolvedName
+                : '证券代码缺失'
+              const strategyId = text(item.strategy_id)
+              const strategyName = strategyNames[strategyId]?.trim() || '影子策略'
+              const positionMeta = !canOpenStock || strategyName.includes(code)
+                ? strategyName
+                : `${code} · ${strategyName}`
+              const quantity = number(item.qty ?? item.quantity)
+              const row = <>
+                <span><strong>{name}</strong><small>{positionMeta}</small></span>
+                <span>
+                  <b>{quantity === undefined ? money(item.market_value) : `${quantity.toLocaleString('zh-CN')} 股`}</b>
+                  <small>{quantity === 0 ? '当前空仓' : `成本 ${money(item.avg_cost ?? item.entry_price)}`}</small>
+                </span>
+              </>
+              return canOpenStock ? (
+                <button
+                  type="button"
+                  className={css.shadowPositionRow}
+                  key={`${strategyId}-${code}-${index}`}
+                  aria-label={`查看${name} · ${code}个股详情`}
+                  onClick={() => { onOpenStock(code) }}
+                >
+                  {row}
+                </button>
+              ) : (
+                <div className={css.shadowPositionRow} data-disabled key={`${strategyId}-missing-${index}`}>
+                  {row}
+                </div>
+              )
+            })}
+            {positionItems.length === 0 && positions.state.phase === 'success' && <Empty>当前没有纸面持仓。</Empty>}
+          </div>
+        </article>
+        <article className={css.shadowEvidenceCard}>
+          <div className={css.sectionHeading}>
+            <div><strong>净值证据</strong><small>按交易日倒序展示纸面账户净值</small></div><span>{equityItems.length} 日</span>
+          </div>
+          <div className={css.dataList}>
+            {equityItems.slice(0, 12).map((item, index) => {
+              const strategy = asRecord(item.strategy)
+              const nav = selectedStrategyId === '' ? item.overall_nav : strategy.nav
+              return (
+                <div className={css.dataRow} key={`${text(item.date)}-${index}`}>
+                  <span>{text(item.date)}</span>
+                  <strong>{compactMetric(nav)}</strong>
+                </div>
+              )
+            })}
+            {equityItems.length === 0 && equity.state.phase === 'success' && <Empty>尚无净值历史，需要先运行影子验证。</Empty>}
+          </div>
+        </article>
+      </section>
+    </>}
+    <div className={css.shadowFooterActions}>
       {reportReady && <button type="button" className={css.secondaryButton} onClick={onOpenReports}>查看本次投研报告</button>}
       <button type="button" className={css.secondaryButton} onClick={() => {
         onAnalyze(selectedStrategyId === '' ? { kind: 'shadow' } : { kind: 'shadow', strategyId: selectedStrategyId })
@@ -1247,8 +1446,8 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
   const lineageVisible = new Set<string>()
   for (const [sid, node] of fullLineageBySid) {
     if (node.status !== 'active') continue
-    let cursor: string | undefined = sid
-    while (cursor !== undefined && !lineageVisible.has(cursor)) {
+    let cursor = sid
+    while (cursor !== '' && !lineageVisible.has(cursor)) {
       lineageVisible.add(cursor)
       cursor = text(fullLineageBySid.get(cursor)?.entry.mutated_from ?? '', '')
     }
@@ -1310,7 +1509,7 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
             <div><dt>下次自动运行</dt><dd>每日 {closedLoopTime}{!closedLoopEnabled && <StatusBadge value="waiting_data" />}</dd></div>
           </dl>
           <div className={css.lifecycleNav} aria-label="生命周期分组">
-            {(['active', 'candidate', 'mutated', 'retired'] as const).map((key) => (
+            {(['active', 'candidate', 'mutated', 'retired'] as const).map(key => (
               <button
                 type="button"
                 data-active={openLifecycle === key || undefined}
@@ -1343,7 +1542,10 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
                       onClick={() => { setOpenDetailSid(open ? '' : sid) }}
                     >
                       <div>
-                        <strong><span className={css.strategyTag}>{strategyLabel(sid)}</span>{strategyTargetLabel(item, securityNames)}</strong>
+                        <strong>
+                          <span className={css.strategyTag}>{strategyLabel(sid)}</span>
+                          {strategyTargetLabel(item, securityNames)}
+                        </strong>
                         <small>{strategyKindLabel(item.kind)} · tier {number(item.tier)?.toFixed(0) ?? '1'}</small>
                       </div>
                       <span className={css.evolutionEvidenceMeta}>
@@ -1415,7 +1617,10 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
                     onClick={() => { setExpandedSid(expanded ? '' : sid) }}
                   >
                     <div>
-                      <strong><span className={css.strategyTag}>{strategyLabel(sid)}</span>{strategyTargetLabel(item, securityNames)}</strong>
+                      <strong>
+                        <span className={css.strategyTag}>{strategyLabel(sid)}</span>
+                        {strategyTargetLabel(item, securityNames)}
+                      </strong>
                       <small>{strategyKindLabel(item.kind)} · {text(item.reason, '')}</small>
                     </div>
                     <span className={css.evolutionEvidenceMeta}>
@@ -1463,11 +1668,22 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
       </section>
       <section className={css.moduleGrid} aria-label="策略演化链路">
         <article className={`${css.moduleCard} ${css.lineageCard}`}>
-          <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅生效 · {lineageBySid.size} 个策略 · {lineageEdgeCount} 条衍生</span></div>
+          <div className={css.sectionHeading}>
+            <strong>策略演化链路</strong>
+            <span>仅生效 · {lineageBySid.size} 个策略 · {lineageEdgeCount} 条衍生</span>
+          </div>
           {lineageRoots.length === 0 && <Empty>暂无生效中的演化链路。</Empty>}
           <div className={css.lineageTree}>
             {lineageRoots.map(rootSid => (
-              <LineageNode key={rootSid} sid={rootSid} depth={0} bySid={lineageBySid} childrenByParent={lineageChildren} securityNames={securityNames} onOpenStock={onOpenStock} />
+              <LineageNode
+                key={rootSid}
+                sid={rootSid}
+                depth={0}
+                bySid={lineageBySid}
+                childrenByParent={lineageChildren}
+                securityNames={securityNames}
+                onOpenStock={onOpenStock}
+              />
             ))}
           </div>
         </article>
@@ -1480,7 +1696,7 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
               <div className={css.dataRow} key={`applied-${text(item.applied_at)}-${index}`}>
                 <div>
                   <strong>{text(item.applied_at, '')} · 自动应用 {number(item.count)?.toFixed(0) ?? '0'} 项动作</strong>
-                  <small>{records(item.actions).map(action => `${text(action.reason, '')}`).join('；')}</small>
+                  <small>{records(item.actions).map(action => text(action.reason, '')).join('；')}</small>
                 </div>
                 <span className={css.evolutionEvidenceMeta}>
                   {records(item.actions).map((action, actionIndex) => (
@@ -1604,17 +1820,34 @@ function IndustryResourceFeedback({
   )
 }
 
-type IndustryGraphDirection = 'center' | 'up' | 'down'
+type IndustryGraphDirection = 'center' | 'up' | 'down' | 'related'
+
+interface IndustryGraphRelationData {
+  readonly direction: 'up' | 'down'
+  readonly depth: number
+  readonly share: number | undefined
+  readonly via: string
+  readonly relationType: string
+  readonly note: string
+}
 
 interface IndustryGraphNodeData {
   readonly id: string
   readonly name: string
   readonly code: string
+  readonly rawKey: string
   readonly label: string
   readonly direction: IndustryGraphDirection
   readonly depth: number
   readonly expandable: boolean
+  readonly loaded: boolean
+  readonly isRoot: boolean
   readonly share: number | undefined
+  readonly via: string
+  readonly relationType: string
+  readonly note: string
+  readonly relations: readonly IndustryGraphRelationData[]
+  readonly profile: Record<string, unknown>
   readonly x: number
   readonly y: number
 }
@@ -1624,6 +1857,12 @@ interface IndustryGraphEdgeData {
   readonly source: string
   readonly target: string
   readonly direction: 'up' | 'down'
+  readonly depth: number
+  readonly share: number | undefined
+  readonly via: string
+  readonly relationType: string
+  readonly note: string
+  readonly tone?: IndustryGraphDirection
 }
 
 interface IndustryGraphData {
@@ -1636,100 +1875,387 @@ interface IndustryGraphParticle {
   y: number
   vx: number
   vy: number
-  readonly targetX: number
-  readonly targetY: number
-  readonly direction: IndustryGraphDirection
+  targetX: number
+  targetY: number
+  readonly fixed: boolean
+}
+
+interface IndustryGraphViewState {
+  particles: Map<string, IndustryGraphParticle>
+  topologySignature: string
+  pan: { readonly x: number; readonly y: number }
+  zoom: number
+}
+
+interface IndustryChainSnapshot {
+  readonly center: Record<string, unknown>
+  readonly upLevels: readonly Record<string, unknown>[]
+  readonly downLevels: readonly Record<string, unknown>[]
+}
+
+interface IndustryChainPathStep extends IndustryCompanySelection {
+  readonly nodeId: string
+  readonly direction?: 'up' | 'down'
+  readonly via?: string
+  readonly share?: number
+  readonly relationType?: string
+}
+
+interface IndustryGraphConnection {
+  readonly sourceId: string
+  readonly sourceName: string
+  readonly sourceCode: string
+  readonly target: IndustryCompanySelection
+  readonly direction: 'up' | 'down'
+  readonly via: string
+  readonly share: number | undefined
+  readonly relationType: string
+  readonly note: string
+}
+
+interface IndustryGraphDrillRequest {
+  readonly company: IndustryCompanySelection
+  readonly sourceId: string
+  readonly sourceName: string
+  readonly sourceCode: string
+  readonly targetId: string
+  readonly direction: 'up' | 'down'
+  readonly via: string
+  readonly share: number | undefined
+  readonly relationType: string
+  readonly note: string
+}
+
+interface IndustryGraphControls {
+  readonly fit: () => void
+  readonly zoomIn: () => void
+  readonly zoomOut: () => void
+}
+
+function industryGraphIdentity(code: string, name: string, rawId = ''): string {
+  const cleanCode = code.trim()
+  if (cleanCode !== '') return `company:${cleanCode}`
+  const cleanId = rawId.trim()
+  if (cleanId !== '') return `entity:${cleanId}`
+  return `entity-name:${name.trim() || 'unknown'}`
+}
+
+function industryGraphRelationKey(relation: IndustryGraphRelationData): string {
+  return `${relation.direction}|${relation.depth}|${relation.via}|${relation.relationType}|${relation.note}`
 }
 
 function industryGraphData(
-  center: Record<string, unknown>,
-  upLevels: readonly Record<string, unknown>[],
-  downLevels: readonly Record<string, unknown>[],
+  root: IndustryCompanySelection,
+  snapshots: readonly IndustryChainSnapshot[],
+  connections: readonly IndustryGraphConnection[],
 ): IndustryGraphData {
-  const nodes: IndustryGraphNodeData[] = []
-  const edges: IndustryGraphEdgeData[] = []
-  const centerCode = text(center.code, '')
-  const centerName = text(center.name, '未命名公司')
-  const centerId = `center-${centerCode || text(center.id, 'company')}`
-  nodes.push({
-    id: centerId,
-    name: centerName,
-    code: centerCode,
-    label: centerCode === '' ? centerName : `${centerName}\n${centerCode}`,
-    direction: 'center',
-    depth: 0,
-    expandable: true,
-    share: undefined,
-    x: 0,
-    y: 0,
-  })
-
-  const appendLevels = (levels: readonly Record<string, unknown>[], direction: 'up' | 'down'): void => {
-    const identifiers = new Map<string, string>()
-    for (const value of [centerCode, text(center.id, ''), centerName]) {
-      if (value !== '') identifiers.set(value, centerId)
-    }
-    for (const [levelIndex, level] of levels.entries()) {
-      const levelNodes = records(level.nodes)
-      const rawDepth = number(level.level)
-      const depth = rawDepth === undefined ? levelIndex + 1 : Math.abs(rawDepth)
-      const levelIds: Array<readonly [Record<string, unknown>, string]> = []
-      for (const [nodeIndex, node] of levelNodes.entries()) {
-        const rawId = text(node.id, text(node.name, `node-${nodeIndex}`))
-        const nodeId = `${direction}-${depth}-${nodeIndex}-${rawId}`
-        levelIds.push([node, nodeId])
-        for (const value of [rawId, text(node.name, ''), text(node.code, '')]) {
-          if (value !== '') identifiers.set(value, nodeId)
-        }
-      }
-      for (const [nodeIndex, [node, nodeId]] of levelIds.entries()) {
-        const name = text(node.name, '未命名环节')
-        const code = text(node.code, '')
-        const parentId = identifiers.get(text(node.parent_id, '')) ?? centerId
-        const count = Math.max(levelIds.length, 1)
-        const y = (nodeIndex - (count - 1) / 2) * 116
-        const x = (direction === 'up' ? -1 : 1) * depth * 260
-        nodes.push({
-          id: nodeId,
-          name,
-          code,
-          label: code === '' ? name : `${name}\n${code}`,
-          direction,
-          depth,
-          expandable: code !== '',
-          share: number(node.share),
-          x,
-          y,
-        })
-        edges.push({
-          id: `edge-${direction}-${depth}-${nodeIndex}`,
-          source: direction === 'up' ? nodeId : parentId,
-          target: direction === 'up' ? parentId : nodeId,
-          direction,
-        })
-      }
-    }
+  const nodes = new Map<string, IndustryGraphNodeData>()
+  const edges = new Map<string, IndustryGraphEdgeData>()
+  const rootId = industryGraphIdentity(root.code, root.name)
+  const ensureNode = ({
+    id, name, code, rawKey = '', loaded = false, isRoot = false, relation, profile = {},
+  }: {
+    readonly id: string
+    readonly name: string
+    readonly code: string
+    readonly rawKey?: string
+    readonly loaded?: boolean
+    readonly isRoot?: boolean
+    readonly relation?: IndustryGraphRelationData
+    readonly profile?: Record<string, unknown>
+  }): void => {
+    const previous = nodes.get(id)
+    const relations = relation === undefined
+      ? previous?.relations ?? []
+      : previous?.relations.some(item => industryGraphRelationKey(item) === industryGraphRelationKey(relation)) === true
+        ? previous.relations
+        : [...(previous?.relations ?? []), relation]
+    const primary = relations[0]
+    const resolvedName = name || previous?.name || '未命名环节'
+    const resolvedCode = code || previous?.code || ''
+    nodes.set(id, {
+      id,
+      name: resolvedName,
+      code: resolvedCode,
+      rawKey: rawKey || previous?.rawKey || resolvedName,
+      label: resolvedCode === '' ? resolvedName : `${resolvedName}\n${resolvedCode}`,
+      direction: previous?.direction ?? 'center',
+      depth: previous?.depth ?? 0,
+      expandable: previous?.expandable === true || resolvedCode !== '',
+      loaded: previous?.loaded === true || loaded,
+      isRoot: previous?.isRoot === true || isRoot,
+      share: primary?.share,
+      via: primary?.via ?? '',
+      relationType: primary?.relationType ?? '',
+      note: primary?.note ?? '',
+      relations,
+      profile: { ...(previous?.profile ?? {}), ...profile },
+      x: previous?.x ?? 0,
+      y: previous?.y ?? 0,
+    })
+  }
+  const ensureEdge = (edge: Omit<IndustryGraphEdgeData, 'id'>): void => {
+    const id = `${edge.source}->${edge.target}|${edge.via}|${edge.relationType}`
+    if (!edges.has(id)) edges.set(id, { id, ...edge })
   }
 
-  appendLevels(upLevels, 'up')
-  appendLevels(downLevels, 'down')
+  ensureNode({ id: rootId, name: root.name, code: root.code, loaded: false, isRoot: true })
+
+  for (const snapshot of snapshots) {
+    const centerCode = text(snapshot.center.code, '')
+    const centerName = text(snapshot.center.name, '未命名公司')
+    const centerRawId = text(snapshot.center.id, '')
+    const centerId = industryGraphIdentity(centerCode, centerName, centerRawId)
+    ensureNode({
+      id: centerId,
+      name: centerName,
+      code: centerCode,
+      rawKey: centerRawId,
+      loaded: true,
+      isRoot: centerId === rootId,
+      profile: snapshot.center,
+    })
+
+    const appendLevels = (levels: readonly Record<string, unknown>[], direction: 'up' | 'down'): void => {
+      const identifiers = new Map<string, string>()
+      for (const value of [centerCode, centerRawId, centerName]) {
+        if (value !== '') identifiers.set(value, centerId)
+      }
+      for (const [levelIndex, level] of levels.entries()) {
+        const levelNodes = records(level.nodes)
+        const rawDepth = number(level.level)
+        const depth = rawDepth === undefined ? levelIndex + 1 : Math.abs(rawDepth)
+        const levelIds: Array<readonly [Record<string, unknown>, string]> = []
+        for (const [nodeIndex, node] of levelNodes.entries()) {
+          const rawId = text(node.id, text(node.name, `node-${nodeIndex}`))
+          const name = text(node.name, '未命名环节')
+          const code = text(node.code, '')
+          const nodeId = industryGraphIdentity(code, name, rawId)
+          levelIds.push([node, nodeId])
+          for (const value of [rawId, name, code]) {
+            if (value !== '') identifiers.set(value, nodeId)
+          }
+          ensureNode({
+            id: nodeId,
+            name,
+            code,
+            rawKey: rawId,
+            relation: {
+              direction,
+              depth,
+              share: number(node.share),
+              via: text(node.via, ''),
+              relationType: industryRelation(node.type),
+              note: text(node.note, ''),
+            },
+          })
+        }
+        for (const [node, nodeId] of levelIds) {
+          const parentId = identifiers.get(text(node.parent_id, '')) ?? centerId
+          ensureEdge({
+            source: direction === 'up' ? nodeId : parentId,
+            target: direction === 'up' ? parentId : nodeId,
+            direction,
+            depth,
+            share: number(node.share),
+            via: text(node.via, ''),
+            relationType: industryRelation(node.type),
+            note: text(node.note, ''),
+          })
+        }
+      }
+    }
+
+    appendLevels(snapshot.upLevels, 'up')
+    appendLevels(snapshot.downLevels, 'down')
+  }
+
+  for (const connection of connections) {
+    const targetId = industryGraphIdentity(connection.target.code, connection.target.name)
+    ensureNode({
+      id: connection.sourceId,
+      name: connection.sourceName,
+      code: connection.sourceCode,
+    })
+    ensureNode({
+      id: targetId,
+      name: connection.target.name,
+      code: connection.target.code,
+      relation: {
+        direction: connection.direction,
+        depth: 1,
+        share: connection.share,
+        via: connection.via,
+        relationType: connection.relationType,
+        note: connection.note,
+      },
+    })
+    ensureEdge({
+      source: connection.direction === 'up' ? targetId : connection.sourceId,
+      target: connection.direction === 'up' ? connection.sourceId : targetId,
+      direction: connection.direction,
+      depth: 1,
+      share: connection.share,
+      via: connection.via,
+      relationType: connection.relationType,
+      note: connection.note,
+    })
+  }
+
+  const ranks = new Map<string, number>([[rootId, 0]])
+  for (let pass = 0; pass < nodes.size; pass += 1) {
+    let changed = false
+    for (const edge of edges.values()) {
+      const sourceRank = ranks.get(edge.source)
+      const targetRank = ranks.get(edge.target)
+      if (sourceRank !== undefined && targetRank === undefined) {
+        ranks.set(edge.target, sourceRank + 1)
+        changed = true
+      } else if (targetRank !== undefined && sourceRank === undefined) {
+        ranks.set(edge.source, targetRank - 1)
+        changed = true
+      }
+    }
+    if (!changed) break
+  }
+  for (const node of nodes.values()) {
+    if (ranks.has(node.id)) continue
+    ranks.set(node.id, node.relations[0]?.direction === 'up' ? -1 : 1)
+  }
+
+  const rankGroups = new Map<number, IndustryGraphNodeData[]>()
+  for (const node of nodes.values()) {
+    const rank = ranks.get(node.id) ?? 0
+    const group = rankGroups.get(rank) ?? []
+    group.push(node)
+    rankGroups.set(rank, group)
+  }
+  for (const group of rankGroups.values()) {
+    group.sort((left, right) => Number(right.loaded) - Number(left.loaded) || left.name.localeCompare(right.name, 'zh-CN'))
+  }
+
+  const laidOutNodes = [...nodes.values()].map((node): IndustryGraphNodeData => {
+    const rank = ranks.get(node.id) ?? 0
+    const group = rankGroups.get(rank) ?? [node]
+    const index = Math.max(group.findIndex(item => item.id === node.id), 0)
+    const primary = node.relations[0]
+    const direction: IndustryGraphDirection = node.id === rootId
+      ? 'center'
+      : rank < 0 || (rank === 0 && primary?.direction === 'up') ? 'up' : 'down'
+    return {
+      ...node,
+      direction,
+      depth: Math.abs(rank) || primary?.depth || 0,
+      share: node.id === rootId ? undefined : node.share,
+      via: node.id === rootId ? '' : node.via,
+      relationType: node.id === rootId ? '' : node.relationType,
+      note: node.id === rootId ? '' : node.note,
+      x: rank * 268,
+      y: (index - (group.length - 1) / 2) * 122,
+    }
+  })
+  return { nodes: laidOutNodes, edges: [...edges.values()] }
+}
+
+function industryGraphPerspective(graph: IndustryGraphData, focusId: string): IndustryGraphData {
+  if (!graph.nodes.some(node => node.id === focusId)) return graph
+  const outgoing = new Map<string, string[]>()
+  const incoming = new Map<string, string[]>()
+  const append = (map: Map<string, string[]>, key: string, value: string): void => {
+    const current = map.get(key) ?? []
+    current.push(value)
+    map.set(key, current)
+  }
+  for (const edge of graph.edges) {
+    append(outgoing, edge.source, edge.target)
+    append(incoming, edge.target, edge.source)
+  }
+  const walk = (map: ReadonlyMap<string, readonly string[]>): Map<string, number> => {
+    const distances = new Map<string, number>([[focusId, 0]])
+    const queue = [focusId]
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index]
+      if (current === undefined) continue
+      const distance = distances.get(current) ?? 0
+      for (const next of map.get(current) ?? []) {
+        if (distances.has(next)) continue
+        distances.set(next, distance + 1)
+        queue.push(next)
+      }
+    }
+    distances.delete(focusId)
+    return distances
+  }
+  const upstream = walk(incoming)
+  const downstream = walk(outgoing)
+  const directions = new Map<string, IndustryGraphDirection>()
+  const depths = new Map<string, number>()
+  for (const node of graph.nodes) {
+    if (node.id === focusId) {
+      directions.set(node.id, 'center')
+      depths.set(node.id, 0)
+      continue
+    }
+    const upDepth = upstream.get(node.id)
+    const downDepth = downstream.get(node.id)
+    if (upDepth !== undefined && (downDepth === undefined || upDepth < downDepth)) {
+      directions.set(node.id, 'up')
+      depths.set(node.id, upDepth)
+    } else if (downDepth !== undefined && (upDepth === undefined || downDepth < upDepth)) {
+      directions.set(node.id, 'down')
+      depths.set(node.id, downDepth)
+    } else {
+      directions.set(node.id, 'related')
+      depths.set(node.id, 0)
+    }
+  }
+  const nodes = graph.nodes.map((node): IndustryGraphNodeData => ({
+    ...node,
+    direction: directions.get(node.id) ?? 'related',
+    depth: depths.get(node.id) ?? 0,
+  }))
+  const directionFor = (id: string): IndustryGraphDirection => directions.get(id) ?? 'related'
+  const edges = graph.edges.map((edge): IndustryGraphEdgeData => {
+    const sourceDirection = directionFor(edge.source)
+    const targetDirection = directionFor(edge.target)
+    const upstreamEdge = (
+      sourceDirection === 'up' && (targetDirection === 'up' || targetDirection === 'center')
+    ) || (targetDirection === 'up' && sourceDirection === 'center')
+    const downstreamEdge = (
+      targetDirection === 'down' && (sourceDirection === 'down' || sourceDirection === 'center')
+    ) || (sourceDirection === 'down' && targetDirection === 'center')
+    const tone: IndustryGraphDirection = upstreamEdge ? 'up' : downstreamEdge ? 'down' : 'related'
+    return { ...edge, tone }
+  })
   return { nodes, edges }
 }
 
 function IndustryPhysicsGraph({
-  center, upLevels, downLevels, onDrill, onLeaf, onReady,
+  graph, activeNodeId, selectedNodeId, ariaLabel, viewState, onSelect, onDrill, onReady,
 }: {
-  readonly center: Record<string, unknown>
-  readonly upLevels: readonly Record<string, unknown>[]
-  readonly downLevels: readonly Record<string, unknown>[]
-  readonly onDrill: (company: IndustryCompanySelection) => void
-  readonly onLeaf: (name: string) => void
-  readonly onReady: (reset: (() => void) | undefined) => void
+  readonly graph: IndustryGraphData
+  readonly activeNodeId: string
+  readonly selectedNodeId: string
+  readonly ariaLabel: string
+  readonly viewState: { current: IndustryGraphViewState }
+  readonly onSelect: (node: IndustryGraphNodeData) => void
+  readonly onDrill: (node: IndustryGraphNodeData) => void
+  readonly onReady: (controls: IndustryGraphControls | undefined) => void
 }) {
-  const graph = useMemo(() => industryGraphData(center, upLevels, downLevels), [center, downLevels, upLevels])
-  const particles = useRef(new Map<string, IndustryGraphParticle>())
+  const particles = useRef(viewState.current.particles)
   const frame = useRef<number>()
   const activeUntil = useRef(0)
+  const topologySignature = [
+    graph.nodes.map(node => `${node.id}:${node.x}:${node.y}`).join('|'),
+    graph.edges.map(edge => `${edge.id}:${edge.source}:${edge.target}`).join('|'),
+  ].join('||')
+  const topologySignatureRef = useRef(viewState.current.topologySignature)
+  const activeNodeIdRef = useRef(activeNodeId)
+  const physicsNodes = useRef(graph.nodes)
+  const physicsEdges = useRef(graph.edges)
+  physicsNodes.current = graph.nodes
+  physicsEdges.current = graph.edges
+  const markerId = `industry-graph-arrow-${useId().replace(/:/gu, '')}`
   const interaction = useRef<{
     readonly kind: 'node' | 'pan'
     readonly pointerId: number
@@ -1740,9 +2266,31 @@ function IndustryPhysicsGraph({
     readonly panY: number
     moved: boolean
   }>()
-  const [positions, setPositions] = useState<Record<string, { readonly x: number; readonly y: number }>>({})
-  const [pan, setPan] = useState({ x: 0, y: 0 })
-  const [zoom, setZoom] = useState(1)
+  const suppressedNodeClick = useRef<{ readonly nodeId: string; readonly until: number }>()
+  const [positions, setPositions] = useState<Record<string, { readonly x: number; readonly y: number }>>(() => (
+    Object.fromEntries([...viewState.current.particles].map(([id, value]) => [id, { x: value.x, y: value.y }]))
+  ))
+  const [pan, setPanState] = useState(viewState.current.pan)
+  const [zoom, setZoomState] = useState(viewState.current.zoom)
+  const setPan = useCallback((next: SetStateAction<{ readonly x: number; readonly y: number }>) => {
+    setPanState((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next
+      viewState.current.pan = resolved
+      return resolved
+    })
+  }, [viewState])
+  const setZoom = useCallback((next: SetStateAction<number>) => {
+    setZoomState((current) => {
+      const resolved = typeof next === 'function' ? next(current) : next
+      viewState.current.zoom = resolved
+      return resolved
+    })
+  }, [viewState])
+  const graphNodeCount = graph.nodes.length
+  const minGraphX = graphNodeCount === 0 ? 0 : Math.min(...graph.nodes.map(node => node.x))
+  const maxGraphX = graphNodeCount === 0 ? 0 : Math.max(...graph.nodes.map(node => node.x))
+  const minGraphY = graphNodeCount === 0 ? 0 : Math.min(...graph.nodes.map(node => node.y))
+  const maxGraphY = graphNodeCount === 0 ? 0 : Math.max(...graph.nodes.map(node => node.y))
 
   const renderParticles = useCallback(() => {
     setPositions(Object.fromEntries([...particles.current].map(([id, value]) => [id, { x: value.x, y: value.y }])))
@@ -1755,7 +2303,7 @@ function IndustryPhysicsGraph({
       const values = [...particles.current.entries()]
       const draggedId = interaction.current?.kind === 'node' ? interaction.current.nodeId : ''
       for (const [id, particle] of values) {
-        if (particle.direction === 'center' || id === draggedId) continue
+        if (particle.fixed || id === draggedId) continue
         particle.vx += (particle.targetX - particle.x) * 0.012
         particle.vy += (particle.targetY - particle.y) * 0.006
       }
@@ -1774,11 +2322,11 @@ function IndustryPhysicsGraph({
           const force = 680 / distanceSquared
           const fx = dx / distance * force * 38
           const fy = dy / distance * force * 38
-          if (a.direction !== 'center') { a.vx -= fx; a.vy -= fy }
-          if (b.direction !== 'center') { b.vx += fx; b.vy += fy }
+          if (!a.fixed) { a.vx -= fx; a.vy -= fy }
+          if (!b.fixed) { b.vx += fx; b.vy += fy }
         }
       }
-      for (const edge of graph.edges) {
+      for (const edge of physicsEdges.current) {
         const source = particles.current.get(edge.source)
         const target = particles.current.get(edge.target)
         if (source === undefined || target === undefined) continue
@@ -1788,12 +2336,12 @@ function IndustryPhysicsGraph({
         const stretch = (distance - 218) * 0.0028
         const fx = dx / distance * stretch
         const fy = dy / distance * stretch
-        if (source.direction !== 'center' && edge.source !== draggedId) { source.vx += fx; source.vy += fy }
-        if (target.direction !== 'center' && edge.target !== draggedId) { target.vx -= fx; target.vy -= fy }
+        if (!source.fixed && edge.source !== draggedId) { source.vx += fx; source.vy += fy }
+        if (!target.fixed && edge.target !== draggedId) { target.vx -= fx; target.vy -= fy }
       }
       let movement = 0
       for (const [id, particle] of values) {
-        if (particle.direction === 'center') {
+        if (particle.fixed) {
           particle.x = 0
           particle.y = 0
           particle.vx = 0
@@ -1812,50 +2360,86 @@ function IndustryPhysicsGraph({
       else frame.current = undefined
     }
     frame.current = window.requestAnimationFrame(tick)
-  }, [graph.edges, renderParticles])
+  }, [renderParticles])
+
+  const fitGraph = useCallback(() => {
+    if (graphNodeCount === 0) return
+    const nextZoom = Math.min(1.08, Math.max(0.3, Math.min(
+      1_070 / Math.max(maxGraphX - minGraphX + 240, 1),
+      650 / Math.max(maxGraphY - minGraphY + 180, 1),
+    )))
+    setZoom(nextZoom)
+    setPan({
+      x: -((minGraphX + maxGraphX) / 2) * nextZoom,
+      y: -((minGraphY + maxGraphY) / 2) * nextZoom,
+    })
+    runPhysics(420)
+  }, [graphNodeCount, maxGraphX, maxGraphY, minGraphX, minGraphY, runPhysics])
+
+  useLayoutEffect(() => {
+    if (activeNodeIdRef.current === activeNodeId) return
+    activeNodeIdRef.current = activeNodeId
+    activeUntil.current = 0
+    if (frame.current !== undefined) window.cancelAnimationFrame(frame.current)
+    frame.current = undefined
+    for (const particle of particles.current.values()) {
+      particle.vx = 0
+      particle.vy = 0
+    }
+  }, [activeNodeId])
 
   useEffect(() => {
+    if (topologySignatureRef.current === topologySignature) return
+    topologySignatureRef.current = topologySignature
+    viewState.current.topologySignature = topologySignature
+    if (frame.current !== undefined) window.cancelAnimationFrame(frame.current)
+    frame.current = undefined
+    const previous = particles.current
     const next = new Map<string, IndustryGraphParticle>()
-    for (const node of graph.nodes) {
+    for (const node of physicsNodes.current) {
+      const retained = previous.get(node.id)
       next.set(node.id, {
-        x: node.x * 0.86,
-        y: node.y * 0.82,
-        vx: 0,
-        vy: 0,
+        x: retained?.x ?? node.x * 0.86,
+        y: retained?.y ?? node.y * 0.82,
+        vx: retained?.vx ?? 0,
+        vy: retained?.vy ?? 0,
         targetX: node.x,
         targetY: node.y,
-        direction: node.direction,
+        fixed: node.isRoot,
       })
     }
     particles.current = next
+    viewState.current.particles = next
     renderParticles()
+    fitGraph()
     const reduceMotion = typeof window.matchMedia === 'function'
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     if (!reduceMotion) runPhysics(620)
-    return () => {
-      if (frame.current !== undefined) window.cancelAnimationFrame(frame.current)
-      frame.current = undefined
-    }
-  }, [graph.nodes, renderParticles, runPhysics])
+  }, [fitGraph, renderParticles, runPhysics, topologySignature])
+
+  useEffect(() => () => {
+    if (frame.current !== undefined) window.cancelAnimationFrame(frame.current)
+    frame.current = undefined
+  }, [])
 
   useEffect(() => {
-    onReady(() => {
-      setPan({ x: 0, y: 0 })
-      setZoom(1)
-      runPhysics(420)
+    onReady({
+      fit: fitGraph,
+      zoomIn: () => { setZoom(current => Math.min(2.2, current * 1.2)) },
+      zoomOut: () => { setZoom(current => Math.max(0.3, current / 1.2)) },
     })
     return () => { onReady(undefined) }
-  }, [onReady, runPhysics])
+  }, [fitGraph, onReady])
 
   const startNodeDrag = (event: ReactPointerEvent<SVGGElement>, node: IndustryGraphNodeData): void => {
-    if (node.direction === 'center' || event.button !== 0) return
+    if (event.button !== 0) return
     event.stopPropagation()
+    if (node.isRoot) return
     event.currentTarget.setPointerCapture(event.pointerId)
     interaction.current = {
       kind: 'node', pointerId: event.pointerId, nodeId: node.id,
       clientX: event.clientX, clientY: event.clientY, panX: pan.x, panY: pan.y, moved: false,
     }
-    runPhysics(1_200)
   }
   const startPan = (event: ReactPointerEvent<SVGSVGElement>): void => {
     if (event.button !== 0) return
@@ -1869,13 +2453,19 @@ function IndustryPhysicsGraph({
     const active = interaction.current
     if (active === undefined || active.pointerId !== event.pointerId) return
     const rect = event.currentTarget.getBoundingClientRect()
-    const scale = rect.width === 0 ? 1 : 1_280 / rect.width
-    const dx = (event.clientX - active.clientX) * scale / zoom
-    const dy = (event.clientY - active.clientY) * scale / zoom
-    if (Math.abs(dx) + Math.abs(dy) > 3) active.moved = true
+    const scaleX = rect.width === 0 ? 1 : 1_280 / rect.width
+    const scaleY = rect.height === 0 ? 1 : 800 / rect.height
+    const dx = (event.clientX - active.clientX) * scaleX / zoom
+    const dy = (event.clientY - active.clientY) * scaleY / zoom
     if (active.kind === 'pan') {
+      if (Math.abs(dx) + Math.abs(dy) > 3) active.moved = true
       setPan({ x: active.panX + dx * zoom, y: active.panY + dy * zoom })
       return
+    }
+    if (!active.moved) {
+      if (Math.abs(dx) + Math.abs(dy) <= 3) return
+      active.moved = true
+      runPhysics(1_200)
     }
     const particle = particles.current.get(active.nodeId)
     if (particle === undefined) return
@@ -1889,14 +2479,9 @@ function IndustryPhysicsGraph({
     const active = interaction.current
     if (active === undefined || active.pointerId !== event.pointerId) return
     interaction.current = undefined
-    if (active.kind === 'node') {
-      const node = graph.nodes.find(item => item.id === active.nodeId)
-      if (!active.moved && node !== undefined) {
-        if (node.code === '') onLeaf(node.name)
-        else onDrill({ code: node.code, name: node.name })
-      } else {
-        runPhysics(900)
-      }
+    if (active.kind === 'node' && active.moved) {
+      suppressedNodeClick.current = { nodeId: active.nodeId, until: performance.now() + 300 }
+      runPhysics(900)
     }
   }
   const zoomGraph = (event: ReactWheelEvent<SVGSVGElement>): void => {
@@ -1909,7 +2494,7 @@ function IndustryPhysicsGraph({
       className={css.industryPhysicsGraph}
       viewBox="-640 -400 1280 800"
       role="img"
-      aria-label="可缩放、可拖动节点的产业链物理图谱"
+      aria-label={ariaLabel}
       onPointerDown={startPan}
       onPointerMove={movePointer}
       onPointerUp={stopPointer}
@@ -1917,9 +2502,20 @@ function IndustryPhysicsGraph({
       onWheel={zoomGraph}
     >
       <defs>
-        <marker id="industry-graph-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-          <path d="M0,0 L7,3.5 L0,7 Z" />
-        </marker>
+        {(['up', 'down', 'related'] as const).map(direction => (
+          <marker
+            id={`${markerId}-${direction}`}
+            data-direction={direction}
+            key={direction}
+            markerWidth="7"
+            markerHeight="7"
+            refX="6"
+            refY="3.5"
+            orient="auto"
+          >
+            <path d="M0,0 L7,3.5 L0,7 Z" />
+          </marker>
+        ))}
       </defs>
       <g transform={`translate(${pan.x} ${pan.y}) scale(${zoom})`}>
         <g className={css.industryPhysicsEdges}>
@@ -1927,36 +2523,73 @@ function IndustryPhysicsGraph({
             const source = positions[edge.source]
             const target = positions[edge.target]
             if (source === undefined || target === undefined) return null
-            return <line key={edge.id} x1={source.x} y1={source.y} x2={target.x} y2={target.y} />
+            const direction = edge.tone ?? edge.direction
+            return (
+              <line
+                data-direction={direction}
+                key={edge.id}
+                x1={source.x}
+                y1={source.y}
+                x2={target.x}
+                y2={target.y}
+                markerEnd={`url(#${markerId}-${direction})`}
+              />
+            )
           })}
         </g>
         <g className={css.industryPhysicsNodes}>
           {graph.nodes.map((node) => {
             const position = positions[node.id] ?? { x: node.x, y: node.y }
+            const relationSummary = [node.via, node.share === undefined ? '' : `${node.share.toFixed(1)}%`].filter(Boolean).join(' · ')
+            const secondaryLines = Number(node.code !== '') + Number(relationSummary !== '')
+            const isFocus = node.id === activeNodeId
+            const directionLabel = node.direction === 'center'
+              ? '当前视角'
+              : node.direction === 'up'
+                ? `上游第 ${node.depth} 层`
+                : node.direction === 'down'
+                  ? `下游第 ${node.depth} 层`
+                  : '旁支关联'
             return (
               <g
                 key={node.id}
                 data-graph-node
                 data-direction={node.direction}
                 data-expandable={node.expandable || undefined}
-                role={node.direction === 'center' ? undefined : 'button'}
-                tabIndex={node.direction === 'center' ? undefined : 0}
-                aria-label={node.direction === 'center'
-                  ? `中心公司 ${node.name} ${node.code}`
-                  : `${node.name}${node.code === '' ? '，叶子节点' : `，点击钻取 ${node.code}`}`}
+                data-loaded={node.loaded || undefined}
+                data-current={node.id === activeNodeId || undefined}
+                data-selected={node.id === selectedNodeId || undefined}
+                role="button"
+                tabIndex={0}
+                aria-pressed={node.id === selectedNodeId}
+                aria-label={`${node.name}${node.code === '' ? '' : ` ${node.code}`}，${directionLabel}`}
                 transform={`translate(${position.x} ${position.y})`}
                 onPointerDown={(event) => { startNodeDrag(event, node) }}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  const suppressed = suppressedNodeClick.current
+                  suppressedNodeClick.current = undefined
+                  if (suppressed?.nodeId === node.id && performance.now() <= suppressed.until) return
+                  onSelect(node)
+                }}
+                onDoubleClick={(event) => { event.stopPropagation(); if (node.code !== '') onDrill(node) }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return
                   event.preventDefault()
-                  if (node.code === '') onLeaf(node.name)
-                  else onDrill({ code: node.code, name: node.name })
+                  onSelect(node)
                 }}
               >
-                <rect x={node.direction === 'center' ? -92 : -79} y={node.direction === 'center' ? -36 : -29} width={node.direction === 'center' ? 184 : 158} height={node.direction === 'center' ? 72 : 58} rx="12" />
+                <rect x={isFocus ? -98 : -91} y={isFocus ? -41 : -38} width={isFocus ? 196 : 182} height={isFocus ? 82 : 76} rx="12" />
+                {(node.direction === 'up' || node.direction === 'down') && (
+                  <path
+                    className={css.industryPhysicsNodeAccent}
+                    d={node.direction === 'up' ? 'M-84 -25 V25' : 'M84 -25 V25'}
+                  />
+                )}
                 <text textAnchor="middle" dominantBaseline="middle">
-                  <tspan x="0" dy={node.code === '' ? '0' : '-0.55em'}>{node.name}</tspan>
-                  {node.code !== '' && <tspan x="0" dy="1.5em">{node.code}</tspan>}
+                  <tspan x="0" dy={secondaryLines === 2 ? '-1.05em' : secondaryLines === 1 ? '-0.52em' : '0'}>{node.name}</tspan>
+                  {node.code !== '' && <tspan x="0" dy="1.45em">{node.code}</tspan>}
+                  {relationSummary !== '' && <tspan x="0" dy="1.4em">{relationSummary}</tspan>}
                 </text>
               </g>
             )
@@ -1967,6 +2600,301 @@ function IndustryPhysicsGraph({
   )
 }
 
+function IndustryGraphExplorer({
+  graph, path, activeCompany, selectedNode, entityState, entityRequested, loading, compact,
+  leafNotice, viewState, onNavigate, onSelect, onDrill, onOpenStock, onDismissNotice,
+}: {
+  readonly graph: IndustryGraphData
+  readonly path: readonly IndustryChainPathStep[]
+  readonly activeCompany: IndustryCompanySelection
+  readonly selectedNode: IndustryGraphNodeData
+  readonly entityState: DataState
+  readonly entityRequested: boolean
+  readonly loading: boolean
+  readonly compact: boolean
+  readonly leafNotice: string
+  readonly viewState: { current: IndustryGraphViewState }
+  readonly onNavigate: (index: number) => void
+  readonly onSelect: (node: IndustryGraphNodeData) => void
+  readonly onDrill: (request: IndustryGraphDrillRequest) => void
+  readonly onOpenStock: (code: string) => void
+  readonly onDismissNotice: () => void
+}) {
+  const controls = useRef<IndustryGraphControls>()
+  const navigator = useRef<HTMLElement>(null)
+  const receiveControls = useCallback((value: IndustryGraphControls | undefined) => {
+    controls.current = value
+  }, [])
+  useEffect(() => {
+    if (navigator.current !== null) navigator.current.scrollTop = 0
+  }, [entityState.phase, selectedNode.id])
+  const loadedCenterId = industryGraphIdentity(activeCompany.code, activeCompany.name)
+  const viewGraph = useMemo(
+    () => industryGraphPerspective(graph, selectedNode.id),
+    [graph, selectedNode.id],
+  )
+  const focusedNode = viewGraph.nodes.find(node => node.id === selectedNode.id) ?? selectedNode
+  const profile = { ...focusedNode.profile, ...asRecord(entityState.value) }
+  const metrics = records(profile.metrics)
+  const related = records(profile.related)
+  const asSupplier = records(profile.as_supplier)
+  const asCustomer = records(profile.as_customer)
+  const reportMaterials = records(profile.report_materials)
+  const reportProducts = records(profile.report_products)
+  const graphDirectory = [...viewGraph.nodes]
+    .filter(node => node.id !== focusedNode.id)
+    .sort((left, right) => left.x - right.x || left.y - right.y || left.name.localeCompare(right.name, 'zh-CN'))
+  const edgeBetween = (leftId: string, rightId: string): IndustryGraphEdgeData | undefined => viewGraph.edges.find(edge => (
+    (edge.source === leftId && edge.target === rightId)
+      || (edge.target === leftId && edge.source === rightId)
+  ))
+  const resolveDrillOrigin = (node: IndustryGraphNodeData): {
+    readonly sourceId: string
+    readonly sourceName: string
+    readonly sourceCode: string
+    readonly edge: IndustryGraphEdgeData | undefined
+  } | undefined => {
+    if (node.id === loadedCenterId) {
+      return { sourceId: loadedCenterId, sourceName: activeCompany.name, sourceCode: activeCompany.code, edge: undefined }
+    }
+    const directEdge = edgeBetween(loadedCenterId, node.id)
+    if (directEdge !== undefined) {
+      return { sourceId: loadedCenterId, sourceName: activeCompany.name, sourceCode: activeCompany.code, edge: directEdge }
+    }
+    for (let index = path.length - 1; index >= 0; index -= 1) {
+      const step = path[index]
+      if (step === undefined || step.nodeId === node.id) continue
+      const edge = edgeBetween(step.nodeId, node.id)
+      if (edge !== undefined) {
+        return { sourceId: step.nodeId, sourceName: step.name, sourceCode: step.code, edge }
+      }
+    }
+    const adjacentEdge = viewGraph.edges.find(edge => edge.source === node.id || edge.target === node.id)
+    const adjacentId = adjacentEdge?.source === node.id ? adjacentEdge.target : adjacentEdge?.source
+    const adjacentNode = viewGraph.nodes.find(candidate => candidate.id === adjacentId)
+    if (adjacentEdge !== undefined && adjacentNode !== undefined) {
+      return {
+        sourceId: adjacentNode.id,
+        sourceName: adjacentNode.name,
+        sourceCode: adjacentNode.code,
+        edge: adjacentEdge,
+      }
+    }
+    return undefined
+  }
+  const selectedOrigin = resolveDrillOrigin(focusedNode)
+  const selectedDirection: 'up' | 'down' = selectedOrigin?.edge === undefined
+    ? focusedNode.direction === 'up' ? 'up' : 'down'
+    : selectedOrigin.edge.target === selectedOrigin.sourceId ? 'up' : 'down'
+  const selectedRelation = focusedNode.id === loadedCenterId && focusedNode.isRoot
+    ? { share: undefined, via: '', relationType: '', note: '' }
+    : selectedOrigin?.edge ?? {
+      share: focusedNode.share,
+      via: focusedNode.via,
+      relationType: focusedNode.relationType,
+      note: focusedNode.note,
+    }
+  const selectedPathIndex = path.findIndex(step => step.nodeId === focusedNode.id)
+  const drillNode = (node: IndustryGraphNodeData): void => {
+    if (node.code === '') return
+    const pathIndex = path.findIndex(step => step.nodeId === node.id)
+    if (pathIndex >= 0 && node.id !== loadedCenterId) {
+      onNavigate(pathIndex)
+      return
+    }
+    const origin = resolveDrillOrigin(node)
+    if (origin === undefined) return
+    const direction: 'up' | 'down' = origin.edge === undefined
+      ? node.direction === 'up' ? 'up' : 'down'
+      : origin.edge.target === origin.sourceId ? 'up' : 'down'
+    onDrill({
+      company: { code: node.code, name: node.name },
+      sourceId: origin.sourceId,
+      sourceName: origin.sourceName,
+      sourceCode: origin.sourceCode,
+      targetId: node.id,
+      direction,
+      via: origin.edge?.via ?? node.via,
+      share: origin.edge?.share ?? node.share,
+      relationType: origin.edge?.relationType ?? node.relationType,
+      note: origin.edge?.note ?? node.note,
+    })
+  }
+  const drillRelatedCompany = (row: Record<string, unknown>, direction: 'up' | 'down'): void => {
+    const code = text(row.company_code, '').trim()
+    const name = text(row.company_name, code)
+    if (code === '') return
+    onDrill({
+      company: { code, name },
+      sourceId: focusedNode.id,
+      sourceName: focusedNode.name,
+      sourceCode: focusedNode.code,
+      targetId: industryGraphIdentity(code, name),
+      direction,
+      via: text(row.item, ''),
+      share: number(row.share),
+      relationType: industryRelation(row.type),
+      note: text(row.note, ''),
+    })
+  }
+  const relationLabel = '当前视角 · 上下游起点'
+  const marketCap = text(profile.market_cap_display, '') || (() => {
+    const value = number(profile.market_cap_cny ?? profile.market_cap)
+    if (value === undefined) return '—'
+    return value >= 100_000_000 ? `${(value / 100_000_000).toFixed(1)} 亿元` : `${value.toLocaleString('zh-CN')} 元`
+  })()
+
+  return (
+    <div className={`${css.industryGraphViewport} ${compact ? css.industryGraphViewportCompact : ''}`}>
+      <IndustryPhysicsGraph
+        graph={viewGraph}
+        activeNodeId={focusedNode.id}
+        selectedNodeId={focusedNode.id}
+        ariaLabel={compact ? '小窗可缩放、可拖动节点的产业链物理图谱' : '可缩放、可拖动节点的产业链物理图谱'}
+        viewState={viewState}
+        onSelect={onSelect}
+        onDrill={drillNode}
+        onReady={receiveControls}
+      />
+      <nav className={css.industryGraphBreadcrumbs} aria-label="产业链视角与已加载路径">
+        <strong>当前视角</strong>
+        <b className={css.industryGraphFocus}>{focusedNode.name}</b>
+        <small className={css.industryGraphFocusHint}>上下游以此节点为起点</small>
+        <em className={css.industryGraphTrailLabel}>已加载路径</em>
+        {path.map((step, index) => (
+          <span key={`${step.code}-${index}`}>
+            {index > 0 && (
+              <i data-direction={step.direction} aria-label={step.direction === 'up' ? '上钻' : '下钻'}>
+                {step.direction === 'up' ? '← 上钻' : '下钻 →'}
+              </i>
+            )}
+            <button
+              type="button"
+              aria-current={step.nodeId === focusedNode.id ? 'page' : undefined}
+              title={step.via === undefined || step.via === '' ? undefined : `经由 ${step.via}`}
+              onClick={() => { onNavigate(index) }}
+            >{step.name || step.code}</button>
+          </span>
+        ))}
+      </nav>
+      <aside ref={navigator} className={css.industryGraphNavigator} aria-label="可钻取公司节点">
+        <div className={css.industryGraphDetailHeader}>
+          <span>{relationLabel}</span>
+          <strong>{focusedNode.name}</strong>
+          <small>{focusedNode.code || '非上市实体'} · {focusedNode.loaded ? '完整链路已载入' : '当前图谱节点'}</small>
+        </div>
+        <dl className={css.industryGraphDetailGrid}>
+          <div><dt>传导环节</dt><dd>{selectedRelation.via || '未标注'}</dd></div>
+          <div><dt>关系类型</dt><dd>{selectedRelation.relationType || '关系未标注'}</dd></div>
+          <div><dt>关系权重</dt><dd>{selectedRelation.share === undefined ? '—' : `${selectedRelation.share.toFixed(1)}%`}</dd></div>
+          <div><dt>关联边</dt><dd>{focusedNode.relations.length || viewGraph.edges.filter(edge => edge.source === focusedNode.id || edge.target === focusedNode.id).length || '—'}</dd></div>
+        </dl>
+        {selectedRelation.note !== '' && <p className={css.industryGraphDetailNote}>{selectedRelation.note}</p>}
+        {entityRequested && entityState.phase === 'loading' && entityState.value === undefined && (
+          <p className={css.industryGraphDetailStatus} role="status">正在补充实体档案…</p>
+        )}
+        {entityRequested && entityState.phase === 'error' && (
+          <p className={css.industryGraphDetailStatus}>实体档案暂不可用，图谱关系仍可继续查看。</p>
+        )}
+        {Object.keys(profile).length > 0 && (
+          <div className={css.industryGraphProfile}>
+            <div><span>行业</span><strong>{text(profile.industry, '未标注')}</strong></div>
+            <div><span>市值</span><strong>{marketCap}</strong></div>
+            <div><span>供应 / 客户</span><strong>{industryCount(profile.supplier_count, '')} / {industryCount(profile.customer_count, '')}</strong></div>
+            <div><span>全图出现</span><strong>{industryCount(profile.appearance_count, ' 次')}</strong></div>
+          </div>
+        )}
+        {text(profile.desc, text(profile.note, '')) !== '' && <p className={css.industryGraphDetailNote}>{text(profile.desc, text(profile.note, ''))}</p>}
+        {metrics.length > 0 && (
+          <div className={css.industryGraphEvidence}>
+            <strong>经营指标</strong>
+            {metrics.slice(0, 4).map((metric, index) => (
+              <span key={`${text(metric.label, '指标')}-${index}`}><small>{text(metric.label, '指标')}</small><b>{text(metric.value)}</b></span>
+            ))}
+          </div>
+        )}
+        {(reportMaterials.length > 0 || reportProducts.length > 0) && (
+          <div className={css.industryGraphEvidence}>
+            <strong>研报补充</strong>
+            {[...reportMaterials, ...reportProducts].slice(0, 4).map((item, index) => (
+              <span key={`${text(item.name, '业务')}-${index}`}><small>{index < reportMaterials.length ? '原材料' : '主营产品'}</small><b>{text(item.name, '未命名')}</b></span>
+            ))}
+          </div>
+        )}
+        <div className={css.industryGraphDetailActions}>
+          {focusedNode.code !== '' && (focusedNode.id === loadedCenterId || selectedPathIndex >= 0 || selectedOrigin !== undefined) && (
+            <button type="button" className={css.primaryButton} onClick={() => { drillNode(focusedNode) }}>
+              {focusedNode.id === loadedCenterId
+                ? '刷新完整上下游'
+                : selectedPathIndex >= 0
+                  ? '切换到该公司'
+                  : `展开${selectedDirection === 'up' ? '上游' : '下游'}完整链路`}
+            </button>
+          )}
+          {/^[0-9]{6,8}$/u.test(focusedNode.code) && (
+            <button type="button" className={css.secondaryButton} onClick={() => { onOpenStock(focusedNode.code) }}>查看个股</button>
+          )}
+        </div>
+        {(asSupplier.length > 0 || asCustomer.length > 0 || related.length > 0) && (
+          <section className={css.industryGraphRelated} aria-label="实体关联公司">
+            <div><strong>实体关联公司</strong><span>{asSupplier.length + asCustomer.length + related.length}</span></div>
+            {asSupplier.slice(0, 4).map((row, index) => (
+              <button type="button" key={`supplier-${text(row.company_code, '')}-${index}`} onClick={() => { drillRelatedCompany(row, 'down') }}>
+                <span><b>{text(row.company_name, text(row.company_code))}</b><small>下钻 · {text(row.item, '供应关系')} · {number(row.share)?.toFixed(1) ?? '—'}%</small></span><i>→</i>
+              </button>
+            ))}
+            {asCustomer.slice(0, 4).map((row, index) => (
+              <button type="button" key={`customer-${text(row.company_code, '')}-${index}`} onClick={() => { drillRelatedCompany(row, 'up') }}>
+                <span><b>{text(row.company_name, text(row.company_code))}</b><small>上钻 · {text(row.item, '采购关系')} · {number(row.share)?.toFixed(1) ?? '—'}%</small></span><i>←</i>
+              </button>
+            ))}
+            {related.slice(0, 3).map((row, index) => (
+              <div key={`related-${text(row.code, text(row.name, ''))}-${index}`}>
+                <span><b>{text(row.name, text(row.code))}</b><small>{text(row.relation, '研报关联')}</small></span>
+              </div>
+            ))}
+          </section>
+        )}
+        <section className={css.industryGraphDirectory} aria-label="完整图谱节点目录">
+          <div><strong>完整图谱</strong><span>{graph.nodes.length} 节点 · {graph.edges.length} 关系</span></div>
+          {graphDirectory.map(node => (
+            <button
+              type="button"
+              data-direction={node.direction}
+              key={node.id}
+              aria-label={`查看节点详情：${node.name}${node.code === '' ? '' : ` ${node.code}`}`}
+              onClick={() => { onSelect(node) }}
+              onDoubleClick={() => { drillNode(node) }}
+            >
+              <span><b>{node.name}</b><small>{node.direction === 'up' ? '上游' : node.direction === 'down' ? '下游' : '旁支'} · {node.direction === 'related' ? '关联分支' : `第 ${node.depth} 层`} · {node.via || '传导未标注'}</small></span>
+              <span><b>{node.share === undefined ? '—' : `${node.share.toFixed(1)}%`}</b><small>{node.loaded ? '已展开' : node.code === '' ? '实体档案' : node.code}</small></span>
+            </button>
+          ))}
+        </section>
+      </aside>
+      <div className={css.industryGraphControls} aria-label="图谱视图控制">
+        <button type="button" aria-label="缩小图谱" onClick={() => { controls.current?.zoomOut() }}>−</button>
+        <button type="button" onClick={() => { controls.current?.fit() }}>适应画布</button>
+        <button type="button" aria-label="放大图谱" onClick={() => { controls.current?.zoomIn() }}>＋</button>
+      </div>
+      <div className={css.industryGraphLegend} aria-hidden="true">
+        <span data-direction="up">上游 · 供给</span>
+        <span data-direction="center">当前视角</span>
+        <span data-direction="down">下游 · 需求</span>
+        <span data-direction="related">旁支</span>
+        <small>单击切换视角 · 拖动节点 · 双击公司继续展开</small>
+      </div>
+      {loading && <div className={css.industryGraphLoading} role="status">正在合并新的完整上下游，已载入图谱保持可用…</div>}
+      {leafNotice !== '' && (
+        <div className={css.industryGraphNotice} role="status">
+          <span>{leafNotice}</span>
+          <button type="button" onClick={onDismissNotice} aria-label="关闭提示">×</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Industry graph, company lookup and event transmission backed by two registered services. */
 export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOpenStock }: IndustryChainPageProps) {
   const dataStatus = useDataResource(requestData)
@@ -1974,6 +2902,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const companies = useDataResource(requestData)
   const securityMatches = useDataResource(requestData)
   const chain = useDataResource(requestData)
+  const entityDetail = useDataResource(requestData)
   const impact = useDataResource(requestData)
   const alive = useAliveRef()
   const bootstrapPoll = useRef<number>()
@@ -1981,12 +2910,19 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const initialSearchPending = useRef(initialQuery.current !== '')
   const chainExpandButtonRef = useRef<HTMLButtonElement>(null)
   const chainCloseButtonRef = useRef<HTMLButtonElement>(null)
-  const chainGraphResetRef = useRef<() => void>()
+  const graphViewState = useRef<IndustryGraphViewState>({
+    particles: new Map(), topologySignature: '', pan: { x: 0, y: 0 }, zoom: 1,
+  })
   const [searchedKeyword, setSearchedKeyword] = useState('')
   const [searchAttempted, setSearchAttempted] = useState(false)
   const [searchValidation, setSearchValidation] = useState('')
   const [selectedCompany, setSelectedCompany] = useState<IndustryCompanySelection>()
-  const [chainPath, setChainPath] = useState<readonly IndustryCompanySelection[]>([])
+  const [chainRoot, setChainRoot] = useState<IndustryCompanySelection>()
+  const [chainPath, setChainPath] = useState<readonly IndustryChainPathStep[]>([])
+  const [chainSnapshots, setChainSnapshots] = useState<Readonly<Record<string, IndustryChainSnapshot>>>({})
+  const [chainConnections, setChainConnections] = useState<readonly IndustryGraphConnection[]>([])
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState('')
+  const [entityRequestedKey, setEntityRequestedKey] = useState('')
   const [chainLeafNotice, setChainLeafNotice] = useState('')
   const [impactSecurityNames, setImpactSecurityNames] = useState<Record<string, string>>({})
   const [chainExpanded, setChainExpanded] = useState(false)
@@ -2034,30 +2970,99 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   }, [companies.run, securityMatches.run])
   const loadChain = useCallback((company: IndustryCompanySelection) => {
     setChainLeafNotice('')
-    chain.run({ operation: 'industry-chain.chain', input: { code: company.code } })
+    chain.run({
+      operation: 'industry-chain.chain',
+      input: { code: company.code, depth_up: 3, depth_down: 3, top_up: 5, top_down: 5 },
+    })
   }, [chain.run])
-  const selectChainCompany = useCallback((company: IndustryCompanySelection, path?: readonly IndustryCompanySelection[]) => {
+  const inspectEntity = useCallback((nodeId: string, key: string) => {
+    const cleanKey = key.trim()
+    setSelectedGraphNodeId(nodeId)
+    setEntityRequestedKey(cleanKey)
+    if (cleanKey !== '') entityDetail.run({ operation: 'industry-chain.entity', input: { key: cleanKey } })
+  }, [entityDetail.run])
+  const startChainCompany = useCallback((company: IndustryCompanySelection) => {
+    const nodeId = industryGraphIdentity(company.code, company.name)
+    setChainRoot(company)
     setSelectedCompany(company)
-    setChainPath(current => path ?? [...current, company])
+    setChainPath([{ ...company, nodeId }])
+    setChainSnapshots({})
+    setChainConnections([])
+    inspectEntity(nodeId, company.code || company.name)
     loadChain(company)
-  }, [loadChain])
-  const drillChainNode = useCallback((company: IndustryCompanySelection) => {
+  }, [inspectEntity, loadChain])
+  const navigateChainPath = useCallback((index: number) => {
+    const step = chainPath[index]
+    if (step === undefined) return
+    setSelectedCompany({ code: step.code, name: step.name })
+    inspectEntity(step.nodeId, step.code || step.name)
+    if (chainSnapshots[step.code] === undefined) loadChain(step)
+  }, [chainPath, chainSnapshots, inspectEntity, loadChain])
+  const drillChainNode = useCallback((request: IndustryGraphDrillRequest) => {
+    const company = request.company
+    if (company.code === '') {
+      setChainLeafNotice(`${company.name} 当前没有可直接展开的公司代码，请从实体关联公司继续上下钻。`)
+      return
+    }
+    if (request.sourceId !== request.targetId) {
+      setChainConnections((current) => {
+        const exists = current.some(item => (
+          item.sourceId === request.sourceId
+          && item.target.code === company.code
+          && item.direction === request.direction
+        ))
+        return exists ? current : [...current, {
+          sourceId: request.sourceId,
+          sourceName: request.sourceName,
+          sourceCode: request.sourceCode,
+          target: company,
+          direction: request.direction,
+          via: request.via,
+          share: request.share,
+          relationType: request.relationType,
+          note: request.note,
+        }]
+      })
+    }
     setChainPath((current) => {
-      const existing = current.findIndex(item => item.code === company.code)
-      return existing >= 0 ? current.slice(0, existing + 1) : [...current, company]
+      const sourceIndex = current.findIndex(item => item.nodeId === request.sourceId)
+      const activeIndex = current.findIndex(item => item.code === selectedCompany?.code)
+      const baseIndex = sourceIndex >= 0 ? sourceIndex : activeIndex
+      const base = baseIndex >= 0 ? current.slice(0, baseIndex + 1) : current
+      const existing = base.findIndex(item => item.code === company.code)
+      const step: IndustryChainPathStep = {
+        ...company,
+        nodeId: request.targetId,
+        direction: request.direction,
+        via: request.via,
+        relationType: request.relationType,
+        ...(request.share === undefined ? {} : { share: request.share }),
+      }
+      return existing >= 0 ? base.slice(0, existing + 1) : [...base, step]
     })
     setSelectedCompany(company)
+    inspectEntity(request.targetId, company.code)
     loadChain(company)
-  }, [loadChain])
-  const showChainLeaf = useCallback((name: string) => {
-    setChainLeafNotice(`${name} 当前没有可继续展开的上市公司链路。`)
-  }, [])
-  const receiveChainGraphReset = useCallback((reset: (() => void) | undefined) => {
-    chainGraphResetRef.current = reset
-  }, [])
+  }, [inspectEntity, loadChain, selectedCompany?.code])
+  const selectGraphNode = useCallback((node: IndustryGraphNodeData) => {
+    inspectEntity(node.id, node.code || node.rawKey || node.name)
+  }, [inspectEntity])
 
   useEffect(loadDataStatus, [loadDataStatus])
   useEffect(loadImpact, [loadImpact])
+  useEffect(() => {
+    if (chain.state.phase !== 'success') return
+    const value = asRecord(chain.state.value)
+    const snapshotCenter = asRecord(value.center)
+    const code = text(snapshotCenter.code, selectedCompany?.code ?? '').trim()
+    if (code === '') return
+    const snapshot: IndustryChainSnapshot = {
+      center: snapshotCenter,
+      upLevels: records(value.up_levels),
+      downLevels: records(value.down_levels),
+    }
+    setChainSnapshots(current => ({ ...current, [code]: snapshot }))
+  }, [chain.state.phase, chain.state.value, selectedCompany?.code])
 
   const status = industryDataStatus(dataStatus.state.value)
   const industryReady = status === 'ready'
@@ -2109,14 +3114,31 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const companyItems = records(asRecord(companies.state.value).items)
   const companyCodes = new Set(companyItems.map(item => text(item.code, '').trim()).filter(Boolean))
   const securityOnlyItems = records(asRecord(securityMatches.state.value).items)
-    .filter(item => {
+    .filter((item) => {
       const code = text(item.code, '').trim()
       return code !== '' && !companyCodes.has(code)
     })
   const chainValue = asRecord(chain.state.value)
-  const center = asRecord(chainValue.center)
-  const upLevels = records(chainValue.up_levels)
-  const downLevels = records(chainValue.down_levels)
+  const responseCenter = asRecord(chainValue.center)
+  const responseCode = text(responseCenter.code, '').trim()
+  const responseSnapshot: IndustryChainSnapshot | undefined = responseCode === ''
+    ? undefined
+    : { center: responseCenter, upLevels: records(chainValue.up_levels), downLevels: records(chainValue.down_levels) }
+  const activeSnapshot = selectedCompany === undefined
+    ? undefined
+    : chainSnapshots[selectedCompany.code]
+      ?? (responseCode === selectedCompany.code ? responseSnapshot : undefined)
+  const center = activeSnapshot?.center ?? {}
+  const graphRoot = chainRoot ?? selectedCompany ?? { code: '', name: '未选择公司' }
+  const graphSnapshots = useMemo(() => Object.values(chainSnapshots), [chainSnapshots])
+  const completeIndustryGraph = useMemo(
+    () => industryGraphData(graphRoot, graphSnapshots, chainConnections),
+    [chainConnections, graphRoot.code, graphRoot.name, graphSnapshots],
+  )
+  const rootGraphNodeId = industryGraphIdentity(graphRoot.code, graphRoot.name)
+  const selectedGraphNode = completeIndustryGraph.nodes.find(node => node.id === selectedGraphNodeId)
+    ?? completeIndustryGraph.nodes.find(node => node.id === rootGraphNodeId)
+    ?? completeIndustryGraph.nodes[0]
   const events = records(asRecord(impact.state.value).events)
   const seededImpactNames: Record<string, string> = {}
   const impactCodes = new Set<string>()
@@ -2167,10 +3189,6 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
     ? ''
     : `${selectedCompany.code} ${selectedCompany.name}`.trim()
   const securityNames = { ...seededImpactNames, ...impactSecurityNames }
-  const chainNavigationNodes = [
-    ...upLevels.flatMap(level => records(level.nodes).map(node => ({ node, direction: '上游' }))),
-    ...downLevels.flatMap(level => records(level.nodes).map(node => ({ node, direction: '下游' }))),
-  ]
   const renderStockLinks = (codes: readonly string[], empty: string): ReactNode => {
     if (codes.length === 0) return empty
     return (
@@ -2192,66 +3210,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
     )
   }
 
-  const renderLevels = (levels: readonly Record<string, unknown>[], direction: 'up' | 'down'): ReactNode => {
-    if (levels.length === 0) {
-      return <div className={css.industryLayerEmpty}>当前没有返回{direction === 'up' ? '上游' : '下游'}关系。</div>
-    }
-    return levels.map((level, levelIndex) => {
-      const nodes = records(level.nodes)
-      const rawLevel = number(level.level)
-      const depth = rawLevel === undefined ? levelIndex + 1 : Math.abs(rawLevel)
-      return (
-        <section className={css.industryLayer} key={`${direction}-${depth}-${levelIndex}`}>
-          <h4>{direction === 'up' ? '上游' : '下游'}第 {depth} 层</h4>
-          {nodes.length === 0
-            ? <div className={css.industryLayerEmpty}>本层没有返回关系。</div>
-            : nodes.map((node, nodeIndex) => {
-              const share = number(node.share)
-              return (
-                <article className={css.industryNode} key={`${text(node.id, text(node.name, 'node'))}-${nodeIndex}`}>
-                  <div className={css.sectionHeading}>
-                    <strong>{text(node.name, '未命名环节')}</strong>
-                    {share !== undefined && <span>{share.toFixed(1)}%</span>}
-                  </div>
-                  <dl className={css.reportMeta}>
-                    <div><dt>传导环节</dt><dd>{text(node.via, '未标注')}</dd></div>
-                    <div><dt>关系类型</dt><dd>{industryRelation(node.type)}</dd></div>
-                  </dl>
-                  {text(node.note, '') !== '' && <p>{text(node.note, '')}</p>}
-                </article>
-              )
-            })}
-        </section>
-      )
-    })
-  }
-
-  const renderChainLayout = (expanded = false): ReactNode => (
-    <div className={`${css.industryChainLayout} ${expanded ? css.industryChainLayoutExpanded : ''}`}>
-      <div className={css.industryDirection} aria-label="上游分层关系">
-        <h3>上游</h3>
-        {renderLevels(upLevels, 'up')}
-      </div>
-      <article className={css.industryCenter}>
-        <span>中心公司</span>
-        <h3>{text(center.name, selectedCompany?.name ?? '未命名公司')}</h3>
-        <strong>{text(center.code, selectedCompany?.code ?? '')}</strong>
-        <p>{text(center.industry, '行业未标注')}</p>
-        <dl className={css.reportMeta}>
-          <div><dt>原材料</dt><dd>{industryCount(center.material_count, ' 项')}</dd></div>
-          <div><dt>供应关系</dt><dd>{industryCount(center.supplier_count, ' 条')}</dd></div>
-          <div><dt>主营产品</dt><dd>{industryCount(center.product_count, ' 项')}</dd></div>
-          <div><dt>客户关系</dt><dd>{industryCount(center.customer_count, ' 条')}</dd></div>
-        </dl>
-      </article>
-      <div className={css.industryDirection} aria-label="下游分层关系">
-        <h3>下游</h3>
-        {renderLevels(downLevels, 'down')}
-      </div>
-    </div>
-  )
-
-  const expandedChainDialog = chainExpanded && (
+  const expandedChainDialog = chainExpanded && selectedCompany !== undefined && selectedGraphNode !== undefined && (
     <div className={css.industryGraphBackdrop} role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) closeExpandedChain()
     }}>
@@ -2264,74 +3223,36 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
       >
         <header className={css.industryGraphHeader}>
           <div>
-            <span>产业链图谱</span>
+            <span>完整产业链图谱</span>
             <h2 id="industry-graph-dialog-title">
-              {text(center.name, selectedCompany?.name ?? '未命名公司')} · {text(center.code, selectedCompany?.code ?? '')}
+              {selectedGraphNode.name || '未命名节点'} · {selectedGraphNode.code || '实体视角'}
             </h2>
-            <p id="industry-graph-dialog-hint">拖动画布平移、滚轮缩放；拖动节点可感受关系回弹，点击带代码的节点继续上下钻。</p>
+            <p id="industry-graph-dialog-hint">
+              当前以“{selectedGraphNode.name}”为上下游起点；已载入 {completeIndustryGraph.nodes.length} 个节点、
+              {completeIndustryGraph.edges.length} 条关系，钻取后继续合并。
+            </p>
           </div>
           <div className={css.moduleToolbar}>
-            <button type="button" className={css.secondaryButton} onClick={() => {
-              chainGraphResetRef.current?.()
-            }}>适应画布</button>
             <button ref={chainCloseButtonRef} type="button" className={css.secondaryButton} onClick={closeExpandedChain}>关闭</button>
           </div>
         </header>
-        <nav className={css.industryGraphBreadcrumbs} aria-label="产业链钻取路径">
-          {chainPath.map((company, index) => (
-            <span key={`${company.code}-${index}`}>
-              {index > 0 && <i aria-hidden="true">›</i>}
-              <button
-                type="button"
-                aria-current={index === chainPath.length - 1 ? 'page' : undefined}
-                onClick={() => { selectChainCompany(company, chainPath.slice(0, index + 1)) }}
-              >{company.name || company.code}</button>
-            </span>
-          ))}
-        </nav>
-        <div className={css.industryGraphViewport}>
-          <IndustryPhysicsGraph
-            center={center}
-            upLevels={upLevels}
-            downLevels={downLevels}
-            onDrill={drillChainNode}
-            onLeaf={showChainLeaf}
-            onReady={receiveChainGraphReset}
-          />
-          <aside className={css.industryGraphNavigator} aria-label="可钻取公司节点">
-            <strong>继续钻取</strong>
-            {chainNavigationNodes.map(({ node, direction }, index) => {
-              const name = text(node.name, '未命名环节')
-              const code = text(node.code, '')
-              return (
-                <button
-                  type="button"
-                  disabled={code === ''}
-                  key={`${direction}-${text(node.id, name)}-${index}`}
-                  onClick={() => {
-                    if (code === '') setChainLeafNotice(`${name} 当前没有可继续展开的上市公司链路。`)
-                    else drillChainNode({ code, name })
-                  }}
-                >
-                  <span>{name}</span>
-                  <small>{code === '' ? '叶子节点' : `${direction} · ${code}`}</small>
-                </button>
-              )
-            })}
-          </aside>
-          <div className={css.industryGraphLegend} aria-hidden="true">
-            <span data-direction="up">上游</span>
-            <span data-direction="center">中心公司</span>
-            <span data-direction="down">下游</span>
-            <small>虚线节点暂无可钻取公司</small>
-          </div>
-          {chainLeafNotice !== '' && (
-            <div className={css.industryGraphNotice} role="status">
-              <span>{chainLeafNotice}</span>
-              <button type="button" onClick={() => { setChainLeafNotice('') }} aria-label="关闭提示">×</button>
-            </div>
-          )}
-        </div>
+        <IndustryGraphExplorer
+          graph={completeIndustryGraph}
+          path={chainPath}
+          activeCompany={selectedCompany}
+          selectedNode={selectedGraphNode}
+          entityState={entityDetail.state}
+          entityRequested={entityRequestedKey !== ''}
+          loading={chain.state.phase === 'loading'}
+          compact={false}
+          leafNotice={chainLeafNotice}
+          viewState={graphViewState}
+          onNavigate={navigateChainPath}
+          onSelect={selectGraphNode}
+          onDrill={drillChainNode}
+          onOpenStock={onOpenStock}
+          onDismissNotice={() => { setChainLeafNotice('') }}
+        />
       </section>
     </div>
   )
@@ -2462,7 +3383,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
                       key={`${code}-${index}`}
                       onClick={() => {
                         const selection = { code, name }
-                        selectChainCompany(selection, [selection])
+                        startChainCompany(selection)
                       }}
                     >
                       <span><strong>{name || '未命名公司'}</strong><small>{text(company.industry, '行业未标注')}</small></span>
@@ -2505,11 +3426,11 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
 
           <section className={css.industryChainPanel} aria-labelledby="industry-chain-title">
             <div className={css.sectionHeading}>
-              <div><h2 id="industry-chain-title">上下游链路</h2><small>按服务端返回的层级与传导字段展示，不补画缺失关系</small></div>
+              <div><h2 id="industry-chain-title">完整上下游图谱</h2><small>小窗与放大视图共用物理图谱；默认读取上下游各 3 层，钻取后继续累积而不覆盖</small></div>
               {selectedCompany !== undefined && (
                 <div className={css.industryChainActions}>
-                  <span>{selectedCompany.name}（{selectedCompany.code}）</span>
-                  {Object.keys(center).length > 0 && (
+                  <span>{completeIndustryGraph.nodes.length} 节点 · {completeIndustryGraph.edges.length} 关系</span>
+                  {selectedGraphNode !== undefined && (
                     <button
                       ref={chainExpandButtonRef}
                       type="button"
@@ -2521,7 +3442,6 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
               )}
             </div>
             {selectedCompany === undefined && <Empty>请先从公司检索结果中选择一家公司。</Empty>}
-            {selectedCompany !== undefined && chain.state.phase === 'loading' && chain.state.value === undefined && <BusyRows />}
             {selectedCompany !== undefined && (
               <IndustryResourceFeedback
                 state={chain.state}
@@ -2533,7 +3453,25 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
             {selectedCompany !== undefined && chain.state.value !== undefined && Object.keys(center).length === 0 && chain.state.phase === 'success' && (
               <Empty>该公司当前没有可展示的产业链数据。</Empty>
             )}
-            {Object.keys(center).length > 0 && renderChainLayout()}
+            {selectedCompany !== undefined && selectedGraphNode !== undefined && !chainExpanded && (
+              <IndustryGraphExplorer
+                graph={completeIndustryGraph}
+                path={chainPath}
+                activeCompany={selectedCompany}
+                selectedNode={selectedGraphNode}
+                entityState={entityDetail.state}
+                entityRequested={entityRequestedKey !== ''}
+                loading={chain.state.phase === 'loading'}
+                compact
+                leafNotice={chainLeafNotice}
+                viewState={graphViewState}
+                onNavigate={navigateChainPath}
+                onSelect={selectGraphNode}
+                onDrill={drillChainNode}
+                onOpenStock={onOpenStock}
+                onDismissNotice={() => { setChainLeafNotice('') }}
+              />
+            )}
           </section>
         </>
       )}
