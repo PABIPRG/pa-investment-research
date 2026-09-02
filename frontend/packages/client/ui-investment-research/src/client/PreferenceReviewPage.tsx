@@ -9,6 +9,7 @@ type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 interface PreferenceReviewPageProps {
   readonly requestData: RequestData
   readonly onBack: () => void
+  readonly backLabel?: string
   readonly trackTelemetry: TrackLocalTelemetry
 }
 
@@ -32,7 +33,7 @@ function displayTime(value: unknown): string {
 
 /** User-owned explanation and controls for the local learning fact store. */
 export function PreferenceReviewPage({
-  requestData, onBack, trackTelemetry,
+  requestData, onBack, backLabel = '← 返回我的投研', trackTelemetry,
 }: PreferenceReviewPageProps) {
   const [days, setDays] = useState<7 | 30>(7)
   const [nonce, setNonce] = useState(0)
@@ -132,7 +133,7 @@ export function PreferenceReviewPage({
     <div className={css.pageScroll}>
       <div className={css.pageHeader}>
         <div>
-          <button type="button" className={css.backTextButton} onClick={onBack}>← 返回我的投研</button>
+          <button type="button" className={css.backTextButton} onClick={onBack}>{backLabel}</button>
           <h1>偏好复盘</h1>
           <p>查看本地记录如何解释你的研究兴趣；这些行为不会修改风险承受能力</p>
         </div>

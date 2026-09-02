@@ -95,6 +95,7 @@ function renderWorkbench(requestData = vi.fn(async (request: InvestmentDataReque
   const navigate = vi.fn()
   const onAnalyze = vi.fn()
   const onOpenReports = vi.fn()
+  const onOpenPreferences = vi.fn()
   const trackTelemetry = vi.fn(async () => {})
   const view = render(
     <ResearchWorkbenchPage
@@ -102,10 +103,11 @@ function renderWorkbench(requestData = vi.fn(async (request: InvestmentDataReque
       navigate={navigate}
       onAnalyze={onAnalyze}
       onOpenReports={onOpenReports}
+      onOpenPreferences={onOpenPreferences}
       trackTelemetry={trackTelemetry}
     />,
   )
-  return { ...view, requestData, navigate, onAnalyze, onOpenReports, trackTelemetry }
+  return { ...view, requestData, navigate, onAnalyze, onOpenReports, onOpenPreferences, trackTelemetry }
 }
 
 function deferred<T>() {
@@ -115,6 +117,14 @@ function deferred<T>() {
 }
 
 describe('研究工作台', () => {
+  it('从页头操作区打开偏好复盘', () => {
+    const view = renderWorkbench()
+
+    fireEvent.click(view.getByRole('button', { name: '偏好复盘' }))
+
+    expect(view.onOpenPreferences).toHaveBeenCalledOnce()
+  })
+
   it('并行读取七类真实数据，并展示真实 cards、KYC 与 match_reasons DTO', async () => {
     const view = renderWorkbench()
 

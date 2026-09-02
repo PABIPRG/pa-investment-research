@@ -10,6 +10,7 @@ import {
   InvestmentWelcome,
   InvestmentSidebar,
   assistantModulePrompt,
+  nextAssistantModuleDraft,
   type InvestmentShellInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
@@ -261,20 +262,27 @@ export function apply(ctx: ClientContext): void {
     flushPendingNavigation()
   }
 
-  const applyModulePromptToBlankDraft = (module: AssistantModule): void => {
+  const automaticModulePrompts = new Map<string, string>()
+
+  const applyModulePromptToBlankDraft = (module: AssistantModule, promptOverride?: string): void => {
     const current = ctx.sessions.list.getSnapshot().current
     if (current === undefined) return
     const scope = ctx.sessions.scope(current)
     if (scope === undefined) return
     const input = ctx.conversation.input.for(scope)
-    if (input.state.getSnapshot().draft.trim() !== '') return
-    const prompt = assistantModulePrompt(module)
-    if (prompt !== '') input.setDraft(prompt)
+    const sessionKey = String(current)
+    const currentDraft = input.state.getSnapshot().draft
+    const prompt = promptOverride ?? assistantModulePrompt(module)
+    const nextDraft = nextAssistantModuleDraft(currentDraft, automaticModulePrompts.get(sessionKey), prompt)
+    if (nextDraft === undefined) return
+    input.setDraft(nextDraft)
+    if (nextDraft === '') automaticModulePrompts.delete(sessionKey)
+    else automaticModulePrompts.set(sessionKey, nextDraft)
   }
 
-  const selectAssistantModule = (module: AssistantModule): void => {
+  const selectAssistantModule = (module: AssistantModule, promptOverride?: string): void => {
     state.setAssistantModule(module)
-    applyModulePromptToBlankDraft(module)
+    applyModulePromptToBlankDraft(module, promptOverride)
   }
 
   const prepareAssistant = async (
