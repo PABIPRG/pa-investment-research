@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import type { CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import {
@@ -36,6 +38,27 @@ export interface InvestmentComposerContextInjected extends InvestmentAssistantMo
 export type InvestmentComposerContextProps = PropsRuntime<'conversation.input.left'>
   & InjectFace<InvestmentComposerContextInjected>
 
+type ResearchContextPanel = 'strategy' | 'instrument'
+
+interface RetrySelection {
+  readonly target: ResearchChatContextTarget
+  readonly source: ResearchContextPanel
+}
+
+interface SelectionFocusRestore {
+  readonly token: number
+  readonly source: ResearchContextPanel
+  eligible: boolean
+}
+
+const POPOVER_MARGIN = 12
+const POPOVER_GAP = 8
+const POPOVER_MAX_HEIGHT = 560
+const POPOVER_MAX_WIDTH = 420
+const POPOVER_MEASURE_STYLE: CSSProperties = {
+  position: 'fixed', left: 0, top: 0, maxHeight: POPOVER_MAX_HEIGHT, visibility: 'hidden',
+}
+
 const STATUS_LABELS: Readonly<Record<string, string>> = {
   active: '已启用', candidate: '候选', rejected: '已拒绝', retired: '已退役',
 }
@@ -48,11 +71,41 @@ const STRATEGY_RISK_ORDER: Readonly<Record<string, number>> = {
   active: 0, candidate: 1, rejected: 2, retired: 3,
 }
 
+function lifecycleLabel(status: string): string {
+  return STATUS_LABELS[status] ?? '状态未知'
+}
+
+function verificationLabel(status: string): string {
+  return VERIFICATION_LABELS[status] ?? '验证状态未知'
+}
+
+function verificationTone(status: string): string {
+  if (status === 'passed') return 'verification'
+  if (status === 'pending') return 'pending'
+  if (status === 'archived') return 'muted'
+  return 'danger'
+}
+
 function strategyLabel(strategy: StrategyOption): string {
-  const lifecycle = STATUS_LABELS[strategy.status] ?? (strategy.status || '状态未知')
-  const verification = VERIFICATION_LABELS[strategy.verificationStatus]
-    ?? (strategy.verificationStatus || '验证状态未知')
-  return `${strategy.name}，${lifecycle}，${verification}，${strategy.recommended ? '推荐' : '非推荐'}`
+  return `${strategy.name}，类型 ${strategy.kind}，${lifecycleLabel(strategy.status)}，${verificationLabel(strategy.verificationStatus)}，${strategy.recommended ? '推荐' : '非推荐'}`
+}
+
+function strategyBadge(strategy: StrategyOption): { readonly label: string; readonly tone: string } {
+  if (strategy.recommended) return { label: '推荐', tone: 'recommended' }
+  if (strategy.verificationStatus === 'failed') return { label: '未通过', tone: 'danger' }
+  if (strategy.verificationStatus === 'archived') return { label: '已归档', tone: 'muted' }
+  if (!(strategy.verificationStatus in VERIFICATION_LABELS)) {
+    return { label: '验证状态未知', tone: 'danger' }
+  }
+  if (strategy.status === 'rejected' || strategy.status === 'retired') {
+    return { label: lifecycleLabel(strategy.status), tone: 'muted' }
+  }
+  if (strategy.verificationStatus === 'pending') return { label: '待验证', tone: 'pending' }
+  return { label: lifecycleLabel(strategy.status), tone: 'pending' }
+}
+
+function strategyElementId(controlId: string, strategyId: string): string {
+  return `${controlId}-strategy-${encodeURIComponent(strategyId)}`
 }
 
 function compactValue(value: unknown): string {
@@ -109,11 +162,38 @@ function instrumentLabel(instrument: ResearchChatInstrument): string {
   return `${instrument.name}，${instrument.code}，${instrument.type === 'etf' ? 'ETF' : 'A股'}`
 }
 
+function selectorContains(
+  element: Node,
+  controls: HTMLDivElement | null,
+  popover: HTMLDivElement | null,
+): boolean {
+  return controls?.contains(element) === true || popover?.contains(element) === true
+}
+
+function isDocumentFocusFallback(element: Element | null): boolean {
+  return element === document.body || element === document.documentElement
+}
+
+function prefersReducedMotion(): boolean {
+  const matchMedia = (window as unknown as { matchMedia?: (query: string) => MediaQueryList }).matchMedia
+  return matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+}
+
+function scrollNearestIntoView(element: Element | null | undefined): void {
+  if (element === null || element === undefined || typeof element.scrollIntoView !== 'function') return
+  element.scrollIntoView({ block: 'nearest', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
+}
+
 /** Composer toolbar controls for the current session's confirmed strategy and target. */
 export function InvestmentComposerContextControls(props: InvestmentComposerContextProps) {
   const { useInvestmentUi, researchChatContext, requestData, session, input } = props
   const route = useInvestmentUi(snapshot => snapshot.route)
   const sessionId = String(session.sessionId)
+  const controlId = useId().replace(/:/gu, '')
+  const strategyDialogId = `${controlId}-strategy-dialog`
+  const strategyListId = `${controlId}-strategy-list`
+  const instrumentDialogId = `${controlId}-instrument-dialog`
+  const instrumentListId = `${controlId}-instrument-list`
   const subscribe = useCallback(
     (listener: () => void) => researchChatContext.subscribe(sessionId, listener),
     [researchChatContext, sessionId],
@@ -123,7 +203,7 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
     [researchChatContext, sessionId],
   )
   const entry = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const [panel, setPanel] = useState<'strategy' | 'instrument' | null>(null)
+  const [panel, setPanel] = useState<ResearchContextPanel | null>(null)
   const [strategies, setStrategies] = useState<StrategyOption[]>([])
   const [confirmedStrategy, setConfirmedStrategy] = useState<StrategyOption>()
   const [confirmedStrategyIssue, setConfirmedStrategyIssue] = useState<'missing' | 'unavailable' | ''>('')
@@ -141,9 +221,24 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
   const [strategyActiveIndex, setStrategyActiveIndex] = useState(-1)
   const searchGeneration = useRef(0)
   const strategyDetailGeneration = useRef(0)
+  const focusRestoreSequence = useRef(0)
+  const focusRestoreRequest = useRef<SelectionFocusRestore>()
+  const strategyItemRefs = useRef(new Map<string, HTMLDivElement>())
+  const controlsRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   const strategyTriggerRef = useRef<HTMLButtonElement>(null)
   const instrumentTriggerRef = useRef<HTMLButtonElement>(null)
-  const [retryTarget, setRetryTarget] = useState<ResearchChatContextTarget>()
+  const strategySearchRef = useRef<HTMLInputElement>(null)
+  const instrumentSearchRef = useRef<HTMLInputElement>(null)
+  const retrySelectionRef = useRef<HTMLButtonElement>(null)
+  const [retrySelection, setRetrySelection] = useState<RetrySelection>()
+  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>(POPOVER_MEASURE_STYLE)
+  const scrollStrategyIntoView = useCallback((strategyId: string) => {
+    scrollNearestIntoView(strategyItemRefs.current.get(strategyId))
+  }, [])
+  const scrollStrategyConfirmIntoView = useCallback((strategyId: string) => {
+    scrollNearestIntoView(document.getElementById(`${strategyElementId(controlId, strategyId)}-confirm`))
+  }, [controlId])
 
   useEffect(() => {
     if (route !== 'portfolio') return
@@ -226,14 +321,84 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
     if (panel === null) return
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
         const trigger = panel === 'strategy' ? strategyTriggerRef.current : instrumentTriggerRef.current
         setPanel(null)
+        if (panel === 'strategy') {
+          setStrategyQuery('')
+          setPreviewStrategyId(undefined)
+          setStrategyActiveIndex(-1)
+        } else {
+          setQuery('')
+        }
         trigger?.focus()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => { window.removeEventListener('keydown', onKeyDown) }
   }, [panel])
+
+  useEffect(() => {
+    const cancelRestoreForExternalTarget = (
+      target: EventTarget | null,
+      allowDocumentFallback: boolean,
+    ): void => {
+      const request = focusRestoreRequest.current
+      if (request === undefined || !request.eligible) return
+      if (!(target instanceof Node)) {
+        request.eligible = false
+        return
+      }
+      if (selectorContains(target, controlsRef.current, popoverRef.current)) return
+      if (allowDocumentFallback && target instanceof Element && isDocumentFocusFallback(target)) return
+      request.eligible = false
+    }
+    const onFocusIn = (event: FocusEvent): void => {
+      cancelRestoreForExternalTarget(event.target, true)
+    }
+    const onPointerDown = (event: PointerEvent): void => {
+      cancelRestoreForExternalTarget(event.target, false)
+    }
+    document.addEventListener('focusin', onFocusIn, true)
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => {
+      document.removeEventListener('focusin', onFocusIn, true)
+      document.removeEventListener('pointerdown', onPointerDown, true)
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    const request = focusRestoreRequest.current
+    if (entry.phase !== 'error' || entry.errorAction !== 'save' || retrySelection === undefined) return
+    if (request === undefined || !request.eligible || request.source !== retrySelection.source) return
+    if (!isDocumentFocusFallback(document.activeElement)) return
+    retrySelectionRef.current?.focus()
+  }, [entry.errorAction, entry.phase, retrySelection])
+
+  useEffect(() => {
+    if (panel === null) return
+    const onPointerDown = (event: PointerEvent): void => {
+      if (!(event.target instanceof Node)) return
+      if (controlsRef.current?.contains(event.target) === true) return
+      if (popoverRef.current?.contains(event.target) === true) return
+      setPanel(null)
+      setPreviewStrategyId(undefined)
+      if (panel === 'strategy') {
+        setStrategyQuery('')
+        setStrategyActiveIndex(-1)
+      }
+      else setQuery('')
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => { document.removeEventListener('pointerdown', onPointerDown, true) }
+  }, [panel])
+
+  useEffect(() => {
+    if (previewStrategyId === undefined) return
+    scrollStrategyIntoView(previewStrategyId)
+    if (prefersReducedMotion()) scrollStrategyConfirmIntoView(previewStrategyId)
+  }, [previewStrategyId, scrollStrategyConfirmIntoView, scrollStrategyIntoView])
 
   const selectedStrategy = useMemo(
     () => strategies.find(strategy => strategy.id === entry.confirmed?.strategy_id) ?? confirmedStrategy,
@@ -255,31 +420,143 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
     || byRecent(left, right)
   ))
   const visibleStrategies = [...recommended, ...other]
-  const previewStrategy = filteredStrategies.find(strategy => strategy.id === previewStrategyId)
+  const placePopover = useCallback((): void => {
+    if (panel === null) return
+    const anchor = panel === 'strategy' ? strategyTriggerRef.current : instrumentTriggerRef.current
+    const popover = popoverRef.current
+    if (anchor === null || popover === null) return
 
-  const saveStrategy = (strategy: StrategyOption | null): void => {
-    const target = {
-      strategy_id: strategy?.id ?? null,
-      instrument: entry.confirmed?.instrument ?? null,
+    const anchorRect = anchor.getBoundingClientRect()
+    const visualViewport = window.visualViewport
+    const viewportLeft = visualViewport?.offsetLeft ?? 0
+    const viewportTop = visualViewport?.offsetTop ?? 0
+    const viewportWidth = visualViewport?.width ?? window.innerWidth
+    const viewportHeight = visualViewport?.height ?? window.innerHeight
+    const viewportRight = viewportLeft + viewportWidth
+    const viewportBottom = viewportTop + viewportHeight
+    const minLeft = viewportLeft + POPOVER_MARGIN
+    const minTop = viewportTop + POPOVER_MARGIN
+    const availableWidth = Math.max(0, viewportWidth - POPOVER_MARGIN * 2)
+    const width = Math.min(POPOVER_MAX_WIDTH, availableWidth)
+    const availableAbove = Math.max(0, anchorRect.top - POPOVER_GAP - minTop)
+    const availableBelow = Math.max(0, viewportBottom - POPOVER_MARGIN - anchorRect.bottom - POPOVER_GAP)
+    const opensAbove = availableAbove >= availableBelow
+    const maxHeight = Math.min(POPOVER_MAX_HEIGHT, opensAbove ? availableAbove : availableBelow)
+    const measuredHeight = popover.scrollHeight || popover.offsetHeight || maxHeight
+    const height = Math.min(measuredHeight, maxHeight)
+    const maxLeft = Math.max(minLeft, viewportRight - width - POPOVER_MARGIN)
+    const maxTop = Math.max(minTop, viewportBottom - height - POPOVER_MARGIN)
+    const left = Math.min(Math.max(anchorRect.left, minLeft), maxLeft)
+    const preferredTop = opensAbove
+      ? anchorRect.top - POPOVER_GAP - height
+      : anchorRect.bottom + POPOVER_GAP
+    const top = Math.min(Math.max(preferredTop, minTop), maxTop)
+
+    setPopoverStyle({ position: 'fixed', left, top, width, maxWidth: availableWidth, maxHeight, visibility: 'visible' })
+  }, [panel])
+
+  useLayoutEffect(() => {
+    if (panel === null) {
+      setPopoverStyle(POPOVER_MEASURE_STYLE)
+      return
     }
-    setRetryTarget(undefined)
+    placePopover()
+    const visualViewport = window.visualViewport
+    let revealFrame: number | undefined
+    const onViewportResize = (): void => {
+      placePopover()
+      if (panel !== 'strategy' || previewStrategyId === undefined) return
+      if (revealFrame !== undefined) window.cancelAnimationFrame(revealFrame)
+      revealFrame = window.requestAnimationFrame(() => {
+        revealFrame = undefined
+        scrollStrategyConfirmIntoView(previewStrategyId)
+      })
+    }
+    window.addEventListener('scroll', placePopover, true)
+    window.addEventListener('resize', onViewportResize)
+    visualViewport?.addEventListener('scroll', placePopover)
+    visualViewport?.addEventListener('resize', onViewportResize)
+    return () => {
+      if (revealFrame !== undefined) window.cancelAnimationFrame(revealFrame)
+      window.removeEventListener('scroll', placePopover, true)
+      window.removeEventListener('resize', onViewportResize)
+      visualViewport?.removeEventListener('scroll', placePopover)
+      visualViewport?.removeEventListener('resize', onViewportResize)
+    }
+  }, [
+    panel, placePopover, previewStrategyId, scrollStrategyConfirmIntoView,
+    strategiesBusy, strategyError, filteredStrategies.length,
+    query, searchBusy, searchError, instruments.length, entry.confirmed?.strategy_id, entry.confirmed?.instrument,
+  ])
+  const focusStrategyAt = (index: number): void => {
+    if (visibleStrategies.length === 0) return
+    const normalizedIndex = (index + visibleStrategies.length) % visibleStrategies.length
+    const strategy = visibleStrategies[normalizedIndex]
+    if (strategy === undefined) return
+    setStrategyActiveIndex(normalizedIndex)
+    document.getElementById(strategyElementId(controlId, strategy.id))?.focus()
+  }
+  const moveStrategyFocus = (strategyId: string, offset: -1 | 1): void => {
+    const index = visibleStrategies.findIndex(strategy => strategy.id === strategyId)
+    if (index >= 0) focusStrategyAt(index + offset)
+  }
+
+  const finishSelection = (source: ResearchContextPanel, focusRestoreToken: number): void => {
+    const focusRestore = focusRestoreRequest.current
+    const matchingRestore = focusRestore?.token === focusRestoreToken && focusRestore.source === source
+    const activeElement = document.activeElement
+    const shouldRestoreFocus = matchingRestore && focusRestore.eligible && activeElement !== null && (
+      selectorContains(activeElement, controlsRef.current, popoverRef.current)
+      || isDocumentFocusFallback(activeElement)
+    )
+    if (matchingRestore) focusRestoreRequest.current = undefined
+    setPanel(null)
+    if (source === 'strategy') {
+      setStrategyQuery('')
+      setPreviewStrategyId(undefined)
+      setStrategyActiveIndex(-1)
+      if (shouldRestoreFocus) strategyTriggerRef.current?.focus()
+    } else {
+      setQuery('')
+      if (shouldRestoreFocus) instrumentTriggerRef.current?.focus()
+    }
+  }
+  const saveTarget = (
+    target: ResearchChatContextTarget,
+    source: ResearchContextPanel,
+    options: { readonly retry?: boolean } = {},
+  ): void => {
+    const focusRestoreToken = ++focusRestoreSequence.current
+    const activeElement = document.activeElement
+    focusRestoreRequest.current = {
+      token: focusRestoreToken,
+      source,
+      eligible: options.retry === true || (
+        activeElement !== null && selectorContains(activeElement, controlsRef.current, popoverRef.current)
+      ),
+    }
+    setRetrySelection(undefined)
     void researchChatContext.save(sessionId, target)
-      .then(() => { setPanel(null); setStrategyQuery(''); setPreviewStrategyId(undefined) })
+      .then(() => { finishSelection(source, focusRestoreToken) })
       .catch(() => {
-        setRetryTarget(researchChatContext.snapshot(sessionId).errorAction === 'conflict' ? undefined : target)
+        if (researchChatContext.snapshot(sessionId).errorAction === 'conflict') {
+          finishSelection(source, focusRestoreToken)
+          return
+        }
+        setRetrySelection({ target, source })
       })
   }
+  const saveStrategy = (strategy: StrategyOption | null): void => {
+    saveTarget({
+      strategy_id: strategy?.id ?? null,
+      instrument: entry.confirmed?.instrument ?? null,
+    }, 'strategy')
+  }
   const saveInstrument = (instrument: ResearchChatInstrument | null): void => {
-    const target = {
+    saveTarget({
       strategy_id: entry.confirmed?.strategy_id ?? null,
       instrument,
-    }
-    setRetryTarget(undefined)
-    void researchChatContext.save(sessionId, target)
-      .then(() => { setPanel(null); setQuery('') })
-      .catch(() => {
-        setRetryTarget(researchChatContext.snapshot(sessionId).errorAction === 'conflict' ? undefined : target)
-      })
+    }, 'instrument')
   }
 
   if (route !== 'portfolio') return <InvestmentAssistantModuleSelect {...props} />
@@ -287,37 +564,56 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
   const strategyAria = selectedStrategy === undefined
     ? `策略，当前：${entry.confirmed?.strategy_id ?? '未选择'}${confirmedStrategyIssue === 'missing' ? '，已失效，非推荐' : confirmedStrategyIssue === 'unavailable' ? '，状态暂不可用' : ''}`
     : `策略，当前：${strategyLabel(selectedStrategy)}`
+  const selectedStrategyBadge = selectedStrategy === undefined ? undefined : strategyBadge(selectedStrategy)
   const instrument = entry.confirmed?.instrument ?? null
   return (
-    <div className={css.researchContextControls} data-saving={entry.phase === 'saving' || undefined}>
+    <div ref={controlsRef} className={css.researchContextControls} data-saving={entry.phase === 'saving' || undefined}>
       <div className={css.researchContextControl}>
         <button
           ref={strategyTriggerRef}
           type="button"
           className={css.researchContextTrigger}
           aria-label={strategyAria}
-          aria-haspopup="listbox"
+          aria-haspopup="dialog"
+          aria-controls={strategyDialogId}
           aria-expanded={panel === 'strategy'}
           disabled={busy}
-          onClick={() => { setPanel(current => current === 'strategy' ? null : 'strategy') }}
+          onClick={() => {
+            setStrategyQuery('')
+            setPreviewStrategyId(undefined)
+            setStrategyActiveIndex(-1)
+            if (panel === 'instrument') setQuery('')
+            setPanel(panel === 'strategy' ? null : 'strategy')
+          }}
         >
           <span aria-hidden="true">◇</span>
           <strong>{selectedStrategy?.name ?? (entry.confirmed?.strategy_id || '选策略')}</strong>
-          {selectedStrategy !== undefined && !selectedStrategy.recommended && <em>有风险</em>}
+          {selectedStrategyBadge !== undefined && !selectedStrategy?.recommended && (
+            <em data-tone={selectedStrategyBadge.tone}>{selectedStrategyBadge.label}</em>
+          )}
           {selectedStrategy === undefined && confirmedStrategyIssue === 'missing' && <em>已失效</em>}
           {selectedStrategy === undefined && confirmedStrategyIssue === 'unavailable' && <em>状态未知</em>}
         </button>
-        {panel === 'strategy' && (
-          <div className={css.researchContextPopover} role="listbox" aria-label="选择投研策略">
+        {panel === 'strategy' && typeof document !== 'undefined' && createPortal((
+          <div
+            id={strategyDialogId}
+            ref={popoverRef}
+            className={css.researchContextPopover}
+            style={popoverStyle}
+            role="dialog"
+            aria-label="选择投研策略"
+            onClick={(event) => { event.stopPropagation() }}
+          >
             <div className={css.researchContextPopoverHead}><strong>选择策略</strong><small>全部可讨论，仅“已启用 + 已验证”推荐</small></div>
             <input
+              ref={strategySearchRef}
               autoFocus
               type="search"
               role="searchbox"
               aria-label="搜索策略名称或标识"
+              aria-controls={strategyListId}
               value={strategyQuery}
-              aria-activedescendant={previewStrategy === undefined ? undefined : `research-strategy-${encodeURIComponent(previewStrategy.id)}`}
-              disabled={strategiesBusy || entry.phase === 'saving'}
+              disabled={busy}
               onChange={(event) => {
                 setStrategyQuery(event.target.value)
                 setStrategyActiveIndex(-1)
@@ -326,17 +622,13 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
               onKeyDown={(event) => {
                 if (event.key === 'ArrowDown' && visibleStrategies.length > 0) {
                   event.preventDefault()
-                  const next = (strategyActiveIndex + 1) % visibleStrategies.length
-                  setStrategyActiveIndex(next)
-                  setPreviewStrategyId(visibleStrategies[next]?.id)
+                  focusStrategyAt(strategyActiveIndex < 0 ? 0 : strategyActiveIndex + 1)
                 } else if (event.key === 'ArrowUp' && visibleStrategies.length > 0) {
                   event.preventDefault()
-                  const next = (strategyActiveIndex - 1 + visibleStrategies.length) % visibleStrategies.length
-                  setStrategyActiveIndex(next)
-                  setPreviewStrategyId(visibleStrategies[next]?.id)
-                } else if (event.key === 'Enter' && previewStrategy !== undefined) {
+                  focusStrategyAt(strategyActiveIndex < 0 ? visibleStrategies.length - 1 : strategyActiveIndex - 1)
+                } else if (event.key === 'Enter' && visibleStrategies.length > 0) {
                   event.preventDefault()
-                  saveStrategy(previewStrategy)
+                  focusStrategyAt(strategyActiveIndex < 0 ? 0 : strategyActiveIndex)
                 }
               }}
               placeholder="搜索策略名称或标识"
@@ -345,38 +637,78 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
             {strategyError !== '' && (
               <div role="alert" className={css.searchError}>
                 {strategyError}
-                <button type="button" onClick={() => { setStrategyLoadNonce(value => value + 1) }}>重试加载策略</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStrategyLoadNonce(value => value + 1)
+                    strategySearchRef.current?.focus()
+                  }}
+                >重试加载策略</button>
               </div>
             )}
             {!strategiesBusy && strategyError === '' && (
               <>
-                <StrategyGroup label="推荐策略" options={recommended} selectedId={entry.confirmed?.strategy_id} previewId={previewStrategyId} onPreview={setPreviewStrategyId} />
-                <StrategyGroup label="其他策略" options={other} selectedId={entry.confirmed?.strategy_id} previewId={previewStrategyId} onPreview={setPreviewStrategyId} />
-                {filteredStrategies.length === 0 && <div className={css.searchStatus}>未找到匹配策略</div>}
-                {previewStrategy !== undefined && (
-                  <section className={css.researchStrategyPreview} aria-label="策略详情预览">
-                    <h3>{previewStrategy.name}</h3>
-                    <p>{previewStrategy.hypothesis}</p>
-                    <dl>
-                      <div><dt>类型</dt><dd>{previewStrategy.kind}</dd></div>
-                      <div><dt>适用证券</dt><dd>{previewStrategy.symbols.length === 0 ? '未限定' : previewStrategy.symbols.join('、')}</dd></div>
-                      <div><dt>更新时间</dt><dd>{previewStrategy.updatedAt}</dd></div>
-                    </dl>
-                    <div className={css.researchStrategyParams}>
-                      {previewStrategy.parameters.length === 0
-                        ? <span>关键参数未返回</span>
-                        : previewStrategy.parameters.map(parameter => <span key={parameter}>{parameter}</span>)}
-                    </div>
-                    <button type="button" disabled={entry.phase === 'saving'} aria-label={`确认使用${previewStrategy.name}`} onClick={() => { saveStrategy(previewStrategy) }}>
-                      {entry.phase === 'saving' ? '保存中…' : '确认使用此策略'}
-                    </button>
-                  </section>
+                <div id={strategyListId} className={css.researchStrategyList} role="list">
+                  <StrategyGroup
+                    controlId={controlId}
+                    label="推荐策略"
+                    options={recommended}
+                    selectedId={entry.confirmed?.strategy_id}
+                    expandedId={previewStrategyId}
+                    busy={busy}
+                    registerItem={(strategyId, element) => {
+                      if (element === null) strategyItemRefs.current.delete(strategyId)
+                      else strategyItemRefs.current.set(strategyId, element)
+                    }}
+                    onToggle={(strategyId) => {
+                      setPreviewStrategyId(current => current === strategyId ? undefined : strategyId)
+                      setStrategyActiveIndex(visibleStrategies.findIndex(strategy => strategy.id === strategyId))
+                    }}
+                    onMoveFocus={moveStrategyFocus}
+                    onExpansionComplete={(strategyId) => {
+                      scrollStrategyConfirmIntoView(strategyId)
+                      placePopover()
+                    }}
+                    onConfirm={saveStrategy}
+                  />
+                  <StrategyGroup
+                    controlId={controlId}
+                    label="其他策略"
+                    options={other}
+                    selectedId={entry.confirmed?.strategy_id}
+                    expandedId={previewStrategyId}
+                    busy={busy}
+                    registerItem={(strategyId, element) => {
+                      if (element === null) strategyItemRefs.current.delete(strategyId)
+                      else strategyItemRefs.current.set(strategyId, element)
+                    }}
+                    onToggle={(strategyId) => {
+                      setPreviewStrategyId(current => current === strategyId ? undefined : strategyId)
+                      setStrategyActiveIndex(visibleStrategies.findIndex(strategy => strategy.id === strategyId))
+                    }}
+                    onMoveFocus={moveStrategyFocus}
+                    onExpansionComplete={(strategyId) => {
+                      scrollStrategyConfirmIntoView(strategyId)
+                      placePopover()
+                    }}
+                    onConfirm={saveStrategy}
+                  />
+                </div>
+                {filteredStrategies.length === 0 && (
+                  <div className={css.researchContextEmpty} role="status">
+                    <strong>{strategyQuery.trim() === '' ? '暂时没有可用策略' : '没有匹配的策略'}</strong>
+                    <span>{strategyQuery.trim() === '' ? '策略上线后会显示在这里。' : '换个名称或策略标识试试。'}</span>
+                  </div>
                 )}
-                <button type="button" role="option" aria-selected={entry.confirmed?.strategy_id === null} disabled={entry.phase === 'saving'} onClick={() => { saveStrategy(null) }}>清除策略</button>
+                {entry.confirmed?.strategy_id != null && (
+                  <div className={css.researchContextPopoverFooter}>
+                    <button type="button" className={css.researchContextClear} disabled={busy} onClick={() => { saveStrategy(null) }}>清除当前策略</button>
+                  </div>
+                )}
               </>
             )}
           </div>
-        )}
+        ), document.body)}
       </div>
 
       <div className={css.researchContextControl}>
@@ -385,26 +717,47 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
           type="button"
           className={css.researchContextTrigger}
           aria-label={`标的，当前：${instrument === null ? '未选择' : instrumentLabel(instrument)}`}
-          aria-haspopup="listbox"
+          aria-haspopup="dialog"
+          aria-controls={instrumentDialogId}
           aria-expanded={panel === 'instrument'}
           disabled={busy}
-          onClick={() => { setPanel(current => current === 'instrument' ? null : 'instrument') }}
+          onClick={() => {
+            setQuery('')
+            setActiveIndex(0)
+            if (panel === 'strategy') {
+              setStrategyQuery('')
+              setPreviewStrategyId(undefined)
+              setStrategyActiveIndex(-1)
+            }
+            setPanel(panel === 'instrument' ? null : 'instrument')
+          }}
         >
           <span aria-hidden="true">⌖</span>
           <strong>{instrument?.name ?? '选标的'}</strong>
         </button>
-        {panel === 'instrument' && (
-          <div className={css.researchContextPopover} role="listbox" aria-label="选择投资标的">
+        {panel === 'instrument' && typeof document !== 'undefined' && createPortal((
+          <div
+            id={instrumentDialogId}
+            ref={popoverRef}
+            className={css.researchContextPopover}
+            style={popoverStyle}
+            role="dialog"
+            aria-label="选择投资标的"
+            onClick={(event) => { event.stopPropagation() }}
+          >
             <div className={css.researchContextPopoverHead}><strong>选择标的</strong><small>首期支持 A 股与场内 ETF</small></div>
             <p className={css.researchContextCapability}>ETF 首期提供行情、技术信号和相关新闻研究，不等同于成分股基本面分析。</p>
             <input
+              ref={instrumentSearchRef}
               autoFocus
               value={query}
               role="combobox"
               aria-label="搜索 A 股或场内 ETF"
               aria-autocomplete="list"
               aria-expanded="true"
-              aria-activedescendant={instruments[activeIndex] === undefined ? undefined : `research-instrument-${activeIndex}`}
+              aria-controls={instrumentListId}
+              aria-activedescendant={searchBusy || instruments[activeIndex] === undefined ? undefined : `${controlId}-instrument-${activeIndex}`}
+              disabled={busy}
               onChange={(event) => { setQuery(event.target.value) }}
               onKeyDown={(event) => {
                 if (event.key === 'ArrowDown' && instruments.length > 0) {
@@ -421,27 +774,55 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
             {searchError !== '' && (
               <div role="alert" className={css.searchError}>
                 {searchError}
-                <button type="button" onClick={() => { setSearchNonce(value => value + 1) }}>重试搜索</button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchNonce(value => value + 1)
+                    instrumentSearchRef.current?.focus()
+                  }}
+                >重试搜索</button>
               </div>
             )}
-            {!searchBusy && instruments.map((item, index) => (
-              <button
-                id={`research-instrument-${index}`}
-                key={item.code}
-                type="button"
-                role="option"
-                aria-selected={index === activeIndex}
-                aria-label={instrumentLabel(item)}
-                onMouseEnter={() => { setActiveIndex(index) }}
-                onClick={() => { saveInstrument(item) }}
-              >
-                <span><strong>{item.name}</strong><small>{item.code} · {item.market}</small></span>
-                <em>{item.type === 'etf' ? 'ETF' : 'A股'}</em>
-              </button>
-            ))}
-            <button type="button" role="option" aria-selected={instrument === null} onClick={() => { saveInstrument(null) }}>清除标的</button>
+            {!searchBusy && query.trim() === '' && (
+              <div className={css.researchContextEmpty} role="status">
+                <strong>搜索要研究的标的</strong>
+                <span>输入证券代码或名称，点击结果即可选中。</span>
+              </div>
+            )}
+            {!searchBusy && query.trim() !== '' && searchError === '' && instruments.length === 0 && (
+              <div className={css.researchContextEmpty} role="status">
+                <strong>没有找到匹配标的</strong>
+                <span>检查代码或换个简称试试。</span>
+              </div>
+            )}
+            <div id={instrumentListId} className={css.researchInstrumentList} role="listbox" aria-label="证券搜索结果">
+              {!searchBusy && instruments.map((item, index) => (
+                <button
+                  id={`${controlId}-instrument-${index}`}
+                  key={item.code}
+                  type="button"
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={instrument?.code === item.code}
+                  aria-label={instrumentLabel(item)}
+                  data-active={index === activeIndex || undefined}
+                  disabled={busy}
+                  onMouseEnter={() => { setActiveIndex(index) }}
+                  onMouseDown={(event) => { event.preventDefault() }}
+                  onClick={() => { saveInstrument(item) }}
+                >
+                  <span><strong>{item.name}</strong><small>{item.code} · {item.market}</small></span>
+                  <em>{item.type === 'etf' ? 'ETF' : 'A股'}</em>
+                </button>
+              ))}
+            </div>
+            {instrument !== null && (
+              <div className={css.researchContextPopoverFooter}>
+                <button type="button" className={css.researchContextClear} disabled={busy} onClick={() => { saveInstrument(null) }}>清除当前标的</button>
+              </div>
+            )}
           </div>
-        )}
+        ), document.body)}
       </div>
       {entry.phase === 'loading' && <span className={css.researchContextStatus} role="status">正在恢复投研上下文…</span>}
       {entry.phase === 'error' && entry.errorAction === 'load' && (
@@ -467,11 +848,12 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
             : `保存失败，已保留上次选择：${entry.error}`}
           {entry.errorAction !== 'conflict' && (
             <button
+              ref={retrySelectionRef}
               type="button"
               aria-label="重试保存投研上下文"
               onClick={() => {
-                if (retryTarget !== undefined) {
-                  void researchChatContext.save(sessionId, retryTarget).catch(() => {})
+                if (retrySelection !== undefined) {
+                  saveTarget(retrySelection.target, retrySelection.source, { retry: true })
                 }
               }}
             >重试</button>
@@ -483,35 +865,132 @@ export function InvestmentComposerContextControls(props: InvestmentComposerConte
 }
 
 function StrategyGroup({
-  label, options, selectedId, previewId, onPreview,
+  controlId, label, options, selectedId, expandedId, busy, registerItem,
+  onToggle, onMoveFocus, onExpansionComplete, onConfirm,
 }: {
+  controlId: string
   label: string
   options: readonly StrategyOption[]
   selectedId: string | null | undefined
-  previewId: string | undefined
-  onPreview: (strategyId: string) => void
+  expandedId: string | undefined
+  busy: boolean
+  registerItem: (strategyId: string, element: HTMLDivElement | null) => void
+  onToggle: (strategyId: string) => void
+  onMoveFocus: (strategyId: string, offset: -1 | 1) => void
+  onExpansionComplete: (strategyId: string) => void
+  onConfirm: (strategy: StrategyOption) => void
 }) {
+  if (options.length === 0) return null
   return (
-    <section className={css.researchStrategyGroup} aria-label={label}>
+    <section className={css.researchStrategyGroup} aria-label={label} role="group">
       <h3>{label}</h3>
-      {options.map(strategy => (
-        <button
-          id={`research-strategy-${encodeURIComponent(strategy.id)}`}
-          key={strategy.id}
-          type="button"
-          role="option"
-          aria-selected={selectedId === strategy.id}
-          data-previewed={previewId === strategy.id || undefined}
-          aria-label={strategyLabel(strategy)}
-          onFocus={() => { onPreview(strategy.id) }}
-          onMouseEnter={() => { onPreview(strategy.id) }}
-          onClick={() => { onPreview(strategy.id) }}
-        >
-          <span><strong>{strategy.name}</strong><small>{STATUS_LABELS[strategy.status] ?? strategy.status} · {VERIFICATION_LABELS[strategy.verificationStatus] ?? strategy.verificationStatus}</small></span>
-          <em data-recommended={strategy.recommended || undefined}>{strategy.recommended ? '推荐' : '有风险'}</em>
-        </button>
-      ))}
-      {options.length === 0 && <p>暂无</p>}
+      {options.map((strategy) => {
+        const expanded = expandedId === strategy.id
+        const selected = selectedId === strategy.id
+        const itemId = strategyElementId(controlId, strategy.id)
+        const detailId = `${itemId}-detail`
+        const badge = strategyBadge(strategy)
+        return (
+          <div
+            key={strategy.id}
+            ref={(element) => { registerItem(strategy.id, element) }}
+            className={css.researchStrategyItem}
+            data-expanded={expanded || undefined}
+            data-selected={selected || undefined}
+            role="listitem"
+          >
+            <button
+              id={itemId}
+              type="button"
+              className={css.researchStrategyRow}
+              aria-current={selected ? 'true' : undefined}
+              aria-expanded={expanded}
+              aria-controls={detailId}
+              aria-label={strategyLabel(strategy)}
+              disabled={busy}
+              onClick={() => { onToggle(strategy.id) }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  onMoveFocus(strategy.id, 1)
+                } else if (event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  onMoveFocus(strategy.id, -1)
+                }
+              }}
+            >
+              <span className={css.researchStrategyRowText}>
+                <strong>{strategy.name}</strong>
+                <small>
+                  {strategy.kind}
+                  {' · '}
+                  {lifecycleLabel(strategy.status)}
+                  {' · '}
+                  {verificationLabel(strategy.verificationStatus)}
+                </small>
+              </span>
+              <span className={css.researchStrategyRowMeta} aria-hidden="true">
+                <em data-tone={badge.tone}>{badge.label}</em>
+                <span className={css.researchStrategyChevron}>⌄</span>
+              </span>
+            </button>
+            <section
+              id={detailId}
+              className={css.researchStrategyDisclosure}
+              role="region"
+              aria-label={`${strategy.name}策略详情`}
+              aria-hidden={!expanded}
+              data-expanded={expanded || undefined}
+              onTransitionEnd={(event) => {
+                if (expanded && event.target === event.currentTarget && event.propertyName === 'grid-template-rows') {
+                  onExpansionComplete(strategy.id)
+                }
+              }}
+            >
+              <div className={css.researchStrategyDisclosureInner}>
+                <div className={css.researchStrategyPreview}>
+                  <div className={css.researchStrategyPreviewHead}>
+                    <div>
+                      <span>策略详情</span>
+                      <h4>{strategy.name}</h4>
+                    </div>
+                    <div className={css.researchStrategyPreviewBadges}>
+                      <em data-tone="lifecycle">{lifecycleLabel(strategy.status)}</em>
+                      <em data-tone={verificationTone(strategy.verificationStatus)}>
+                        {verificationLabel(strategy.verificationStatus)}
+                      </em>
+                      {selected && <em data-tone="current">当前使用</em>}
+                    </div>
+                  </div>
+                  <p>{strategy.hypothesis}</p>
+                  <dl>
+                    <div><dt>类型</dt><dd>{strategy.kind}</dd></div>
+                    <div><dt>适用证券</dt><dd>{strategy.symbols.length === 0 ? '未限定' : strategy.symbols.join('、')}</dd></div>
+                    <div><dt>更新时间</dt><dd>{strategy.updatedAt}</dd></div>
+                  </dl>
+                  <div className={css.researchStrategyParams} aria-label="策略参数">
+                    {strategy.parameters.length === 0
+                      ? <span>关键参数未返回</span>
+                      : strategy.parameters.map(parameter => <span key={parameter}>{parameter}</span>)}
+                  </div>
+                  <button
+                    id={`${itemId}-confirm`}
+                    type="button"
+                    className={css.researchStrategyConfirm}
+                    disabled={!expanded || busy || selected}
+                    tabIndex={expanded ? 0 : -1}
+                    aria-label={`确认使用${strategy.name}`}
+                    onClick={() => { onConfirm(strategy) }}
+                  >
+                    {busy ? '保存中…' : selected ? '当前已使用' : '确认使用此策略'}
+                    {!busy && !selected && <span aria-hidden="true">→</span>}
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        )
+      })}
     </section>
   )
 }

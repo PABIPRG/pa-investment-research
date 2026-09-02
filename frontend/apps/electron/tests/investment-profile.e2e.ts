@@ -170,7 +170,7 @@ describe('Electron investment Profile composition', () => {
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await ctx.loader.await()
 
-    expect(ctx.tools.schemas()).toHaveLength(21)
+    expect(ctx.tools.schemas()).toHaveLength(22)
     const industryReadiness = ctx.investmentPythonRuntime.readiness().backends.find(
       backend => backend.backendId === 'industry-chain',
     )
