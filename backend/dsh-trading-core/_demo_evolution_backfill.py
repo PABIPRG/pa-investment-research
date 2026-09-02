@@ -33,6 +33,7 @@ from adapter.config import settings  # noqa: E402
 from adapter.store import JsonStore  # noqa: E402
 
 WINDOW_SIZE = 5  # 演示窗口：最近 5 个交易日
+PRE_ROLL_DAYS = 20  # 激活起始日前移量：窗口首日前再往前 N 个交易日预热建仓
 _REF_FETCH_SYMBOLS = 6  # 结算日探测最多取的 symbol 数（不重复拉同一只）
 
 
@@ -179,6 +180,24 @@ def main() -> int:
     _clear_shadow_collections(store)
     print(f"[2/4] 已清空 shadow_equity/shadows，将重建最近 {len(window)} 日全 active 净值序列")
 
+    # 2b) 预置各策略激活起始日 track_from 前移到窗口前 ~PRE_ROLL_DAYS 个交易日：
+    # 低频策略若只在窗口内从零起跑，大多来不及建仓 → 净值恒 1.0 太干。
+    # 前移后各策略以真实历史行情从更早建仓，带着真实持仓/涨跌进入最近 5 日快照
+    #（仍是确定性单一路径重放 + 真实价格，不伪造数字；快照仍只写最近 WINDOW_SIZE 日）。
+    pos0 = cal.index(window[0]) if window[0] in cal else max(0, len(cal) - len(window))
+    track_from = cal[max(0, pos0 - PRE_ROLL_DAYS)]
+    act_meta = {
+        sid: {
+            "track_from": track_from,
+            "initial_capital": settings.shadow_initial_capital,
+            "activated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        for sid in actives
+    }
+    store.set("shadows", "meta", act_meta)
+    print(f"[2/4] 已前移激活起始日 track_from={track_from}（窗口首日前 {PRE_ROLL_DAYS} 个交易日），"
+          f"使最近 {len(window)} 日快照带真实持仓/波动")
+
     # 3) 逐日真实行情重放（ShadowRunner 引擎，进程内临时 patch 交易日）
     import adapter.shadow as shadow_mod
 
@@ -219,7 +238,7 @@ def main() -> int:
         print(f"[4/4] evolve_auto → status={status} applied={applied} 动作数={len(acts)}")
         if applied and acts:
             for a in acts:
-                print(f"      · {a.get('strategy_id')} → {a.get('type')}（{a.get('reason')}）")
+                print(f"      · {a.get('sid') or a.get('strategy_id')} → {a.get('type')}（{a.get('reason')}）")
         elif status == "waiting_data":
             print(f"      {evo.get('data_note')}")
 
