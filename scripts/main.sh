@@ -17,6 +17,7 @@ SCRIPTS=(
   "backend-start|手动启动常驻投研后台（独立调试）|scripts/start-investment-backends.sh"
   "backend-stop|停止手动常驻投研后台|scripts/stop-investment-backends.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
+  "demo-evolution-data|演示数据：准备最近历史5个交易日的影子验证数据，让自进化页面可以展示进化闭环|scripts/prepare-demo-evolution-data.sh"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)
