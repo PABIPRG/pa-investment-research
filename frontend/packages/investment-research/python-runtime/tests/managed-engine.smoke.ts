@@ -130,7 +130,7 @@ describe.skipIf(!enabled)('managed investment engines', () => {
     } as unknown as NonNullable<typeof context.loader.internal>
     await context.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await context.loader.await()
-    expect(context.tools.schemas()).toHaveLength(21)
+    expect(context.tools.schemas()).toHaveLength(22)
     expect(context.investmentPythonRuntime.invariantSnapshot().active).toHaveLength(3)
   }, 120_000)
 })
