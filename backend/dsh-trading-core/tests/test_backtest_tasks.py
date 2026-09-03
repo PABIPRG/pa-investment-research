@@ -222,5 +222,86 @@ class PatrolTests(unittest.TestCase):
         self.assertEqual((store.get("strategies", "s-first") or {}).get("status"), "candidate")
 
 
+class _FirstBacktestRunner:
+    """生成即首测用 fake runner：录制参数并按 sid 返回验证分类（不真跑行情）。"""
+
+    results: dict[str, str] = {}
+    calls: list[dict] = []
+
+    def __init__(self, store):
+        pass
+
+    def run(self, params: dict, _cb) -> dict:
+        _FirstBacktestRunner.calls.append(params)
+        return {"verification_status": _FirstBacktestRunner.results.get(params["strategy_id"], "passed")}
+
+
+class FirstBacktestTests(unittest.TestCase):
+    """候选落池即触发首测：run_first_backtests 的筛选 + 结果语义。"""
+
+    def setUp(self):
+        _FirstBacktestRunner.calls = []
+        _FirstBacktestRunner.results = {}
+
+    def test_passes_candidate_stays_candidate_not_activated(self):
+        store = _store()
+        _seed(store, "s-pass", status="candidate", verification_status="pending")
+        _FirstBacktestRunner.results = {"s-pass": "passed"}
+
+        with patch("adapter.strategies.StrategyBacktestRunner", _FirstBacktestRunner):
+            stats = bt.run_first_backtests(store, ["s-pass"])
+
+        self.assertEqual(stats["started"], 1)
+        self.assertEqual(stats["completed"], 1)
+        self.assertEqual(stats["rejected"], 0)
+        self.assertEqual(len(_FirstBacktestRunner.calls), 1)
+        params = _FirstBacktestRunner.calls[0]
+        self.assertEqual(params["strategy_id"], "s-pass")
+        self.assertEqual(params["source"], "auto")
+        self.assertEqual(params["lookback_years"], bt._default_auto_lookback())  # 默认 lookback 年
+        # 通过只落 passed → 候选保持 candidate（人工确认生效，不自动激活）
+        self.assertEqual((store.get("strategies", "s-pass") or {}).get("status"), "candidate")
+
+    def test_failed_candidate_is_rejected(self):
+        store = _store()
+        _seed(store, "s-fail", status="candidate")
+        _FirstBacktestRunner.results = {"s-fail": "failed"}
+
+        with patch("adapter.strategies.StrategyBacktestRunner", _FirstBacktestRunner):
+            stats = bt.run_first_backtests(store, ["s-fail"])
+
+        self.assertEqual(stats["started"], 1)
+        self.assertEqual(stats["rejected"], 1)
+        self.assertEqual((store.get("strategies", "s-fail") or {}).get("status"), "rejected")
+
+    def test_skips_inflight_existing_evidence_and_ineligible(self):
+        store = _store()
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _seed(store, "s-inflight", status="candidate")          # 有进行中任务 → 跳过
+        store.mutate(bt.COLLECTION, "t-running", lambda _: {
+            "task_id": "t-running", "strategy_id": "s-inflight",
+            "source": "auto", "status": "running",
+        })
+        _seed(store, "s-done", status="candidate",
+              backtest={"ran_at": now})                         # 已有首测证据 → 跳过
+        _seed(store, "s-retired", status="retired")             # 归档 → 不参与
+        _seed(store, "s-ok", status="candidate")                # 应跑
+        _FirstBacktestRunner.results = {"s-ok": "passed"}
+
+        with patch("adapter.strategies.StrategyBacktestRunner", _FirstBacktestRunner):
+            stats = bt.run_first_backtests(store, ["s-inflight", "s-done", "s-retired", "s-ok"])
+
+        self.assertEqual(stats["started"], 1)
+        self.assertEqual(stats["skipped"], 3)
+        self.assertEqual([c["strategy_id"] for c in _FirstBacktestRunner.calls], ["s-ok"])
+
+    def test_trigger_enqueues_all_ids_via_background_thread(self):
+        with patch("adapter.backtest_tasks.threading.Thread") as mock_thread:
+            result = bt.trigger_first_backtests(["s-a", "s-b", ""])
+        self.assertEqual(result, {"enqueued": 2})  # 空串过滤
+        mock_thread.assert_called_once()
+        self.assertTrue(mock_thread.call_args.kwargs.get("daemon"))
+
+
 if __name__ == "__main__":
     unittest.main()

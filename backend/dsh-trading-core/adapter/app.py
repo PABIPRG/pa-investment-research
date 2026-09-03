@@ -433,7 +433,10 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     @app.post("/strategies/hypothesize", response_model=dict)
     def strategies_hypothesize(req: HypothesizeRequest):
-        """事件 → 投资假设 → 候选入库。LLM 阻塞 10-30s，用普通 def 走线程池避免卡事件循环。"""
+        """事件 → 投资假设 → 候选入库。LLM 阻塞 10-30s，用普通 def 走线程池避免卡事件循环。
+
+        落库的新候选（dry_run=False）立即在后台触发默认 lookback 年首测
+        （source=auto，写回回测任务历史），响应带 auto_first_backtest 计数。"""
         from .strategies import create_candidates, fetch_events, generate_hypotheses
 
         events = fetch_events(limit=req.limit)
@@ -442,7 +445,16 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
                     "note": "事件源暂无事件（market-watch 未开 / 无新事件）"}
         hypotheses = generate_hypotheses(events)
         ids = create_candidates(events, hypotheses) if not req.dry_run else []
-        return {"n_events": len(events), "hypotheses": hypotheses, "candidates": ids}
+        auto_started = 0
+        if ids:
+            # 候选落池即触发首测：后台异步跑默认 lookback 年回测（写回任务历史），不阻塞请求
+            from . import backtest_tasks as bt
+
+            auto_started = int(bt.trigger_first_backtests(ids).get("enqueued") or 0)
+        return {
+            "n_events": len(events), "hypotheses": hypotheses,
+            "candidates": ids, "auto_first_backtest": auto_started,
+        }
 
     @app.post("/strategies/run", response_model=dict)
     async def strategies_run(req: StrategyRunRequest):
