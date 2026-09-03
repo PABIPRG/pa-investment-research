@@ -4,6 +4,19 @@
 - 使用 Superpowers 工作流时，所有新建或更新的 Markdown 文档均使用中文，包括规格、实施计划、handoff、task brief、task report 和进度账本。
 - 代码标识符、命令、文件路径、配置键、API 名称以及必须逐字保留的引用可以继续使用原文；其余标题和说明正文使用中文。
 
+## Linear 项目映射
+
+- 后续所有任务追踪统一使用 Linear。
+- Linear workspace: `PABIPRG`
+- Linear team: `PABIPRG`
+- Team key: `PAB`
+- Linear project: `投研智能体`
+- Linear project ID: `08905897-5bb3-4f89-8a07-5729018a65b4`
+- 默认状态: `Backlog`
+- 默认标签: `Feature`
+- 创建 Linear issue 前必须先展示完整草稿，并取得用户明确确认。
+- 禁止通过仓库名称猜测 Linear Project；必须使用本节记录的项目名称与 ID。若映射失效或无法访问，应停止创建并请求用户确认。
+
 ## 多 Agent 与 Git worktree
 
 ### 角色与调度契约
