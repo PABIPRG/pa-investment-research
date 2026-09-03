@@ -347,15 +347,22 @@ def risk_alerts(store=None) -> dict:
                 })
         closed = int(s.get("closed_count") or 0)
         if closed > 0:
-            trades = {k: v for k, v in (store.all("shadows") or {}).items()
-                      if k.startswith(f"trades:{sid}")}
             net = 0.0
-            for t in trades.values():
-                try:
-                    net += float(t.get("ret_pct") or 0)
-                except (TypeError, ValueError):
-                    pass
-            if trades and net < 0:
+            trade_count = 0
+            for k, v in (store.all("shadows") or {}).items():
+                if not k.startswith(f"trades:{sid}"):
+                    continue
+                # trades:{sid} 存的是 list[dict]（shadow.py 平仓台账）；兼容旧版单 dict 形态。
+                rows = v if isinstance(v, list) else [v]
+                for t in rows:
+                    if not isinstance(t, dict):
+                        continue
+                    trade_count += 1
+                    try:
+                        net += float(t.get("ret_pct") or 0)
+                    except (TypeError, ValueError):
+                        pass
+            if trade_count and net < 0:
                 items.append({
                     "id": "risk-" + _md5("shadow:closed:" + sid),
                     "source": "shadow",
