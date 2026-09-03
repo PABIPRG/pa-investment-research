@@ -1,0 +1,8 @@
+---
+description: 加载仓库统一协作约定与产品 UI 规范
+alwaysApply: true
+---
+
+开始处理仓库任务前，完整读取并遵守根目录 `AGENTS.md`。涉及任何用户可见 UI 或 UX 时，使用 `delivering-product-ui` Skill，并完整读取 `DESIGN.md`。
+
+这些文件是唯一事实源；本规则只负责发现，不复制其正文。
