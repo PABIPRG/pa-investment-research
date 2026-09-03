@@ -81,6 +81,21 @@ describe('投研工作台主题样式', () => {
     expect(styles).not.toMatch(/\.researchContext(?:Controls|Popover)[^{]*\{[^}]*#[0-9a-f]{3,8}/isu)
   })
 
+  it('模块选择器在两种外观下共享箭头过渡并尊重减少动态效果偏好', () => {
+    expect(styles).toContain('.assistantModuleMenuRoot { min-width: 0; max-width: 180px; }')
+    expect(styles).not.toMatch(/\.assistantModuleMenuRoot\s*\{[^}]*overflow:\s*hidden;/u)
+    expect(styles).toMatch(
+      /\.assistantModuleTrigger\s*\{[^}]*box-sizing:\s*border-box;[^}]*max-width:\s*100%;/u,
+    )
+    expect(styles).toMatch(
+      /\.assistantModuleTrigger > i, \.researchContextTrigger > i \{[^}]*transition: transform 120ms ease;/u,
+    )
+    const reducedMotion = styles.slice(styles.indexOf('@media (prefers-reduced-motion: reduce)'))
+    expect(reducedMotion).toMatch(
+      /:is\([^)]*\.assistantModuleTrigger > i[^)]*\.researchContextTrigger > i[^)]*\) \{ transition: none; \}/u,
+    )
+  })
+
   it('消费 profile 的隐藏标记并隐藏新对话中的工作区上下文', () => {
     expect(conversationStyles).toContain(":global(body[data-workspace-context-visibility='hidden']) .heroWorkspaceContext")
     expect(conversationStyles).toMatch(

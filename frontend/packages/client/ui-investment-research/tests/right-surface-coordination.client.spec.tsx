@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { InvestmentShell } from '../src/client/InvestmentShell.tsx'
 import { assistantPrompt, type AssistantIntent } from '../src/client/assistant-intent.ts'
 import type { RequestData } from '../src/client/research-types.ts'
@@ -41,21 +41,46 @@ const SHELL_CSS = readFileSync(resolve(
 
 let rafId = 0
 let rafCallbacks = new Map<number, FrameRequestCallback>()
+let notifyResize: ResizeObserverCallback | undefined
 
-function installBrowserDoubles(mobile = false): void {
+interface BrowserDoubles {
+  readonly setViewportWidth: (width: number) => void
+}
+
+function installBrowserDoubles(initialViewportWidth = 1280): BrowserDoubles {
+  let viewportWidth = initialViewportWidth
+  const mediaLists = new Map<string, MediaQueryList>()
+  const mediaListeners = new Map<string, Set<(event: MediaQueryListEvent) => void>>()
+  const matches = (query: string): boolean => {
+    const maxWidth = /\(max-width:\s*(\d+)px\)/u.exec(query)
+    return maxWidth === null ? false : viewportWidth <= Number(maxWidth[1])
+  }
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
-    value: vi.fn((query: string) => ({
-      matches: query === '(max-width: 1023px)' ? mobile : false,
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(() => true),
-    })),
+    value: vi.fn((query: string) => {
+      const existing = mediaLists.get(query)
+      if (existing !== undefined) return existing
+      const listeners = new Set<(event: MediaQueryListEvent) => void>()
+      mediaListeners.set(query, listeners)
+      const media = {
+        get matches() { return matches(query) },
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn((_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          listeners.add(listener)
+        }),
+        removeEventListener: vi.fn((_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          listeners.delete(listener)
+        }),
+        addListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => { listeners.add(listener) }),
+        removeListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => { listeners.delete(listener) }),
+        dispatchEvent: vi.fn(() => true),
+      } as unknown as MediaQueryList
+      mediaLists.set(query, media)
+      return media
+    }),
   })
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: initialViewportWidth })
   rafId = 0
   rafCallbacks = new Map()
   vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
@@ -66,6 +91,30 @@ function installBrowserDoubles(mobile = false): void {
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => {
     rafCallbacks.delete(id)
   })
+  class ResizeObserverHarness {
+    constructor(callback: ResizeObserverCallback) { notifyResize = callback }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  vi.stubGlobal('ResizeObserver', ResizeObserverHarness)
+  return {
+    setViewportWidth(width) {
+      const previousMatches = new Map(
+        [...mediaLists].map(([query]) => [query, matches(query)]),
+      )
+      viewportWidth = width
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+      window.dispatchEvent(new Event('resize'))
+      for (const [query, media] of mediaLists) {
+        const nextMatches = matches(query)
+        if (previousMatches.get(query) === nextMatches) continue
+        const event = { matches: nextMatches, media: query } as MediaQueryListEvent
+        media.onchange?.call(media, event)
+        for (const listener of mediaListeners.get(query) ?? []) listener(event)
+      }
+    },
+  }
 }
 
 function flushAnimationFrames(): void {
@@ -94,12 +143,15 @@ function defaultResponse(request: Parameters<RequestData>[0]): unknown {
 interface HarnessOptions {
   readonly initial?: Partial<InvestmentUiSnapshot>
   readonly mobile?: boolean
+  readonly viewportWidth?: number
   readonly requestData?: RequestData
   readonly prepareAssistantGate?: (intent: AssistantIntent, module: AssistantModule) => Promise<void>
 }
 
 function renderHarness(options: HarnessOptions = {}) {
-  installBrowserDoubles(options.mobile)
+  const browserDoubles = installBrowserDoubles(
+    options.viewportWidth ?? (options.mobile === true ? 640 : 1280),
+  )
   const prepareAssistant = vi.fn<(
     intent: AssistantIntent,
     module?: AssistantModule,
@@ -215,11 +267,21 @@ function renderHarness(options: HarnessOptions = {}) {
           aria-label="外部进入我的投研"
           onClick={() => { setSnapshot(current => ({ ...current, route: 'portfolio' })) }}
         />
+        <button
+          type="button"
+          aria-label="外部进入研究工作台"
+          onClick={() => { setSnapshot(current => ({ ...current, route: 'dashboard' })) }}
+        />
+        <button
+          type="button"
+          aria-label="外部返回实时盯盘"
+          onClick={() => { setSnapshot(current => ({ ...current, route: 'opportunity' })) }}
+        />
       </>
     )
   }
 
-  return { ...render(<Harness />), prepareAssistant, requestData }
+  return { ...render(<Harness />), prepareAssistant, requestData, ...browserDoubles }
 }
 
 function operationCalls(requestData: ReturnType<typeof vi.fn<RequestData>>, operation: string) {
@@ -243,6 +305,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   rafCallbacks.clear()
   document.body.style.overflow = ''
   delete document.body.dataset.investmentAssistantMode
@@ -293,6 +356,251 @@ describe('Shell 右侧表面协调', () => {
       /@container \(max-width: 860px\)[\s\S]*?\.opportunityWorkspace \{ grid-template-columns: minmax\(0, 1fr\); \}/u,
     )
     expect(SHELL_CSS).toMatch(/@container \(max-width: 860px\)[\s\S]*?\.marketNewsRail \{ position: relative; top: auto;/u)
+  })
+
+  it('实时盯盘为 AI 受控让位，并在关闭后保留资讯实例和恢复焦点', async () => {
+    const { requestData } = renderHarness()
+    await waitForScan()
+    await waitFor(() => {
+      expect(operationCalls(requestData, 'market-watch.news-flash')).toHaveLength(1)
+    })
+    const root = screen.getByTestId('opportunity-root')
+    const newsRail = screen.getByRole('complementary', { name: '市场资讯栏' })
+    const launcher = screen.getByRole('button', { name: '打开 AI 研究助理' })
+
+    fireEvent.click(launcher)
+    expect(await screen.findByTestId('assistant-panel')).toBeTruthy()
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+    expect(newsRail.getAttribute('aria-hidden')).toBe('true')
+    expect(newsRail.hasAttribute('inert')).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭 AI 研究助理' }))
+    act(() => { flushAnimationFrames() })
+    expect(root.getAttribute('data-assistant-layout')).toBe('closed')
+    expect(newsRail.hasAttribute('aria-hidden')).toBe(false)
+    expect(operationCalls(requestData, 'market-watch.news-flash')).toHaveLength(1)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '打开 AI 研究助理' }))
+  })
+
+  it('实时盯盘为证券研究窗按同一实测宽度让位，切股时复用浮窗容器', async () => {
+    renderHarness({ viewportWidth: 1202 })
+    await waitForScan()
+    const root = screen.getByTestId('opportunity-root')
+    const newsRail = screen.getByRole('complementary', { name: '市场资讯栏' })
+    const widthAnchor = newsRail.lastElementChild
+    if (!(widthAnchor instanceof HTMLElement)) throw new Error('研究窗宽度锚点不存在')
+    vi.spyOn(widthAnchor, 'getBoundingClientRect').mockReturnValue({
+      x: 804,
+      y: 210,
+      width: 366,
+      height: 640,
+      top: 210,
+      right: 1170,
+      bottom: 850,
+      left: 804,
+      toJSON: () => ({}),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
+    const firstSurface = researchSurface('贵州茅台')
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+    expect(root.style.getPropertyValue('--investment-right-surface-width')).toBe('min(366px, 42vw)')
+    expect(firstSurface.style.getPropertyValue('--investment-research-surface-width')).toBe('min(366px, 42vw)')
+
+    fireEvent.click(screen.getByRole('button', { name: '打开平安银行研究' }))
+    const nextSurface = researchSurface('平安银行')
+    expect(nextSurface).toBe(firstSurface)
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+    expect(root.style.getPropertyValue('--investment-right-surface-width')).toBe('min(366px, 42vw)')
+  })
+
+  it('证券研究窗在 1023px 内切换为遮罩，回到桌面后恢复让位布局', async () => {
+    const { setViewportWidth } = renderHarness({ viewportWidth: 1202 })
+    await waitForScan()
+    const root = screen.getByTestId('opportunity-root')
+    fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+
+    act(() => { setViewportWidth(1023) })
+    expect(await screen.findByRole('dialog', { name: '贵州茅台证券研究窗' })).toBeTruthy()
+    expect(root.getAttribute('data-assistant-layout')).toBe('overlay')
+
+    act(() => { setViewportWidth(1024) })
+    expect(await screen.findByRole('complementary', { name: '贵州茅台证券研究窗' })).toBeTruthy()
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+  })
+
+  it('切换左侧功能模块会关闭研究窗并清除回到实时盯盘后的自动恢复状态', async () => {
+    renderHarness({ initial: { watchQuery: '600519' } })
+    expect(await screen.findByRole('complementary', { name: '600519证券研究窗' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '外部进入研究工作台' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('complementary', { name: '600519证券研究窗' })).toBeNull()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '外部返回实时盯盘' }))
+    await waitForScan()
+    expect(screen.queryByRole('complementary', { name: '600519证券研究窗' })).toBeNull()
+    expect(screen.getByTestId('opportunity-root').getAttribute('data-assistant-layout')).toBe('closed')
+  })
+
+  it('切换左侧功能模块会关闭 AI 小窗', async () => {
+    renderHarness()
+    await waitForScan()
+    fireEvent.click(screen.getByRole('button', { name: '打开 AI 研究助理' }))
+    expect(await screen.findByTestId('assistant-panel')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '外部进入研究工作台' }))
+    await waitFor(() => { expect(screen.queryByTestId('assistant-panel')).toBeNull() })
+
+    fireEvent.click(screen.getByRole('button', { name: '外部返回实时盯盘' }))
+    await waitForScan()
+    expect(screen.queryByTestId('assistant-panel')).toBeNull()
+  })
+
+  it('异步创建 AI 会话期间切换左侧功能模块，不会在完成后重新打开旧模块小窗', async () => {
+    let releaseAssistant: (() => void) | undefined
+    const assistantGate = new Promise<void>((resolve) => { releaseAssistant = resolve })
+    const { prepareAssistant } = renderHarness({ prepareAssistantGate: () => assistantGate })
+    await waitForScan()
+
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+    expect(prepareAssistant).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: '外部进入研究工作台' }))
+    expect(screen.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
+
+    await act(async () => {
+      releaseAssistant?.()
+      await assistantGate
+    })
+
+    await waitFor(() => { expect(screen.queryByTestId('assistant-panel')).toBeNull() })
+    expect(screen.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
+  })
+
+  it('旧模块异步请求完成时保留新模块由用户手动打开的 AI 小窗', async () => {
+    let releaseAssistant: (() => void) | undefined
+    const assistantGate = new Promise<void>((resolve) => { releaseAssistant = resolve })
+    renderHarness({ prepareAssistantGate: () => assistantGate })
+    await waitForScan()
+
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+    fireEvent.click(screen.getByRole('button', { name: '外部进入研究工作台' }))
+    fireEvent.click(screen.getByRole('button', { name: '打开 AI 研究助理' }))
+    expect(screen.getByTestId('assistant-panel')).toBeTruthy()
+
+    await act(async () => {
+      releaseAssistant?.()
+      await assistantGate
+    })
+
+    await waitFor(() => { expect(screen.getByTestId('assistant-panel')).toBeTruthy() })
+    expect(screen.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
+  })
+
+  it('跨模块后可重新发起同一分析，旧请求完成时保持收窗直到新请求就绪', async () => {
+    let releaseFirst: (() => void) | undefined
+    let releaseSecond: (() => void) | undefined
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve })
+    let invocation = 0
+    const { prepareAssistant } = renderHarness({
+      prepareAssistantGate: () => {
+        invocation += 1
+        return invocation === 1 ? firstGate : secondGate
+      },
+    })
+    await waitForScan()
+
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+    fireEvent.click(screen.getByRole('button', { name: '外部进入研究工作台' }))
+    fireEvent.click(screen.getByRole('button', { name: '外部返回实时盯盘' }))
+    await waitForScan()
+    fireEvent.click(within(screen.getByRole('article', { name: '贵州茅台 600519' }))
+      .getByRole('button', { name: '智能分析' }))
+
+    await act(async () => {
+      releaseFirst?.()
+      await firstGate
+    })
+    await waitFor(() => { expect(prepareAssistant).toHaveBeenCalledTimes(2) })
+    expect(screen.queryByTestId('assistant-panel')).toBeNull()
+
+    await act(async () => {
+      releaseSecond?.()
+      await secondGate
+    })
+    expect(await screen.findByTestId('assistant-panel')).toBeTruthy()
+    expect(screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' }).value)
+      .toContain('贵州茅台（600519）')
+  })
+
+  it('实时盯盘只在 680px 内将 docked AI 升级为遮罩，并随视口动态恢复让位布局', async () => {
+    const { setViewportWidth } = renderHarness({ viewportWidth: 820 })
+    await waitForScan()
+    const root = screen.getByTestId('opportunity-root')
+    const workbench = document.querySelector('main')
+    const newsRail = screen.getByRole('complementary', { name: '市场资讯栏' })
+    const outsideModal = screen.getByRole('button', { name: '投研报告' })
+    if (workbench === null) throw new Error('真实工作台不存在')
+
+    fireEvent.click(screen.getByRole('button', { name: '打开 AI 研究助理' }))
+
+    expect(await screen.findByRole('complementary', { name: 'AI 研究助理' })).toBeTruthy()
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+    expect(document.querySelector('[class*="assistantBackdrop"]')).toBeNull()
+    expect(workbench.hasAttribute('inert')).toBe(false)
+    expect(workbench.hasAttribute('aria-hidden')).toBe(false)
+    expect(newsRail.hasAttribute('inert')).toBe(true)
+    expect(newsRail.getAttribute('aria-hidden')).toBe('true')
+
+    act(() => { setViewportWidth(640) })
+
+    const modal = await screen.findByRole('dialog', { name: 'AI 研究助理' })
+    const modalControls = within(modal).getAllByRole('button')
+    for (const control of modalControls) {
+      Object.defineProperty(control, 'offsetParent', { configurable: true, get: () => modal })
+    }
+    outsideModal.focus()
+    act(() => { flushAnimationFrames() })
+    expect(document.activeElement).toBe(modalControls[0])
+    expect(root.getAttribute('data-assistant-layout')).toBe('overlay')
+    expect(document.querySelector('[class*="assistantBackdrop"]')).toBeTruthy()
+    expect(workbench.hasAttribute('inert')).toBe(true)
+    expect(workbench.getAttribute('aria-hidden')).toBe('true')
+
+    outsideModal.focus()
+    fireEvent.keyDown(window, { key: 'Tab' })
+    expect(document.activeElement).toBe(modalControls[0])
+
+    act(() => { setViewportWidth(681) })
+
+    expect(await screen.findByRole('complementary', { name: 'AI 研究助理' })).toBeTruthy()
+    expect(root.getAttribute('data-assistant-layout')).toBe('docked')
+    expect(document.querySelector('[class*="assistantBackdrop"]')).toBeNull()
+    expect(workbench.hasAttribute('inert')).toBe(false)
+    expect(workbench.hasAttribute('aria-hidden')).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: '近全屏展开 AI 助理' }))
+    expect(screen.getByRole('dialog', { name: 'AI 研究助理' }).getAttribute('aria-modal')).toBe('true')
+    expect(document.querySelector('[class*="assistantBackdrop"]')).toBeTruthy()
+    expect(workbench.hasAttribute('inert')).toBe(true)
+  })
+
+  it('实时盯盘按容器宽度切换紧凑密度', async () => {
+    renderHarness()
+    await waitForScan()
+    const root = screen.getByTestId('opportunity-root')
+    expect(root.getAttribute('data-density')).toBe('comfortable')
+
+    act(() => {
+      notifyResize?.([{ contentRect: { width: 900 } } as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    expect(root.getAttribute('data-density')).toBe('compact')
   })
 
   it('研究 expanded 时继续隐藏 AI launcher', async () => {
@@ -369,7 +677,7 @@ describe('Shell 右侧表面协调', () => {
     )
   })
 
-  it('排队意图保留点击时的浮动表面归属，不被等待期间的主对话导航改写', async () => {
+  it('排队意图在等待期间切换左侧模块后整体失效，不把旧请求带入新模块', async () => {
     let releaseFirst: (() => void) | undefined
     const firstPending = new Promise<void>((resolve) => { releaseFirst = resolve })
     const { prepareAssistant } = renderHarness({
@@ -384,14 +692,16 @@ describe('Shell 右侧表面协调', () => {
     fireEvent.click(within(screen.getByRole('article', { name: '平安银行 000001' }))
       .getByRole('button', { name: '智能分析' }))
     fireEvent.click(screen.getByRole('button', { name: '外部进入我的投研' }))
-    releaseFirst?.()
+    await act(async () => {
+      releaseFirst?.()
+      await firstPending
+    })
 
-    await waitFor(() => { expect(prepareAssistant).toHaveBeenCalledTimes(2) })
-    expect(prepareAssistant).toHaveBeenLastCalledWith(
-      { kind: 'stock', code: '000001', name: '平安银行' },
-      'general',
-      'floating',
-    )
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '新对话' }).getAttribute('aria-busy')).toBe('false')
+    })
+    expect(prepareAssistant).toHaveBeenCalledOnce()
+    expect(screen.queryByTestId('assistant-panel')).toBeNull()
   })
 
   it('首个排队意图失败后，后续成功意图会清除旧错误并正常展示', async () => {
@@ -473,6 +783,43 @@ describe('Shell 右侧表面协调', () => {
     expect(researchSurface('贵州茅台').getAttribute('data-mode')).toBe('docked')
     expect(screen.queryByRole('button', { name: '恢复贵州茅台研究窗' })).toBeNull()
     expect(screen.queryByRole('button', { name: '返回证券详情' })).toBeNull()
+  })
+
+  it.each([
+    ['显式返回', '返回证券详情'],
+    ['直接关闭', '关闭 AI 研究助理'],
+  ] as const)('研究进入 AI 后%s时保留原先实测宽度', async (_, closerName) => {
+    renderHarness({ viewportWidth: 1202 })
+    await waitForScan()
+    const root = screen.getByTestId('opportunity-root')
+    const newsRail = screen.getByRole('complementary', { name: '市场资讯栏' })
+    const widthAnchor = newsRail.lastElementChild
+    if (!(widthAnchor instanceof HTMLElement)) throw new Error('研究窗宽度锚点不存在')
+    vi.spyOn(widthAnchor, 'getBoundingClientRect').mockReturnValue({
+      x: 804,
+      y: 210,
+      width: 366,
+      height: 640,
+      top: 210,
+      right: 1170,
+      bottom: 850,
+      left: 804,
+      toJSON: () => ({}),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
+    expect(researchSurface('贵州茅台').style.getPropertyValue('--investment-research-surface-width'))
+      .toBe('min(366px, 42vw)')
+    fireEvent.click(screen.getByRole('button', { name: '带入智能分析' }))
+    await screen.findByRole('button', { name: '返回证券详情' })
+
+    fireEvent.click(screen.getByRole('button', { name: closerName }))
+
+    await waitFor(() => {
+      expect(researchSurface('贵州茅台').style.getPropertyValue('--investment-research-surface-width'))
+        .toBe('min(366px, 42vw)')
+    })
+    expect(root.style.getPropertyValue('--investment-right-surface-width')).toBe('min(366px, 42vw)')
   })
 
   it('切换证券时更新主题与触发元素所有权，不展示旧证券数据', async () => {

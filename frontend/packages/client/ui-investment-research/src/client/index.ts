@@ -10,7 +10,7 @@ import {
   InvestmentWelcome,
   InvestmentSidebar,
   assistantModulePrompt,
-  nextAssistantModuleDraft,
+  nextPromptTemplateDraft,
   type InvestmentShellInjected,
   type InvestmentSidebarInjected,
 } from './InvestmentShell.tsx'
@@ -19,6 +19,8 @@ import {
   type InvestmentComposerContextInjected,
 } from './ResearchContextControls.tsx'
 import { ResearchChatContextController } from './research-chat-context.ts'
+import { AnalysisPromptTemplateController } from './analysis-prompt-templates.ts'
+import type { AnalysisPromptTemplateId } from './analysis-modules.ts'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import {
   createLocalTelemetry, type LocalTelemetryEvent, type LocalTelemetrySurface,
@@ -49,6 +51,9 @@ export type {
   InvestmentSidebarProps,
 } from './InvestmentShell.tsx'
 export { ResearchChatContextController } from './research-chat-context.ts'
+export { AnalysisPromptTemplateController } from './analysis-prompt-templates.ts'
+export type { AnalysisPromptTemplateId } from './analysis-modules.ts'
+export type { AnalysisPromptTemplateSnapshot } from './analysis-prompt-templates.ts'
 export type {
   ResearchChatContext, ResearchChatContextEntry, ResearchChatContextTarget,
   ResearchChatInstrument,
@@ -58,7 +63,11 @@ export { assistantPrompt } from './assistant-intent.ts'
 export type { AssistantIntent } from './assistant-intent.ts'
 export { EvolutionDashboard } from './EvolutionDashboard.tsx'
 export { StrategyEvolutionDiagnostics } from './StrategyEvolutionDiagnostics.tsx'
-export type { EvolutionDashboardProps, EvolutionLifecycleGroup, EvolutionRequestData, StrategyEvolutionDiagnosticsProps } from './evolution-types.ts'
+export { evolutionConfidenceLabel, evolutionParticipationLabel } from './evolution-types.ts'
+export type {
+  EvolutionDashboardProps, EvolutionLifecycleGroup, EvolutionRequestData,
+  EvolutionStrategyStatus, StrategyEvolutionDiagnosticsProps,
+} from './evolution-types.ts'
 export type {
   AssistantDisplayMode, AssistantModule, InvestmentDraftKey, InvestmentNavigationContext,
   InvestmentRoute, InvestmentUiSnapshot, StrategyResearchStage,
@@ -69,6 +78,24 @@ export const inject = [
   'slots', 'sessions', 'workspaces', 'layout', 'theme', 'conversation', 'investmentResearchRuntimeClient',
 ]
 
+function assistantModuleForIntent(intent: AssistantIntent): AssistantModule {
+  if (intent.kind === 'stock') return 'stock'
+  if (intent.kind === 'portfolio') return 'portfolio'
+  if (intent.kind === 'strategy' || intent.kind === 'shadow' || intent.kind === 'evolution') return 'strategy'
+  if (intent.kind === 'watch') return 'watch'
+  if (intent.kind === 'industry') return 'industry'
+  return 'general'
+}
+
+type InvestmentNavigationModule = Exclude<InvestmentRoute, 'stock-detail' | 'assistant' | 'projects'>
+
+function navigationModule(route: InvestmentRoute): InvestmentNavigationModule {
+  if (route === 'stock-detail') return 'opportunity'
+  if (route === 'assistant') return 'analysis'
+  if (route === 'projects') return 'framework'
+  return route
+}
+
 /** Mount the investment navigation and workbench without replacing the shared conversation surface. */
 export function apply(ctx: ClientContext): void {
   const state = new InvestmentUiState()
@@ -76,6 +103,7 @@ export function apply(ctx: ClientContext): void {
     ctx.investmentResearchRuntimeClient.requestData(request)
   )
   const researchChatContext = new ResearchChatContextController(requestData)
+  const promptTemplates = new AnalysisPromptTemplateController()
   const telemetry = createLocalTelemetry(requestData)
   let cancelPendingDraft: (() => void) | undefined
 
@@ -98,7 +126,7 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'ui-investment-research: profile marker')
 
-  ctx.effect(() => () => { researchChatContext.dispose() }, 'ui-investment-research: research chat context')
+  ctx.effect(() => () => { promptTemplates.dispose() }, 'ui-investment-research: analysis prompt templates')
 
   // Workspace remains an internal session-grouping and tool-scope abstraction
   // in this product. On a truly empty first run, create one ordinary Session at
@@ -173,6 +201,8 @@ export function apply(ctx: ClientContext): void {
   let primaryAssistantSessionId: SessionId | undefined
   let activeConversationSurface: 'floating' | 'primary' = 'floating'
   let navigationGeneration = 0
+  let floatingSessionResetRequired = false
+  let floatingResetPromise: Promise<SessionId> | undefined
   let conversationSwitchRunning = false
   let pendingNavigation: {
     readonly generation: number
@@ -188,6 +218,39 @@ export function apply(ctx: ClientContext): void {
   const rememberSurfaceSession = (surface: 'floating' | 'primary', sessionId: SessionId): void => {
     if (surface === 'primary') primaryAssistantSessionId = sessionId
     else floatingAssistantSessionId = sessionId
+  }
+
+  const resetFloatingConversation = (): Promise<SessionId> => {
+    if (floatingResetPromise !== undefined) return floatingResetPromise
+    const previousSessionId = ctx.sessions.list.getSnapshot().current
+    const operation = (async (): Promise<SessionId> => {
+      try {
+        const fresh = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
+        if (fresh === undefined || !setDraft(fresh, '')) {
+          throw new Error('investment floating conversation session is unavailable')
+        }
+        floatingAssistantSessionId = fresh
+        promptTemplates.set(String(fresh), 'general')
+        floatingSessionResetRequired = false
+        return fresh
+      } catch (reason) {
+        if (previousSessionId !== undefined
+          && ctx.sessions.list.getSnapshot().current !== previousSessionId) {
+          try {
+            await openConversationSession(previousSessionId)
+          } catch (restoreReason) {
+            console.warn('investment floating conversation restore failed:', restoreReason)
+          }
+        }
+        throw reason
+      }
+    })()
+    floatingResetPromise = operation
+    void operation.then(
+      () => { if (floatingResetPromise === operation) floatingResetPromise = undefined },
+      () => { if (floatingResetPromise === operation) floatingResetPromise = undefined },
+    )
+    return operation
   }
 
   const restoreActiveSurfaceAfter = async (
@@ -207,6 +270,11 @@ export function apply(ctx: ClientContext): void {
     const current = ctx.sessions.list.getSnapshot().current
     if (nextSurface !== activeConversationSurface && current !== undefined && current !== target) {
       rememberSurfaceSession(activeConversationSurface, current)
+    }
+
+    if (nextSurface === 'floating' && floatingSessionResetRequired) {
+      await resetFloatingConversation()
+      return
     }
 
     if (target !== undefined) {
@@ -233,10 +301,14 @@ export function apply(ctx: ClientContext): void {
       while (pendingNavigation !== undefined) {
         const request = pendingNavigation
         pendingNavigation = undefined
+        let surfaceReady = true
         try {
           await ensureConversationSurface(request.surface)
         } catch (reason) {
           console.warn('investment conversation surface switch failed:', reason)
+          surfaceReady = false
+        }
+        if (!surfaceReady && request.surface === 'primary') {
           continue
         }
         if (request.generation !== navigationGeneration) continue
@@ -253,7 +325,18 @@ export function apply(ctx: ClientContext): void {
   const navigate = (route: InvestmentRoute, context: InvestmentNavigationContext = {}): void => {
     const generation = ++navigationGeneration
     const nextSurface = route === 'portfolio' ? 'primary' : 'floating'
-    if (!conversationSwitchRunning && nextSurface === activeConversationSurface) {
+    const nextNavigationModule = navigationModule(route)
+    const moduleChanged = navigationModule(state.getSnapshot().route) !== nextNavigationModule
+    if (nextSurface === 'floating' && moduleChanged) {
+      floatingSessionResetRequired = true
+      cancelPendingDraft?.()
+      cancelPendingDraft = undefined
+      state.setAssistantMode('closed')
+      state.setAssistantModule('general')
+    }
+    if (!conversationSwitchRunning
+      && nextSurface === activeConversationSurface
+      && !floatingSessionResetRequired) {
       state.navigate(route, context)
       ctx.layout.closeDetails()
       return
@@ -262,27 +345,39 @@ export function apply(ctx: ClientContext): void {
     flushPendingNavigation()
   }
 
-  const automaticModulePrompts = new Map<string, string>()
+  const selectPromptTemplate = (
+    sessionId: string,
+    templateId: AnalysisPromptTemplateId,
+    prompt: string,
+  ): void => {
+    const scope = ctx.sessions.scope(sessionId as SessionId)
+    if (scope === undefined) return
+    const input = ctx.conversation.input.for(scope)
+    const currentDraft = input.state.getSnapshot().draft
+    const previous = promptTemplates.snapshot(sessionId)
+    const nextDraft = nextPromptTemplateDraft(currentDraft, previous.automaticPrompt, prompt)
+    if (nextDraft === undefined) return
+    input.setDraft(nextDraft)
+    promptTemplates.set(sessionId, templateId, nextDraft === '' ? undefined : nextDraft)
+  }
 
-  const applyModulePromptToBlankDraft = (module: AssistantModule, promptOverride?: string): void => {
+  const applyModulePromptToBlankDraft = (module: AssistantModule): void => {
     const current = ctx.sessions.list.getSnapshot().current
     if (current === undefined) return
     const scope = ctx.sessions.scope(current)
     if (scope === undefined) return
     const input = ctx.conversation.input.for(scope)
-    const sessionKey = String(current)
-    const currentDraft = input.state.getSnapshot().draft
-    const prompt = promptOverride ?? assistantModulePrompt(module)
-    const nextDraft = nextAssistantModuleDraft(currentDraft, automaticModulePrompts.get(sessionKey), prompt)
-    if (nextDraft === undefined) return
-    input.setDraft(nextDraft)
-    if (nextDraft === '') automaticModulePrompts.delete(sessionKey)
-    else automaticModulePrompts.set(sessionKey, nextDraft)
+    if (input.state.getSnapshot().draft.trim() !== '') return
+    const prompt = assistantModulePrompt(module)
+    if (prompt !== '') {
+      input.setDraft(prompt)
+      promptTemplates.set(String(current), 'general', prompt)
+    }
   }
 
-  const selectAssistantModule = (module: AssistantModule, promptOverride?: string): void => {
+  const selectAssistantModule = (module: AssistantModule): void => {
     state.setAssistantModule(module)
-    applyModulePromptToBlankDraft(module, promptOverride)
+    applyModulePromptToBlankDraft(module)
   }
 
   const prepareAssistant = async (
@@ -348,11 +443,9 @@ export function apply(ctx: ClientContext): void {
     })()
     void telemetry.track({ action: 'analyze', surface, ...telemetryTarget })
     const prompt = assistantPrompt(intent)
-    const module: AssistantModule = moduleOverride ?? (intent.kind === 'stock' ? 'stock'
-      : intent.kind === 'portfolio' ? 'portfolio'
-        : intent.kind === 'strategy' || intent.kind === 'shadow' || intent.kind === 'evolution' ? 'strategy'
-          : intent.kind === 'watch' ? 'watch'
-            : intent.kind === 'industry' ? 'industry' : 'general')
+    const module: AssistantModule = intent.kind === 'prompt' && intent.promptTemplateId !== undefined
+      ? 'general'
+      : moduleOverride ?? assistantModuleForIntent(intent)
     cancelPendingDraft?.()
     cancelPendingDraft = undefined
     const sourceSurface = sourceSurfaceOverride ?? activeConversationSurface
@@ -360,6 +453,13 @@ export function apply(ctx: ClientContext): void {
     if (fresh === undefined || !setDraft(fresh, prompt)) {
       throw new Error('investment assistant fresh session is unavailable')
     }
+    promptTemplates.set(
+      String(fresh),
+      intent.kind === 'prompt' && intent.promptTemplateId !== undefined
+        ? intent.promptTemplateId
+        : 'general',
+      prompt === '' ? undefined : prompt,
+    )
     await restoreActiveSurfaceAfter(sourceSurface, fresh)
     if (activeConversationSurface === sourceSurface) {
       state.openAssistant(module)
@@ -380,7 +480,23 @@ export function apply(ctx: ClientContext): void {
     trackTelemetry: telemetry.track,
     setHistory: (open) => { state.setHistory(open) },
     setReports: (open) => { state.setReports(open) },
-    setAssistantMode: (mode: AssistantDisplayMode) => { state.setAssistantMode(mode) },
+    setAssistantMode: (mode: AssistantDisplayMode) => {
+      if (mode === 'closed' || activeConversationSurface !== 'floating' || !floatingSessionResetRequired) {
+        state.setAssistantMode(mode)
+        return
+      }
+      const generation = navigationGeneration
+      void resetFloatingConversation()
+        .then(async (sessionId) => {
+          await restoreActiveSurfaceAfter('floating', sessionId)
+          if (generation === navigationGeneration && activeConversationSurface === 'floating') {
+            state.setAssistantMode(mode)
+          }
+        })
+        .catch((reason: unknown) => {
+          console.warn('investment floating conversation retry failed:', reason)
+        })
+    },
     setAssistantModule: selectAssistantModule,
     setModuleDraft: (key: InvestmentDraftKey, value: string) => { state.setDraft(key, value) },
     selectStrategy: (strategyId) => { state.selectStrategy(strategyId) },
@@ -393,6 +509,7 @@ export function apply(ctx: ClientContext): void {
       const fresh = await ctx.workspaces.startFreshSession(undefined, { fallbackToHostCwd: true })
       if (fresh !== undefined) {
         setDraft(fresh, '')
+        promptTemplates.set(String(fresh), 'general')
         await restoreActiveSurfaceAfter(sourceSurface, fresh)
       }
     },
@@ -427,7 +544,10 @@ export function apply(ctx: ClientContext): void {
       const result = await session.rename(title)
       if (!result.ok) throw new Error(result.error.message)
     },
-    archiveSession: sessionId => ctx.workspaces.archiveSession(sessionId),
+    archiveSession: async (sessionId) => {
+      await ctx.workspaces.archiveSession(sessionId)
+      promptTemplates.delete(String(sessionId))
+    },
     prepareAssistant,
     toggleTheme: () => {
       const next = ctx.theme.getTheme().active.colorScheme === 'dark' ? 'light' : 'dark'
@@ -463,6 +583,8 @@ export function apply(ctx: ClientContext): void {
     inject: (): InvestmentComposerContextInjected => ({
       hooks: { investmentUi: state },
       setAssistantModule: selectAssistantModule,
+      promptTemplates,
+      selectPromptTemplate,
       researchChatContext,
       requestData,
     }),

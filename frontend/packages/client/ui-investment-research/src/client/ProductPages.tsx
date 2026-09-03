@@ -296,7 +296,6 @@ function backtestVerdictLabel(task: Record<string, unknown>): string {
   if (verification === 'failed') return '未达标'
   return '—'
 }
-
 function strategySubjectLabel(value: unknown, securityNames: Readonly<Record<string, string>> = {}): string {
   const raw = text(value, '').trim()
   if (raw === '') return ''
@@ -693,7 +692,7 @@ function StrategyDetailDialog({
             <table>
               <thead><tr><th>时间窗口</th><th>来源</th><th>状态</th><th>创建时间</th><th>开始 / 完成</th><th>结果</th><th>失败原因</th></tr></thead>
               <tbody>
-                {tasks.map(task => {
+                {tasks.map((task) => {
                   const taskIdText = text(task.task_id, '')
                   const summary = asRecord(task.summary)
                   const failed = text(task.status, '') === 'failed'
@@ -922,6 +921,7 @@ export function StrategyResearchPage({
   const [evolutionEducationOpen, setEvolutionEducationOpen] = useState(false)
   const [suppressEvolutionEducation, setSuppressEvolutionEducation] = useState(false)
   const [filter, setFilter] = useState<StrategyFilter>('all')
+  const [lifecycleHelpOpen, setLifecycleHelpOpen] = useState(false)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
   const [newTaskItem, setNewTaskItem] = useState<Record<string, unknown>>()
   const [archiveItem, setArchiveItem] = useState<Record<string, unknown>>()
@@ -1155,6 +1155,12 @@ export function StrategyResearchPage({
   return (
     <div className={css.pageScroll}>
       <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
+        <button
+          type="button"
+          className={css.secondaryButton}
+          aria-haspopup="dialog"
+          onClick={() => { setLifecycleHelpOpen(true) }}
+        >了解策略生命周期</button>
         {view === 'pool' && <>
           <span className={css.backtestWindow} title="回测入口已并入策略详情：可自选预设窗口或自定义起止日期">回测入口：策略详情 → 回测管理</span>
           <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
@@ -1167,63 +1173,74 @@ export function StrategyResearchPage({
         <button type="button" aria-pressed={view === 'pool'} className={view === 'pool' ? css.segmentActive : undefined} onClick={() => { setView('pool') }}>策略池</button>
         <button type="button" aria-pressed={view === 'shadow'} className={view === 'shadow' ? css.segmentActive : undefined} onClick={() => { setView('shadow') }}>影子验证</button>
       </div>
-      <section className={css.lifecyclePanel} aria-labelledby="strategy-lifecycle-title">
-        <div className={css.lifecycleIntro}>
-          <div><h2 id="strategy-lifecycle-title">策略生命周期</h2><small>每条策略都沿着真实证据逐步推进，不会自动进入下一阶段</small></div>
-          {view === 'pool' && <span>新建方式：点击右上角“从事件新建策略”</span>}
-        </div>
-        <nav className={css.lifecycleStrip} aria-label="策略生命周期步骤">
-          <button
-            type="button"
-            aria-current={currentLifecycleStage === 'form' ? 'step' : undefined}
-            aria-describedby={lifecycleHelpStage === 1 ? 'strategy-lifecycle-tooltip' : undefined}
-            data-state={currentLifecycleStage === 'form' ? 'active' : undefined}
-            onMouseEnter={() => { setLifecycleHelpStage(1) }}
-            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
-            onFocus={() => { setLifecycleHelpStage(1) }}
-            onBlur={() => { setLifecycleHelpStage(undefined) }}
-            onClick={() => { setView('pool'); setFilter('all') }}
-          ><b>1</b><strong>事件形成假设</strong><small>创建或查看事件候选</small></button><i aria-hidden="true">→</i>
-          <button
-            type="button"
-            aria-current={currentLifecycleStage === 'backtest' ? 'step' : undefined}
-            aria-describedby={lifecycleHelpStage === 2 ? 'strategy-lifecycle-tooltip' : undefined}
-            data-state={currentLifecycleStage === 'backtest' ? 'active' : undefined}
-            onMouseEnter={() => { setLifecycleHelpStage(2) }}
-            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
-            onFocus={() => { setLifecycleHelpStage(2) }}
-            onBlur={() => { setLifecycleHelpStage(undefined) }}
-            onClick={() => { setView('pool'); setFilter('unverified') }}
-          ><b>2</b><strong>样本外回测</strong><small>查看待验证策略与回测证据</small></button><i aria-hidden="true">→</i>
-          <button
-            type="button"
-            aria-current={currentLifecycleStage === 'shadow' ? 'step' : undefined}
-            aria-describedby={lifecycleHelpStage === 3 ? 'strategy-lifecycle-tooltip' : undefined}
-            data-state={currentLifecycleStage === 'shadow' ? 'active' : undefined}
-            onMouseEnter={() => { setLifecycleHelpStage(3) }}
-            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
-            onFocus={() => { setLifecycleHelpStage(3) }}
-            onBlur={() => { setLifecycleHelpStage(undefined) }}
-            onClick={() => { setView('shadow') }}
-          ><b>3</b><strong>影子验证</strong><small>进入纸面账户验证</small></button><i aria-hidden="true">→</i>
-          <button
-            type="button"
-            aria-current={currentLifecycleStage === 'evolution' ? 'step' : undefined}
-            aria-describedby={lifecycleHelpStage === 4 ? 'strategy-lifecycle-tooltip' : undefined}
-            data-state={currentLifecycleStage === 'evolution' ? 'active' : undefined}
-            onMouseEnter={() => { setLifecycleHelpStage(4) }}
-            onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
-            onFocus={() => { setLifecycleHelpStage(4) }}
-            onBlur={() => { setLifecycleHelpStage(undefined) }}
-            onClick={openEvolutionDiagnostics}
-          ><b>4</b><strong>进化诊断</strong><small>查看最新判定与闭环历史</small></button>
-        </nav>
-        {lifecycleHelpStage !== undefined && (
-          <div className={css.lifecycleTooltip} id="strategy-lifecycle-tooltip" role="tooltip" style={{ position: 'absolute' }}>
-            {LIFECYCLE_HELP[lifecycleHelpStage]}
-          </div>
-        )}
-      </section>
+      {lifecycleHelpOpen && (
+        <DetailDialog
+          title="策略生命周期"
+          description="从事件假设、进入策略池到回测、影子验证和自进化的完整路径"
+          eyebrow="帮助"
+          wide
+          onClose={() => { setLifecycleHelpOpen(false) }}
+          actions={<button type="button" className={css.primaryButton} onClick={() => { setLifecycleHelpOpen(false) }}>知道了</button>}
+        >
+          <section className={css.lifecyclePanel}>
+            <div className={css.lifecycleIntro}>
+              <small>每条策略都沿着真实证据逐步推进，不会自动进入下一阶段。</small>
+              {view === 'pool' && <span>新建方式：使用页面上的“从事件新建策略”。</span>}
+            </div>
+            <nav className={css.lifecycleStrip} aria-label="策略生命周期步骤">
+              <button
+                type="button"
+                aria-current={currentLifecycleStage === 'form' ? 'step' : undefined}
+                aria-describedby={lifecycleHelpStage === 1 ? 'strategy-lifecycle-tooltip' : undefined}
+                data-state={currentLifecycleStage === 'form' ? 'active' : undefined}
+                onMouseEnter={() => { setLifecycleHelpStage(1) }}
+                onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+                onFocus={() => { setLifecycleHelpStage(1) }}
+                onBlur={() => { setLifecycleHelpStage(undefined) }}
+                onClick={() => { setLifecycleHelpOpen(false); setView('pool'); setFilter('all') }}
+              ><b>1</b><strong>事件形成假设</strong><small>创建或查看事件候选</small></button><i aria-hidden="true">→</i>
+              <button
+                type="button"
+                aria-current={currentLifecycleStage === 'backtest' ? 'step' : undefined}
+                aria-describedby={lifecycleHelpStage === 2 ? 'strategy-lifecycle-tooltip' : undefined}
+                data-state={currentLifecycleStage === 'backtest' ? 'active' : undefined}
+                onMouseEnter={() => { setLifecycleHelpStage(2) }}
+                onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+                onFocus={() => { setLifecycleHelpStage(2) }}
+                onBlur={() => { setLifecycleHelpStage(undefined) }}
+                onClick={() => { setLifecycleHelpOpen(false); setView('pool'); setFilter('unverified') }}
+              ><b>2</b><strong>样本外回测</strong><small>查看待验证策略与回测证据</small></button><i aria-hidden="true">→</i>
+              <button
+                type="button"
+                aria-current={currentLifecycleStage === 'shadow' ? 'step' : undefined}
+                aria-describedby={lifecycleHelpStage === 3 ? 'strategy-lifecycle-tooltip' : undefined}
+                data-state={currentLifecycleStage === 'shadow' ? 'active' : undefined}
+                onMouseEnter={() => { setLifecycleHelpStage(3) }}
+                onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+                onFocus={() => { setLifecycleHelpStage(3) }}
+                onBlur={() => { setLifecycleHelpStage(undefined) }}
+                onClick={() => { setLifecycleHelpOpen(false); setView('shadow') }}
+              ><b>3</b><strong>影子验证</strong><small>进入纸面账户验证</small></button><i aria-hidden="true">→</i>
+              <button
+                type="button"
+                aria-current={currentLifecycleStage === 'evolution' ? 'step' : undefined}
+                aria-describedby={lifecycleHelpStage === 4 ? 'strategy-lifecycle-tooltip' : undefined}
+                data-state={currentLifecycleStage === 'evolution' ? 'active' : undefined}
+                onMouseEnter={() => { setLifecycleHelpStage(4) }}
+                onMouseLeave={() => { setLifecycleHelpStage(undefined) }}
+                onFocus={() => { setLifecycleHelpStage(4) }}
+                onBlur={() => { setLifecycleHelpStage(undefined) }}
+                onClick={openEvolutionDiagnostics}
+              ><b>4</b><strong>进化诊断</strong><small>查看最新判定与闭环历史</small></button>
+            </nav>
+            {lifecycleHelpStage !== undefined && (
+              <div className={css.lifecycleTooltip} id="strategy-lifecycle-tooltip" role="tooltip" style={{ position: 'absolute' }}>
+                {LIFECYCLE_HELP[lifecycleHelpStage]}
+              </div>
+            )}
+          </section>
+        </DetailDialog>
+      )}
       {view === 'pool' ? <>
         <div className={css.contextHint}>AI 评审会自动读取当前策略上下文；页面只保存策略标识，不会复制或覆盖策略内容。</div>
         {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
@@ -1326,7 +1343,7 @@ export function StrategyResearchPage({
           busy={busyAction === `backtest:${text(detailItem.id, '')}`}
           tasksBusy={backtestTasks.state.phase === 'loading' && backtestTasks.state.value === undefined}
           onClose={() => { setDetailItem(undefined) }}
-          onRefreshTasks={() => { void refreshBacktestTasks() }}
+          onRefreshTasks={() => { refreshBacktestTasks() }}
           onCreateTask={() => { setNewTaskItem(detailItem) }}
           onAnalyze={() => {
             const id = text(detailItem.id, '')
@@ -1627,7 +1644,7 @@ export function ShadowValidationPage({
                 <th></th>
               </tr></thead>
               <tbody>
-                {visibleHistoryItems.map(item => {
+                {visibleHistoryItems.map((item) => {
                   const sid = text(item.strategy_id, '')
                   const rawName = text(item.strategy_name, '')
                   const resolvedName = strategyNames[sid]?.trim() ?? rawName
@@ -2919,6 +2936,7 @@ function IndustryPhysicsGraph({
 function IndustryGraphExplorer({
   graph, path, activeCompany, selectedNode, entityState, entityRequested, loading, compact,
   leafNotice, viewState, onNavigate, onSelect, onDrill, onOpenStock, onDismissNotice,
+  onSetCenter,
 }: {
   readonly graph: IndustryGraphData
   readonly path: readonly IndustryChainPathStep[]
@@ -2933,6 +2951,7 @@ function IndustryGraphExplorer({
   readonly onNavigate: (index: number) => void
   readonly onSelect: (node: IndustryGraphNodeData) => void
   readonly onDrill: (request: IndustryGraphDrillRequest) => void
+  readonly onSetCenter: (company: IndustryCompanySelection) => void
   readonly onOpenStock: (code: string) => void
   readonly onDismissNotice: () => void
 }) {
@@ -2999,9 +3018,6 @@ function IndustryGraphExplorer({
     return undefined
   }
   const selectedOrigin = resolveDrillOrigin(focusedNode)
-  const selectedDirection: 'up' | 'down' = selectedOrigin?.edge === undefined
-    ? focusedNode.direction === 'up' ? 'up' : 'down'
-    : selectedOrigin.edge.target === selectedOrigin.sourceId ? 'up' : 'down'
   const selectedRelation = focusedNode.id === loadedCenterId && focusedNode.isRoot
     ? { share: undefined, via: '', relationType: '', note: '' }
     : selectedOrigin?.edge ?? {
@@ -3010,7 +3026,6 @@ function IndustryGraphExplorer({
       relationType: focusedNode.relationType,
       note: focusedNode.note,
     }
-  const selectedPathIndex = path.findIndex(step => step.nodeId === focusedNode.id)
   const drillNode = (node: IndustryGraphNodeData): void => {
     if (node.code === '') return
     const pathIndex = path.findIndex(step => step.nodeId === node.id)
@@ -3061,7 +3076,10 @@ function IndustryGraphExplorer({
   })()
 
   return (
-    <div className={`${css.industryGraphViewport} ${compact ? css.industryGraphViewportCompact : ''}`}>
+    <div
+      className={`${css.industryGraphViewport} ${compact ? css.industryGraphViewportCompact : ''}`}
+      data-refreshing={loading ? '' : undefined}
+    >
       <IndustryPhysicsGraph
         graph={viewGraph}
         activeNodeId={focusedNode.id}
@@ -3138,13 +3156,13 @@ function IndustryGraphExplorer({
           </div>
         )}
         <div className={css.industryGraphDetailActions}>
-          {focusedNode.code !== '' && (focusedNode.id === loadedCenterId || selectedPathIndex >= 0 || selectedOrigin !== undefined) && (
-            <button type="button" className={css.primaryButton} onClick={() => { drillNode(focusedNode) }}>
-              {focusedNode.id === loadedCenterId
-                ? '刷新完整上下游'
-                : selectedPathIndex >= 0
-                  ? '切换到该公司'
-                  : `展开${selectedDirection === 'up' ? '上游' : '下游'}完整链路`}
+          {focusedNode.code !== '' && (
+            <button
+              type="button"
+              className={css.primaryButton}
+              onClick={() => { onSetCenter({ code: focusedNode.code, name: focusedNode.name }) }}
+            >
+              {focusedNode.id === loadedCenterId ? '刷新当前中心' : `将${focusedNode.name}设为中心`}
             </button>
           )}
           {/^[0-9]{6,8}$/u.test(focusedNode.code) && (
@@ -3193,12 +3211,12 @@ function IndustryGraphExplorer({
         <button type="button" onClick={() => { controls.current?.fit() }}>适应画布</button>
         <button type="button" aria-label="放大图谱" onClick={() => { controls.current?.zoomIn() }}>＋</button>
       </div>
-      <div className={css.industryGraphLegend} aria-hidden="true">
+      <div className={css.industryGraphLegend} aria-label="产业链图例">
         <span data-direction="up">上游 · 供给</span>
         <span data-direction="center">当前视角</span>
         <span data-direction="down">下游 · 需求</span>
-        <span data-direction="related">旁支</span>
-        <small>单击切换视角 · 拖动节点 · 双击公司继续展开</small>
+        <span data-direction="related">推断关系 / 旁支</span>
+        <small>方向：供应商 → 当前企业 → 客户；单击聚焦，双击继续展开。</small>
       </div>
       {loading && <div className={css.industryGraphLoading} role="status">正在合并新的完整上下游，已载入图谱保持可用…</div>}
       {leafNotice !== '' && (
@@ -3242,6 +3260,8 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const [chainLeafNotice, setChainLeafNotice] = useState('')
   const [impactSecurityNames, setImpactSecurityNames] = useState<Record<string, string>>({})
   const [chainExpanded, setChainExpanded] = useState(false)
+  const [chainDepth, setChainDepth] = useState<1 | 2 | 3>(3)
+  const [pendingChainCenter, setPendingChainCenter] = useState<IndustryCompanySelection>()
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [bootstrapFailed, setBootstrapFailed] = useState(false)
   const closeExpandedChain = useCallback(() => {
@@ -3284,13 +3304,13 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
     companies.run({ operation: 'industry-chain.companies', input: { keyword: cleanKeyword, limit: 20 } })
     securityMatches.run({ operation: 'market-watch.security-search', input: { query: cleanKeyword, limit: 8 } })
   }, [companies.run, securityMatches.run])
-  const loadChain = useCallback((company: IndustryCompanySelection) => {
+  const loadChain = useCallback((company: IndustryCompanySelection, depth = chainDepth) => {
     setChainLeafNotice('')
     chain.run({
       operation: 'industry-chain.chain',
-      input: { code: company.code, depth_up: 3, depth_down: 3, top_up: 5, top_down: 5 },
+      input: { code: company.code, depth_up: depth, depth_down: depth, top_up: 5, top_down: 5 },
     })
-  }, [chain.run])
+  }, [chain.run, chainDepth])
   const inspectEntity = useCallback((nodeId: string, key: string) => {
     const cleanKey = key.trim()
     setSelectedGraphNodeId(nodeId)
@@ -3299,14 +3319,17 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   }, [entityDetail.run])
   const startChainCompany = useCallback((company: IndustryCompanySelection) => {
     const nodeId = industryGraphIdentity(company.code, company.name)
-    setChainRoot(company)
-    setSelectedCompany(company)
-    setChainPath([{ ...company, nodeId }])
-    setChainSnapshots({})
-    setChainConnections([])
+    setPendingChainCenter(company)
+    setSelectedCompany(current => current ?? company)
     inspectEntity(nodeId, company.code || company.name)
     loadChain(company)
   }, [inspectEntity, loadChain])
+  const changeChainDepth = useCallback((depth: 1 | 2 | 3): void => {
+    setChainDepth(depth)
+    if (selectedCompany === undefined) return
+    setPendingChainCenter(selectedCompany)
+    loadChain(selectedCompany, depth)
+  }, [loadChain, selectedCompany])
   const navigateChainPath = useCallback((index: number) => {
     const step = chainPath[index]
     if (step === undefined) return
@@ -3367,6 +3390,10 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   useEffect(loadDataStatus, [loadDataStatus])
   useEffect(loadImpact, [loadImpact])
   useEffect(() => {
+    if (chain.state.phase === 'error') {
+      setPendingChainCenter(undefined)
+      return
+    }
     if (chain.state.phase !== 'success') return
     const value = asRecord(chain.state.value)
     const snapshotCenter = asRecord(value.center)
@@ -3377,8 +3404,19 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
       upLevels: records(value.up_levels),
       downLevels: records(value.down_levels),
     }
+    if (pendingChainCenter !== undefined && code === pendingChainCenter.code) {
+      const nodeId = industryGraphIdentity(pendingChainCenter.code, pendingChainCenter.name)
+      setChainRoot(pendingChainCenter)
+      setSelectedCompany(pendingChainCenter)
+      setChainPath([{ ...pendingChainCenter, nodeId }])
+      setChainSnapshots({ [code]: snapshot })
+      setChainConnections([])
+      setSelectedGraphNodeId(nodeId)
+      setPendingChainCenter(undefined)
+      return
+    }
     setChainSnapshots(current => ({ ...current, [code]: snapshot }))
-  }, [chain.state.phase, chain.state.value, selectedCompany?.code])
+  }, [chain.state.phase, chain.state.value, pendingChainCenter, selectedCompany?.code])
 
   const status = industryDataStatus(dataStatus.state.value)
   const industryReady = status === 'ready'
@@ -3566,6 +3604,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
           onNavigate={navigateChainPath}
           onSelect={selectGraphNode}
           onDrill={drillChainNode}
+          onSetCenter={startChainCompany}
           onOpenStock={onOpenStock}
           onDismissNotice={() => { setChainLeafNotice('') }}
         />
@@ -3742,9 +3781,25 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
 
           <section className={css.industryChainPanel} aria-labelledby="industry-chain-title">
             <div className={css.sectionHeading}>
-              <div><h2 id="industry-chain-title">完整上下游图谱</h2><small>小窗与放大视图共用物理图谱；默认读取上下游各 3 层，钻取后继续累积而不覆盖</small></div>
+              <div>
+                <h2 id="industry-chain-title">完整上下游图谱</h2>
+                <small>默认读取上下游各 3 层；聚焦节点不会重新请求，设为中心才重新加载图谱</small>
+                {selectedCompany !== undefined && <strong>中心企业：{selectedCompany.name || selectedCompany.code}</strong>}
+              </div>
               {selectedCompany !== undefined && (
                 <div className={css.industryChainActions}>
+                  <div className={css.segmented} role="group" aria-label="产业链展示层级">
+                    {([1, 2, 3] as const).map(depth => (
+                      <button
+                        type="button"
+                        key={depth}
+                        aria-label={`显示 ${depth} 层上下游`}
+                        aria-pressed={chainDepth === depth}
+                        className={chainDepth === depth ? css.segmentActive : undefined}
+                        onClick={() => { changeChainDepth(depth) }}
+                      >{depth} 层</button>
+                    ))}
+                  </div>
                   <span>{completeIndustryGraph.nodes.length} 节点 · {completeIndustryGraph.edges.length} 关系</span>
                   {selectedGraphNode !== undefined && (
                     <button
@@ -3784,6 +3839,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
                 onNavigate={navigateChainPath}
                 onSelect={selectGraphNode}
                 onDrill={drillChainNode}
+                onSetCenter={startChainCompany}
                 onOpenStock={onOpenStock}
                 onDismissNotice={() => { setChainLeafNotice('') }}
               />

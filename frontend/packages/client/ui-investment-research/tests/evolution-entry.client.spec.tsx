@@ -5,10 +5,53 @@ import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-r
 import { EvolutionDashboard } from '../src/client/EvolutionDashboard.tsx'
 import { StrategyEvolutionDiagnostics } from '../src/client/StrategyEvolutionDiagnostics.tsx'
 import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
+import {
+  evolutionConfidenceLabel,
+  evolutionParticipationLabel,
+} from '../src/client/evolution-types.ts'
 
 afterEach(cleanup)
 
 describe('自进化全局只读看板', () => {
+  it('统一参与状态和置信层级，并把变异仅作为来源标记', async () => {
+    expect(evolutionParticipationLabel('active')).toBe('正常运行')
+    expect(evolutionParticipationLabel('watch')).toBe('观察中')
+    expect(evolutionParticipationLabel('retired')).toBe('已淘汰')
+    expect(evolutionConfidenceLabel(2)).toBe('已升级')
+
+    const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
+      if (operation === 'trading-core.evolution-status') return {
+        closed_loop_enabled: true,
+        lifecycle: {
+          active: [
+            { strategy_id: 'strat-normal', name: '正常策略', tier: 1 },
+            { strategy_id: 'strat-upgraded', name: '升级策略', tier: 2, mutated_from: 'strat-parent' },
+          ],
+          watch: [{ strategy_id: 'strat-watch', name: '观察策略', tier: 1 }],
+          retired: [{ strategy_id: 'strat-retired', name: '淘汰策略', tier: 1 }],
+          mutated: [{ strategy_id: 'strat-upgraded', name: '升级策略', mutated_from: 'strat-parent' }],
+        },
+        per_strategy: [
+          { strategy_id: 'strat-normal', name: '正常策略', decision: 'none', reason: '阈值带内', tier: 1 },
+          { strategy_id: 'strat-upgraded', name: '升级策略', decision: 'promote', reason: '证据达标', tier: 2, mutated_from: 'strat-parent' },
+        ],
+        recent_applied: [],
+        counts: { active: 2, watch: 1, retired: 1, mutated: 1 },
+      }
+      if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={() => {}} />)
+    const summary = await screen.findByTestId('evolution-status-summary')
+    expect(summary.textContent).toContain('正常运行1')
+    expect(summary.textContent).toContain('观察中1')
+    expect(summary.textContent).toContain('已升级1')
+    expect(summary.textContent).toContain('已淘汰1')
+    expect(screen.queryByRole('button', { name: /变体 1/ })).toBeNull()
+    expect(screen.getByText('变异来源：strat-parent')).toBeTruthy()
+  })
+
   it('只读取状态与归因且没有人工应用入口', async () => {
     const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
       if (operation === 'trading-core.evolution-status') return {

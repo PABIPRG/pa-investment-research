@@ -1,3 +1,6 @@
-# Bilingual-pair consistency record (docs/i18n/README.md).
-2026-09-01-evolution-dashboard-strategy-diagnostics.md: 3dd19a9b39c0b45601185c66bc943fec3af1d334
-2026-09-01-evolution-dashboard-strategy-diagnostics.zh.md: 2d2f639c8b26ff262f160274ca19748ada4ff552
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-01-evolution-dashboard-strategy-diagnostics.md
+2026-09-01-evolution-dashboard-strategy-diagnostics.md: 3ccf223dd09abd8573d276a381e01294e028cfc3
+2026-09-01-evolution-dashboard-strategy-diagnostics.zh.md: 7de6c3fa4679860e6953a5831a15f299204292a2

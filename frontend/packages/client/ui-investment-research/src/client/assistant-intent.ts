@@ -1,3 +1,5 @@
+import type { AnalysisPromptTemplateId } from './analysis-modules.ts'
+
 /** A typed UI intent is converted to a short model-facing instruction at the boundary. */
 export type AssistantIntent =
   | { readonly kind: 'stock'; readonly code: string; readonly name?: string }
@@ -8,7 +10,12 @@ export type AssistantIntent =
   | { readonly kind: 'evolution'; readonly strategyId?: string }
   | { readonly kind: 'reports'; readonly reportId?: string }
   | { readonly kind: 'industry'; readonly reference?: string }
-  | { readonly kind: 'prompt'; readonly prompt: string }
+  | {
+    readonly kind: 'prompt'
+    readonly prompt: string
+    /** Frontend-only provenance used to restore the selected editable template per conversation. */
+    readonly promptTemplateId?: AnalysisPromptTemplateId
+  }
 
 function subject(code: string, name?: string): string {
   const cleanCode = code.trim()

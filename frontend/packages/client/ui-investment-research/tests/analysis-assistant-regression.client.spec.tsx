@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import packageManifest from '../package.json' with { type: 'json' }
 import {
-  InvestmentAssistantModuleSelect, InvestmentBrand, InvestmentShell, nextAssistantModuleDraft,
+  InvestmentBrand, InvestmentPromptTemplateSelect, InvestmentShell, nextPromptTemplateDraft,
 } from '../src/client/InvestmentShell.tsx'
+import { AnalysisPromptTemplateController } from '../src/client/analysis-prompt-templates.ts'
+import type { AnalysisPromptTemplateId } from '../src/client/analysis-modules.ts'
 import { assistantPrompt, type AssistantIntent } from '../src/client/assistant-intent.ts'
 import type {
   AssistantDisplayMode,
@@ -50,6 +52,7 @@ function renderHarness(
   const prepareAssistant = vi.fn<(intent: AssistantIntent, module?: AssistantModule) => void>()
   const startSession = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
   const requestData = vi.fn(requestDataImplementation)
+  const promptTemplates = new AnalysisPromptTemplateController()
 
   function Harness() {
     const [snapshot, setSnapshot] = useState(INITIAL)
@@ -58,13 +61,17 @@ function renderHarness(
     const setAssistantMode = (assistantMode: AssistantDisplayMode): void => {
       setSnapshot(current => ({ ...current, assistantMode }))
     }
-    const openAssistant = async (intent: AssistantIntent, module: AssistantModule = 'general'): Promise<void> => {
+    const openAssistant = async (intent: AssistantIntent, module?: AssistantModule): Promise<void> => {
       prepareAssistant(intent, module)
-      setComposerDraft(assistantPrompt(intent))
+      const prompt = assistantPrompt(intent)
+      setComposerDraft(prompt)
+      if (intent.kind === 'prompt' && intent.promptTemplateId !== undefined) {
+        promptTemplates.set('session-a', intent.promptTemplateId, prompt === '' ? undefined : prompt)
+      }
       setSnapshot(current => ({
         ...current,
         assistantMode: current.assistantMode === 'closed' ? 'docked' : current.assistantMode,
-        assistantModule: module,
+        assistantModule: module ?? current.assistantModule,
       }))
     }
 
@@ -94,6 +101,7 @@ function renderHarness(
         startSession={async () => {
           await startSession()
           setComposerDraft('')
+          promptTemplates.set('session-a', 'general')
           setSnapshot(current => ({ ...current, assistantModule: 'general' }))
         }}
         openSession={() => Promise.resolve()}
@@ -103,11 +111,30 @@ function renderHarness(
         prepareAssistant={openAssistant}
         toggleTheme={() => {}}
       />
-      {createElement(InvestmentAssistantModuleSelect, {
+      {createElement(InvestmentPromptTemplateSelect, {
         useInvestmentUi,
-        setAssistantModule: (assistantModule: AssistantModule) => {
-          setSnapshot(current => ({ ...current, assistantModule }))
+        promptTemplates,
+        selectPromptTemplate: (
+          sessionId: string,
+          templateId: AnalysisPromptTemplateId,
+          promptTemplate: string,
+        ) => {
+          const previous = promptTemplates.snapshot(sessionId)
+          const nextDraft = nextPromptTemplateDraft(
+            composerDraft,
+            previous.automaticPrompt,
+            promptTemplate,
+          )
+          if (nextDraft === undefined) return
+          setComposerDraft(nextDraft)
+          promptTemplates.set(
+            sessionId,
+            templateId,
+            nextDraft === '' ? undefined : nextDraft,
+          )
         },
+        session: { sessionId: 'session-a', running: false },
+        input: { phase: 'plain' },
       } as never)}
       <textarea
         aria-label="模型输入框"
@@ -144,23 +171,23 @@ function assistantLauncher(): HTMLButtonElement {
 }
 
 function chooseAssistantModule(label: string): void {
-  fireEvent.click(screen.getByRole('button', { name: /^研究模块，当前：/ }))
+  fireEvent.click(screen.getByRole('button', { name: /^提示词模板，当前：/ }))
   fireEvent.click(screen.getByRole('menuitem', { name: label }))
 }
 
 describe('智能分析与全局 AI 助理回归', () => {
-  it('模块切换只替换自动提示，并允许回到开放式提问', () => {
+  it('提示词模板切换只替换自动内容，并允许回到开放式提问', () => {
     const stockPrompt = '个股模块自动提示'
     const briefPrompt = '市场简报模块自动提示'
 
-    expect(nextAssistantModuleDraft('', undefined, stockPrompt)).toBe(stockPrompt)
-    expect(nextAssistantModuleDraft(stockPrompt, stockPrompt, briefPrompt)).toBe(briefPrompt)
-    expect(nextAssistantModuleDraft(briefPrompt, briefPrompt, '')).toBe('')
-    expect(nextAssistantModuleDraft('我自己输入的研究问题', stockPrompt, briefPrompt)).toBeUndefined()
+    expect(nextPromptTemplateDraft('', undefined, stockPrompt)).toBe(stockPrompt)
+    expect(nextPromptTemplateDraft(stockPrompt, stockPrompt, briefPrompt)).toBe(briefPrompt)
+    expect(nextPromptTemplateDraft(briefPrompt, briefPrompt, '')).toBe('')
+    expect(nextPromptTemplateDraft('我自己输入的研究问题', stockPrompt, briefPrompt)).toBeUndefined()
   })
 
   it('从研究工作台进入偏好复盘并返回工作台', async () => {
-    renderHarness(async (request) => {
+    const { requestData } = renderHarness(async (request) => {
       if (request.operation === 'trading-core.local-learning-review') {
         return {
           window_days: 7,
@@ -176,12 +203,25 @@ describe('智能分析与全局 AI 助理回归', () => {
       return defaultRequestData(request)
     })
     fireEvent.click(screen.getByRole('button', { name: '测试路由到研究工作台' }))
+    const transition = await screen.findByTestId('dashboard-view-transition')
+    expect(transition.getAttribute('data-view')).toBe('workbench')
+    await waitFor(() => {
+      expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings')).toBe(true)
+    })
+    const initialHoldingsCalls = requestData.mock.calls.filter(
+      ([request]) => request.operation === 'trading-core.holdings',
+    ).length
 
     fireEvent.click(screen.getByRole('button', { name: '偏好复盘' }))
     expect(await screen.findByRole('heading', { name: '偏好复盘' })).toBeTruthy()
+    expect(transition.getAttribute('data-view')).toBe('preferences')
 
     fireEvent.click(screen.getByRole('button', { name: '← 返回研究工作台' }))
     expect(screen.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
+    expect(transition.getAttribute('data-view')).toBe('workbench')
+    expect(
+      requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings'),
+    ).toHaveLength(initialHoldingsCalls)
   })
 
   it('我的投研把共享对话设为主界面并提供会话与资料入口', () => {
@@ -213,22 +253,20 @@ describe('智能分析与全局 AI 助理回归', () => {
     expect(screen.getByText(`${packageManifest.version} · 智能投研系统`)).toBeTruthy()
   })
 
-  it('始终保留结构化智能分析工作台，并在助理模式切换时保留两份业务输入', () => {
-    renderHarness()
+  it('智能分析只展示能力介绍，并在助理模式切换时保留页面', () => {
+    const { requestData } = renderHarness()
 
     const workbench = screen.getByTestId('analysis-workbench')
     expect(screen.getByRole('heading', { name: '智能分析' })).toBeTruthy()
-    expect(workbench.querySelectorAll('[data-analysis-module-id]')).toHaveLength(4)
+    expect(workbench.querySelectorAll('article[data-analysis-module-id]')).toHaveLength(4)
     expect(within(workbench).getByText('17 个角色')).toBeTruthy()
-
-    const stockInput = screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' })
-    const backtestInput = screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' })
-    const depthInput = screen.getByRole<HTMLSelectElement>('combobox', { name: '研究深度' })
-    const windowInput = screen.getByRole<HTMLSelectElement>('combobox', { name: '前瞻窗口' })
-    fireEvent.change(stockInput, { target: { value: '600519' } })
-    fireEvent.change(backtestInput, { target: { value: '000001' } })
-    fireEvent.change(depthInput, { target: { value: 'deep' } })
-    fireEvent.change(windowInput, { target: { value: '60' } })
+    expect(within(workbench).queryByRole('textbox')).toBeNull()
+    expect(within(workbench).queryByRole('combobox')).toBeNull()
+    expect(within(workbench).queryByRole('button', { name: '开始个股分析' })).toBeNull()
+    expect(within(workbench).queryByRole('button', { name: '运行历史回测' })).toBeNull()
+    expect(requestData).not.toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'trading-core.holdings',
+    }))
 
     fireEvent.click(assistantLauncher())
     const docked = screen.getByTestId('assistant-panel')
@@ -249,63 +287,19 @@ describe('智能分析与全局 AI 助理回归', () => {
     fireEvent.click(screen.getByRole('button', { name: '关闭 AI 研究助理' }))
     expect(screen.queryByTestId('assistant-panel')).toBeNull()
     expect(assistantLauncher()).toBeTruthy()
-
-    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' }).value).toBe('600519')
-    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' }).value).toBe('000001')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '研究深度' }).value).toBe('deep')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '前瞻窗口' }).value).toBe('60')
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
   })
 
-  it('路由往返后保留智能分析的股票、回测及表单配置', () => {
-    renderHarness()
-    fireEvent.change(screen.getByRole('textbox', { name: '个股分析股票代码' }), {
-      target: { value: '600519' },
-    })
-    fireEvent.change(screen.getByRole('textbox', { name: '历史回测股票代码' }), {
-      target: { value: '000001' },
-    })
-    fireEvent.change(screen.getByRole('combobox', { name: '研究深度' }), {
-      target: { value: 'full' },
-    })
-    fireEvent.change(screen.getByRole('combobox', { name: '风险画像' }), {
-      target: { value: 'aggressive' },
-    })
-    fireEvent.change(screen.getByRole('combobox', { name: '前瞻窗口' }), {
-      target: { value: '60' },
-    })
+  it('智能分析普通入口创建空白对话，不注入隐藏模板', () => {
+    const { prepareAssistant } = renderHarness()
 
-    fireEvent.click(screen.getByRole('button', { name: '测试路由到我的投研' }))
-    expect(screen.getByTestId('analysis-workbench').parentElement?.hidden).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: '测试路由到智能分析' }))
-    expect(screen.getByTestId('analysis-workbench').parentElement?.hidden).toBe(false)
+    fireEvent.click(within(screen.getByTestId('analysis-workbench')).getByRole('button', {
+      name: '打开 AI 研究助理',
+    }))
 
-    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' }).value).toBe('600519')
-    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' }).value).toBe('000001')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '研究深度' }).value).toBe('full')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '风险画像' }).value).toBe('aggressive')
-    expect(screen.getByRole<HTMLSelectElement>('combobox', { name: '前瞻窗口' }).value).toBe('60')
-  })
-
-  it('路由往返后保留已经完成的智能分析任务状态与报告入口', async () => {
-    renderHarness(async (request) => {
-      if (request.operation === 'trading-core.holdings') return { items: [{ code: '600519' }] }
-      if (request.operation === 'trading-core.analyze') return { task_id: 'analysis-task-1' }
-      if (request.operation === 'trading-core.task-status') return { status: 'done' }
-      if (request.operation === 'trading-core.task-result') return { report_id: 'report-analysis-1' }
-      return {}
-    })
-    fireEvent.change(screen.getByRole('textbox', { name: '个股分析股票代码' }), {
-      target: { value: '600519' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: '开始个股分析' }))
-    expect((await screen.findAllByText('报告 report-analysis-1 已生成。')).length).toBeGreaterThan(0)
-
-    fireEvent.click(screen.getByRole('button', { name: '测试路由到我的投研' }))
-    fireEvent.click(screen.getByRole('button', { name: '测试路由到智能分析' }))
-
-    expect(screen.getAllByText('报告 report-analysis-1 已生成。').length).toBeGreaterThan(0)
-    expect(screen.getAllByRole('button', { name: '查看投研报告' }).length).toBeGreaterThan(0)
+    expect(prepareAssistant).toHaveBeenCalledWith({
+      kind: 'prompt', prompt: '', promptTemplateId: 'general',
+    }, undefined)
   })
 
   it('Escape 从 expanded 退回 docked，再从 docked 关闭', () => {
@@ -324,63 +318,48 @@ describe('智能分析与全局 AI 助理回归', () => {
     expect(screen.getByTestId('analysis-workbench')).toBeTruthy()
   })
 
-  it('输入框工具栏的模块选择改变研究角色，但不覆盖用户已有草稿', () => {
+  it('输入框工具栏的智能分析选择使用提示词模板，但不覆盖用户已有草稿', () => {
     renderHarness()
     fireEvent.click(assistantLauncher())
     const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' })
     fireEvent.change(composer, { target: { value: '请先比较供需拐点，再告诉我需要补充哪些证据。' } })
 
-    chooseAssistantModule('产业链研究专家')
+    chooseAssistantModule('市场简报')
 
-    expect(screen.getByRole('button', { name: '研究模块，当前：产业链研究专家' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '提示词模板，当前：普通对话' })).toBeTruthy()
     expect(screen.queryByText('上下文由工具按需读取，输入框不会写入业务 JSON。')).toBeNull()
-    expect(screen.getByText('行业景气 · 上下游 · 影响传导')).toBeTruthy()
     expect(composer.value).toBe('请先比较供需拐点，再告诉我需要补充哪些证据。')
     expect(composer.value).not.toMatch(/[{}\[\]]/u)
   })
 
-  it('新建对话清空已有草稿并重置到通用研究模块', async () => {
+  it('新建对话清空已有草稿并重置到普通对话', async () => {
     const { startSession } = renderHarness()
     fireEvent.click(assistantLauncher())
     const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' })
     fireEvent.change(composer, { target: { value: '这段内容不能进入新对话' } })
-    chooseAssistantModule('个股研究专家')
+    chooseAssistantModule('个股多智能体分析')
 
     fireEvent.click(screen.getByRole('button', { name: '新对话' }))
 
     await waitFor(() => { expect(startSession).toHaveBeenCalledOnce() })
     expect(composer.value).toBe('')
-    expect(screen.getByRole('button', { name: '研究模块，当前：通用研究' })).toBeTruthy()
-  })
-
-  it('持仓摘要不可用时禁止提交持仓分析任务', async () => {
-    const { requestData } = renderHarness(async (request) => {
-      if (request.operation === 'trading-core.holdings') throw new Error('backend unavailable')
-      return {}
-    })
-
-    expect(await screen.findByText('持仓摘要暂不可用，请先恢复数据连接后再运行分析。')).toBeTruthy()
-    const submit = screen.getByRole<HTMLButtonElement>('button', { name: '分析持仓风险' })
-    expect(submit.disabled).toBe(true)
-    fireEvent.click(submit)
-    expect(requestData).not.toHaveBeenCalledWith(expect.objectContaining({
-      operation: 'trading-core.holdings-analyze',
-    }))
+    expect(screen.getByRole('button', { name: '提示词模板，当前：普通对话' })).toBeTruthy()
   })
 
   it.each([
-    ['stock', '个股多智能体分析', 'stock', '个股研究专家'],
-    ['portfolio', '持仓风险分析', 'portfolio', '组合风控专家'],
-    ['backtest', '历史决策回测', 'strategy', '策略验证专家'],
-    ['brief', '市场简报', 'watch', '实时盯盘专家'],
-  ] as const)('模块 %s 的详情 CTA 打开对应 AI 模块且输入框不出现 JSON', (
-    moduleId, moduleTitle, assistantModule, assistantLabel,
+    ['stock', '个股多智能体分析'],
+    ['portfolio', '持仓风险分析'],
+    ['backtest', '历史决策回测'],
+    ['brief', '市场简报'],
+  ] as const)('模块 %s 的详情 CTA 以提示词模板打开普通 AI 对话且输入框不出现 JSON', (
+    moduleId, moduleTitle,
   ) => {
     const { prepareAssistant } = renderHarness()
     const moduleCard = document.querySelector<HTMLElement>(`[data-analysis-module-id="${moduleId}"]`)
     if (moduleCard === null) {
       throw new Error(`智能分析模块 ${moduleId} 不存在`)
     }
+    expect(within(moduleCard).getByRole('button', { name: '打开助理' })).toBeTruthy()
     fireEvent.click(within(moduleCard).getByRole('button', { name: '查看模块详情' }))
 
     const dialog = screen.getByRole('dialog', { name: moduleTitle })
@@ -390,9 +369,12 @@ describe('智能分析与全局 AI 助理回归', () => {
     fireEvent.click(cta)
 
     expect(prepareAssistant).toHaveBeenCalledOnce()
-    expect(prepareAssistant.mock.calls[0]?.[1]).toBe(assistantModule)
+    expect(prepareAssistant.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'prompt', promptTemplateId: moduleId,
+    })
+    expect(prepareAssistant.mock.calls[0]?.[1]).toBeUndefined()
     expect(screen.getByTestId('assistant-panel').getAttribute('data-mode')).toBe('docked')
-    expect(screen.getByRole('button', { name: `研究模块，当前：${assistantLabel}` })).toBeTruthy()
+    expect(screen.getByRole('button', { name: `提示词模板，当前：${moduleTitle}` })).toBeTruthy()
 
     const composer = screen.getByRole<HTMLTextAreaElement>('textbox', { name: '模型输入框' })
     expect(composer.value).not.toBe('')
