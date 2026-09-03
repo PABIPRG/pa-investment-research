@@ -9,6 +9,13 @@
 - 任何新增、修改或审查用户可见页面、组件、交互、文案、视觉样式或响应式行为的任务，必须使用仓库 Skill [`delivering-product-ui`](.agents/skills/delivering-product-ui/SKILL.md)。
 - 产品体验与设计规范以 [`DESIGN.md`](DESIGN.md) 为入口；必读上下文、实施流程与验收门槛由上述 Skill 定义。
 
+### AI 开发工具兼容
+
+- `AGENTS.md`、`DESIGN.md` 与 `.agents/skills/delivering-product-ui/` 是项目指令、设计规范和 UI Skill 的唯一事实源；平台专用文件只负责导入或引导读取，不得复制规范正文。
+- Codex、Cursor、JetBrains Junie、GitHub Copilot Agent、Windsurf、Cline 与支持 Agent Skills 标准的工具直接使用上述事实源。
+- Claude Code 通过 `CLAUDE.md` 与 `.claude/skills/` 接入；Gemini CLI 通过 `GEMINI.md` 接入；GitHub Copilot 的非 Agent 场景通过 `.github/copilot-instructions.md` 接入；JetBrains AI Assistant 与 Continue 通过各自 rules 目录接入。
+- 腾讯 CodeBuddy、字节 TRAE、阿里 Qoder 与通义灵码分别通过 `.codebuddy/`、`.trae/`、`.qoder/` 与 `.lingma/` 下的薄入口接入；平台升级后即使增加原生兼容，也保留单一事实源，删除冗余入口前先验证实际加载行为。
+
 ## Linear 项目映射
 
 - 后续所有任务追踪统一使用 Linear。
