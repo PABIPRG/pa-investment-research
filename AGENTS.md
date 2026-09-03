@@ -4,6 +4,11 @@
 - 使用 Superpowers 工作流时，所有新建或更新的 Markdown 文档均使用中文，包括规格、实施计划、handoff、task brief、task report 和进度账本。
 - 代码标识符、命令、文件路径、配置键、API 名称以及必须逐字保留的引用可以继续使用原文；其余标题和说明正文使用中文。
 
+## UI / UX 入口
+
+- 任何新增、修改或审查用户可见页面、组件、交互、文案、视觉样式或响应式行为的任务，必须使用仓库 Skill [`delivering-product-ui`](.agents/skills/delivering-product-ui/SKILL.md)。
+- 产品体验与设计规范以 [`DESIGN.md`](DESIGN.md) 为入口；必读上下文、实施流程与验收门槛由上述 Skill 定义。
+
 ## Linear 项目映射
 
 - 后续所有任务追踪统一使用 Linear。
