@@ -48,19 +48,18 @@ function renderReactiveControls(requestData: ReturnType<typeof vi.fn>) {
   function Harness() {
     const [snapshot, setSnapshot] = useState(UI)
     const useInvestmentUi = <T,>(selector: (value: InvestmentUiSnapshot) => T): T => selector(snapshot)
-    return (
-      <InvestmentComposerContextControls
-        useInvestmentUi={useInvestmentUi}
-        setAssistantModule={(assistantModule, promptOverride) => {
-          onModuleSelected(assistantModule, promptOverride)
-          setSnapshot(current => ({ ...current, assistantModule }))
-        }}
-        researchChatContext={controller}
-        requestData={requestData as never}
-        session={{ sessionId: 'session-a', running: false } as never}
-        input={{ phase: 'plain' } as never}
-      />
-    )
+    const props = {
+      useInvestmentUi,
+      setAssistantModule: (assistantModule: Parameters<typeof onModuleSelected>[0], promptOverride: string | undefined) => {
+        onModuleSelected(assistantModule, promptOverride)
+        setSnapshot(current => ({ ...current, assistantModule }))
+      },
+      researchChatContext: controller,
+      requestData: requestData as never,
+      session: { sessionId: 'session-a', running: false } as never,
+      input: { phase: 'plain' } as never,
+    } as unknown as ComponentProps<typeof InvestmentComposerContextControls>
+    return <InvestmentComposerContextControls {...props} />
   }
 
   return { ...render(<Harness />), onModuleSelected }

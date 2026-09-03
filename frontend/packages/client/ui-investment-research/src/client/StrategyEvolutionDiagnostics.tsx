@@ -3,14 +3,15 @@ import { asRecord, number, records, text } from './data.ts'
 import type { StrategyEvolutionDiagnosticsProps } from './evolution-types.ts'
 import css from './InvestmentShell.module.css'
 
+// 变异是来源标记（source/mutated_from）而非独立分组；mutated 保留为防御性兜底。
 const LIFECYCLE_LABELS: Readonly<Record<string, string>> = {
-  active: '生效', candidate: '候选', mutated: '变体', retired: '退役', watch: '观察', rejected: '拒绝',
+  active: '生效', candidate: '候选', mutated: '变异', retired: '已淘汰/已退役', watch: '观察中', rejected: '已拒绝',
 }
 
-const LIFECYCLE_PRIORITY = ['retired', 'rejected', 'watch', 'candidate', 'active', 'mutated'] as const
+const LIFECYCLE_PRIORITY = ['retired', 'rejected', 'watch', 'candidate', 'active'] as const
 
 const DECISION_LABELS: Readonly<Record<string, string>> = {
-  promote: '升级', demote: '降级观察', retire: '退役', mutate: '生成变体', none: '带内运行',
+  promote: '升级', demote: '降级观察', retire: '已淘汰/已退役', mutate: '生成变体', none: '正常运行',
 }
 
 function strategyId(value: Record<string, unknown>): string {
@@ -110,7 +111,7 @@ export function StrategyEvolutionDiagnostics({
         <article className={css.moduleCard}>
           <div className={css.sectionHeading}><strong>当前判定</strong><span>{LIFECYCLE_LABELS[lifecycleGroup] ?? lifecycleGroup}</span></div>
           <dl className={css.reportMeta}>
-            <div><dt>预计动作</dt><dd>{DECISION_LABELS[text(scopedDecision.decision, 'none')] ?? text(scopedDecision.behavior, '带内运行')}</dd></div>
+            <div><dt>预计动作</dt><dd>{DECISION_LABELS[text(scopedDecision.decision, 'none')] ?? text(scopedDecision.behavior, '正常运行')}</dd></div>
             <div><dt>证据时点</dt><dd>{text(statusRecord.as_of, '未返回')}</dd></div>
             <div><dt>下次自动运行</dt><dd>{statusRecord.closed_loop_enabled === true ? `每日 ${text(statusRecord.closed_loop_time, '15:35')}` : '自动闭环未启用'}</dd></div>
           </dl>

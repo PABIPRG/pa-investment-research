@@ -3,16 +3,17 @@ import { asRecord, number, records, text } from './data.ts'
 import type { EvolutionDashboardProps, EvolutionLifecycleGroup } from './evolution-types.ts'
 import css from './InvestmentShell.module.css'
 
+// 变异是来源标记（source/mutated_from）而非独立分组：策略按真实状态落桶。mutated 保留为防御性兜底。
 const GROUPS: readonly EvolutionLifecycleGroup[] = [
-  'active', 'candidate', 'mutated', 'retired', 'watch', 'rejected',
+  'active', 'candidate', 'retired', 'watch', 'rejected',
 ]
 
 const GROUP_LABELS: Readonly<Record<string, string>> = {
-  active: '生效', candidate: '候选', mutated: '变体', retired: '退役', watch: '观察', rejected: '拒绝',
+  active: '生效', candidate: '候选', mutated: '变异', retired: '已淘汰/已退役', watch: '观察中', rejected: '已拒绝',
 }
 
 const DECISION_LABELS: Readonly<Record<string, string>> = {
-  promote: '升级', demote: '降级观察', retire: '退役', mutate: '生成变体', none: '带内运行',
+  promote: '升级', demote: '降级观察', retire: '已淘汰/已退役', mutate: '生成变体', none: '正常运行',
 }
 
 function strings(value: unknown): string[] {
@@ -173,7 +174,8 @@ export function EvolutionDashboard({
           {openGroup !== '' && <div className={css.lifecycleList}>
             {lifecycleEntries.map((entry, index) => {
               const sid = strategyId(entry)
-              return <button type="button" className={css.dataRow} key={`${sid}-${index}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><strong>{strategyName(entry)}</strong><span>{GROUP_LABELS[openGroup]}</span></button>
+              const isVariant = text(entry.source, '') === 'evolution' || text(entry.mutated_from, '') !== ''
+              return <button type="button" className={css.dataRow} key={`${sid}-${index}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{strategyName(entry)}</strong></div><span>{GROUP_LABELS[openGroup]}{isVariant ? ' · 变异' : ''}</span></button>
             })}
             {lifecycleEntries.length === 0 && <div className={css.emptyPanel}>该类目暂无策略。</div>}
           </div>}
@@ -185,6 +187,11 @@ export function EvolutionDashboard({
             <div><dt>最大回撤</dt><dd>{metric(overall.max_drawdown_pct, '%')}</dd></div>
             <div><dt>当前净值</dt><dd>{metric(overall.end_nav)}</dd></div>
           </dl>
+        </article>
+        <article className={`${css.moduleCard} ${css.lineageCard}`}>
+          <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅生效策略及母链</span></div>
+          <div className={css.lineageTree}>{lineage.roots.map(sid => <LineageNode key={sid} sid={sid} entries={lineage.entries} children={lineage.children} onOpenStrategy={onOpenStrategy} returnGroup={openGroup} />)}</div>
+          {lineage.roots.length === 0 && !loading && <div className={css.emptyPanel}>暂无生效中的演化链路。</div>}
         </article>
       </section>
 
@@ -198,7 +205,7 @@ export function EvolutionDashboard({
               const strategyAttribution = attributionByStrategy.get(sid) ?? {}
               const symbols = strings(entry.symbols).length > 0 ? strings(entry.symbols) : strings(strategyAttribution.symbols)
               return <div className={css.strategyEntry} key={`${sid}-${index}`}>
-                <button type="button" className={css.dataRow} aria-label={`${strategyName(entry)} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{strategyName(entry)}</strong><small>{reason}</small></div><span>{DECISION_LABELS[text(entry.decision, '')] ?? text(entry.behavior, '带内运行')}</span></button>
+                <button type="button" className={css.dataRow} aria-label={`${strategyName(entry)} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{strategyName(entry)}</strong><small>{reason}</small></div><span>{DECISION_LABELS[text(entry.decision, '')] ?? text(entry.behavior, '正常运行')}</span></button>
                 <div className={css.strategyDetail}>
                   <dl className={css.strategyDetailGrid}>
                     <div><dt>影子净值</dt><dd>{metric(entry.nav)}</dd></div>
@@ -213,14 +220,6 @@ export function EvolutionDashboard({
             })}
             {perStrategy.length === 0 && !loading && <div className={css.emptyPanel}>暂无策略判定。</div>}
           </div>
-        </article>
-      </section>
-
-      <section className={css.moduleGrid} aria-label="策略演化链路">
-        <article className={`${css.moduleCard} ${css.lineageCard}`}>
-          <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅生效策略及母链</span></div>
-          <div className={css.lineageTree}>{lineage.roots.map(sid => <LineageNode key={sid} sid={sid} entries={lineage.entries} children={lineage.children} onOpenStrategy={onOpenStrategy} returnGroup={openGroup} />)}</div>
-          {lineage.roots.length === 0 && !loading && <div className={css.emptyPanel}>暂无生效中的演化链路。</div>}
         </article>
       </section>
 

@@ -359,11 +359,12 @@ describe('策略研究产品事实与确认流程', () => {
     expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.strategies-hypothesize' && request.input?.dry_run === false)).toBe(false)
   })
 
-  it('回测窗口可选：运行回测把用户选择的年份传给后端，默认 2 年', async () => {
+  it('回测窗口可选：新建任务向导把用户选择的年份传给后端，默认 2 年', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.strategies') {
         return { items: [{ id: 's-1', name: '可回测策略', status: 'active', kind: 'ma_cross', backtest: null }] }
       }
+      if (request.operation === 'trading-core.strategy-backtests') return { strategy_id: 's-1', count: 0, tasks: [] }
       if (request.operation === 'trading-core.strategy-run') return { task_id: 'task-1' }
       if (request.operation === 'trading-core.task-status') return { status: 'done' }
       if (request.operation === 'trading-core.task-result') return { reports: { 'r-1': {} } }
@@ -377,26 +378,35 @@ describe('策略研究产品事实与确认流程', () => {
     const runInputs = () => requestData.mock.calls
       .filter(([request]) => request.operation === 'trading-core.strategy-run')
       .map(([request]) => request.input)
-    const runButton = () => within(
-      screen.getByText('可回测策略').closest('article') as HTMLElement,
-    ).getByRole('button', { name: '运行回测' })
-    // 等待回测结束后按钮重新可用（回测中按钮会消失并置为 disabled）
-    const awaitIdle = async () => {
-      await waitFor(() => { expect((runButton() as HTMLButtonElement).disabled).toBe(false) })
+    // 打开回测管理（详情弹窗）→ 新建回测任务向导
+    const openWizard = async () => {
+      fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测管理' }))
+      await screen.findByRole('dialog', { name: '可回测策略' })
+      fireEvent.click(within(screen.getByRole('dialog', { name: '可回测策略' })).getByRole('button', { name: '新建回测任务' }))
+      await screen.findByRole('dialog', { name: '新建回测任务' })
     }
+    const awaitWizardClosed = () => waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '新建回测任务' })).toBeNull()
+    })
 
     // 默认 2 年
-    fireEvent.click(runButton())
-    await awaitIdle()
-    expect(runInputs()).toEqual([{ strategy_id: 's-1', lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 }])
+    await openWizard()
+    fireEvent.click(screen.getByRole('button', { name: '开始回测' }))
+    await waitFor(() => {
+      expect(runInputs()).toEqual([{ strategy_id: 's-1', lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 }])
+    })
+    await awaitWizardClosed()
 
-    // 切到 3 年后再回测
-    fireEvent.change(screen.getByLabelText('回测窗口'), { target: { value: '3' } })
-    fireEvent.click(runButton())
-    await awaitIdle()
-    expect(runInputs()).toEqual([
-      { strategy_id: 's-1', lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 },
-      { strategy_id: 's-1', lookback_years: 3, oos_frac: 0.3, min_oos_trades: 4 },
-    ])
+    // 再次新建，切到 3 年再回测
+    fireEvent.click(within(screen.getByRole('dialog', { name: '可回测策略' })).getByRole('button', { name: '新建回测任务' }))
+    const wizard = await screen.findByRole('dialog', { name: '新建回测任务' })
+    fireEvent.change(within(wizard).getByLabelText('回测时间窗口'), { target: { value: '3' } })
+    fireEvent.click(within(wizard).getByRole('button', { name: '开始回测' }))
+    await waitFor(() => {
+      expect(runInputs()).toEqual([
+        { strategy_id: 's-1', lookback_years: 2, oos_frac: 0.3, min_oos_trades: 4 },
+        { strategy_id: 's-1', lookback_years: 3, oos_frac: 0.3, min_oos_trades: 4 },
+      ])
+    })
   })
 })

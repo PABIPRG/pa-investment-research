@@ -514,6 +514,17 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="策略不存在")
         return project_strategy_verification(s)
 
+    @app.get("/strategies/{sid}/backtests", response_model=dict)
+    async def strategy_backtests(sid: str, limit: int = 50):
+        """单策略回测任务历史（手动/自动统一；时间范围+来源+状态+时间戳+结果/失败原因）。"""
+        from . import backtest_tasks as bt
+
+        store = JsonStore()
+        if not store.get("strategies", sid):
+            raise HTTPException(status_code=404, detail="策略不存在")
+        tasks = bt.list_tasks(store, strategy_id=sid, limit=limit)
+        return {"strategy_id": sid, "count": len(tasks), "tasks": tasks}
+
     @app.post("/strategies/{sid}/{action}", response_model=dict)
     async def strategies_transition(sid: str, action: Literal["activate", "reject", "retire"]):
         """手动迁移生命周期；验证分类由最新回测证据独立维护。"""
@@ -576,6 +587,44 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
                 recs.append({"date": k, "overall_nav": snap.get("overall_nav"),
                              "strategy_count": len(snap.get("strategies") or {})})
         return {"count": len(recs), "items": recs}
+
+    @app.get("/shadow/history", response_model=dict)
+    async def shadow_history(strategy_id: Optional[str] = None, limit: int = 200):
+        """影子验证运行历史：展平 交易日×策略 记录行（三块视图的数据源）。
+
+        数据来自 shadow_equity/{date} 快照：单策略历史传 strategy_id；不带 = 全部策略运行记录。
+        某日期未参与验证的策略不出行（与 /shadow/equity 语义一致）。行内含 open_positions
+        （per_symbol 中 qty>0 计数）与策略级 strategy_error（快照顶层，数据异常/失败原因）。
+        """
+        store = JsonStore()
+        keys = sorted((store.all("shadow_equity") or {}).keys(), reverse=True)
+        items = []
+        for k in keys:
+            snap = store.get("shadow_equity", k) or {}
+            top_errors = snap.get("strategy_errors") or {}
+            for sid, s in (snap.get("strategies") or {}).items():
+                if strategy_id and sid != strategy_id:
+                    continue
+                per = s.get("per_symbol") or {}
+                open_positions = sum(
+                    1 for v in per.values()
+                    if isinstance(v, dict) and (v.get("qty") or 0) > 0
+                )
+                items.append({
+                    "date": k,
+                    "strategy_id": sid,
+                    "strategy_name": s.get("name"),
+                    "kind": s.get("kind"),
+                    "initial_capital": s.get("initial_capital"),
+                    "equity": s.get("equity"),
+                    "nav": s.get("nav"),
+                    "track_from": s.get("track_from"),
+                    "closed_count": s.get("closed_count", 0),
+                    "open_positions": open_positions,
+                    "symbol_errors": s.get("symbol_errors") or {},
+                    "strategy_error": top_errors.get(sid),
+                })
+        return {"count": len(items), "items": items[: max(1, min(limit, 2000))]}
 
     # ---- 个性化右链（O 策略匹配 + D/P 资讯卡片 + R 行为捕获） ----------------
 

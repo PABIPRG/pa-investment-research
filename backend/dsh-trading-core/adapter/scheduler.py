@@ -83,6 +83,82 @@ def _run_shadow_job() -> None:
         logger.error("影子验证失败: %s", exc)
 
 
+def _run_backtest_patrol() -> None:
+    """自动回测巡检：候选/生效策略首测或满间隔复测，统一走 StrategyBacktestRunner 任务历史。
+
+    由 backtest_tasks.is_auto_eligible 决定参与面：
+    - 参与：status ∈ {candidate, active}（含 watch，因为 watch 属于 evolve.state 不是 status，
+      active 复测**只刷新证据，绝不改生命周期**；shadow 进化仍是唯一状态变更方）。
+    - 不参与：归档(retired)/淘汰(rejected)/验证失败(failed 或 archived) 不再建新自动任务。
+    命中条件 = 无最近完成（首测）或 now−最近完成 ≥ interval_days（复测）；有 queued/running 任务跳过。
+    交易日才巡检；候选首测通过只落 passed **不自动激活**（沿用「人工确认生效」语义）；
+    失败且 CANDIDATE_AUTO_REJECT=on 时 transition reject（同闭环兜底）。
+    """
+    from .brief_engine import _is_trading_day  # lazy
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if not _is_trading_day(today):
+        logger.info("非交易日 %s，跳过自动回测巡检", today)
+        return
+
+    from . import backtest_tasks as bt
+    from .strategies import StrategyBacktestRunner, transition_strategy
+
+    store = JsonStore()
+    now = datetime.now()
+    due: list[str] = []
+    blocked: int = 0
+    for sid, s in (store.all("strategies") or {}).items():
+        if not isinstance(s, dict) or not bt.is_auto_eligible(s):
+            continue
+        if bt.has_inflight(store, sid):
+            blocked += 1
+            continue
+        last = bt.latest_completed_at(store, sid)
+        if not last:
+            due.append(sid)  # 首测
+            continue
+        try:
+            last_dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            due.append(sid)
+            continue
+        elapsed = (now - last_dt).total_seconds()
+        if elapsed >= settings.auto_retest_interval_days * 86400:
+            due.append(sid)
+
+    if not due:
+        logger.info("自动回测巡检：无到期任务（有 %d 条进行中跳过）", blocked)
+        return
+
+    logger.info("🔁 自动回测巡检（%s）… 首测/复测 %d 条，进行中跳过 %d", today, len(due), blocked)
+    runner = StrategyBacktestRunner(store)
+    completed, rejected = 0, 0
+    for sid in due:
+        try:
+            res = runner.run(
+                {"strategy_id": sid, "source": "auto",
+                 "lookback_years": settings.auto_backtest_lookback_years,
+                 "oos_frac": 0.3, "min_oos_trades": 4},
+                lambda m: None,
+            )
+            completed += 1
+            vstatus = res.get("verification_status")
+            rec = store.get("strategies", sid) or {}
+            if (rec.get("status") == "candidate" and vstatus == "failed"
+                    and settings.candidate_auto_reject):
+                transition_strategy(store, sid, "reject")
+                rejected += 1
+                logger.info("候选 %s 首测未达标 → 自动淘汰（不再建新自动任务）", sid)
+            elif rec.get("status") == "candidate" and vstatus == "passed":
+                logger.info("候选 %s 首测通过 → 落 passed（人工确认生效，不自动激活）", sid)
+            else:
+                logger.info("策略 %s 自动回测完成 → %s（证据刷新，生命周期不变）", sid, vstatus)
+        except Exception as exc:  # noqa: BLE001 — 单策略失败不拖垮整轮
+            logger.warning("策略 %s 自动回测失败: %s", sid, exc)
+    logger.info("自动回测巡检结束：完成 %d 条，淘汰 %d 条", completed, rejected)
+
+
 def _run_event_generation(store: JsonStore) -> dict:
     """Step 0：拉市场事件 → 假设 → 候选落池（EVENT_GENERATION_ENABLED 控制）。
 
@@ -178,7 +254,7 @@ def _run_closed_loop_job() -> None:
             try:
                 res = runner.run(
                     {"strategy_id": sid, "lookback_years": 2.0, "oos_frac": 0.3,
-                     "min_oos_trades": 4},
+                     "min_oos_trades": 4, "source": "auto"},
                     lambda m: None,
                 )
                 vstatus = res.get("verification_status")
@@ -226,9 +302,10 @@ def _run_closed_loop_job() -> None:
 
 
 def setup_scheduler() -> BackgroundScheduler | None:
-    """按 BRIEF_SCHEDULE_ENABLED / SHADOW_SCHEDULE_ENABLED / CLOSED_LOOP_ENABLED 决定是否挂载；全关返回 None。"""
-    if not settings.schedule_enabled and not settings.shadow_schedule_enabled and not settings.closed_loop_enabled:
-        logger.info("简报/影子/闭环调度全关，跳过定时调度")
+    """按 BRIEF / SHADOW / CLOSED_LOOP / AUTO_RETEST 开关决定是否挂载；全关返回 None。"""
+    if not settings.schedule_enabled and not settings.shadow_schedule_enabled \
+            and not settings.closed_loop_enabled and not settings.auto_retest_enabled:
+        logger.info("简报/影子/闭环/自动回测调度全关，跳过定时调度")
         return None
 
     sched = BackgroundScheduler(timezone=_TIMEZONE)
@@ -261,6 +338,17 @@ def setup_scheduler() -> BackgroundScheduler | None:
             id="closed_loop_daily", replace_existing=True,
         )
         logger.info("🔁 定时自进化闭环已启动: %s:%02d", c_h, c_m)
+
+    if settings.auto_retest_enabled:
+        p_h, p_m = _parse_hhmm(settings.auto_retest_time)
+        sched.add_job(
+            _run_backtest_patrol, CronTrigger(hour=p_h, minute=p_m),
+            id="backtest_patrol_daily", replace_existing=True,
+        )
+        logger.info(
+            "🔁 定时自动回测巡检已启动: %s:%02d（复测间隔 %d 天）",
+            p_h, p_m, settings.auto_retest_interval_days,
+        )
 
     if sched.get_jobs():
         sched.start()

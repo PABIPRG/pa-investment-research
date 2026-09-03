@@ -620,7 +620,7 @@ def _per_strategy_decisions(
             "closed_trades": closed,
             "decision": "none",
             "reason": "",
-            "behavior": "带内运行",
+            "behavior": "正常运行",
         }
         if rec.get("status") != "active":
             # 策略现状只展示已激活运行的策略：非 active（候选/变体/退役/拒绝）
@@ -733,7 +733,7 @@ def _per_strategy_decisions(
                 entry.update(behavior="升级+变异")
             per_strategy.append(entry)
             continue
-        # 5) 无动作：带内 / 已升级 / 已降级
+        # 5) 无动作：正常运行 / 已升级 / 已降级
         if nav is None:
             entry.update(behavior="待判定", reason="影子净值缺失，暂不参与判定")
         elif tier >= 2:
@@ -748,7 +748,7 @@ def _per_strategy_decisions(
             )
         else:
             entry.update(
-                behavior="带内运行",
+                behavior="正常运行",
                 reason=(
                     f"影子净值 {nav:.4f} 处于 {settings.evolve_demote_nav}~"
                     f"{settings.evolve_promote_nav} 带内，无升降级动作"
@@ -922,8 +922,9 @@ def _lifecycle(
     store: JsonStore,
     strategy_id: str | None = None,
 ) -> dict[str, list[dict]]:
+    # 变异是来源标记（source/mutated_from）而非独立运行状态：变异策略按其真实 status 落桶。
     groups = {key: [] for key in (
-        "active", "candidate", "mutated", "retired", "watch", "rejected",
+        "active", "candidate", "retired", "watch", "rejected",
     )}
     for record in (store.all("strategies") or {}).values():
         if not isinstance(record, dict):
@@ -931,8 +932,6 @@ def _lifecycle(
         entry = _lifecycle_entry(record)
         status_value = str(record.get("status") or "")
         evolve_state = str((record.get("evolve") or {}).get("state") or "")
-        if record.get("source") == "evolution":
-            groups["mutated"].append(entry)
         if status_value in groups:
             groups[status_value].append(entry)
         if status_value == "active" and evolve_state in {"watch", "retired"}:

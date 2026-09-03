@@ -46,12 +46,13 @@ describe('自进化全局只读看板', () => {
       if (operation === 'trading-core.evolution-status') return {
         closed_loop_enabled: true,
         lifecycle: {
+          // 变异是来源标记：母策略按真实状态（retired）落桶，子策略 active 并沿 mutated_from 上溯母链
           active: [{ strategy_id: 'strat-child', name: '子策略', mutated_from: 'strat-parent' }],
-          mutated: [{ strategy_id: 'strat-parent', name: '母策略' }],
+          retired: [{ strategy_id: 'strat-parent', name: '母策略' }],
         },
         per_strategy: [{ strategy_id: 'strat-child', name: '子策略', decision: 'promote', reason: '证据达标', nav: 1.12, closed_win_rate_pct: 64, symbols: ['600519'] }],
         recent_applied: [{ applied_at: '2026-09-01', count: 1, actions: [{ sid: 'strat-child', type: 'promote', reason: '升级' }] }],
-        counts: { active: 1, mutated: 1 },
+        counts: { active: 1, retired: 1 },
       }
       if (operation === 'trading-core.evolution-attribution') return {
         overall: {},
@@ -121,7 +122,7 @@ describe('策略研究单策略诊断', () => {
     render(<StrategyEvolutionDiagnostics requestData={requestData} strategyId="strat-watch" strategyLabel="观察策略" strategyStatus="active" onAnalyze={() => {}} onBack={() => {}} />)
 
     expect(await screen.findByText(/进入观察态/)).toBeTruthy()
-    expect(screen.getAllByText('观察').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('观察中').length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: '重新评估' })).toBeNull()
   })
 
