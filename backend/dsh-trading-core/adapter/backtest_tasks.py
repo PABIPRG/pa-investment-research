@@ -22,9 +22,13 @@
 complete/fail；手动（TaskManager 注入 task_id）、闭环 Step C、自动巡检三条调用链都走同一处。
 """
 
+import logging
+import threading
 import time
 import uuid
-from typing import Optional
+from typing import Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 from .store import JsonStore
 
@@ -224,3 +228,83 @@ def is_auto_eligible(strategy: dict) -> bool:
         return False
     vstatus = str(strategy.get("verification_status") or "")
     return vstatus not in ("archived", "failed")
+
+
+# ---- 候选落池即触发首测（策略生成 → 立即自动首测，默认 lookback 年）--------
+# 产品语义：hypothesize「从事件新建策略」等生成入口写入新候选后，不等每日巡检，
+# 立即在后台发起默认 lookback 年首测（source=auto，写回本任务历史），
+# 使新候选生成当下就有回测证据。与巡检首测一致：通过只落 passed（人工确认生效，
+# 不自动激活）；失败且 CANDIDATE_AUTO_REJECT=on 时淘汰（不再建新自动任务）。
+
+
+def _default_auto_lookback() -> float:
+    from .config import settings
+
+    return float(settings.auto_backtest_lookback_years)
+
+
+def run_first_backtests(store: JsonStore, strategy_ids: Iterable[str]) -> dict:
+    """同步跑一批刚落池候选的**首测**（source=auto，默认 lookback 年）。
+
+    只处理尚无任何回测证据的新候选：非 candidate/active、已有 queued/running
+    任务（in-flight）、或已有完成记录/backtest.ran_at 的均跳过——防与巡检/闭环重复。
+    通过不激活、失败按 CANDIDATE_AUTO_REJECT 淘汰。返回计数便于日志/测试断言。
+    """
+    from .config import settings
+    from .strategies import StrategyBacktestRunner, transition_strategy
+
+    started = completed = rejected = skipped = failed = 0
+    for sid in strategy_ids:
+        sid = str(sid)
+        rec = store.get("strategies", sid) or {}
+        if not is_auto_eligible(rec):
+            skipped += 1
+            continue
+        if has_inflight(store, sid):
+            skipped += 1
+            continue
+        if latest_completed_at(store, sid):
+            skipped += 1
+            continue
+        started += 1
+        try:
+            res = StrategyBacktestRunner(store).run(
+                {"strategy_id": sid, "source": "auto",
+                 "lookback_years": _default_auto_lookback(),
+                 "oos_frac": 0.3, "min_oos_trades": 4},
+                lambda m: None,
+            )
+            completed += 1
+            vstatus = res.get("verification_status")
+            if str(rec.get("status")) == "candidate" and vstatus == "failed" \
+                    and settings.candidate_auto_reject:
+                transition_strategy(store, sid, "reject")
+                rejected += 1
+                logger.info("候选 %s 生成即首测未达标 → 自动淘汰", sid)
+            elif str(rec.get("status")) == "candidate" and vstatus == "passed":
+                logger.info("候选 %s 生成即首测通过 → 落 passed（人工确认生效，不自动激活）", sid)
+        except Exception as exc:  # noqa: BLE001 — 单候选失败不拖垮整批
+            failed += 1
+            logger.warning("候选 %s 生成即首测失败: %s", sid, exc)
+    return {"started": started, "completed": completed, "rejected": rejected,
+            "skipped": skipped, "failed": failed}
+
+
+def trigger_first_backtests(strategy_ids: Iterable[str]) -> dict:
+    """候选落池即触发（异步后台）：新候选生成后立即发起默认 lookback 年首测。
+
+    生成入口（hypothesize 等）拿到新建候选 id 后调用；后台 daemon 线程串行跑，
+    不阻塞请求。返回入队 id 数（实际跳过数见后台日志，测试用 run_first_backtests）。
+    """
+    ids = [str(s) for s in (strategy_ids or []) if str(s).strip()]
+    if not ids:
+        return {"enqueued": 0}
+
+    def _run() -> None:
+        try:
+            run_first_backtests(JsonStore(), ids)
+        except Exception as exc:  # noqa: BLE001 — 后台批次异常不静默
+            logger.exception("生成即首测后台批次失败: %s", exc)
+
+    threading.Thread(target=_run, name="first-backtest", daemon=True).start()
+    return {"enqueued": len(ids)}

@@ -16,6 +16,19 @@
 - Claude Code 通过 `CLAUDE.md` 与 `.claude/skills/` 接入；Gemini CLI 通过 `GEMINI.md` 接入；GitHub Copilot 的非 Agent 场景通过 `.github/copilot-instructions.md` 接入；JetBrains AI Assistant 与 Continue 通过各自 rules 目录接入。
 - 腾讯 CodeBuddy、字节 TRAE、阿里 Qoder 与通义灵码分别通过 `.codebuddy/`、`.trae/`、`.qoder/` 与 `.lingma/` 下的薄入口接入；平台升级后即使增加原生兼容，也保留单一事实源，删除冗余入口前先验证实际加载行为。
 
+## Linear 项目映射
+
+- 后续所有任务追踪统一使用 Linear。
+- Linear workspace: `PABIPRG`
+- Linear team: `PABIPRG`
+- Team key: `PAB`
+- Linear project: `投研智能体`
+- Linear project ID: `08905897-5bb3-4f89-8a07-5729018a65b4`
+- 默认状态: `Backlog`
+- 默认标签: `Feature`
+- 创建 Linear issue 前必须先展示完整草稿，并取得用户明确确认。
+- 禁止通过仓库名称猜测 Linear Project；必须使用本节记录的项目名称与 ID。若映射失效或无法访问，应停止创建并请求用户确认。
+
 ## 多 Agent 与 Git worktree
 
 ### 角色与调度契约
