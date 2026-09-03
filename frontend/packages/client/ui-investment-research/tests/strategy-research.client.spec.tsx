@@ -20,7 +20,7 @@ function renderStrategyPage(
 }
 
 describe('策略研究产品事实与确认流程', () => {
-  it('生命周期按所选策略证据高亮，并为每个阶段提供可操作入口', async () => {
+  it('生命周期默认收起，帮助弹层按所选策略证据高亮并提供可操作入口', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.strategies') {
         return {
@@ -43,8 +43,11 @@ describe('策略研究产品事实与确认流程', () => {
 
     const view = render(<StrategyResearchPage {...props} />)
     await screen.findByText('已回测候选')
+    expect(screen.queryByRole('heading', { name: '策略生命周期' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '了解策略生命周期' }))
+    const helpDialog = screen.getByRole('dialog', { name: '策略生命周期' })
 
-    const lifecycle = screen.getByRole('navigation', { name: '策略生命周期步骤' })
+    const lifecycle = within(helpDialog).getByRole('navigation', { name: '策略生命周期步骤' })
     const formation = within(lifecycle).getByRole('button', { name: /1.*事件形成假设/u })
     const backtest = within(lifecycle).getByRole('button', { name: /2.*样本外回测/u })
     expect(within(lifecycle).getByRole('button', { name: /3.*影子验证/u })).toBeTruthy()
@@ -76,7 +79,8 @@ describe('策略研究产品事实与确认流程', () => {
     expect(screen.getByRole('button', { name: '未验证 1' }).getAttribute('aria-pressed')).toBe('true')
 
     view.rerender(<StrategyResearchPage {...props} selectedStrategyId="" />)
-    expect(lifecycle.querySelector('[aria-current="step"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '了解策略生命周期' }))
+    expect(screen.getByRole('navigation', { name: '策略生命周期步骤' }).querySelector('[aria-current="step"]')).toBeNull()
   })
 
   it('策略归档需要二次确认，确认后以 retire 迁移并进入已归档分类', async () => {
@@ -290,8 +294,8 @@ describe('策略研究产品事实与确认流程', () => {
     })
 
     renderStrategyPage(requestData)
-    expect(await screen.findByRole('heading', { name: '策略生命周期' })).toBeTruthy()
-    expect(screen.getByText(/点击右上角“从事件新建策略”/)).toBeTruthy()
+    expect(await screen.findByRole('button', { name: '了解策略生命周期' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '策略生命周期' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '从事件新建策略' }))
 
     const dialog = await screen.findByRole('dialog', { name: '候选假设预览' })
@@ -374,6 +378,8 @@ describe('策略研究产品事实与确认流程', () => {
     renderStrategyPage(requestData)
     const card = (await screen.findByText('可回测策略')).closest('article')
     expect(card).not.toBeNull()
+    expect(screen.queryByLabelText('回测窗口')).toBeNull()
+    expect(screen.getByRole('button', { name: '刷新' })).toBeTruthy()
 
     const runInputs = () => requestData.mock.calls
       .filter(([request]) => request.operation === 'trading-core.strategy-run')

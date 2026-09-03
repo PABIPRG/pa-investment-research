@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { asRecord, number, records, text } from './data.ts'
 import type { EvolutionDashboardProps, EvolutionLifecycleGroup } from './evolution-types.ts'
+import { evolutionConfidenceLabel, evolutionParticipationLabel } from './evolution-types.ts'
 import css from './InvestmentShell.module.css'
 
 // 变异是来源标记（source/mutated_from）而非独立分组：策略按真实状态落桶。mutated 保留为防御性兜底。
 const GROUPS: readonly EvolutionLifecycleGroup[] = [
-  'active', 'candidate', 'retired', 'watch', 'rejected',
+  'active', 'watch', 'candidate', 'retired', 'rejected',
 ]
 
 const GROUP_LABELS: Readonly<Record<string, string>> = {
-  active: '生效', candidate: '候选', mutated: '变异', retired: '已淘汰/已退役', watch: '观察中', rejected: '已拒绝',
+  active: '正常运行', candidate: '候选', retired: '已淘汰', watch: '观察中', rejected: '已拒绝',
 }
 
 const DECISION_LABELS: Readonly<Record<string, string>> = {
-  promote: '升级', demote: '降级观察', retire: '已淘汰/已退役', mutate: '生成变体', none: '正常运行',
+  promote: '已升级', demote: '观察中', retire: '已淘汰', mutate: '生成变体', none: '正常运行',
 }
 
 function strings(value: unknown): string[] {
@@ -55,7 +56,14 @@ function LineageNode({ sid, entries, children, onOpenStrategy, returnGroup }: Li
       {(children.get(sid) ?? []).length > 0 && (
         <div className={css.lineageChildren}>
           {(children.get(sid) ?? []).map(child => (
-            <LineageNode key={child} sid={child} entries={entries} children={children} onOpenStrategy={onOpenStrategy} returnGroup={returnGroup} />
+            <LineageNode
+              key={child}
+              sid={child}
+              entries={entries}
+              children={children}
+              onOpenStrategy={onOpenStrategy}
+              returnGroup={returnGroup}
+            />
           ))}
         </div>
       )}
@@ -104,6 +112,22 @@ export function EvolutionDashboard({
   const closedLoopEnabled = statusRecord.closed_loop_enabled === true
   const closedLoopTime = text(statusRecord.closed_loop_time, '15:35')
   const lifecycleEntries = openGroup === '' ? [] : records(lifecycle[openGroup])
+  const mutationEntries = records(lifecycle.mutated)
+  const lifecycleByStrategy = new Map<string, { entry: Record<string, unknown>; status: string }>()
+  for (const group of ['candidate', 'active', 'watch', 'retired', 'rejected'] as const) {
+    for (const entry of records(lifecycle[group])) {
+      const sid = strategyId(entry)
+      if (sid !== '') lifecycleByStrategy.set(sid, { entry, status: group })
+    }
+  }
+  const mutationByStrategy = new Map(mutationEntries.map(entry => [strategyId(entry), entry]))
+  const activeEntries = records(lifecycle.active)
+  const statusSummary = {
+    normal: activeEntries.filter(entry => number(entry.tier) !== 2).length,
+    watch: records(lifecycle.watch).length,
+    upgraded: activeEntries.filter(entry => number(entry.tier) === 2).length,
+    retired: records(lifecycle.retired).length,
+  }
 
   const lineage = useMemo(() => {
     const entries = new Map<string, Record<string, unknown>>()
@@ -112,6 +136,10 @@ export function EvolutionDashboard({
         const sid = strategyId(raw)
         if (sid !== '') entries.set(sid, { ...raw, lifecycle_group: group })
       }
+    }
+    for (const raw of records(lifecycle.mutated)) {
+      const sid = strategyId(raw)
+      if (sid !== '' && !entries.has(sid)) entries.set(sid, { ...raw, lifecycle_group: 'mutated' })
     }
     const visible = new Set<string>()
     for (const raw of records(lifecycle.active)) {
@@ -127,7 +155,7 @@ export function EvolutionDashboard({
       if (parent === '' || !visible.has(parent)) continue
       children.set(parent, [...(children.get(parent) ?? []), sid])
     }
-    const roots = [...visible].filter(sid => {
+    const roots = [...visible].filter((sid) => {
       const parent = text(entries.get(sid)?.mutated_from, '')
       return parent === '' || !visible.has(parent)
     })
@@ -157,6 +185,12 @@ export function EvolutionDashboard({
           <dl className={css.reportMeta}>
             <div><dt>上次自动应用</dt><dd>{text(statusRecord.last_applied_at, '尚未应用')}</dd></div>
             <div><dt>数据完成度</dt><dd>{number(statusRecord.days_of_data)?.toFixed(0) ?? '—'} / {number(statusRecord.min_days)?.toFixed(0) ?? '—'} 日</dd></div>
+          </dl>
+          <dl className={css.evolutionStatusSummary} data-testid="evolution-status-summary">
+            <div><dt>正常运行</dt><dd>{statusSummary.normal}</dd></div>
+            <div><dt>观察中</dt><dd>{statusSummary.watch}</dd></div>
+            <div><dt>已升级</dt><dd>{statusSummary.upgraded}</dd></div>
+            <div><dt>已淘汰</dt><dd>{statusSummary.retired}</dd></div>
           </dl>
           <div className={css.lifecycleNav} aria-label="生命周期分组">
             {GROUPS.map(group => (
@@ -190,7 +224,16 @@ export function EvolutionDashboard({
         </article>
         <article className={`${css.moduleCard} ${css.lineageCard}`}>
           <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅生效策略及母链</span></div>
-          <div className={css.lineageTree}>{lineage.roots.map(sid => <LineageNode key={sid} sid={sid} entries={lineage.entries} children={lineage.children} onOpenStrategy={onOpenStrategy} returnGroup={openGroup} />)}</div>
+          <div className={css.lineageTree}>{lineage.roots.map(sid => (
+            <LineageNode
+              key={sid}
+              sid={sid}
+              entries={lineage.entries}
+              children={lineage.children}
+              onOpenStrategy={onOpenStrategy}
+              returnGroup={openGroup}
+            />
+          ))}</div>
           {lineage.roots.length === 0 && !loading && <div className={css.emptyPanel}>暂无生效中的演化链路。</div>}
         </article>
       </section>
@@ -204,9 +247,20 @@ export function EvolutionDashboard({
               const reason = text(entry.reason, '暂无判定依据')
               const strategyAttribution = attributionByStrategy.get(sid) ?? {}
               const symbols = strings(entry.symbols).length > 0 ? strings(entry.symbols) : strings(strategyAttribution.symbols)
+              const lifecycleState = lifecycleByStrategy.get(sid)
+              const tier = number(entry.tier) ?? number(lifecycleState?.entry.tier)
+              const mutationEntry = mutationByStrategy.get(sid)
+              const mutationSource = text(entry.mutated_from, text(lifecycleState?.entry.mutated_from, text(mutationEntry?.mutated_from, '')))
               return <div className={css.strategyEntry} key={`${sid}-${index}`}>
-                <button type="button" className={css.dataRow} aria-label={`${strategyName(entry)} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{strategyName(entry)}</strong><small>{reason}</small></div><span>{DECISION_LABELS[text(entry.decision, '')] ?? text(entry.behavior, '正常运行')}</span></button>
+                <button type="button" className={css.dataRow} aria-label={`${strategyName(entry)} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}>
+                  <div><strong>{strategyName(entry)}</strong><small>{reason}</small></div>
+                  <span className={css.evolutionStatusStack}>
+                    <strong>{evolutionParticipationLabel(lifecycleState?.status ?? text(entry.status, ''))}</strong>
+                    <small>{evolutionConfidenceLabel(tier)}</small>
+                  </span>
+                </button>
                 <div className={css.strategyDetail}>
+                  {mutationSource !== '' && <span className={css.evolutionMutationSource}>变异来源：{mutationSource}</span>}
                   <dl className={css.strategyDetailGrid}>
                     <div><dt>影子净值</dt><dd>{metric(entry.nav)}</dd></div>
                     <div><dt>累计收益</dt><dd>{metric(strategyAttribution.return_pct, '%')}</dd></div>

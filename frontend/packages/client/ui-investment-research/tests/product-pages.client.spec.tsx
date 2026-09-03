@@ -717,7 +717,7 @@ describe('投研产品闭环', () => {
     expect(screen.queryByText(/Traceback|\/Users\/private/)).toBeNull()
   })
 
-  it('产业链、全局搜索、个股分析和历史回测拥有四份独立输入状态', async () => {
+  it('产业链与全局搜索保持独立，智能分析不再持有任务表单输入', async () => {
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'industry-chain.data-status') {
         return { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null }
@@ -784,13 +784,9 @@ describe('投研产品闭环', () => {
     fireEvent.change(chainFilter, { target: { value: '半导体' } })
     expect(globalSearch.value).toBe('贵州茅台')
     fireEvent.click(screen.getByRole('button', { name: '智能分析' }))
-    const analysisCode = screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' })
-    const backtestCode = screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' })
-    fireEvent.change(analysisCode, { target: { value: '600519' } })
-    fireEvent.change(backtestCode, { target: { value: '000001' } })
+    expect(screen.queryByRole('textbox', { name: '个股分析股票代码' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: '历史回测股票代码' })).toBeNull()
     expect(globalSearch.value).toBe('贵州茅台')
-    expect(analysisCode.value).toBe('600519')
-    expect(backtestCode.value).toBe('000001')
     fireEvent.click(screen.getByRole('button', { name: '产业链' }))
     const restoredChainFilter = await screen.findByRole<HTMLInputElement>('textbox', { name: '搜索公司、行业或股票代码' })
     expect(restoredChainFilter.value).toBe('半导体')
@@ -802,8 +798,8 @@ describe('投研产品闭环', () => {
     })
     expect(globalSearch.value).toBe('贵州茅台')
     fireEvent.click(screen.getByRole('button', { name: '智能分析' }))
-    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '个股分析股票代码' }).value).toBe('600519')
-    expect(screen.getByRole<HTMLInputElement>('textbox', { name: '历史回测股票代码' }).value).toBe('000001')
+    expect(screen.queryByRole('textbox', { name: '个股分析股票代码' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: '历史回测股票代码' })).toBeNull()
   })
 
   it('按真实 DTO 检索公司、逐层展示上下游并只向 AI 传短意图', async () => {
@@ -947,18 +943,28 @@ describe('投研产品闭环', () => {
     const supplierTransform = screen.getByRole('button', { name: '高粱供应商 600000，上游第 1 层' })
       .getAttribute('transform')
     expect(screen.getByLabelText('产业链视角与已加载路径')).toBeTruthy()
+    const chainCallsBeforeFocus = requestData.mock.calls.filter(([request]) => request.operation === 'industry-chain.chain').length
     fireEvent.click(screen.getByRole('button', { name: '查看节点详情：高粱供应商 600000' }))
     expect(screen.getByRole('dialog', { name: '高粱供应商 · 600000' })).toBeTruthy()
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'industry-chain.chain')).toHaveLength(chainCallsBeforeFocus)
     expect(expandedGraph.querySelector(':scope > g')?.getAttribute('transform')).toBe(canvasTransform)
     expect(screen.getByRole('button', { name: '高粱供应商 600000，当前视角' }).getAttribute('transform'))
       .toBe(supplierTransform)
     expect(screen.getByText('上下游以此节点为起点')).toBeTruthy()
     expect(await screen.findByText('80 万吨')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '展开上游完整链路' }))
+    fireEvent.click(screen.getByRole('button', { name: '将高粱供应商设为中心' }))
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
         operation: 'industry-chain.chain',
         input: { code: '600000', depth_up: 3, depth_down: 3, top_up: 5, top_down: 5 },
+      })
+    })
+    expect(screen.getByText('中心企业：高粱供应商')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '显示 1 层上下游' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'industry-chain.chain',
+        input: { code: '600000', depth_up: 1, depth_down: 1, top_up: 5, top_down: 5 },
       })
     })
     expect(screen.getByRole('button', { name: '高粱供应商' }).getAttribute('aria-current')).toBe('page')
@@ -1139,7 +1145,7 @@ describe('投研产品闭环', () => {
       if (request.operation === 'trading-core.shadow-positions') return { items: [] }
       if (request.operation === 'trading-core.shadow-equity') return { items: [] }
       if (request.operation === 'trading-core.shadow-history') {
-        const single = String(request.input?.strategy_id ?? '') === 'strat-1'
+        const single = request.input?.strategy_id === 'strat-1'
         const rows = [
           { date: '2026-09-01', strategy_id: 'strat-1', strategy_name: '电力事件策略', kind: 'event',
             initial_capital: 100000, equity: 101200, nav: 1.012, track_from: '2026-08-01', closed_count: 1, open_positions: 1,

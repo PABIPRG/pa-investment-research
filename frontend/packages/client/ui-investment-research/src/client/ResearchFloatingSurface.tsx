@@ -39,6 +39,7 @@ const scrollResourceLeases = new WeakMap<HTMLElement, ScrollResourceLease>()
 export interface ResearchFloatingSurfaceProps {
   readonly mode: ResearchSurfaceMode
   readonly subject: ResearchSubject
+  readonly dockedWidth?: number
   readonly triggerRef: RefObject<HTMLElement>
   readonly backgroundRef: RefObject<HTMLElement>
   readonly scrollContainerRef: RefObject<HTMLElement>
@@ -177,6 +178,7 @@ function acquireModalResources(
 export function ResearchFloatingSurface({
   mode,
   subject,
+  dockedWidth,
   triggerRef,
   backgroundRef,
   scrollContainerRef,
@@ -230,9 +232,17 @@ export function ResearchFloatingSurface({
       surfaceRef.current?.style.removeProperty('--investment-research-surface-width')
       return
     }
+    if (dockedWidth !== undefined) {
+      surfaceRef.current?.style.setProperty(
+        '--investment-research-surface-width',
+        `min(${Math.round(dockedWidth)}px, 42vw)`,
+      )
+      return
+    }
     const widthAnchor = widthAnchorRef.current
-    const ownerWindow = widthAnchor?.ownerDocument.defaultView
-    if (widthAnchor === null || widthAnchor === undefined || ownerWindow === null || ownerWindow === undefined) return
+    if (widthAnchor === null) return
+    const ownerWindow = widthAnchor.ownerDocument.defaultView
+    if (ownerWindow === null) return
     const updateWidth = (): void => {
       const nextWidth = Math.round(widthAnchor.getBoundingClientRect().width)
       const surface = surfaceRef.current
@@ -250,7 +260,7 @@ export function ResearchFloatingSurface({
       resizeObserver?.disconnect()
       ownerWindow.removeEventListener('resize', updateWidth)
     }
-  }, [mobile, mode, widthAnchorRef])
+  }, [dockedWidth, mobile, mode, widthAnchorRef])
 
   useEffect(() => {
     const surface = surfaceRef.current
@@ -377,6 +387,10 @@ export function ResearchFloatingSurface({
       }
     }
   }, [interactionEnabled, mode, restoreFocusOnExit, triggerRef])
+
+  useLayoutEffect(() => {
+    if (isSurfaceMode(mode)) entryTriggerRef.current = triggerRef.current
+  }, [mode, subject.code, triggerRef])
 
   useEffect(() => {
     if (previousAnnouncementSignatureRef.current === announcementSignature) return

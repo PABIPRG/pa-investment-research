@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { MutableRefObject, ReactNode, RefObject } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import packageManifest from '@deepseek-ai/dsh-client-ui-investment-research/package.json' with { type: 'json' }
 import type {
@@ -14,7 +14,12 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
-import { ANALYSIS_MODULES, SmartAnalysisPage } from './AnalysisPage.tsx'
+import {
+  ANALYSIS_MODULES,
+  type AnalysisPromptTemplateId,
+} from './analysis-modules.ts'
+import type { AnalysisPromptTemplateController } from './analysis-prompt-templates.ts'
+import { SmartAnalysisPage } from './AnalysisPage.tsx'
 import { asRecord, compactMoney, money, number, percent, productErrorText, records, text } from './data.ts'
 import { useQuotePolling } from './quote-polling.ts'
 import {
@@ -180,6 +185,13 @@ export type InvestmentNewSessionProps = PropsRuntime<'sidebar.newSession'>
 export type InvestmentWelcomeProps = PropsRuntime<'conversation.hero.welcome'> & HeroWelcomeOwnerProps
 
 type NavigationRoute = Exclude<InvestmentRoute, 'stock-detail' | 'assistant' | 'projects'>
+
+function navigationModule(route: InvestmentRoute): NavigationRoute {
+  if (route === 'stock-detail') return 'opportunity'
+  if (route === 'assistant') return 'analysis'
+  if (route === 'projects') return 'framework'
+  return route
+}
 
 const ROUTES: readonly { id: NavigationRoute; label: string; note?: string }[] = [
   { id: 'dashboard', label: '研究工作台', note: '总览' },
@@ -541,47 +553,63 @@ const ASSISTANT_MODULE_OPTIONS: readonly { id: AssistantModule; label: string; n
 ]
 
 const GENERAL_ANALYSIS_MODULE_OPTION = {
-  id: 'general', label: '不指定模块', note: '直接提出开放式研究问题', prompt: '',
+  id: 'general', label: '普通对话', note: '不使用提示词模板，直接提出开放式研究问题', promptTemplate: '',
 } as const
 
 const ANALYSIS_MODULE_OPTIONS: readonly {
-  id: AssistantModule
+  id: AnalysisPromptTemplateId
   label: string
   note: string
-  prompt: string
+  promptTemplate: string
 }[] = [
   GENERAL_ANALYSIS_MODULE_OPTION,
   ...ANALYSIS_MODULES.map(module => ({
-    id: module.assistantModule,
+    id: module.id,
     label: module.title,
     note: module.summary,
-    prompt: module.assistantPrompt,
+    promptTemplate: module.promptTemplate,
   })),
 ]
 
 export interface InvestmentAssistantModuleInjected {
   hooks: { investmentUi: HostObservable<InvestmentUiSnapshot> }
-  setAssistantModule: (module: AssistantModule, promptOverride?: string) => void
+  setAssistantModule: (module: AssistantModule) => void
+}
+
+export interface InvestmentPromptTemplateInjected {
+  hooks: { investmentUi: HostObservable<InvestmentUiSnapshot> }
+  promptTemplates: AnalysisPromptTemplateController
+  selectPromptTemplate: (
+    sessionId: string,
+    templateId: AnalysisPromptTemplateId,
+    promptTemplate: string,
+  ) => void
 }
 
 export type InvestmentAssistantModuleProps = PropsRuntime<'conversation.input.left'>
   & InjectFace<InvestmentAssistantModuleInjected>
   & {
-    readonly catalog?: 'experts' | 'analysis-modules'
+    readonly appearance?: 'assistant' | 'context'
+    readonly visibleWhenClosed?: boolean
+  }
+
+export type InvestmentPromptTemplateProps = PropsRuntime<'conversation.input.left'>
+  & InjectFace<InvestmentPromptTemplateInjected>
+  & {
+    readonly appearance?: 'assistant' | 'context'
     readonly visibleWhenClosed?: boolean
   }
 
 /** Profile-specific research scope picker in the shared composer tool row. */
 export function InvestmentAssistantModuleSelect({
-  useInvestmentUi, setAssistantModule, catalog = 'experts', visibleWhenClosed = false,
+  useInvestmentUi, setAssistantModule, appearance = 'assistant', visibleWhenClosed = false,
 }: InvestmentAssistantModuleProps) {
   const mode = useInvestmentUi(snapshot => snapshot.assistantMode)
   const module = useInvestmentUi(snapshot => snapshot.assistantModule)
   const [open, setOpen] = useState(false)
-  const options = catalog === 'analysis-modules' ? ANALYSIS_MODULE_OPTIONS : ASSISTANT_MODULE_OPTIONS
-  const fallback = catalog === 'analysis-modules' ? GENERAL_ANALYSIS_MODULE_OPTION : GENERAL_ASSISTANT_OPTION
-  const selected = options.find(item => item.id === module) ?? fallback
-  const selectedLabel = catalog === 'analysis-modules' && selected.id === 'general' ? '未选择' : selected.label
+  const selected = ASSISTANT_MODULE_OPTIONS.find(item => item.id === module) ?? GENERAL_ASSISTANT_OPTION
+  const selectedLabel = selected.label
+  const controlTitle = `${selectedLabel}：${selected.note}`
 
   useEffect(() => {
     if (mode === 'closed') setOpen(false)
@@ -591,33 +619,96 @@ export function InvestmentAssistantModuleSelect({
   return (
     <Menu
       open={open}
-      items={options.map(item => ({ id: item.id, label: item.label }))}
+      className={css.assistantModuleMenuRoot ?? ''}
+      items={ASSISTANT_MODULE_OPTIONS.map(item => ({ id: item.id, label: item.label }))}
       selectedId={module}
       side="top"
       compact
       onClose={() => { setOpen(false) }}
       onSelect={(id) => {
         setOpen(false)
-        const selectedOption = options.find(item => item.id === id)
-        setAssistantModule(
-          id as AssistantModule,
-          catalog === 'analysis-modules' && selectedOption !== undefined
-            && 'prompt' in selectedOption && typeof selectedOption.prompt === 'string'
-            ? selectedOption.prompt
-            : undefined,
-        )
+        setAssistantModule(id as AssistantModule)
       }}
       anchor={(
         <button
           type="button"
-          className={catalog === 'analysis-modules' ? css.researchContextTrigger : css.assistantModuleTrigger}
+          className={appearance === 'context' ? css.researchContextTrigger : css.assistantModuleTrigger}
           aria-label={`研究模块，当前：${selectedLabel}`}
-          title={selected.note}
+          title={controlTitle}
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => { setOpen(current => !current) }}
         >
-          <span>{catalog === 'analysis-modules' && selected.id === 'general' ? '选模块' : selected.label}</span>
+          {appearance === 'context'
+            && <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">✦</span>}
+          {appearance === 'context'
+            ? <strong>{selected.label}</strong>
+            : <span className={css.assistantModuleLabel}>{selected.label}</span>}
+          <i className={open ? css.assistantModuleChevronOpen : undefined} aria-hidden="true">
+            <IconChevronDownOutline14 />
+          </i>
+        </button>
+      )}
+    />
+  )
+}
+
+/** Session-scoped editable prompt-template picker used only by Smart Analysis surfaces. */
+export function InvestmentPromptTemplateSelect({
+  useInvestmentUi, promptTemplates, selectPromptTemplate,
+  appearance = 'assistant', visibleWhenClosed = false, session,
+}: InvestmentPromptTemplateProps) {
+  const mode = useInvestmentUi(snapshot => snapshot.assistantMode)
+  const sessionId = String(session.sessionId)
+  const subscribe = useCallback(
+    (listener: () => void) => promptTemplates.subscribe(sessionId, listener),
+    [promptTemplates, sessionId],
+  )
+  const getSnapshot = useCallback(
+    () => promptTemplates.snapshot(sessionId),
+    [promptTemplates, sessionId],
+  )
+  const template = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  const [open, setOpen] = useState(false)
+  const selected = ANALYSIS_MODULE_OPTIONS.find(item => item.id === template.templateId)
+    ?? GENERAL_ANALYSIS_MODULE_OPTION
+  const selectedLabel = selected.label
+
+  useEffect(() => {
+    if (mode === 'closed') setOpen(false)
+  }, [mode])
+
+  if (mode === 'closed' && !visibleWhenClosed) return null
+  return (
+    <Menu
+      open={open}
+      className={css.assistantModuleMenuRoot ?? ''}
+      items={ANALYSIS_MODULE_OPTIONS.map(item => ({ id: item.id, label: item.label }))}
+      selectedId={template.templateId}
+      side="top"
+      compact
+      onClose={() => { setOpen(false) }}
+      onSelect={(id) => {
+        setOpen(false)
+        const selectedOption = ANALYSIS_MODULE_OPTIONS.find(item => item.id === id)
+        if (selectedOption === undefined) return
+        selectPromptTemplate(sessionId, selectedOption.id, selectedOption.promptTemplate)
+      }}
+      anchor={(
+        <button
+          type="button"
+          className={appearance === 'context' ? css.researchContextTrigger : css.assistantModuleTrigger}
+          aria-label={`提示词模板，当前：${selectedLabel}`}
+          title={`${selectedLabel}：${selected.note}。模板只填充输入内容，不限制可用工具。`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={() => { setOpen(current => !current) }}
+        >
+          {appearance === 'context'
+            && <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">✦</span>}
+          {appearance === 'context'
+            ? <strong>{selected.label}</strong>
+            : <span className={css.assistantModuleLabel}>{selected.label}</span>}
           <i className={open ? css.assistantModuleChevronOpen : undefined} aria-hidden="true">
             <IconChevronDownOutline14 />
           </i>
@@ -633,8 +724,8 @@ export function assistantModulePrompt(module: AssistantModule): string {
   return RESEARCH_EXPERTS.find(expert => expert.id === module)?.prompt ?? ''
 }
 
-/** Replace only blank or still-automatic drafts when the selected module changes. */
-export function nextAssistantModuleDraft(
+/** Replace only blank or still-automatic drafts when the selected prompt template changes. */
+export function nextPromptTemplateDraft(
   currentDraft: string,
   previousAutomaticPrompt: string | undefined,
   nextPrompt: string,
@@ -645,7 +736,7 @@ export function nextAssistantModuleDraft(
 
 function AssistantFloatingSurface({
   mode, module, starting, historyOpen, launcherRef, historyRef,
-  launcherPlacement, onMode, onClose, onReturnToResearch, onNew, onHistory,
+  launcherPlacement, modalDocked, onMode, onClose, onReturnToResearch, onNew, onHistory,
 }: {
   mode: AssistantDisplayMode
   module: AssistantModule
@@ -654,6 +745,7 @@ function AssistantFloatingSurface({
   launcherRef: RefObject<HTMLButtonElement>
   historyRef: RefObject<HTMLButtonElement>
   launcherPlacement: 'default' | 'hidden' | 'research-minimized'
+  modalDocked: boolean
   onMode: (mode: AssistantDisplayMode) => void
   onClose: () => void
   onReturnToResearch?: () => void
@@ -679,16 +771,20 @@ function AssistantFloatingSurface({
   }
   return (
     <>
-      {mode === 'expanded' && (
-        <div className={css.assistantBackdrop} role="presentation" onMouseDown={() => { onMode('docked') }} />
+      {(mode === 'expanded' || modalDocked) && (
+        <div
+          className={css.assistantBackdrop}
+          role="presentation"
+          onMouseDown={() => { onMode(mode === 'expanded' ? 'docked' : 'closed') }}
+        />
       )}
       <section
         id="investment-assistant-panel"
         className={css.assistantPanel}
         data-testid="assistant-panel"
         data-mode={mode}
-        role={mode === 'expanded' ? 'dialog' : 'complementary'}
-        aria-modal={mode === 'expanded' ? 'true' : undefined}
+        role={mode === 'expanded' || modalDocked ? 'dialog' : 'complementary'}
+        aria-modal={mode === 'expanded' || modalDocked ? 'true' : undefined}
         aria-label="AI 研究助理"
       >
         <header className={css.assistantHeader}>
@@ -731,17 +827,25 @@ interface ResearchSurfaceState {
   readonly subject?: ResearchSubject
   readonly mode: ResearchSurfaceMode
   readonly suspendedByAssistant: boolean
+  readonly dockedWidth?: number
 }
 
 interface ResearchReturnTarget {
   readonly subject: ResearchSubject
   readonly restoreMode: 'minimized' | 'docked'
+  readonly dockedWidth?: number
 }
 
 interface PendingResearchActivation {
   readonly subject: ResearchSubject
   readonly mode: 'minimized' | 'docked'
+  readonly dockedWidth?: number
   readonly closeRequestGeneration: number
+}
+
+interface AssistantSurfaceIntent {
+  readonly generation: number
+  readonly mode: AssistantDisplayMode
 }
 
 type AssistantExitReason = 'none' | 'direct-close' | 'return-to-research' | 'open-research'
@@ -751,6 +855,10 @@ const INITIAL_RESEARCH_SURFACE: ResearchSurfaceState = Object.freeze({
   suspendedByAssistant: false,
 })
 
+const DEFAULT_RESEARCH_SURFACE_WIDTH = 410
+const MIN_RESEARCH_SURFACE_WIDTH = 360
+const MAX_RESEARCH_SURFACE_WIDTH = 620
+
 export function InvestmentShell({
   useInvestmentUi, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
   navigate, setHistory, setReports,
@@ -759,7 +867,7 @@ export function InvestmentShell({
 }: InvestmentShellProps) {
   const snapshot = useInvestmentUi(s => s)
   const [startingSession, setStartingSession] = useState(false)
-  const assistantConversationQueueRef = useRef(Promise.resolve())
+  const assistantConversationQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const assistantConversationPendingKeysRef = useRef(new Set<string>())
   const assistantConversationRequestGenerationRef = useRef(0)
   const [switchingSessionId, setSwitchingSessionId] = useState<SessionId | undefined>()
@@ -776,6 +884,8 @@ export function InvestmentShell({
   const materialsCloseRef = useRef<HTMLButtonElement>(null)
   const materialsDrawerRef = useRef<HTMLElement>(null)
   const workbenchRef = useRef<HTMLElement>(null)
+  const previousNavigationModuleRef = useRef(navigationModule(snapshot.route))
+  const navigationEpochRef = useRef(0)
   const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
   const assistantExitReasonRef = useRef<AssistantExitReason>('none')
   const pendingResearchActivationRef = useRef<PendingResearchActivation>()
@@ -793,7 +903,19 @@ export function InvestmentShell({
   const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
   const [dashboardView, setDashboardView] = useState<'workbench' | 'preferences'>('workbench')
+  const [preferencesVisited, setPreferencesVisited] = useState(false)
   const assistantMode = snapshot.assistantMode
+  const assistantSurfaceIntentRef = useRef<AssistantSurfaceIntent>({ generation: 0, mode: assistantMode })
+  const [compactAssistantViewport, setCompactAssistantViewport] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 680px)').matches
+      : false
+  ))
+  const [compactResearchViewport, setCompactResearchViewport] = useState(() => (
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 1023px)').matches
+      : false
+  ))
   const assistantModeRef = useRef(assistantMode)
   assistantModeRef.current = assistantMode
   researchSurfaceRef.current = researchSurface
@@ -801,6 +923,26 @@ export function InvestmentShell({
   const conversationPrimary = snapshot.route === 'portfolio'
   const assistantModule = snapshot.assistantModule
   const colorScheme = useActiveColorScheme()
+  const opportunityAssistantOverlay = snapshot.route === 'opportunity'
+    && compactAssistantViewport && assistantMode === 'docked'
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia('(max-width: 680px)')
+    const update = (): void => { setCompactAssistantViewport(media.matches) }
+    update()
+    media.addEventListener('change', update)
+    return () => { media.removeEventListener('change', update) }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia('(max-width: 1023px)')
+    const update = (): void => { setCompactResearchViewport(media.matches) }
+    update()
+    media.addEventListener('change', update)
+    return () => { media.removeEventListener('change', update) }
+  }, [])
 
   const updateResearchSurface = useCallback((next: ResearchSurfaceState): void => {
     researchSurfaceRef.current = next
@@ -810,6 +952,13 @@ export function InvestmentShell({
   const updateResearchReturnTarget = useCallback((next: ResearchReturnTarget | undefined): void => {
     researchReturnTargetRef.current = next
     setResearchReturnTarget(next)
+  }, [])
+
+  const recordAssistantSurfaceIntent = useCallback((mode: AssistantDisplayMode): void => {
+    assistantSurfaceIntentRef.current = {
+      generation: assistantSurfaceIntentRef.current.generation + 1,
+      mode,
+    }
   }, [])
 
   const queueResearchAfterAssistantClose = useCallback((
@@ -822,49 +971,77 @@ export function InvestmentShell({
     assistantExitReasonRef.current = reason
     updateResearchSurface({ ...next, suspendedByAssistant: true })
     setAssistantCloseRequestGeneration(closeRequestGeneration)
+    recordAssistantSurfaceIntent('closed')
     setAssistantMode('closed')
-  }, [setAssistantMode, updateResearchSurface])
+  }, [recordAssistantSurfaceIntent, setAssistantMode, updateResearchSurface])
+
+  const measureResearchSurfaceWidth = useCallback((): number => {
+    const measured = Math.round(opportunityResearchWidthAnchorRef.current?.getBoundingClientRect().width ?? 0)
+    if (measured <= 0) return DEFAULT_RESEARCH_SURFACE_WIDTH
+    return Math.min(MAX_RESEARCH_SURFACE_WIDTH, Math.max(MIN_RESEARCH_SURFACE_WIDTH, measured))
+  }, [])
 
   const openResearch = useCallback((subject: ResearchSubject): void => {
     pendingResearchActivationRef.current = undefined
     updateResearchReturnTarget(undefined)
+    const current = researchSurfaceRef.current
+    const dockedWidth = current.mode !== 'closed' && current.dockedWidth !== undefined
+      ? current.dockedWidth
+      : measureResearchSurfaceWidth()
     if (assistantModeRef.current !== 'closed') {
-      queueResearchAfterAssistantClose({ subject, mode: 'docked' }, 'open-research')
+      queueResearchAfterAssistantClose({ subject, mode: 'docked', dockedWidth }, 'open-research')
       return
     }
-    updateResearchSurface({ subject, mode: 'docked', suspendedByAssistant: false })
-  }, [queueResearchAfterAssistantClose, updateResearchReturnTarget, updateResearchSurface])
+    updateResearchSurface({ subject, mode: 'docked', suspendedByAssistant: false, dockedWidth })
+  }, [measureResearchSurfaceWidth, queueResearchAfterAssistantClose, updateResearchReturnTarget, updateResearchSurface])
 
   const startAssistantConversation = useCallback((
     intent: AssistantIntent,
     module: AssistantModule | undefined,
     onReady: () => void,
   ): void => {
-    const key = `${module ?? 'default'}:${assistantPrompt(intent)}`
+    const navigationEpoch = navigationEpochRef.current
+    const promptTemplateKey = intent.kind === 'prompt' ? intent.promptTemplateId ?? 'untracked' : 'legacy'
+    const key = `${navigationEpoch}:${module ?? 'default'}:${promptTemplateKey}:${assistantPrompt(intent)}`
     if (assistantConversationPendingKeysRef.current.has(key)) return
     const hasPendingConversation = assistantConversationPendingKeysRef.current.size > 0
     const sourceSurface = conversationPrimary ? 'primary' : 'floating'
+    const assistantSurfaceIntentGeneration = assistantSurfaceIntentRef.current.generation
     const requestGeneration = assistantConversationRequestGenerationRef.current + 1
     assistantConversationRequestGenerationRef.current = requestGeneration
     assistantConversationPendingKeysRef.current.add(key)
     setStartingSession(true)
-    const run = async (): Promise<void> => {
+    const run = async (): Promise<boolean> => {
+      if (navigationEpoch !== navigationEpochRef.current) return false
       if (requestGeneration === assistantConversationRequestGenerationRef.current) setSessionError(null)
       if (hasPendingConversation) {
         await prepareAssistant(intent, module, sourceSurface)
       } else {
         await (module === undefined ? prepareAssistant(intent) : prepareAssistant(intent, module))
       }
+      return true
     }
     const pending = hasPendingConversation ? assistantConversationQueueRef.current.then(run) : run()
     assistantConversationQueueRef.current = pending.catch(() => {})
     void pending
-      .then(() => {
+      .then((prepared) => {
+        if (!prepared) return
+        if (navigationEpoch !== navigationEpochRef.current) {
+          const currentSurfaceIntent = assistantSurfaceIntentRef.current
+          const restoreMode = currentSurfaceIntent.generation === assistantSurfaceIntentGeneration
+            ? 'closed'
+            : currentSurfaceIntent.mode
+          if (typeof setAssistantMode === 'function') setAssistantMode(restoreMode)
+          return
+        }
         if (requestGeneration === assistantConversationRequestGenerationRef.current) setSessionError(null)
         onReady()
       })
       .catch(() => {
-        if (requestGeneration === assistantConversationRequestGenerationRef.current) {
+        if (
+          navigationEpoch === navigationEpochRef.current
+          && requestGeneration === assistantConversationRequestGenerationRef.current
+        ) {
           setSessionError('新对话创建失败，请稍后重试。')
         }
       })
@@ -872,7 +1049,7 @@ export function InvestmentShell({
         assistantConversationPendingKeysRef.current.delete(key)
         if (assistantConversationPendingKeysRef.current.size === 0) setStartingSession(false)
       })
-  }, [conversationPrimary, prepareAssistant])
+  }, [conversationPrimary, prepareAssistant, setAssistantMode])
 
   const prepareAssistantWithoutReturn = useCallback((
     intent: AssistantIntent,
@@ -896,7 +1073,11 @@ export function InvestmentShell({
     startAssistantConversation(intent, undefined, () => {
       pendingResearchActivationRef.current = undefined
       assistantExitReasonRef.current = 'none'
-      updateResearchReturnTarget({ subject, restoreMode: 'docked' })
+      updateResearchReturnTarget({
+        subject,
+        restoreMode: 'docked',
+        ...(current.dockedWidth === undefined ? {} : { dockedWidth: current.dockedWidth }),
+      })
       updateResearchSurface({ ...current, suspendedByAssistant: true })
     })
   }, [startAssistantConversation, updateResearchReturnTarget, updateResearchSurface])
@@ -918,13 +1099,18 @@ export function InvestmentShell({
     const target = researchReturnTargetRef.current
     if (target !== undefined) {
       updateResearchReturnTarget(undefined)
-      queueResearchAfterAssistantClose({ subject: target.subject, mode: target.restoreMode }, 'direct-close')
+      queueResearchAfterAssistantClose({
+        subject: target.subject,
+        mode: target.restoreMode,
+        ...(target.dockedWidth === undefined ? {} : { dockedWidth: target.dockedWidth }),
+      }, 'direct-close')
       return
     }
     pendingResearchActivationRef.current = undefined
     assistantExitReasonRef.current = 'none'
+    recordAssistantSurfaceIntent('closed')
     setAssistantMode('closed')
-  }, [queueResearchAfterAssistantClose, setAssistantMode, updateResearchReturnTarget])
+  }, [queueResearchAfterAssistantClose, recordAssistantSurfaceIntent, setAssistantMode, updateResearchReturnTarget])
 
   const returnToResearch = useCallback((): void => {
     const target = researchReturnTargetRef.current
@@ -933,6 +1119,7 @@ export function InvestmentShell({
     queueResearchAfterAssistantClose({
       subject: target.subject,
       mode: target.restoreMode,
+      ...(target.dockedWidth === undefined ? {} : { dockedWidth: target.dockedWidth }),
     }, 'return-to-research')
   }, [queueResearchAfterAssistantClose, updateResearchReturnTarget])
 
@@ -946,8 +1133,9 @@ export function InvestmentShell({
         updateResearchSurface({ ...current, mode: 'closed', suspendedByAssistant: true })
       }
     }
+    recordAssistantSurfaceIntent(nextMode)
     setAssistantMode(nextMode)
-  }, [setAssistantMode, updateResearchReturnTarget, updateResearchSurface])
+  }, [recordAssistantSurfaceIntent, setAssistantMode, updateResearchReturnTarget, updateResearchSurface])
 
   useEffect(() => {
     const surface: LocalTelemetrySurface = snapshot.route === 'stock-detail'
@@ -1025,6 +1213,7 @@ export function InvestmentShell({
           subject: pending.subject,
           mode: pending.mode,
           suspendedByAssistant: false,
+          ...(pending.dockedWidth === undefined ? {} : { dockedWidth: pending.dockedWidth }),
         })
         return
       }
@@ -1035,13 +1224,31 @@ export function InvestmentShell({
           subject: target.subject,
           mode: target.restoreMode,
           suspendedByAssistant: false,
+          ...(target.dockedWidth === undefined ? {} : { dockedWidth: target.dockedWidth }),
         })
       } else if (reason === 'none') {
         window.requestAnimationFrame(() => { assistantTriggerRef.current?.focus() })
       }
     }
   }, [assistantCloseRequestGeneration, assistantMode, updateResearchReturnTarget, updateResearchSurface])
+  useLayoutEffect(() => {
+    const nextModule = navigationModule(snapshot.route)
+    const previousModule = previousNavigationModuleRef.current
+    previousNavigationModuleRef.current = nextModule
+    if (previousModule === nextModule) return
+
+    navigationEpochRef.current += 1
+    recordAssistantSurfaceIntent('closed')
+    pendingResearchActivationRef.current = undefined
+    assistantExitReasonRef.current = 'direct-close'
+    assistantCloseRequestGenerationRef.current += 1
+    updateResearchReturnTarget(undefined)
+    updateResearchSurface(INITIAL_RESEARCH_SURFACE)
+    if (previousModule === 'opportunity' && typeof setModuleDraft === 'function') setModuleDraft('watchQuery', '')
+    if (assistantModeRef.current !== 'closed' && typeof setAssistantMode === 'function') setAssistantMode('closed')
+  }, [recordAssistantSurfaceIntent, setAssistantMode, setModuleDraft, snapshot.route, updateResearchReturnTarget, updateResearchSurface])
   useEffect(() => () => {
+    navigationEpochRef.current += 1
     pendingResearchActivationRef.current = undefined
     assistantExitReasonRef.current = 'none'
     assistantCloseRequestGenerationRef.current = 0
@@ -1049,14 +1256,14 @@ export function InvestmentShell({
   useEffect(() => {
     const workbench = workbenchRef.current
     if (workbench === null) return
-    if (conversationPrimary || assistantMode === 'expanded') {
+    if (conversationPrimary || assistantMode === 'expanded' || opportunityAssistantOverlay) {
       workbench.setAttribute('inert', '')
       workbench.setAttribute('aria-hidden', 'true')
     } else {
       workbench.removeAttribute('inert')
       workbench.removeAttribute('aria-hidden')
     }
-  }, [assistantMode, conversationPrimary])
+  }, [assistantMode, conversationPrimary, opportunityAssistantOverlay])
   useEffect(() => {
     if (!conversationPrimary) setMaterialsOpen(false)
   }, [conversationPrimary])
@@ -1090,32 +1297,52 @@ export function InvestmentShell({
   }, [materialsOpen])
   useEffect(() => {
     if (assistantMode === 'closed') return
+    const assistantIsModal = assistantMode === 'expanded' || opportunityAssistantOverlay
+    const focusableAssistantControls = (): HTMLElement[] => {
+      const panel = document.getElementById('investment-assistant-panel')
+      const conversation = document.querySelector<HTMLElement>('[data-conversation-scroll]')
+      const selector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      return [
+        ...(panel?.querySelectorAll<HTMLElement>(selector) ?? []),
+        ...(conversation?.querySelectorAll<HTMLElement>(selector) ?? []),
+      ].filter(element => element.offsetParent !== null)
+    }
+    const focusFrame = assistantIsModal && !snapshot.historyOpen && !snapshot.reportsOpen
+      ? window.requestAnimationFrame(() => {
+        const focusable = focusableAssistantControls()
+        const activeElement = document.activeElement
+        if (focusable.length === 0 || focusable.some(element => element.contains(activeElement))) return
+        focusable[0]?.focus({ preventScroll: true })
+      })
+      : undefined
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented || snapshot.historyOpen || snapshot.reportsOpen) return
       if (event.key === 'Escape') {
         event.preventDefault()
         event.stopPropagation()
-        if (assistantMode === 'expanded') setAssistantMode('docked')
+        if (assistantMode === 'expanded') changeAssistantMode('docked')
         else closeAssistant()
         return
       }
-      if (event.key !== 'Tab' || assistantMode !== 'expanded') return
-      const panel = document.getElementById('investment-assistant-panel')
-      const conversation = document.querySelector<HTMLElement>('[data-conversation-scroll]')
-      const selector = 'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      const focusable = [
-        ...(panel?.querySelectorAll<HTMLElement>(selector) ?? []),
-        ...(conversation?.querySelectorAll<HTMLElement>(selector) ?? []),
-      ].filter(element => element.offsetParent !== null)
+      if (event.key !== 'Tab' || !assistantIsModal) return
+      const focusable = focusableAssistantControls()
       if (focusable.length === 0) return
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+      const activeElement = document.activeElement
+      if (!focusable.some(element => element.contains(activeElement))) {
+        event.preventDefault()
+        if (event.shiftKey) last?.focus()
+        else first?.focus()
+      } else if (event.shiftKey && activeElement === first) { event.preventDefault(); last?.focus() }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
     }
     window.addEventListener('keydown', handleKeyDown)
-    return () => { window.removeEventListener('keydown', handleKeyDown) }
-  }, [assistantMode, closeAssistant, setAssistantMode, snapshot.historyOpen, snapshot.reportsOpen])
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      if (focusFrame !== undefined) window.cancelAnimationFrame(focusFrame)
+    }
+  }, [assistantMode, changeAssistantMode, closeAssistant, opportunityAssistantOverlay, snapshot.historyOpen, snapshot.reportsOpen])
 
   const closeHistory = useCallback(() => {
     if (historyClosing) return
@@ -1143,6 +1370,17 @@ export function InvestmentShell({
           && researchSurface.mode === 'minimized'
           ? 'research-minimized'
           : 'default'
+
+  const opportunityResearchActive = snapshot.route === 'opportunity'
+    && assistantMode === 'closed'
+    && !researchSurface.suspendedByAssistant
+    && researchSurface.subject !== undefined
+    && (researchSurface.mode === 'docked' || researchSurface.mode === 'expanded')
+  const opportunitySurfaceLayout: 'closed' | 'docked' | 'overlay' = assistantMode !== 'closed'
+    ? assistantMode === 'expanded' || opportunityAssistantOverlay ? 'overlay' : 'docked'
+    : !opportunityResearchActive
+      ? 'closed'
+      : researchSurface.mode === 'expanded' || compactResearchViewport ? 'overlay' : 'docked'
 
   const switchSession = useCallback(async (sessionId: SessionId): Promise<void> => {
     if (switchingSessionId !== undefined) return
@@ -1238,38 +1476,51 @@ export function InvestmentShell({
         {analysisVisited && (
           <div className={css.routeSurface} hidden={!isAnalysisRoute}>
             <SmartAnalysisPage
-              requestData={requestData}
-              stockQuery={snapshot.analysisQuery}
-              backtestQuery={snapshot.backtestQuery}
-              onStockQuery={(value) => { setModuleDraft('analysisQuery', value) }}
-              onBacktestQuery={(value) => { setModuleDraft('backtestQuery', value) }}
               onOpenReports={() => { setReports(true) }}
               onOpenAssistant={prepareAssistantWithoutReturn}
-              onOpenPortfolio={() => { navigate('portfolio') }}
             />
           </div>
         )}
-        {snapshot.route === 'dashboard' && dashboardView === 'workbench' && (
-          <ResearchWorkbenchPage
-            requestData={requestData}
-            navigate={navigate}
-            onAnalyze={prepareAssistantWithoutReturn}
-            onOpenPreferences={() => { setDashboardView('preferences') }}
-            onOpenReports={() => { setReports(true) }}
-            trackTelemetry={trackTelemetry}
-          />
-        )}
-        {snapshot.route === 'dashboard' && dashboardView === 'preferences' && (
-          <PreferenceReviewPage
-            requestData={requestData}
-            onBack={() => { setDashboardView('workbench') }}
-            backLabel="← 返回研究工作台"
-            trackTelemetry={trackTelemetry}
-          />
+        {snapshot.route === 'dashboard' && (
+          <div
+            className={css.dashboardViewTransition}
+            data-testid="dashboard-view-transition"
+            data-view={dashboardView}
+          >
+            <div className={css.dashboardViewPane} data-dashboard-view="workbench" hidden={dashboardView !== 'workbench'}>
+              <ResearchWorkbenchPage
+                requestData={requestData}
+                navigate={navigate}
+                onAnalyze={prepareAssistantWithoutReturn}
+                onOpenPreferences={() => {
+                  setPreferencesVisited(true)
+                  setDashboardView('preferences')
+                }}
+                onOpenReports={() => { setReports(true) }}
+                trackTelemetry={trackTelemetry}
+              />
+            </div>
+            {preferencesVisited && (
+              <div className={css.dashboardViewPane} data-dashboard-view="preferences" hidden={dashboardView !== 'preferences'}>
+                <PreferenceReviewPage
+                  requestData={requestData}
+                  onBack={() => { setDashboardView('workbench') }}
+                  backLabel="← 返回研究工作台"
+                  trackTelemetry={trackTelemetry}
+                />
+              </div>
+            )}
+          </div>
         )}
         {snapshot.route === 'opportunity' && (
           <OpportunityPage
             requestData={requestData}
+            assistantLayout={opportunitySurfaceLayout}
+            {...(opportunitySurfaceLayout === 'docked'
+              && assistantMode === 'closed'
+              && researchSurface.dockedWidth !== undefined
+              ? { rightSurfaceWidth: researchSurface.dockedWidth }
+              : {})}
             initialQuery={snapshot.watchQuery}
             activeCode={researchSurface.mode === 'closed' ? '' : researchSurface.subject?.code ?? ''}
             researchTriggerRef={researchTriggerRef}
@@ -1331,13 +1582,13 @@ export function InvestmentShell({
         )}
       </main>
 
-      {!conversationPrimary && researchSurface.subject !== undefined && (
+      {snapshot.route === 'opportunity' && researchSurface.subject !== undefined && (
         <ResearchFloatingSurface
-          key={researchSurface.subject.code}
           mode={researchSurface.suspendedByAssistant || assistantMode !== 'closed'
             ? 'closed'
             : researchSurface.mode}
           subject={researchSurface.subject}
+          {...(researchSurface.dockedWidth === undefined ? {} : { dockedWidth: researchSurface.dockedWidth })}
           triggerRef={researchTriggerRef}
           backgroundRef={workbenchRef}
           scrollContainerRef={opportunityScrollRef}
@@ -1377,12 +1628,13 @@ export function InvestmentShell({
       {!conversationPrimary && (
         <AssistantFloatingSurface
           mode={assistantMode}
-          module={assistantModule}
+          module={isAnalysisRoute ? 'general' : assistantModule}
           starting={startingSession}
           historyOpen={snapshot.historyOpen}
           launcherRef={assistantTriggerRef}
           historyRef={historyTriggerRef}
           launcherPlacement={assistantLauncherPlacement}
+          modalDocked={opportunityAssistantOverlay}
           onMode={changeAssistantMode}
           onClose={closeAssistant}
           {...(researchReturnTarget === undefined ? {} : { onReturnToResearch: returnToResearch })}
@@ -1618,6 +1870,8 @@ function HistoryDrawer({
 
 export interface OpportunityPageProps {
   readonly requestData: RequestData
+  readonly assistantLayout?: 'closed' | 'docked' | 'overlay'
+  readonly rightSurfaceWidth?: number
   readonly initialQuery: string
   readonly activeCode: string
   readonly onOpenResearch: (subject: ResearchSubject) => void
@@ -1660,6 +1914,8 @@ function researchSubject(row: Record<string, unknown>): ResearchSubject | undefi
 /** Opportunity workbench that emits explicit research intents without owning selection. */
 export function OpportunityPage({
   requestData,
+  assistantLayout = 'closed',
+  rightSurfaceWidth,
   initialQuery,
   activeCode,
   onOpenResearch,
@@ -1670,6 +1926,9 @@ export function OpportunityPage({
 }: OpportunityPageProps) {
   const [kind, setKind] = useState('gainers')
   const [nonce, setNonce] = useState(0)
+  const [density, setDensity] = useState<'comfortable' | 'compact'>('comfortable')
+  const workspaceRef = useRef<HTMLDivElement>(null)
+  const newsRailRef = useRef<HTMLElement>(null)
   const scan = useRequestResource(requestData)
   const indices = useRequestResource(requestData)
   const openedInitialCodesRef = useRef(new Set<string>())
@@ -1690,6 +1949,26 @@ export function OpportunityPage({
     indices.run({ operation: 'market-watch.indices' })
   }, [indices.run, nonce])
 
+  useEffect(() => {
+    const workspace = workspaceRef.current
+    const ownerWindow = workspace?.ownerDocument.defaultView
+    if (workspace === null || ownerWindow === null || ownerWindow === undefined
+      || typeof ownerWindow.ResizeObserver !== 'function') return
+    const observer = new ownerWindow.ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width
+      if (width !== undefined) setDensity(width < 1040 ? 'compact' : 'comfortable')
+    })
+    observer.observe(workspace)
+    return () => { observer.disconnect() }
+  }, [])
+
+  useEffect(() => {
+    const newsRail = newsRailRef.current
+    if (newsRail === null) return
+    if (assistantLayout === 'docked') newsRail.setAttribute('inert', '')
+    else newsRail.removeAttribute('inert')
+  }, [assistantLayout])
+
   const rows = useMemo(() => {
     const record = asRecord(scan.state.value)
     return [...records(record.items), ...records(record.limit_up), ...records(record.limit_down)]
@@ -1709,7 +1988,16 @@ export function OpportunityPage({
   const normalizedActiveCode = normalizedResearchCode(activeCode)
 
   return (
-    <div ref={pageScrollRef} className={css.pageScroll}>
+    <div
+      ref={pageScrollRef}
+      className={css.pageScroll}
+      data-testid="opportunity-root"
+      data-assistant-layout={assistantLayout}
+      data-density={density}
+      style={rightSurfaceWidth === undefined ? undefined : {
+        '--investment-right-surface-width': `min(${Math.round(rightSurfaceWidth)}px, 42vw)`,
+      } as CSSProperties}
+    >
       <PageHeader title="实时盯盘" description="通过大盘快照和实时扫描发现研究线索">
         <button
           type="button"
@@ -1756,7 +2044,7 @@ export function OpportunityPage({
         ))}
       </div>
       <ResourceProgress label="机会数据" resources={resources} />
-      <div className={css.opportunityWorkspace} role="region" aria-label="实时盯盘机会工作区">
+      <div ref={workspaceRef} className={css.opportunityWorkspace} role="region" aria-label="实时盯盘机会工作区">
         <div className={css.opportunityScanColumn}>
           <p className={css.opportunityHint}>
             <strong>选择证券查看研究详情</strong>
@@ -1819,8 +2107,8 @@ export function OpportunityPage({
                         </span>
                         <dl>
                           <div><dt>现价</dt><dd>{money(row.price)}</dd></div>
-                          <div><dt>量比</dt><dd>{number(row.volume_ratio)?.toFixed(2) ?? '—'}</dd></div>
-                          <div><dt>成交额</dt><dd>{amountYi === undefined ? '—' : `${amountYi.toFixed(2)} 亿`}</dd></div>
+                          <div data-priority="secondary"><dt>量比</dt><dd>{number(row.volume_ratio)?.toFixed(2) ?? '—'}</dd></div>
+                          <div data-priority="secondary"><dt>成交额</dt><dd>{amountYi === undefined ? '—' : `${amountYi.toFixed(2)} 亿`}</dd></div>
                         </dl>
                       </button>
                       <div className={css.stockCardActions}>
@@ -1842,7 +2130,13 @@ export function OpportunityPage({
             )}
           </section>
         </div>
-        <aside className={css.marketNewsRail} aria-label="市场资讯栏">
+        <aside
+          ref={newsRailRef}
+          className={css.marketNewsRail}
+          role="complementary"
+          aria-label="市场资讯栏"
+          aria-hidden={assistantLayout === 'docked' ? 'true' : undefined}
+        >
           <MarketNewsPanel requestData={requestData} refreshNonce={nonce} />
           <div ref={researchWidthAnchorRef} className={css.researchWidthAnchor} />
         </aside>

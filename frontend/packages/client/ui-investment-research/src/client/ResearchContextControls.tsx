@@ -2,10 +2,13 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSy
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import {
   InvestmentAssistantModuleSelect,
   type InvestmentAssistantModuleInjected,
+  InvestmentPromptTemplateSelect,
+  type InvestmentPromptTemplateInjected,
 } from './InvestmentShell.tsx'
 import { asRecord, records, text } from './data.ts'
 import {
@@ -16,7 +19,8 @@ import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
-export interface InvestmentComposerContextInjected extends InvestmentAssistantModuleInjected {
+export interface InvestmentComposerContextInjected
+  extends InvestmentAssistantModuleInjected, InvestmentPromptTemplateInjected {
   researchChatContext: ResearchChatContextController
   requestData: RequestData
 }
@@ -59,6 +63,9 @@ function containsSelectionSurface(
 /** Composer controls: Smart Analysis module plus an optional A-share or venue ETF target. */
 export function InvestmentComposerContextControls(props: InvestmentComposerContextProps) {
   const route = props.useInvestmentUi(snapshot => snapshot.route)
+  if (route === 'analysis' || route === 'assistant') {
+    return <InvestmentPromptTemplateSelect {...props} />
+  }
   if (route !== 'portfolio') return <InvestmentAssistantModuleSelect {...props} />
   return <MyResearchComposerContextControls {...props} />
 }
@@ -238,7 +245,11 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
   return (
     <div ref={controlsRef} className={css.researchContextControls} data-saving={entry.phase === 'saving' || undefined}>
       <div className={css.researchContextControl}>
-        <InvestmentAssistantModuleSelect {...props} catalog="analysis-modules" visibleWhenClosed />
+        <InvestmentPromptTemplateSelect
+          {...props}
+          appearance="context"
+          visibleWhenClosed
+        />
       </div>
       <div className={css.researchContextControl}>
         <button
@@ -256,8 +267,11 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
             setOpen(current => !current)
           }}
         >
-          <span aria-hidden="true">⌖</span>
+          <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">⌖</span>
           <strong>{instrument?.name ?? '选标的'}</strong>
+          <i className={open ? css.assistantModuleChevronOpen : undefined} aria-hidden="true">
+            <IconChevronDownOutline14 />
+          </i>
         </button>
         {open && typeof document !== 'undefined' && createPortal((
           <div
@@ -353,10 +367,10 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
         <span className={css.researchContextError} data-compact="true" role="alert" aria-label="投研上下文暂不可用">
           <button
             type="button"
-            aria-label="重试读取投研上下文"
+            aria-label="上下文不可用，重试读取"
             title="投研上下文暂不可用，点击重试"
             onClick={() => { void researchChatContext.load(sessionId, { refresh: true }).catch(() => {}) }}
-          ><span aria-hidden="true">!</span></button>
+          >上下文不可用 · 重试</button>
         </span>
       )}
       {entry.phase === 'error' && entry.errorAction !== 'load' && (

@@ -12,10 +12,15 @@ import {
   InvestmentWelcome,
   InvestmentShell,
   InvestmentSidebar,
+  assistantModulePrompt,
   type InvestmentSidebarInjected,
   type InvestmentShellInjected,
 } from '../src/client/InvestmentShell.tsx'
-import { InvestmentComposerContextControls } from '../src/client/ResearchContextControls.tsx'
+import {
+  InvestmentComposerContextControls,
+  type InvestmentComposerContextInjected,
+} from '../src/client/ResearchContextControls.tsx'
+import { analysisModule } from '../src/client/analysis-modules.ts'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
 afterEach(() => {
@@ -131,11 +136,16 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
   const layout = { closeDetails: vi.fn() }
   const setDraft = vi.fn()
   const draftWrites = vi.fn<(sessionId: string, prompt: string) => void>()
+  const drafts = new Map<string, string>()
   const conversation = {
     input: {
       for: vi.fn((scope: { sessionId: string }) => ({
-        setDraft: (prompt: string) => { setDraft(prompt); draftWrites(scope.sessionId, prompt) },
-        state: { getSnapshot: () => ({ draft: '' }) },
+        setDraft: (prompt: string) => {
+          drafts.set(scope.sessionId, prompt)
+          setDraft(prompt)
+          draftWrites(scope.sessionId, prompt)
+        },
+        state: { getSnapshot: () => ({ draft: drafts.get(scope.sessionId) ?? '' }) },
       })),
     },
   }
@@ -154,7 +164,7 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
   ctx.provide('investmentResearchRuntimeClient', { requestData } as never)
   return {
     ctx, slots, sessions, workspaces, layout, theme, setTheme, setDraft, draftWrites,
-    requestData, rename, listSnapshot, sessionFace,
+    drafts, requestData, rename, listSnapshot, sessionFace,
   }
 }
 
@@ -448,7 +458,7 @@ describe('ui-investment-research apply', () => {
     })
   })
 
-  it('keeps stock analysis, historical backtest and global search inputs independent', () => {
+  it('keeps global search independent from analysis capability hand-off', () => {
     const setModuleDraft = vi.fn()
     const prepareAssistant = vi.fn()
     const requestData = vi.fn(async () => ({ items: [] }))
@@ -479,23 +489,21 @@ describe('ui-investment-research apply', () => {
     expect(view.queryByText('预览版')).toBeNull()
 
     const globalSearch = view.getByRole('combobox', { name: '搜索 A 股或场内 ETF 代码或名称' })
-    const analysisInput = view.getByRole('textbox', { name: '个股分析股票代码' })
-    const backtestInput = view.getByRole('textbox', { name: '历史回测股票代码' })
     fireEvent.change(globalSearch, { target: { value: '贵州茅台' } })
-    expect((analysisInput as HTMLInputElement).value).toBe('')
-    expect((backtestInput as HTMLInputElement).value).toBe('')
-    fireEvent.change(analysisInput, { target: { value: '600519' } })
-    fireEvent.change(backtestInput, { target: { value: '000001' } })
     expect((globalSearch as HTMLInputElement).value).toBe('贵州茅台')
-    expect(setModuleDraft).toHaveBeenCalledWith('analysisQuery', '600519')
-    expect(setModuleDraft).toHaveBeenCalledWith('backtestQuery', '000001')
+    expect(setModuleDraft).not.toHaveBeenCalled()
+    expect(view.queryByRole('textbox', { name: '个股分析股票代码' })).toBeNull()
+    expect(view.queryByRole('textbox', { name: '历史回测股票代码' })).toBeNull()
+    expect(view.getByText('个股多智能体分析')).toBeTruthy()
+    expect(view.getByText('持仓风险分析')).toBeTruthy()
+    expect(view.getByText('历史决策回测')).toBeTruthy()
+    expect(view.getByText('市场简报')).toBeTruthy()
 
     fireEvent.click(view.getAllByRole('button', { name: '查看模块详情' })[0]!)
     expect(view.getByRole('dialog', { name: '个股多智能体分析' })).toBeTruthy()
     fireEvent.click(view.getByRole('button', { name: '用此模块打开 AI 助理' }))
     expect(prepareAssistant).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'prompt' }),
-      'stock',
+      expect.objectContaining({ kind: 'prompt', promptTemplateId: 'stock' }),
     )
   })
 
@@ -592,8 +600,104 @@ describe('ui-investment-research apply', () => {
     expect(b.setTheme).toHaveBeenLastCalledWith('light')
   })
 
+  it('智能分析模板选择器只切换当前草稿，不调用业务后端', async () => {
+    const b = await bench()
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+    const composer = (b.slots.entries('conversation.input.left')[0]!.inject as unknown as (() => InvestmentComposerContextInjected))()
+    const stock = analysisModule('stock')
+    const brief = analysisModule('brief')
+
+    await shell.prepareAssistant({
+      kind: 'prompt', prompt: stock.promptTemplate, promptTemplateId: stock.id,
+    })
+    expect(b.drafts.get('fresh')).toBe(stock.promptTemplate)
+    expect(composer.promptTemplates.snapshot('fresh').templateId).toBe('stock')
+    expect(shell.hooks.investmentUi.getSnapshot().assistantModule).toBe('general')
+    b.requestData.mockClear()
+
+    composer.selectPromptTemplate('fresh', brief.id, brief.promptTemplate)
+
+    expect(b.drafts.get('fresh')).toBe(brief.promptTemplate)
+    expect(composer.promptTemplates.snapshot('fresh').templateId).toBe('brief')
+    expect(shell.hooks.investmentUi.getSnapshot().assistantModule).toBe('general')
+
+    composer.selectPromptTemplate('fresh', 'general', '')
+
+    expect(b.drafts.get('fresh')).toBe('')
+    expect(composer.promptTemplates.snapshot('fresh').templateId).toBe('general')
+
+    b.drafts.set('fresh', '我手写的研究问题')
+    b.draftWrites.mockClear()
+    composer.selectPromptTemplate('fresh', stock.id, stock.promptTemplate)
+
+    expect(b.drafts.get('fresh')).toBe('我手写的研究问题')
+    expect(b.draftWrites).not.toHaveBeenCalled()
+    expect(composer.promptTemplates.snapshot('fresh').templateId).toBe('general')
+
+    composer.selectPromptTemplate('fresh', 'general', '')
+
+    expect(b.drafts.get('fresh')).toBe('我手写的研究问题')
+    expect(b.requestData).not.toHaveBeenCalled()
+  })
+
+  it('其他研究专家仍只在空白草稿首次填入，不采用模板切换语义', async () => {
+    const b = await bench()
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+    const composer = (b.slots.entries('conversation.input.left')[0]!.inject as unknown as (() => InvestmentComposerContextInjected))()
+
+    shell.setAssistantModule('stock')
+    expect(b.drafts.get('session')).toBe(assistantModulePrompt('stock'))
+    expect(composer.promptTemplates.snapshot('session').templateId).toBe('general')
+
+    shell.setAssistantModule('strategy')
+
+    expect(b.drafts.get('session')).toBe(assistantModulePrompt('stock'))
+    expect(shell.hooks.investmentUi.getSnapshot().assistantModule).toBe('strategy')
+
+    composer.selectPromptTemplate('session', 'general', '')
+
+    expect(b.drafts.get('session')).toBe('')
+    expect(composer.promptTemplates.snapshot('session').templateId).toBe('general')
+    expect(shell.hooks.investmentUi.getSnapshot().assistantModule).toBe('strategy')
+  })
+
+  it('不同会话分别保存智能分析模板选择，且不改变旧研究专家状态', async () => {
+    const b = await bench()
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+    const composer = (b.slots.entries('conversation.input.left')[0]!.inject as unknown as (() => InvestmentComposerContextInjected))()
+    const stock = analysisModule('stock')
+    const brief = analysisModule('brief')
+
+    shell.setAssistantModule('strategy')
+    b.drafts.set('session-a', '')
+    b.drafts.set('session-b', '')
+    composer.selectPromptTemplate('session-a', stock.id, stock.promptTemplate)
+    composer.selectPromptTemplate('session-b', brief.id, brief.promptTemplate)
+
+    expect(composer.promptTemplates.snapshot('session-a')).toMatchObject({
+      templateId: 'stock', automaticPrompt: stock.promptTemplate,
+    })
+    expect(composer.promptTemplates.snapshot('session-b')).toMatchObject({
+      templateId: 'brief', automaticPrompt: brief.promptTemplate,
+    })
+    expect(b.drafts.get('session-a')).toBe(stock.promptTemplate)
+    expect(b.drafts.get('session-b')).toBe(brief.promptTemplate)
+    expect(shell.hooks.investmentUi.getSnapshot().assistantModule).toBe('strategy')
+  })
+
   it('为“我的投研”和浮动 AI 保留独立会话槽，首次进入主对话为空', async () => {
     const b = await bench()
+    const freshIds = ['primary-session', 'opportunity-session']
+    b.workspaces.startFreshSession.mockImplementation(async () => {
+      const sessionId = freshIds.shift()
+      if (sessionId === undefined) throw new Error('unexpected fresh session')
+      b.listSnapshot.current = sessionId
+      b.listSnapshot.ids.push(sessionId)
+      return sessionId
+    })
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     const sidebar = (b.slots.entries('sidebar.workspaces')[0]!.inject as unknown as () => InvestmentSidebarInjected)()
 
@@ -602,24 +706,221 @@ describe('ui-investment-research apply', () => {
       expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('portfolio')
     })
     expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
-    expect(b.draftWrites).toHaveBeenCalledWith('fresh', '')
+    expect(b.draftWrites).toHaveBeenCalledWith('primary-session', '')
     expect(b.sessions.open).not.toHaveBeenCalled()
 
     sidebar.navigate('opportunity')
     await waitFor(() => {
       expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('opportunity')
     })
-    expect(b.sessions.open).toHaveBeenLastCalledWith('session')
+    expect(b.listSnapshot.current).toBe('opportunity-session')
+    expect(b.draftWrites).toHaveBeenCalledWith('opportunity-session', '')
 
     sidebar.navigate('portfolio')
     await waitFor(() => {
       expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('portfolio')
     })
-    expect(b.sessions.open).toHaveBeenLastCalledWith('fresh')
-    expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
+    expect(b.sessions.open).toHaveBeenLastCalledWith('primary-session')
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
   })
 
-  it('主对话创建期间返回工作台时恢复浮动会话，不让迟到结果串联会话', async () => {
+  it('浮动 AI 跨左侧模块后使用新的空白会话，同模块详情跳转不新建', async () => {
+    const b = await bench()
+    const freshIds = ['opportunity-session', 'tasks-session']
+    b.workspaces.startFreshSession.mockImplementation(async () => {
+      const sessionId = freshIds.shift()
+      if (sessionId === undefined) throw new Error('unexpected fresh session')
+      b.listSnapshot.current = sessionId
+      b.listSnapshot.ids.push(sessionId)
+      return sessionId
+    })
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const sidebar = (b.slots.entries('sidebar.workspaces')[0]!.inject as unknown as () => InvestmentSidebarInjected)()
+    const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+
+    sidebar.navigate('opportunity')
+    await waitFor(() => {
+      expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('opportunity')
+    })
+    expect(b.listSnapshot.current).toBe('opportunity-session')
+    expect(b.drafts.get('opportunity-session')).toBe('')
+
+    b.drafts.set('opportunity-session', '不应带到下一模块的旧提示词')
+    shell.setAssistantModule('stock')
+    shell.setAssistantMode('docked')
+    sidebar.navigate('stock-detail', { stockCode: '600519' })
+    await waitFor(() => {
+      expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('stock-detail')
+    })
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
+    expect(b.listSnapshot.current).toBe('opportunity-session')
+
+    sidebar.navigate('tasks')
+    await waitFor(() => {
+      expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('tasks')
+    })
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
+    expect(b.listSnapshot.current).toBe('tasks-session')
+    expect(b.drafts.get('tasks-session')).toBe('')
+    expect(sidebar.hooks.investmentUi.getSnapshot()).toMatchObject({
+      assistantMode: 'closed', assistantModule: 'general',
+    })
+  })
+
+  it('浮动会话创建未完成时的同模块详情导航复用同一次创建', async () => {
+    const b = await bench()
+    let resolveFloating: ((sessionId: string) => void) | undefined
+    const floatingSession = new Promise<string>((resolve) => { resolveFloating = resolve })
+    b.workspaces.startFreshSession.mockImplementation(async () => {
+      const sessionId = await floatingSession
+      b.listSnapshot.current = sessionId
+      b.listSnapshot.ids.push(sessionId)
+      return sessionId
+    })
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const sidebar = (b.slots.entries('sidebar.workspaces')[0]!.inject as unknown as () => InvestmentSidebarInjected)()
+    const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+
+    shell.setAssistantModule('stock')
+    shell.setAssistantMode('docked')
+    sidebar.navigate('opportunity')
+
+    expect(sidebar.hooks.investmentUi.getSnapshot()).toMatchObject({
+      route: 'dashboard', assistantMode: 'closed', assistantModule: 'general',
+    })
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
+
+    sidebar.navigate('stock-detail', { stockCode: '600519' })
+    resolveFloating?.('opportunity-session')
+
+    await waitFor(() => {
+      expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('stock-detail')
+    })
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
+    expect(b.listSnapshot.current).toBe('opportunity-session')
+    expect(b.drafts.get('opportunity-session')).toBe('')
+  })
+
+  it.each(['reject', 'undefined', 'scope'] as const)(
+    '浮动会话创建发生 %s 故障时仍完成导航，并在再次打开时重试',
+    async (failureMode) => {
+      const b = await bench()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      b.workspaces.startFreshSession
+        .mockImplementationOnce(async () => {
+          if (failureMode === 'reject') throw new Error('fresh session failed')
+          if (failureMode === 'undefined') return undefined as never
+          b.listSnapshot.current = 'broken-session'
+          b.listSnapshot.ids.push('broken-session')
+          return 'broken-session'
+        })
+        .mockImplementationOnce(async () => {
+          b.listSnapshot.current = 'retry-session'
+          b.listSnapshot.ids.push('retry-session')
+          return 'retry-session'
+        })
+      if (failureMode === 'scope') {
+        b.sessions.scope.mockImplementation((sessionId: string) => (
+          sessionId === 'broken-session' ? undefined as never : { sessionId }
+        ))
+      }
+      await b.ctx.plugin({ inject: [...inject], apply }).await()
+      const sidebar = (b.slots.entries('sidebar.workspaces')[0]!.inject as unknown as () => InvestmentSidebarInjected)()
+      const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+
+      sidebar.navigate('tasks')
+      await waitFor(() => {
+        expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('tasks')
+      })
+      expect(b.listSnapshot.current).toBe('session')
+      expect(sidebar.hooks.investmentUi.getSnapshot()).toMatchObject({
+        assistantMode: 'closed', assistantModule: 'general',
+      })
+
+      shell.setAssistantMode('docked')
+      await waitFor(() => {
+        expect(sidebar.hooks.investmentUi.getSnapshot().assistantMode).toBe('docked')
+        expect(b.listSnapshot.current).toBe('retry-session')
+      })
+      expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
+      expect(b.drafts.get('retry-session')).toBe('')
+    },
+  )
+
+  it('浮动重试晚于主会话完成时恢复主会话且不误开浮窗', async () => {
+    const b = await bench()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let resolveFloating: ((sessionId: string) => void) | undefined
+    let resolvePrimary: ((sessionId: string) => void) | undefined
+    const floatingSession = new Promise<string>((resolve) => { resolveFloating = resolve })
+    const primarySession = new Promise<string>((resolve) => { resolvePrimary = resolve })
+    let freshCall = 0
+    b.workspaces.startFreshSession.mockImplementation(async () => {
+      freshCall += 1
+      if (freshCall === 1) throw new Error('initial floating reset failed')
+      const sessionId = await (freshCall === 2 ? floatingSession : primarySession)
+      b.listSnapshot.current = sessionId
+      b.listSnapshot.ids.push(sessionId)
+      return sessionId
+    })
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const sidebar = (b.slots.entries('sidebar.workspaces')[0]!.inject as unknown as () => InvestmentSidebarInjected)()
+    const shell = (b.slots.entries('shell.overlay')[0]!.inject as unknown as () => InvestmentShellInjected)()
+
+    sidebar.navigate('tasks')
+    await waitFor(() => { expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('tasks') })
+
+    shell.setAssistantMode('docked')
+    sidebar.navigate('portfolio')
+    resolvePrimary?.('primary-session')
+    await waitFor(() => {
+      expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('portfolio')
+      expect(b.listSnapshot.current).toBe('primary-session')
+    })
+
+    resolveFloating?.('floating-session')
+    await waitFor(() => { expect(b.drafts.get('floating-session')).toBe('') })
+    expect(b.listSnapshot.current).toBe('primary-session')
+    expect(sidebar.hooks.investmentUi.getSnapshot().assistantMode).toBe('closed')
+    expect(b.sessions.open).toHaveBeenLastCalledWith('primary-session')
+  })
+
+  it('主会话仍在创建时返回当前浮动模块且随后失败不误建新会话', async () => {
+    const b = await bench()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let rejectPrimary: ((reason: Error) => void) | undefined
+    const primarySession = new Promise<string>((_resolve, reject) => { rejectPrimary = reject })
+    let freshCall = 0
+    b.workspaces.startFreshSession.mockImplementation(async () => {
+      freshCall += 1
+      if (freshCall === 2) return primarySession
+      if (freshCall > 2) throw new Error('unexpected floating reset')
+      b.listSnapshot.current = 'tasks-session'
+      b.listSnapshot.ids.push('tasks-session')
+      return 'tasks-session'
+    })
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const sidebar = (b.slots.entries('sidebar.workspaces')[0]!.inject as unknown as () => InvestmentSidebarInjected)()
+
+    sidebar.navigate('tasks')
+    await waitFor(() => { expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('tasks') })
+    sidebar.navigate('portfolio')
+    sidebar.navigate('tasks')
+    rejectPrimary?.(new Error('primary session failed'))
+
+    await waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        'investment conversation surface switch failed:',
+        expect.objectContaining({ message: 'primary session failed' }),
+      )
+      expect(b.layout.closeDetails).toHaveBeenCalledTimes(2)
+      expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('tasks')
+      expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
+    })
+    expect(b.listSnapshot.current).toBe('tasks-session')
+  })
+
+  it('主对话创建期间返回工作台时仍创建新的空白浮动会话', async () => {
     const b = await bench()
     let resolvePrimary: ((sessionId: string) => void) | undefined
     const primarySession = new Promise<string>((resolve) => { resolvePrimary = resolve })
@@ -638,9 +939,10 @@ describe('ui-investment-research apply', () => {
 
     await waitFor(() => {
       expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('opportunity')
-      expect(b.listSnapshot.current).toBe('session')
+      expect(b.listSnapshot.current).toBe('fresh')
     })
-    expect(b.sessions.open).toHaveBeenCalledWith('session')
+    expect(b.drafts.get('fresh')).toBe('')
+    expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
   })
 
   it('主对话仍在创建时重复进入只复用一次创建任务', async () => {
@@ -666,9 +968,12 @@ describe('ui-investment-research apply', () => {
     })
   })
 
-  it('浮动表面的新建与历史会话会更新槽位，往返后不恢复旧会话', async () => {
+  it('离开浮动模块后再次进入总是新建空白会话，不恢复旧新建或历史', async () => {
     const b = await bench()
-    const freshIds = ['primary-session', 'floating-new-session']
+    const freshIds = [
+      'primary-session', 'opportunity-session', 'floating-new-session',
+      'opportunity-return-session', 'opportunity-latest-session',
+    ]
     b.workspaces.startFreshSession.mockImplementation(async () => {
       const sessionId = freshIds.shift()
       if (sessionId === undefined) throw new Error('unexpected fresh session')
@@ -689,13 +994,15 @@ describe('ui-investment-research apply', () => {
     sidebar.navigate('portfolio')
     await waitFor(() => { expect(b.listSnapshot.current).toBe('primary-session') })
     sidebar.navigate('opportunity')
-    await waitFor(() => { expect(b.listSnapshot.current).toBe('floating-new-session') })
+    await waitFor(() => { expect(b.listSnapshot.current).toBe('opportunity-return-session') })
+    expect(b.drafts.get('opportunity-return-session')).toBe('')
 
     await shell.openSession('history-session' as never)
     sidebar.navigate('portfolio')
     await waitFor(() => { expect(b.listSnapshot.current).toBe('primary-session') })
     sidebar.navigate('opportunity')
-    await waitFor(() => { expect(b.listSnapshot.current).toBe('history-session') })
+    await waitFor(() => { expect(b.listSnapshot.current).toBe('opportunity-latest-session') })
+    expect(b.drafts.get('opportunity-latest-session')).toBe('')
   })
 
   it('历史会话打开失败时恢复原活动会话，不让宿主停留在失败目标', async () => {

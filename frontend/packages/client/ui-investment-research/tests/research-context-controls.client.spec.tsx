@@ -5,6 +5,8 @@ import { useState } from 'react'
 import type { ComponentProps } from 'react'
 import { InvestmentComposerContextControls } from '../src/client/ResearchContextControls.tsx'
 import { ResearchChatContextController } from '../src/client/research-chat-context.ts'
+import { AnalysisPromptTemplateController } from '../src/client/analysis-prompt-templates.ts'
+import { analysisModule, type AnalysisPromptTemplateId } from '../src/client/analysis-modules.ts'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
 afterEach(() => {
@@ -29,10 +31,13 @@ function deferred<T>() {
 
 function renderControls(requestData: ReturnType<typeof vi.fn>, overrides: Partial<InvestmentUiSnapshot> = {}) {
   const controller = new ResearchChatContextController(requestData as never)
+  const promptTemplates = new AnalysisPromptTemplateController()
   const snapshot = { ...UI, ...overrides }
   const props = {
     useInvestmentUi: ((selector: (value: InvestmentUiSnapshot) => unknown) => selector(snapshot)) as never,
     setAssistantModule: () => {},
+    promptTemplates,
+    selectPromptTemplate: () => {},
     researchChatContext: controller,
     requestData: requestData as never,
     session: { sessionId: 'session-a', running: false } as never,
@@ -41,18 +46,37 @@ function renderControls(requestData: ReturnType<typeof vi.fn>, overrides: Partia
   return { ...render(<InvestmentComposerContextControls {...props} />), controller }
 }
 
-function renderReactiveControls(requestData: ReturnType<typeof vi.fn>) {
+function renderReactiveControls(
+  requestData: ReturnType<typeof vi.fn>,
+  overrides: Partial<InvestmentUiSnapshot> = {},
+  promptTemplateId: AnalysisPromptTemplateId = 'general',
+) {
   const controller = new ResearchChatContextController(requestData as never)
   const onModuleSelected = vi.fn()
+  const onTemplateSelected = vi.fn()
+  const promptTemplates = new AnalysisPromptTemplateController()
+  const initialPrompt = promptTemplateId === 'general'
+    ? undefined
+    : analysisModule(promptTemplateId).promptTemplate
+  promptTemplates.set('session-a', promptTemplateId, initialPrompt)
 
   function Harness() {
-    const [snapshot, setSnapshot] = useState(UI)
+    const [snapshot, setSnapshot] = useState({ ...UI, ...overrides })
     const useInvestmentUi = <T,>(selector: (value: InvestmentUiSnapshot) => T): T => selector(snapshot)
     const props = {
       useInvestmentUi,
-      setAssistantModule: (assistantModule: Parameters<typeof onModuleSelected>[0], promptOverride: string | undefined) => {
-        onModuleSelected(assistantModule, promptOverride)
+      setAssistantModule: (assistantModule: InvestmentUiSnapshot['assistantModule']) => {
+        onModuleSelected(assistantModule)
         setSnapshot(current => ({ ...current, assistantModule }))
+      },
+      promptTemplates,
+      selectPromptTemplate: (
+        sessionId: string,
+        nextTemplateId: AnalysisPromptTemplateId,
+        promptTemplate: string,
+      ) => {
+        onTemplateSelected(sessionId, nextTemplateId, promptTemplate)
+        promptTemplates.set(sessionId, nextTemplateId, promptTemplate || undefined)
       },
       researchChatContext: controller,
       requestData: requestData as never,
@@ -62,33 +86,34 @@ function renderReactiveControls(requestData: ReturnType<typeof vi.fn>) {
     return <InvestmentComposerContextControls {...props} />
   }
 
-  return { ...render(<Harness />), onModuleSelected }
+  return { ...render(<Harness />), onModuleSelected, onTemplateSelected }
 }
 
 describe('investment composer research context controls', () => {
-  it('我的投研使用智能分析模块和可选标的，不再选择策略池策略', async () => {
+  it('我的投研保留智能分析提示词模板，点击模板后同步显示当前模板', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.research-chat-context') return { exists: false, context: null }
       throw new Error(`unexpected operation ${request.operation}`)
     })
     const view = renderReactiveControls(requestData)
 
-    const moduleTrigger = screen.getByRole('button', { name: '研究模块，当前：未选择' })
-    expect(within(moduleTrigger).getByText('选模块')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '标的，当前：未选择' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /策略，当前/u })).toBeNull()
-
+    const moduleTrigger = screen.getByRole('button', { name: '提示词模板，当前：普通对话' })
+    const instrumentTrigger = screen.getByRole('button', { name: '标的，当前：未选择' })
+    expect(within(moduleTrigger).getByText('普通对话')).toBeTruthy()
+    expect(moduleTrigger.className).toContain('researchContextTrigger')
+    expect(moduleTrigger.querySelector('strong')?.textContent).toBe('普通对话')
+    expect(instrumentTrigger.querySelector('strong')?.textContent).toBe('选标的')
+    expect(moduleTrigger.querySelector('[data-context-control-icon]')).toBeTruthy()
+    expect(instrumentTrigger.querySelector('[data-context-control-icon]')).toBeTruthy()
+    expect(moduleTrigger.querySelector('i')).toBeTruthy()
+    expect(instrumentTrigger.querySelector('i')).toBeTruthy()
     fireEvent.click(moduleTrigger)
-    for (const label of ['个股多智能体分析', '持仓风险分析', '历史决策回测', '市场简报']) {
-      expect(screen.getByRole('menuitem', { name: label })).toBeTruthy()
-    }
-    expect(screen.getByRole('menuitem', { name: '不指定模块' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('menuitem', { name: '市场简报' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '个股多智能体分析' }))
 
-    expect(screen.getByRole('button', { name: '研究模块，当前：市场简报' })).toBeTruthy()
-    expect(view.onModuleSelected).toHaveBeenCalledWith(
-      'watch',
-      expect.stringContaining('市场简报专家'),
+    expect(screen.getByRole('button', { name: '提示词模板，当前：个股多智能体分析' })).toBeTruthy()
+    expect(view.onTemplateSelected).toHaveBeenCalledWith(
+      'session-a', 'stock',
+      expect.stringContaining('个股研究专家'),
     )
   })
 
@@ -254,12 +279,81 @@ describe('investment composer research context controls', () => {
     expect(saveAttempts).toBe(2)
   })
 
-  it('我的投研之外仍保留研究专家选择器', () => {
+  it('智能分析浮窗与我的投研使用同一提示词模板选择器', () => {
     const requestData = vi.fn(async () => ({ exists: false, context: null }))
-    renderControls(requestData, { route: 'framework', assistantMode: 'docked', assistantModule: 'strategy' })
+    const view = renderReactiveControls(requestData, {
+      route: 'analysis', assistantMode: 'docked', assistantModule: 'stock',
+    }, 'stock')
+
+    const trigger = screen.getByRole('button', { name: '提示词模板，当前：个股多智能体分析' })
+    expect(within(trigger).getByText('个股多智能体分析')).toBeTruthy()
+    expect(trigger.className).toContain('assistantModuleTrigger')
+    expect(trigger.className).not.toContain('researchContextTrigger')
+    fireEvent.click(trigger)
+    expect(screen.getByRole('menuitem', { name: '普通对话' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: '持仓风险分析' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('menuitem', { name: '市场简报' }))
+    expect(screen.getByRole('button', { name: '提示词模板，当前：市场简报' })).toBeTruthy()
+    expect(view.onTemplateSelected).toHaveBeenCalledWith(
+      'session-a', 'brief', expect.stringContaining('市场简报专家'),
+    )
+    expect(screen.queryByRole('button', { name: /标的，当前/u })).toBeNull()
+  })
+
+  it('切换会话时恢复各自的提示词模板，而不复用全局研究专家状态', () => {
+    const requestData = vi.fn(async () => ({ exists: false, context: null }))
+    const researchChatContext = new ResearchChatContextController(requestData)
+    const promptTemplates = new AnalysisPromptTemplateController()
+    promptTemplates.set('session-a', 'stock', analysisModule('stock').promptTemplate)
+    promptTemplates.set('session-b', 'brief', analysisModule('brief').promptTemplate)
+
+    function Harness() {
+      const [sessionId, setSessionId] = useState('session-a')
+      const snapshot = { ...UI, route: 'analysis' as const, assistantMode: 'docked' as const, assistantModule: 'strategy' as const }
+      const props = {
+        useInvestmentUi: <T,>(selector: (value: InvestmentUiSnapshot) => T): T => selector(snapshot),
+        setAssistantModule: () => {},
+        promptTemplates,
+        selectPromptTemplate: () => {},
+        researchChatContext,
+        requestData: requestData as never,
+        session: { sessionId, running: false } as never,
+        input: { phase: 'plain' } as never,
+      } as unknown as ComponentProps<typeof InvestmentComposerContextControls>
+      return <>
+        <InvestmentComposerContextControls {...props} />
+        <button type="button" onClick={() => { setSessionId('session-b') }}>切换测试会话</button>
+      </>
+    }
+
+    render(<Harness />)
+    expect(screen.getByRole('button', { name: '提示词模板，当前：个股多智能体分析' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '切换测试会话' }))
+
+    expect(screen.getByRole('button', { name: '提示词模板，当前：市场简报' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /策略验证专家/u })).toBeNull()
+  })
+
+  it('其他业务页面继续使用原研究专家选择，不启用智能分析提示词模板', () => {
+    const requestData = vi.fn(async () => ({ exists: false, context: null }))
+    const view = renderReactiveControls(requestData, {
+      route: 'framework', assistantMode: 'docked', assistantModule: 'strategy',
+    })
 
     const trigger = screen.getByRole('button', { name: '研究模块，当前：策略验证专家' })
-    expect(within(trigger).getByText('策略验证专家')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /标的，当前/u })).toBeNull()
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitem', { name: '通用研究' }))
+
+    expect(view.onModuleSelected).toHaveBeenCalledWith('general')
+    expect(screen.queryByRole('menuitem', { name: '普通对话' })).toBeNull()
+  })
+
+  it('上下文读取失败时显示可理解的重试动作', async () => {
+    const requestData = vi.fn(async () => { throw new Error('context unavailable') })
+    renderControls(requestData)
+
+    const retry = await screen.findByRole('button', { name: '上下文不可用，重试读取' })
+    expect(retry.textContent).toBe('上下文不可用 · 重试')
   })
 })
