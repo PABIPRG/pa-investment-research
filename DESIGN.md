@@ -1,251 +1,144 @@
 # 投研产品设计规范
 
-## 字体基线
+本文定义产品体验、视觉判断和交互质量的长期基线。它不是 token 清单，也不替代前端工程规范：
 
-- Web 与 Electron 必须共用同一套字体规则和组件样式，不得针对某一端单独覆盖字号。
-- `html` 根字号固定为 `14px`。这是字号体系中唯一允许使用 `px` 的位置。
-- 组件内的 `font-size` 必须使用 `rem`；正文以 `1rem` 为基准，标题、辅助文字和状态文字按语义相对缩放。
-- 推荐字号层级：辅助说明 `0.7143rem`、次要正文 `0.8571rem`、正文 `1rem`、小标题 `1.1429rem`、页面标题 `1.5714rem`。
-- 正文行高优先使用无单位倍率；需要与输入控件精确对齐时可以使用 `rem`。
-- 表单控件必须继承页面字体和字号，避免浏览器默认样式造成输入框与周边文字不一致。
+- 产品体验与设计取舍以本文为准。
+- Web 与 Electron 的实际颜色、排版、阴影和动效 token 以 [`frontend/packages/client/ui-theme/src/styles/`](frontend/packages/client/ui-theme/src/styles/) 为准。
+- 样式职责、CSS Modules 和语义 token 的使用方式以 [`frontend/docs/web-styling.zh.md`](frontend/docs/web-styling.zh.md) 为准。
+- 公共控件优先复用 [`frontend/packages/client/ui-primitives`](frontend/packages/client/ui-primitives/)；投研领域模式在 [`frontend/packages/client/ui-investment-research`](frontend/packages/client/ui-investment-research/) 包内部优先复用。跨包组合必须遵守 slot、服务和公共 primitive 边界，不得为复用实现细节而扩大插件公共导出。
 
-## 助理浮层
+当用户明确批准新的设计方向时，应同步更新本文和相关 token 或组件，避免实现与规范长期分叉。界面图是体验意图，不是数据、权限或业务状态的权威来源。
 
-- AI 研究助理覆盖在业务页面上方，不改变业务页面宽度。
-- 输入框正文使用 `1rem`，工具栏文字使用 `0.8571rem`，避免输入内容比业务正文明显偏大。
-- 工具选择器仅保留有意义的文字与展开箭头，不使用无语义装饰图标。
-- 新对话属于主操作，使用主色按钮；历史属于次操作，使用有边界和底色的次级按钮。
-- 历史对话抽屉及遮罩必须限制在助理浮层内部，不得覆盖完整业务页面或与助理边框形成双层冲突。
+## 设计北极星
 
-## 实施检查
+产品应当像一间可靠、克制、信息充分的专业投研工作室，而不是交易刺激器、营销落地页或卡片陈列柜。
 
-- 修改字体相关样式时，同时检查 Web 与 Electron。
-- 新增组件样式不得写入 `px` 字号；检查应覆盖 CSS Modules 和全局基础样式。
-- 在 1024px 与 1440px 两种典型宽度下检查标题、正文、输入框、工具栏和抽屉层级。
+- **可信先于惊艳：** 数据来源、时间、状态和不确定性必须容易辨认。
+- **决策先于展示：** 页面先帮助用户理解、比较和行动，再考虑装饰。
+- **清晰先于密度：** 保持专业信息量，但通过分组、留白和渐进披露降低认知负担。
+- **证据先于结论：** AI 判断必须能回到事实、来源或推理依据。
+- **一致先于新颖：** 优先复用已验证的布局、控件和交互，不为局部页面创造近似但不同的语言。
+- **完成先于可见：** 有按钮不等于可用；边界状态、反馈、撤销和键盘路径都是功能的一部分。
 
----
-name: Technical Precision
-colors:
-  surface: '#f8f9fb'
-  surface-dim: '#d8dadc'
-  surface-bright: '#f8f9fb'
-  surface-container-lowest: '#ffffff'
-  surface-container-low: '#f2f4f6'
-  surface-container: '#eceef0'
-  surface-container-high: '#e6e8ea'
-  surface-container-highest: '#e0e3e5'
-  on-surface: '#191c1e'
-  on-surface-variant: '#434653'
-  inverse-surface: '#2d3133'
-  inverse-on-surface: '#eff1f3'
-  outline: '#737785'
-  outline-variant: '#c3c6d5'
-  surface-tint: '#1758c7'
-  primary: '#1155c4'
-  on-primary: '#ffffff'
-  primary-container: '#396fdf'
-  on-primary-container: '#fefcff'
-  inverse-primary: '#b1c5ff'
-  secondary: '#5d5e63'
-  on-secondary: '#ffffff'
-  secondary-container: '#e2e2e8'
-  on-secondary-container: '#636469'
-  tertiary: '#575c61'
-  on-tertiary: '#ffffff'
-  tertiary-container: '#70757a'
-  on-tertiary-container: '#fcfcff'
-  error: '#ba1a1a'
-  on-error: '#ffffff'
-  error-container: '#ffdad6'
-  on-error-container: '#93000a'
-  primary-fixed: '#dae2ff'
-  primary-fixed-dim: '#b1c5ff'
-  on-primary-fixed: '#001946'
-  on-primary-fixed-variant: '#00419e'
-  secondary-fixed: '#e2e2e8'
-  secondary-fixed-dim: '#c6c6cc'
-  on-secondary-fixed: '#1a1c20'
-  on-secondary-fixed-variant: '#45474b'
-  tertiary-fixed: '#dee3e9'
-  tertiary-fixed-dim: '#c2c7cc'
-  on-tertiary-fixed: '#171c20'
-  on-tertiary-fixed-variant: '#42474c'
-  background: '#f8f9fb'
-  on-background: '#191c1e'
-  surface-variant: '#e0e3e5'
-typography:
-  html:
-    fontSize: 14px
-  display-lg:
-    fontFamily: Inter
-    fontSize: 1.5714rem
-    fontWeight: '700'
-    lineHeight: 1.5
-    letterSpacing: -0.01em
-  headline-lg:
-    fontFamily: Inter
-    fontSize: 1.1429rem
-    fontWeight: '700'
-    lineHeight: 1.5
-    letterSpacing: -0.005em
-  headline-md:
-    fontFamily: Inter
-    fontSize: 1.1429rem
-    fontWeight: '600'
-    lineHeight: 1.5
-  body-base:
-    fontFamily: Inter
-    fontSize: 1rem
-    fontWeight: '400'
-    lineHeight: 1.5
-  ui-medium:
-    fontFamily: Inter
-    fontSize: 1rem
-    fontWeight: '500'
-    lineHeight: 1.5
-  ui-base:
-    fontFamily: Inter
-    fontSize: 1rem
-    fontWeight: '400'
-    lineHeight: 1.5
-  ui-compact:
-    fontFamily: Inter
-    fontSize: 0.8571rem
-    fontWeight: '400'
-    lineHeight: 1.5
-  label-sm-strong:
-    fontFamily: Inter
-    fontSize: 0.8571rem
-    fontWeight: '500'
-    lineHeight: 1.5
-  caption:
-    fontFamily: Inter
-    fontSize: 0.7143rem
-    fontWeight: '400'
-    lineHeight: 1.5
-  code-base:
-    fontFamily: JetBrains Mono
-    fontSize: 1rem
-    fontWeight: '400'
-    lineHeight: 1.5
-  code-sm:
-    fontFamily: JetBrains Mono
-    fontSize: 0.8571rem
-    fontWeight: '400'
-    lineHeight: 1.5
-rounded:
-  sm: 0.25rem
-  DEFAULT: 0.5rem
-  md: 0.75rem
-  lg: 1rem
-  xl: 1.5rem
-  full: 9999px
-spacing:
-  unit: 4px
-  xs: 4px
-  sm: 8px
-  md: 12px
-  base: 16px
-  lg: 24px
-  xl: 32px
-  gutter: 16px
-  chat-max-width: 748px
-  composer-max-width: 780px
----
+避免用大面积渐变、厚重阴影、玻璃拟态、过度圆角、装饰性图标或无业务价值的卡片制造“高级感”。视觉品质来自比例、层级、对齐、节奏和细节一致性。
 
-## Brand & Style
+## 信息架构与页面层级
 
-The visual identity is defined by a clean, technical, and developer-focused aesthetic. It prioritizes information density, structural discipline, and computational rigor, specifically tailored for AI-centric orchestration and high-productivity workflows.
+每个页面必须有一个清晰的主任务。首屏按下列顺序组织信息：
 
-The design style is **Corporate / Modern** with a lean towards **Minimalism**. It uses a cool-toned palette to create a "technical canvas" feel. Hierarchy is established through subtle tonal layering and hairline borders rather than heavy shadows or decorative elements. The interface should feel like a sophisticated IDE or a high-end developer tool—precise, reliable, and unobtrusive.
+1. 当前对象、范围和数据时间。
+2. 用户最需要理解的结论、风险或变化。
+3. 支撑结论的证据和关键指标。
+4. 明确的下一步操作。
+5. 次要元数据、历史记录和高级设置。
 
-**Key Principles:**
-- **Clarity over Decoration:** Every element serves a functional purpose in navigating complex AI data.
-- **Structural Discipline:** Rigid adherence to a 4px grid system and consistent radii.
-- **Cool-Toned Environment:** Utilization of bluish-neutrals to reduce eye strain during long sessions.
+标题回答“我在哪里”，摘要回答“发生了什么”，主操作回答“下一步做什么”。同一区域只保留一个视觉主操作；次操作降低权重，危险操作与普通操作分离。
 
-## Colors
+不要默认把每组内容包成卡片。只有当内容具有独立边界、可单独操作、可重排或需要与背景分层时才使用容器；普通分组优先使用标题、间距和细分隔线。
 
-The palette is anchored by "DeepSeek Electric Blue" for primary interactions and a sophisticated range of cool grays and slates for structural elements.
+## 数据、金融语义与 AI 边界
 
-- **Primary (`#4176e6`):** Used for primary CTAs, active states, and focus indicators.
-- **Surface & Backgrounds:** Use `#ffffff` for the main content canvas and `#f9fafb` for secondary surfaces like sidebars to create a subtle but clear distinction between navigation and workspace.
-- **Typography:** Use `#0f1115` for high-emphasis headers and `#61666b` for secondary body text to maintain a professional, high-contrast reading experience.
-- **Borders:** Utilize semi-transparent outlines (`rgba(0, 0, 0, 0.10)`) to define containers without adding visual weight.
-- **Semantic Colors:** Success, Warning, and Error colors follow standard utility conventions but are calibrated for legibility against both white and off-white surfaces.
+- 证券名称为主、代码为辅；内部 ID 不作为用户主标题。
+- 数值必须带单位、周期和必要精度；涨跌、盈亏、收益率和风险口径保持一致。
+- `null`、缺失和不可计算统一显示为“—”，不得补造为 `0`。
+- 延迟、缓存、部分成功和过期数据必须如实标示；刷新不得让旧数据无提示地闪烁或消失。
+- 风险、涨跌和状态不得只依赖颜色；同时提供文本、符号或结构提示。
+- 区分“确定事实”“模型分析”“建议行动”。模型结论应展示来源、时间、置信或限制条件；不得把生成内容当成确定字段。
+- 会改变持仓、策略、通知、权限或外部系统的动作必须显示影响范围，并提供确认、撤销或可追溯记录。
 
-## Typography
+## 视觉语言
 
-The typography system is built on **Inter** for its neutral, systematic character and exceptional legibility in data-dense interfaces. **JetBrains Mono** is used for all technical and AI-generated code content.
+### 排版
 
-**Usage Guidelines:**
-- **Hierarchy:** Use weight changes (400 to 700) rather than drastic size changes to indicate hierarchy.
-- **Density:** For Kanban boards and complex tables, prefer `ui-compact` (`0.8571rem`) to maximize visible information.
-- **Code:** All assistant-generated outputs, terminal snippets, and variable names must use the code stack to signal "machine-readable" data.
-- **Line Height:** Maintain tight but readable line heights (approx 1.4x - 1.5x) to ensure text blocks remain cohesive within compact UI components.
+- Web 与 Electron 共用同一套字体和组件样式。
+- `html` 根字号固定为 `14px`。功能组件不得直接写 `px` 字号，应使用主题变量或 `rem`；主题所有方可以用 `px` 定义共享排版 token。
+- 正文以 `1rem` 为基准；辅助说明 `0.7143rem`，次要正文 `0.8571rem`，小标题 `1.1429rem`，页面标题 `1.5714rem`。
+- 优先使用字重、色阶和间距建立层级，避免用夸张字号制造标题感。
+- 正文行高保持约 `1.4` 至 `1.5`；表格、代码、数字列应支持快速纵向扫描。
+- 普通界面使用系统无衬线字体栈；代码和机器可读内容使用项目代码字体栈。
 
-## Layout & Spacing
+### 色彩与层级
 
-This system utilizes a **Fixed Grid** approach for core application workflows to ensure predictability in tool-heavy interfaces.
+- 功能组件只使用 `--dsw-alias-*` 语义 token，不写颜色字面量，不复制静态色板。
+- 主色只强调主要操作、焦点和关键业务状态，不用于大面积装饰。
+- 层级主要依靠背景色阶、间距和低对比分隔线；阴影只用于真正浮于页面之上的弹层、菜单和临时表面。
+- 同一视图同时出现的强调色应保持克制；语义色不得抢夺主任务的视觉优先级。
+- 受影响界面必须同时检查浅色与深色主题。
 
-- **Grid Model:** A 12-column system is used for dashboard views, while a centered single-column layout is preferred for the AI chat experience.
-- **Rhythm:** All spacing must be a multiple of the 4px base unit.
-- **Chat Layout:** The message transcript is locked to a `748px` width to maintain optimal line lengths for reading. The input composer is slightly wider at `780px` to visually anchor the bottom of the viewport.
-- **Kanban Layout:** Column widths should be consistent (e.g., 280px - 320px) with 16px gutters.
-- **Breakpoints:**
-  - **Desktop:** Sidebar is expanded (260px).
-  - **Tablet:** Sidebar collapses to a 56px icon rail.
-  - **Mobile:** Sidebar moves to a hidden drawer; horizontal padding reduces to 16px.
+### 网格、间距与形状
 
-## Elevation & Depth
+- 使用 4px 基础节奏；优先从 `4 / 8 / 12 / 16 / 24 / 32` 中选择间距。
+- 对齐优先于填满空间。关联内容靠近，不相关内容用明确间隔分开。
+- 普通按钮和输入框延续现有约 `8px` 圆角；大容器是否使用更大圆角由既有组件决定，不得页面内自行漂移。
+- 桌面常规控件应保持至少约 36px 的清晰操作高度；仅在高密度、低风险的次级区域使用更紧凑控件。触控场景提供至少 44px 的有效点击区域。
+- 列表、表格和图表必须处理长名称、大数值、窄列、缩放和空数据，不能靠截断隐藏关键判断依据。
 
-Hierarchy is established through **Tonal Layers** and **Low-contrast Outlines** rather than physical depth.
+## 组件与交互
 
-- **Surface Levels:**
-  - **Level 0 (Canvas):** Pure white background for the primary workspace.
-  - **Level 1 (Sidebars/Panels):** `#f9fafb` with a 1px hairline border.
-  - **Level 2 (Cards/Modals):** Elevated using a very soft shadow (`0 4px 12px rgba(0,0,0,0.04)`) and a `1px` border of `rgba(0,0,0,0.10)`.
-- **Separators:** Use 1px hairlines for all divisions. Avoid thick borders.
-- **Interactivity:** Hover states are indicated by a subtle background tint (`rgba(0, 0, 0, 0.04)`) rather than shadow changes.
+- 优先复用现有按钮、输入框、分段控件、菜单、弹层、提示和状态组件；新增公共模式前先证明现有组件无法组合满足。
+- 按钮使用动作型中文文案。图标按钮必须有可访问名称；不得用 emoji 充当产品图标。
+- 表单标签常驻可见，placeholder 只提供示例；校验信息靠近字段，并说明如何修正。
+- 筛选器必须明确作用范围、活动条件和结果变化；支持一步清除。无匹配结果与数据源本身为空是两个不同状态。
+- 弹层打开后焦点进入，关闭后返回触发点；支持 `Escape`，并防止焦点逃逸。危险操作不可只靠弹层标题表达风险。
+- hover、focus、active、selected 和 disabled 各有明确语义，不得互相代替；仅在 hover 出现的操作也必须能通过键盘发现。
+- 动效用于解释状态和空间关系，通常保持在 `100–300ms`；遵循 `prefers-reduced-motion`，不让动画阻塞操作。
 
-## Shapes
+## 完整状态契约
 
-The shape language is **Rounded**, striking a balance between a modern approachable feel and professional precision.
+任何异步或数据驱动界面都要按实际风险覆盖以下状态：
 
-- **Standard Elements (Buttons, Inputs):** Use `0.5rem` (8px) for a consistent UI feel.
-- **Large Containers (Cards, Composer):** Use `rounded-xl` (1.5rem / 24px) to create a distinct containerized look for major interface blocks.
-- **Status Pills/Tags:** Use "Full" roundedness (capsule) to distinguish metadata from interactive buttons.
-- **Technical Blocks (Code):** Use a slightly tighter `0.75rem` (12px) radius for code snippets to maximize internal space.
+| 状态 | 体验要求 |
+|---|---|
+| 首次加载 | 保留布局结构，说明正在获取什么，避免无意义整页转圈 |
+| 后台刷新 | 尽量保留可用旧数据，同时显示刷新状态 |
+| 空数据 | 解释为什么为空，并在用户可处理时给出下一步动作 |
+| 筛选无结果 | 保留筛选上下文，提供清除或调整入口 |
+| 部分成功 | 明确成功与失败范围，不把部分结果包装成完整成功 |
+| 过期数据 | 显示更新时间和过期含义，提供合理刷新路径 |
+| 可恢复错误 | 说明影响并提供重试，重试不能重复危险副作用 |
+| 无权限或不可用 | 解释限制和可行路径，不伪装成普通空态 |
+| 成功 | 反馈动作结果；若改变重要状态，提供撤销或可追溯记录 |
+| 禁用 | 在上下文需要时解释原因，不能让用户猜测 |
 
-## Components
+骨架屏应近似最终结构，避免加载完成后大幅跳动。错误文案描述用户影响，不暴露无意义的内部异常。
 
-### Buttons
-- **Primary:** Capsule-shaped with `#4176e6` background and white text.
-- **Ghost:** Transparent background with a `1px` border of `rgba(0, 0, 0, 0.10)`. Used for secondary actions in toolbars.
-- **Size:** Standard height is 36px; compact height is 28px for use within cards.
+## 响应式与跨端
 
-### Kanban Cards
-- **Structure:** 12px corner radius, white background, hairline border.
-- **Header:** `ui-compact` bold text with a status indicator (dot or icon) in the top-right.
-- **Metadata:** Use `label-sm-strong` (`0.8571rem`) for timestamps and user tags.
+- 1440px 用于检查完整桌面层级，1024px 用于检查收缩、浮层与信息密度。
+- 支持窄屏的表面还必须检查约 768px 与 390px；不支持移动端的复杂工作台必须明确最小宽度，并提供不会丢失数据或操作的降级方式。
+- 窄屏优先重排、折叠次要信息或转为抽屉，不得只是等比例压缩桌面布局。
+- Web 与 Electron 共享字号和组件行为；平台差异只处理窗口、系统菜单、文件能力等真实平台约束。
+- 不允许页面级意外横向滚动。确需横向滚动的数据区域必须局部承载，并保持关键列或上下文可识别。
 
-### Chat Interface
-- **User Bubbles:** Right-aligned, `#edf3fe` background, 22px corner radius.
-- **Assistant Messages:** Left-aligned, no background bubble, pure typography on the canvas to emphasize the "agent" presence.
-- **Composer:** A 24px rounded card containing a borderless auto-expanding textarea and a primary send button.
+## 无障碍基线
 
-### Inputs & Fields
-- **Fields:** 8px corner radius, 1px border. The border color transitions to the primary blue (`#4176e6`) on focus with no heavy outer glow.
-- **Chips:** Capsule-shaped, `#f1f3f5` background, `label-sm-strong` (`0.8571rem`) medium text.
+- 文本和关键控件满足 WCAG AA 对比度；焦点指示清晰且不被裁剪。
+- 所有核心流程可仅用键盘完成，交互顺序与视觉顺序一致。
+- 使用语义 HTML；名称、角色、状态和值能被辅助技术理解。
+- 图表提供文字摘要或数据替代；颜色编码同时具有非颜色提示。
+- 文本缩放、浏览器缩放和中文长文案下仍能完成核心任务。
+- 自动更新、错误和异步完成反馈应在需要时通过适当的 live region 被感知，但避免重复播报。
 
-### Interactive Elements
-- **Tabs:** Horizontal layout with a 2px blue underline to indicate the active state. No background fills on tabs.
-- **Checkboxes:** 4px rounded corners, primary blue fill when checked.
+## 投研业务模式
 
-## 投研业务交互补充
+- AI 研究助理覆盖在业务页面上方，不改变业务页面宽度。历史对话在小窗完整覆盖助理内容区，在放大状态可使用右侧抽屉与轻遮罩。
+- 助理输入正文使用 `1rem`，工具栏文字使用 `0.8571rem`，避免输入内容比业务正文明显偏大。工具选择器只保留有意义的文字与展开箭头，不使用无语义装饰图标。
+- “新对话”是主操作，使用主按钮；“历史”是次操作，使用有边界和底色的次级按钮。历史抽屉及遮罩限制在助理浮层内部，不得覆盖完整业务页面或与助理边框形成双层冲突。
+- 历史会话条目的 hover、focus 和 selected 反馈作用于整行，更多操作只作为行内次级入口。
+- 个股详情同时承接“加入自选”“加入持仓”“带入智能分析”。加入持仓先录入数量与成本并明确确认；加入自选同步实时盯盘与个性化研究，部分失败必须如实提示。
+- “我的投研”是持仓、自选和画像事实的稳定入口。自选以股票名称为主、代码为辅，并提供详情和移出操作。
+- 自进化按“影子数据 → 策略归因 → 只读预案 → 人工确认”展示连续状态。分策略证据以证券名称和代码为主，不以策略 ID 作为用户主标题；可识别证券时整行可进入个股详情。
+- 数据列表和卡片保持信息密度，同时清晰区分主标题、辅助指标、状态标签和操作。
 
-- 历史对话属于投研助理内部视图。小窗状态打开历史时应完整覆盖助理内容区，不保留窄遮罩条；放大状态可使用右侧抽屉与轻遮罩。会话条目的悬停、聚焦和选中反馈作用于整行，更多操作只作为行内次级入口。
-- 个股详情需要同时承接“加入自选”“加入持仓”“带入智能分析”三类去向。加入持仓必须先录入数量与成本并明确确认；加入自选需同步实时盯盘与个性化研究，部分同步失败必须如实提示。
-- “我的投研”是持仓、自选和画像事实的稳定入口。自选股以股票名称为主、代码为辅，并提供查看个股详情和移出操作。
-- 自进化按“影子数据 → 策略归因 → 只读预案 → 人工确认”展示连续状态。分策略证据以股票名称和代码为主，不用策略 ID 作为用户主标题；可识别证券时整行可进入个股详情。
-- 数据列表和卡片保持信息密度，但主标题、辅助指标、状态标签与操作按钮必须分层清晰。空数据保留下一步动作，`null` 统一显示为“—”，不补造为 `0`。
+## 设计完成标准
+
+UI 工作只有同时满足以下条件才可报告完成：
+
+1. 已确认用户目标、主任务、关键数据和现有可复用能力。
+2. 已覆盖与风险相称的状态、键盘、响应式、主题和长内容场景。
+3. 已运行最窄且足够的自动化检查；可见组装界面变化遵循仓库浏览器测试要求。
+4. 已在真实产品中查看实际渲染，而不只阅读代码或依赖 jsdom。
+5. 已检查 1440px、1024px 和所有受支持窄屏；涉及主题 token 时检查浅色与深色。
+6. 已记录验证证据、已知限制，以及没有验证的部分；未知不得描述为通过。
+
+赶演示、改动很小、已有截图或自动测试通过，都不能代替真实体验验收。范围可以缩小，但已交付范围的质量门槛不降低。
