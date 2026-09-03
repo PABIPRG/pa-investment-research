@@ -9,6 +9,19 @@
 - 任何新增、修改或审查用户可见页面、组件、交互、文案、视觉样式或响应式行为的任务，必须使用仓库 Skill [`delivering-product-ui`](.agents/skills/delivering-product-ui/SKILL.md)。
 - 产品体验与设计规范以 [`DESIGN.md`](DESIGN.md) 为入口；必读上下文、实施流程与验收门槛由上述 Skill 定义。
 
+## Linear 项目映射
+
+- 后续所有任务追踪统一使用 Linear。
+- Linear workspace: `PABIPRG`
+- Linear team: `PABIPRG`
+- Team key: `PAB`
+- Linear project: `投研智能体`
+- Linear project ID: `08905897-5bb3-4f89-8a07-5729018a65b4`
+- 默认状态: `Backlog`
+- 默认标签: `Feature`
+- 创建 Linear issue 前必须先展示完整草稿，并取得用户明确确认。
+- 禁止通过仓库名称猜测 Linear Project；必须使用本节记录的项目名称与 ID。若映射失效或无法访问，应停止创建并请求用户确认。
+
 ## 多 Agent 与 Git worktree
 
 ### 角色与调度契约
