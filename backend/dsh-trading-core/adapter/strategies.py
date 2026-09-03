@@ -18,6 +18,7 @@ import math
 import re
 import threading
 import time
+import uuid
 from datetime import date, timedelta
 from typing import Callable
 
@@ -837,6 +838,33 @@ class StrategyBacktestRunner:
         return hist
 
     def run(self, params: dict, progress_cb: Callable) -> dict:
+        """统一入口：手动/自动回测都建任务行，成功/失败都写回策略回测任务历史。
+
+        task_id 优先取 TaskManager 注入的 params["task_id"]，否则自生成；source 由调度传
+        "auto"、页面请求默认 "manual"。
+        """
+        from . import backtest_tasks as bt
+
+        task_id = str(params.get("task_id") or uuid.uuid4().hex)
+        source = "auto" if str(params.get("source") or "") == "auto" else "manual"
+        try:
+            return self._run_impl(params, progress_cb, task_id=task_id, source=source)
+        except Exception as exc:  # noqa: BLE001 — 收尾失败记录后照常向上抛
+            try:
+                bt.fail_task(
+                    self.store, task_id, f"{type(exc).__name__}: {exc}",
+                    strategy_id=str(params.get("strategy_id") or ""),
+                    source=source,
+                )
+            except Exception:  # noqa: BLE001 — 记账异常不掩盖原始失败
+                logger.exception("回测失败任务记账出错 task=%s", task_id)
+            raise
+
+    def _run_impl(self, params: dict, progress_cb: Callable, *,
+                  task_id: str, source: str) -> dict:
+        """实际回测体；run() 负责任务行生命周期。"""
+        from . import backtest_tasks as bt
+
         sid = params.get("strategy_id", "")
         strategy = self.store.get("strategies", sid)
         if not strategy:
@@ -849,8 +877,22 @@ class StrategyBacktestRunner:
         capital = float(params.get("initial_capital") or settings.shadow_initial_capital)
         min_oos = int(params.get("min_oos_trades", 4))
 
-        end = date.today().isoformat()
-        start = (date.today() - timedelta(days=int(lookback_years * 366))).isoformat()
+        # 显式 start_date/end_date → 用给定窗口（lookback 记为空）；否则默认 lookback_years 窗口。
+        requested_start = str(params.get("start_date") or "").strip()
+        requested_end = str(params.get("end_date") or "").strip()
+        if requested_start and requested_end:
+            start, end = requested_start, requested_end
+            window_lookback = None
+        else:
+            end = requested_end or date.today().isoformat()
+            start = (date.today() - timedelta(days=int(lookback_years * 366))).isoformat()
+            window_lookback = lookback_years
+
+        bt.begin_task(
+            self.store, task_id=task_id, strategy_id=sid, source=source,
+            window_start=start, window_end=end,
+            lookback_years=window_lookback, initial_capital=capital,
+        )
 
         progress_cb(f"📐 策略 {kind} {symbols} · {lookback_years}年 · 样本外{oos_frac:.0%}")
 
@@ -918,6 +960,12 @@ class StrategyBacktestRunner:
         }
         saved = _persist_strategy_backtest(
             self.store, sid, strategy, backtest, verification_status
+        )
+        bt.complete_task(
+            self.store, task_id,
+            verification_status=verification_status,
+            thresholds_pass=bool(passed),
+            result=backtest,
         )
         lifecycle_status = str(saved.get("status") or "candidate")
         saved_verification = str(saved["verification_status"])

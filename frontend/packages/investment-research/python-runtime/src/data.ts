@@ -226,6 +226,17 @@ function query(path: string, values: Readonly<Record<string, string | number | b
   return suffix === '' ? path : `${path}?${suffix}`
 }
 
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+function optionalDate(input: Readonly<Record<string, unknown>>, key: string): string | undefined {
+  const value = optionalString(input, key)
+  if (value === undefined) return undefined
+  if (!DATE_ONLY.test(value)) {
+    throw new TypeError(`investment data: ${key} must be YYYY-MM-DD`)
+  }
+  return value
+}
+
 function noInput(path: string, backendId: InvestmentBackendId): RequestSpec {
   return {
     backendId,
@@ -824,10 +835,21 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     method: 'POST',
     path: () => '/strategies/run',
     body: (input) => {
-      knownKeys(input, ['strategy_id', 'lookback_years', 'oos_frac', 'initial_capital', 'min_oos_trades'])
+      knownKeys(input, [
+        'strategy_id', 'lookback_years', 'oos_frac', 'initial_capital', 'min_oos_trades',
+        'start_date', 'end_date',
+      ])
       const strategyId = stringValue(input, 'strategy_id')
       if (!PATH_IDENTIFIER.test(strategyId)) {
         throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
+      const startDate = optionalDate(input, 'start_date')
+      const endDate = optionalDate(input, 'end_date')
+      if ((startDate === undefined) !== (endDate === undefined)) {
+        throw new TypeError('investment data: start_date and end_date must be provided together')
+      }
+      if (startDate !== undefined && endDate !== undefined && startDate >= endDate) {
+        throw new TypeError('investment data: start_date must be earlier than end_date')
       }
       return {
         strategy_id: strategyId,
@@ -835,7 +857,17 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
         oos_frac: boundedNumberWithDefault(input, 'oos_frac', 0.3, 0.001, 0.499),
         initial_capital: boundedNumberWithDefault(input, 'initial_capital', 0, 0, 1_000_000_000_000),
         min_oos_trades: integer(input, 'min_oos_trades', 4, 1, 100),
+        ...(startDate === undefined ? {} : { start_date: startDate, end_date: endDate }),
       }
+    },
+  },
+  'trading-core.strategy-backtests': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'limit'])
+      const sid = strategyIdentifier(input, 'strategy_id')
+      return `/strategies/${sid}/backtests?limit=${integer(input, 'limit', 50, 1, 500)}`
     },
   },
   'trading-core.backtest-run': {
@@ -884,6 +916,21 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       return query('/shadow/equity', {
         strategy_id: strategyId,
         limit: integer(input, 'limit', 120, 1, 1_000),
+      })
+    },
+  },
+  'trading-core.shadow-history': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'limit'])
+      const strategyId = optionalString(input, 'strategy_id')
+      if (strategyId !== undefined && !PATH_IDENTIFIER.test(strategyId)) {
+        throw new TypeError('investment data: strategy_id must be a safe identifier')
+      }
+      return query('/shadow/history', {
+        strategy_id: strategyId,
+        limit: integer(input, 'limit', 200, 1, 2_000),
       })
     },
   },

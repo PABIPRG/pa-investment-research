@@ -1133,8 +1133,8 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
 { "as_of": "2026-08-24 17:27:11", "days_of_data": 1, "min_days": 5,
   "ready": false,
   "counts": { "candidate": 1, "active": 1, "watch": 0, "retired": 0,
-              "rejected": 0, "mutated": 0 },
-  "lifecycle": { "active": [], "candidate": [], "mutated": [], "retired": [], "watch": [], "rejected": [] },
+              "rejected": 0 },
+  "lifecycle": { "active": [], "candidate": [], "retired": [], "watch": [], "rejected": [] },
   "per_strategy": [], "recent_applied": [], "last_applied_at": null,
   "closed_loop_enabled": false, "closed_loop_time": "15:35",
   "note": "影子净值仅 1 日，自进化待累积至 5 日" }
@@ -1142,7 +1142,7 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
 
 - `days_of_data`：shadow_equity 有效净值日数；`min_days`：进化阈值（默认 5，`EVOLVE_MIN_DAYS`）。
 - `ready = days_of_data >= min_days`。不足时只出归因报告，`/evolution/run` 返回 `waiting_data` 不动作。
-- `counts.watch` = 自进化降级观察中的策略；`counts.mutated` = 变异回流产生的 candidate 后代。
+- `counts.watch` = 自进化降级观察中的策略；变异是来源标记（`source='evolution'`/`mutated_from`），变异候选按真实状态计入 `candidate`，无独立 `mutated` 计数。
 - scoped `per_strategy` 只包含目标策略；非 active 策略返回 `decision=none` 和只读说明。
 - scoped `recent_applied` 只保留 `sid` 命中目标或 `parent` 为目标的动作；读取和重新评估均不写策略、预案或执行记录。
 
@@ -1756,7 +1756,7 @@ interface RiskAlert {               // GET /risk/alerts → items[]
 interface EvolutionStatus {         // GET /evolution/status
   as_of: string; days_of_data: number; min_days: number; ready: boolean
   counts: { candidate: number; active: number; watch: number
-            retired: number; rejected: number; mutated: number }
+            retired: number; rejected: number }   // 无独立 mutated（变异并入 candidate 等真实状态）
   note: string | null
   last_applied_at: string | null            // 最近一次自动应用进化时间（YYYY-MM-DD HH:MM:SS）
   closed_loop_enabled: boolean              // CLOSED_LOOP_ENABLED
@@ -1765,11 +1765,11 @@ interface EvolutionStatus {         // GET /evolution/status
   recent_applied: EvolutionApplied[]        // 最近 5 条自动进化应用记录（时间线）
   lifecycle: { active: EvolutionLifecycleEntry[]
               candidate: EvolutionLifecycleEntry[]
-              mutated: EvolutionLifecycleEntry[]
               retired: EvolutionLifecycleEntry[]
               watch: EvolutionLifecycleEntry[]
               rejected: EvolutionLifecycleEntry[] }
-        // 各生命周期分组策略列表（供前端点开计数查看具体策略）
+        // 各生命周期分组策略列表（供前端点开计数查看具体策略）；
+        // 变异候选按真实状态（candidate/active）落桶，无独立 mutated 桶
 }
 
 // GET /evolution/status?strategy_id=<safe-id>：per_strategy 仅目标策略，recent_applied 仅相关动作，
@@ -1780,7 +1780,7 @@ interface EvolutionPerStrategy {            // /evolution/status → per_strateg
   symbols: string[]; nav: number | null
   closed_win_rate_pct: number | null; closed_trades: number
   decision: 'promote' | 'demote' | 'retire' | 'none'
-  behavior: string   // 升级 / 淘汰 / 降级观察 / 带内运行 / 待判定 / 已升级 / 降级观察中 / 升级+变异
+  behavior: string   // 升级 / 淘汰 / 降级观察 / 正常运行 / 待判定 / 已升级 / 降级观察中 / 升级+变异
   reason: string
 }
 
@@ -1792,7 +1792,7 @@ interface EvolutionApplied {                // /evolution/status → recent_appl
 interface EvolutionLifecycleEntry {        // /evolution/status → lifecycle.<group>[]
   strategy_id: string; name: string; kind: string; tier: number
   symbols: string[]; mutated_from?: string; source?: string
-        // mutated 分组含全部变异衍生策略（source==="evolution"），mutated_from 标注父策略
+        // source==="evolution" + mutated_from=父策略 → 变异来源标记；按真实状态落 candidate/active 等桶
 }
 
 interface StrategyAttribution {     // GET /evolution/attribution → strategies[]

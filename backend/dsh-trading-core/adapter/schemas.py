@@ -129,6 +129,27 @@ class StrategyRunRequest(BaseModel):
     min_oos_trades: int = Field(
         default=4, ge=1, le=100, description="样本外最低成交数（不足保持 candidate）"
     )
+    # 显式时间窗口（可选）：提供时必须 start_date + end_date 同时给出并满足 start<end≤today，
+    # 此时 runner 用显式区间回测而忽略 lookback_years。
+    start_date: Optional[str] = Field(
+        default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="回测起始日 YYYY-MM-DD"
+    )
+    end_date: Optional[str] = Field(
+        default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="回测截止日 YYYY-MM-DD（≤今天）"
+    )
+
+    @model_validator(mode="after")
+    def _window_consistency(self):
+        from datetime import date
+
+        if (self.start_date is None) != (self.end_date is None):
+            raise ValueError("start_date 与 end_date 必须同时提供")
+        if self.start_date and self.end_date:
+            if self.start_date >= self.end_date:
+                raise ValueError("start_date 必须早于 end_date")
+            if self.end_date > date.today().isoformat():
+                raise ValueError("end_date 不能晚于今天")
+        return self
 
 
 class ResearchChatInstrument(BaseModel):

@@ -248,7 +248,7 @@ class EvolveTests(unittest.TestCase):
         self.assertEqual(per["strat-t2"]["behavior"], "已升级")
         self.assertEqual(per["strat-band"]["decision"], "none")
         self.assertIn("带内", per["strat-band"]["reason"])
-        self.assertEqual(per["strat-band"]["behavior"], "带内运行")
+        self.assertEqual(per["strat-band"]["behavior"], "正常运行")
 
     def test_preview_exposes_last_applied_at_after_auto_apply(self):
         """闭环自动应用过进化后，再生成空预案也能带上轮应用时间供前端展示。"""
@@ -406,7 +406,6 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(result["counts"], {
             "active": 1,
             "candidate": 0,
-            "mutated": 0,
             "retired": 0,
             "watch": 0,
             "rejected": 0,
@@ -448,7 +447,9 @@ class StatusTests(unittest.TestCase):
         _preview_and_apply(store)
         st = status(store)
         self.assertTrue(st["ready"])
-        self.assertGreaterEqual(st["counts"]["mutated"], 2)
+        # 变异候选按真实状态（candidate）计，不再有独立 mutated 计数
+        self.assertNotIn("mutated", st["counts"])
+        self.assertGreaterEqual(st["counts"]["candidate"], 2)
         self.assertGreaterEqual(st["counts"]["retired"], 1)
 
     def test_status_exposes_closed_loop_and_last_applied(self):
@@ -505,29 +506,28 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(recs[0]["count"], 1)
 
     def test_status_lifecycle_groups_strategies_by_state(self):
-        """闭环运行状态可点开各类别策略列表：active/candidate/mutated/retired 分组正确。"""
+        """闭环运行状态分组：变异策略按真实状态（candidate）落桶并带来源标记。"""
         store = _store()
         _plant(store)
-        _preview_and_apply(store)  # strat-good 升级、strat-bad 退役、2 个变异候选
+        _preview_and_apply(store)  # strat-good 升级、strat-bad 退役、2 个变异候选（status=candidate）
         st = status(store)
         lc = st["lifecycle"]
         active_ids = {e["strategy_id"] for e in lc["active"]}
         candidate_ids = {e["strategy_id"] for e in lc["candidate"]}
-        mutated_ids = {e["strategy_id"] for e in lc["mutated"]}
         retired_ids = {e["strategy_id"] for e in lc["retired"]}
         self.assertIn("strat-good", active_ids)
         self.assertNotIn("strat-bad", active_ids)
         self.assertIn("strat-bad", retired_ids)
         self.assertEqual(len(candidate_ids), 2)
-        self.assertEqual(len(mutated_ids), 2)
-        self.assertEqual(candidate_ids, mutated_ids)  # 变异候选同时计入 mutated 与 candidate
+        self.assertNotIn("mutated", lc)  # 不再有独立「变异」桶
         for entry in lc["candidate"]:
             self.assertEqual(entry["mutated_from"], "strat-good")
             self.assertEqual(entry["source"], "evolution")
-        # 计数与列表一致
+        # 计数与列表一致；counts 无 mutated 键
         self.assertEqual(st["counts"]["active"], len(active_ids))
-        self.assertEqual(st["counts"]["mutated"], len(mutated_ids))
+        self.assertEqual(st["counts"]["candidate"], len(candidate_ids))
         self.assertEqual(st["counts"]["retired"], len(retired_ids))
+        self.assertNotIn("mutated", st["counts"])
 
 
 if __name__ == "__main__":

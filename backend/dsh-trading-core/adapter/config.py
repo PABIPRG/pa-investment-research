@@ -95,6 +95,11 @@ class Settings:
         # 闭环 Step 0：拉事件 → 生成新策略候选（并入闭环，幂等 md5 去重）
         self.event_generation_enabled = os.getenv("EVENT_GENERATION_ENABLED", "true").lower() == "true"
         self.event_generation_limit = int(os.getenv("EVENT_GENERATION_LIMIT", "20"))
+        # 自动回测（首测 + 15 天复测巡检；候选/生效策略统一进回测任务历史，复测不改生命周期）
+        self.auto_retest_enabled = os.getenv("AUTO_RETEST_ENABLED", "false").lower() == "true"
+        self.auto_retest_time = os.getenv("AUTO_RETEST_TIME", "15:40")  # 巡检每日时刻（收盘后）
+        self.auto_retest_interval_days = int(os.getenv("AUTO_RETEST_INTERVAL_DAYS", "15"))  # 复测间隔天
+        self.auto_backtest_lookback_years = float(os.getenv("AUTO_BACKTEST_LOOKBACK_YEARS", "2.0"))
 
     def llm_available(self) -> bool:
         return bool(self.deepseek_api_key)

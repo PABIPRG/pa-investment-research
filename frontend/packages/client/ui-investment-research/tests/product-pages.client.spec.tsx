@@ -73,6 +73,7 @@ describe('投研产品闭环', () => {
           }],
         }
       }
+      if (request.operation === 'trading-core.strategy-backtests') return { strategy_id: 'strategy-1', count: 0, tasks: [] }
       if (request.operation === 'trading-core.strategy-run') return { task_id: '1'.repeat(32) }
       if (request.operation === 'trading-core.task-status') return { status: 'done' }
       if (request.operation === 'trading-core.task-result') {
@@ -90,7 +91,10 @@ describe('投研产品闭环', () => {
       onAnalyze={() => {}}
     />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '运行回测' }))
+    fireEvent.click(await screen.findByRole('button', { name: '查看详情' }))
+    fireEvent.click(await screen.findByRole('button', { name: '新建回测任务' }))
+    expect(await screen.findByRole('dialog', { name: '新建回测任务' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '开始回测' }))
     expect(await screen.findByText('回测完成，正式结果已进入投研报告。')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '查看本次投研报告' }))
     expect(onOpenReports).toHaveBeenCalledOnce()
@@ -1080,6 +1084,93 @@ describe('投研产品闭环', () => {
     expect(requestData.mock.calls.filter(([request]) => (
       request.operation === 'industry-chain.chain' && request.input?.code === '600519'
     ))).toHaveLength(1)
+  })
+
+  it('全部策略运行记录表：按交易日×策略展示净值/资金/异常并可打开报告', async () => {
+    const onOpenReports = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.shadow-status') {
+        return { trade_date: '2026-09-01', strategy_count: 2, ran_at: '2026-09-01 15:30:00', overall_nav: 1.01 }
+      }
+      if (request.operation === 'trading-core.shadow-positions') return { items: [] }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      if (request.operation === 'trading-core.shadow-history') {
+        return {
+          count: 2,
+          items: [
+            { date: '2026-09-01', strategy_id: 'strat-1', strategy_name: '利空·rsi_reversal·600519', kind: 'rsi_reversal',
+              initial_capital: 100000, equity: 101200, nav: 1.012, track_from: '2026-08-01', closed_count: 1, open_positions: 1,
+              symbol_errors: {}, strategy_error: '' },
+            { date: '2026-08-28', strategy_id: 'strat-2', strategy_name: '事件策略B', kind: 'event',
+              initial_capital: 100000, equity: 96000, nav: 0.96, track_from: '2026-08-01', closed_count: 0, open_positions: 0,
+              symbol_errors: { '600000': '无历史行情（baostock 空）' }, strategy_error: 'TimeoutError: 数据源超时' },
+          ],
+        }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      onOpenEvolution={() => {}}
+      onOpenReports={onOpenReports}
+      onAnalyze={() => {}}
+    />)
+
+    const table = await screen.findByRole('region', { name: '全部策略运行记录' })
+    expect(within(table).getByText('2026-09-01')).toBeTruthy()
+    expect(within(table).getByText('1.01')).toBeTruthy()
+    expect(within(table).getByText('¥101200.00')).toBeTruthy()
+    expect(within(table).getAllByText('¥100000.00').length).toBeGreaterThan(0)
+    expect(within(table).getByText('0.96')).toBeTruthy()
+    // 存在策略级 strategy_error 时展示该原因（而非标的计数）
+    expect(within(table).getByText('TimeoutError: 数据源超时')).toBeTruthy()
+    // 打开投研报告抽屉
+    fireEvent.click(within(table).getAllByRole('button', { name: '影子报告' })[0]!)
+    expect(onOpenReports).toHaveBeenCalledOnce()
+  })
+
+  it('已选策略时默认单策略历史，可切到全部策略运行记录', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.shadow-status') {
+        return { trade_date: '2026-09-01', strategy_count: 1, ran_at: '2026-09-01 15:30:00', overall_nav: 1.012 }
+      }
+      if (request.operation === 'trading-core.shadow-positions') return { items: [] }
+      if (request.operation === 'trading-core.shadow-equity') return { items: [] }
+      if (request.operation === 'trading-core.shadow-history') {
+        const single = String(request.input?.strategy_id ?? '') === 'strat-1'
+        const rows = [
+          { date: '2026-09-01', strategy_id: 'strat-1', strategy_name: '电力事件策略', kind: 'event',
+            initial_capital: 100000, equity: 101200, nav: 1.012, track_from: '2026-08-01', closed_count: 1, open_positions: 1,
+            symbol_errors: {}, strategy_error: '' },
+          { date: '2026-08-28', strategy_id: 'strat-other', strategy_name: '无关策略', kind: 'event',
+            initial_capital: 100000, equity: 90000, nav: 0.9, track_from: '2026-07-01', closed_count: 0, open_positions: 0,
+            symbol_errors: {}, strategy_error: '' },
+        ]
+        return { count: rows.length, items: single ? rows.filter(row => row.strategy_id === 'strat-1') : rows }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<ShadowValidationPage
+      requestData={requestData as never}
+      selectedStrategyId="strat-1"
+      strategyNames={{ 'strat-1': '电力事件策略' }}
+      onOpenEvolution={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+    />)
+
+    const region = await screen.findByRole('region', { name: '影子验证历史' })
+    // 默认当前策略历史：只见 strat-1 行
+    expect(within(region).getByRole('button', { name: '当前策略历史' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(region).getByText('2026-09-01')).toBeTruthy()
+    expect(within(region).queryByText('2026-08-28')).toBeNull()
+    // 切到全部策略运行记录 → 出现其它策略行
+    fireEvent.click(within(region).getByRole('button', { name: '全部策略运行记录' }))
+    expect(await within(region).findByText('2026-08-28')).toBeTruthy()
+    expect(within(region).getByText('无关策略')).toBeTruthy()
   })
 
   it('影子验证切页后停止长任务轮询且不再读取结果', async () => {

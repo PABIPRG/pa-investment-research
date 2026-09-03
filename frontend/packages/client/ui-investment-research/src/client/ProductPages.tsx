@@ -200,7 +200,7 @@ function StatusBadge({ value }: { value: string }) {
 function statusLabel(value: string): string {
   const labels: Record<string, string> = {
     candidate: '候选', active: '生效中', rejected: '已拒绝', retired: '已退役',
-    pending: '等待中', running: '运行中', done: '已完成', failed: '失败',
+    pending: '等待中', queued: '排队中', running: '运行中', done: '已完成', failed: '失败',
     waiting_data: '等待数据', preview: '待确认', applied: '已应用',
     promote: '升级', demote: '降级观察', retire: '退役', mutate: '生成变体', ready: '就绪',
     positive: '正向', negative: '负向', neutral: '中性', bullish: '正向', bearish: '负向',
@@ -241,9 +241,9 @@ const LIFECYCLE_LABELS: Readonly<Record<string, string>> = {
   rejected: '已拒绝',
 }
 
-/** 同一策略出现在多个生命周期分组时，取真实状态（mutated 是来源标注而非状态）。 */
+/** 同一策略出现在多个生命周期分组时，取真实状态（变异是来源标注而非独立状态）。 */
 const LIFECYCLE_PRIORITY: Readonly<Record<string, number>> = {
-  active: 6, watch: 5, candidate: 4, retired: 3, rejected: 2, mutated: 1,
+  active: 6, watch: 5, candidate: 4, retired: 3, rejected: 2,
 }
 
 /** 策略稳定标号：取 id 后 6 位，全站统一，方便对话中指认策略。 */
@@ -260,6 +260,42 @@ const BACKTEST_WINDOW_OPTIONS: ReadonlyArray<{ readonly value: number; readonly 
   { value: 3, label: '3年' },
   { value: 5, label: '5年' },
 ]
+
+const CUSTOM_WINDOW_VALUE = 'custom'
+
+/** 回测任务执行来源：手动页面触发 / 自动（首次入池或 15 天复测巡检）。 */
+function backtestSourceLabel(source: unknown): string {
+  return text(source, '') === 'auto' ? '自动' : '手动'
+}
+
+/** 回测任务的显式时间窗口标签（自动任务带「2年」预设；手动可为自定义区间）。 */
+function backtestWindowLabel(task: Record<string, unknown>): string {
+  const window = asRecord(task.window)
+  const years = number(task.lookback_years)
+  const start = text(window.start, '')
+  const end = text(window.end, '')
+  if (start !== '' && end !== '') {
+    return years === undefined ? `${start} ~ ${end}` : `${years}年（${start} ~ ${end}）`
+  }
+  return '未记录窗口'
+}
+
+/** 任务状态的中文徽标文案（独立于策略生命周期状态）。 */
+function taskStatusLabel(status: unknown): string {
+  return statusLabel(text(status, 'unknown'))
+}
+
+/** 回测任务的验证结论：通过 / 待定 / 未达标（thresholds_pass 优先于 verification_status）。 */
+function backtestVerdictLabel(task: Record<string, unknown>): string {
+  const thresholds = task.thresholds_pass
+  if (thresholds === true) return '通过'
+  if (thresholds === false) return '未达标'
+  const verification = text(task.verification_status, '')
+  if (verification === 'passed') return '通过'
+  if (verification === 'pending') return '样本不足待定'
+  if (verification === 'failed') return '未达标'
+  return '—'
+}
 
 function strategySubjectLabel(value: unknown, securityNames: Readonly<Record<string, string>> = {}): string {
   const raw = text(value, '').trim()
@@ -537,14 +573,17 @@ function HypothesisPreviewDialog({
 }
 
 function StrategyDetailDialog({
-  item, busy, onClose, onRun, onAnalyze, onShadow,
+  item, tasks, busy, tasksBusy, onClose, onAnalyze, onShadow, onRefreshTasks, onCreateTask,
 }: {
   item: Record<string, unknown>
+  tasks: readonly Record<string, unknown>[]
   busy: boolean
+  tasksBusy: boolean
   onClose: () => void
-  onRun: () => void
   onAnalyze: () => void
   onShadow: () => void
+  onRefreshTasks: () => void
+  onCreateTask: () => void
 }) {
   const id = text(item.id, '未返回')
   const status = text(item.status, '')
@@ -569,6 +608,8 @@ function StrategyDetailDialog({
     ['年化 Sharpe', metric(inSample.sharpe_annualized), metric(outOfSample.sharpe_annualized)],
     ['最大回撤', metric(inSample.max_drawdown_pct, '%'), metric(outOfSample.max_drawdown_pct, '%')],
   ] as const
+  const latestTask = tasks.find(task => text(task.status, '') === 'completed') ?? tasks[0]
+  const manageDisabled = busy || category === 'archived'
   return (
     <DetailDialog
       title={text(item.name, id)}
@@ -579,7 +620,6 @@ function StrategyDetailDialog({
       actions={<>
         <button type="button" className={css.secondaryButton} onClick={onClose}>关闭</button>
         <button type="button" className={css.secondaryButton} onClick={onAnalyze}>AI 评审</button>
-        <button type="button" className={css.secondaryButton} disabled={busy || category === 'archived'} onClick={onRun}>{busy ? '回测中…' : '运行回测'}</button>
         <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={onShadow}>进入影子验证</button>
       </>}
     >
@@ -622,6 +662,62 @@ function StrategyDetailDialog({
         </div>
         {symbolErrors.length > 0 && <p className={css.detailFootnote}>行情获取异常标的：{symbolErrors.join('、')}</p>}
       </section>
+      <section className={css.detailSection} data-testid="backtest-management" aria-label="回测管理">
+        <h3>回测管理</h3>
+        <p className={css.detailFootnote}>
+          每次手动或自动回测都是一条独立任务；自动任务由策略首次入池与每 15 天复测巡检创建，
+          统一进入下方历史清单。最新一次证据会同步到“验证结论/样本内外证据”。
+        </p>
+        {latestTask === undefined ? (
+          <p className={css.detailFootnote}>暂无回测任务记录。策略首次进入策略池后会由自动回测创建首测任务。</p>
+        ) : (
+          <dl className={css.detailMetaGrid}>
+            <div><dt>最近状态</dt><dd>{taskStatusLabel(latestTask.status)}</dd></div>
+            <div><dt>执行来源</dt><dd>{backtestSourceLabel(latestTask.source)}</dd></div>
+            <div><dt>时间窗口</dt><dd>{backtestWindowLabel(latestTask)}</dd></div>
+            <div><dt>创建 / 完成</dt><dd>{reportTimeLabel(latestTask.created_at)} → {reportTimeLabel(latestTask.completed_at)}</dd></div>
+            <div><dt>验证结论</dt><dd>{latestTask.status === 'completed' ? backtestVerdictLabel(latestTask) : '—'}</dd></div>
+          </dl>
+        )}
+        {latestTask !== undefined && text(latestTask.failure_reason, '') !== '' && (
+          <p className={css.detailFootnote}>失败原因：{text(latestTask.failure_reason)}</p>
+        )}
+        <div className={css.moduleToolbar}>
+          <button type="button" className={css.secondaryButton} disabled={tasksBusy || busy} onClick={onRefreshTasks}>刷新任务</button>
+          <button type="button" className={css.primaryButton} disabled={manageDisabled} onClick={onCreateTask}>
+            {busy ? '回测中…' : '新建回测任务'}
+          </button>
+        </div>
+        {tasks.length > 0 ? (
+          <div className={css.strategyEvidenceTable}>
+            <table>
+              <thead><tr><th>时间窗口</th><th>来源</th><th>状态</th><th>创建时间</th><th>开始 / 完成</th><th>结果</th><th>失败原因</th></tr></thead>
+              <tbody>
+                {tasks.map(task => {
+                  const taskIdText = text(task.task_id, '')
+                  const summary = asRecord(task.summary)
+                  const failed = text(task.status, '') === 'failed'
+                  const trades = number(summary.oos_trades)
+                  const verdict = failed ? '—' : `${backtestVerdictLabel(task)}${trades === undefined ? '' : ` · 样本外${trades}笔`}`
+                  return (
+                    <tr key={taskIdText}>
+                      <td>{backtestWindowLabel(task)}</td>
+                      <td>{backtestSourceLabel(task.source)}</td>
+                      <td>{taskStatusLabel(task.status)}</td>
+                      <td>{reportTimeLabel(task.created_at)}</td>
+                      <td>{reportTimeLabel(task.started_at)} → {reportTimeLabel(task.completed_at)}</td>
+                      <td>{verdict}</td>
+                      <td>{failed ? text(task.failure_reason, '') : ''}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className={css.detailFootnote}>暂无回测任务历史。</p>
+        )}
+      </section>
       <section className={css.detailSection} data-testid="strategy-sources">
         <h3>数据来源与准入说明</h3>
         <ul className={css.detailList}>
@@ -633,6 +729,116 @@ function StrategyDetailDialog({
           <li>影子验证只使用纸面账户，不会发出真实交易指令。</li>
         </ul>
       </section>
+    </DetailDialog>
+  )
+}
+
+interface NewBacktestOptions {
+  readonly years?: number
+  readonly startDate?: string
+  readonly endDate?: string
+  readonly capital?: number
+}
+
+function NewBacktestTaskDialog({
+  item, busy, onClose, onConfirm,
+}: {
+  item: Record<string, unknown>
+  busy: boolean
+  onClose: () => void
+  onConfirm: (options: NewBacktestOptions) => void
+}) {
+  const id = text(item.id, '未返回')
+  const today = new Date()
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const [mode, setMode] = useState<string>('2')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [capital, setCapital] = useState('')
+  const [error, setError] = useState('')
+
+  const submit = (): void => {
+    const parsedCapital = capital.trim() === '' ? undefined : Number(capital)
+    if (parsedCapital !== undefined && (!Number.isFinite(parsedCapital) || parsedCapital <= 0)) {
+      setError('初始资金必须是大于 0 的金额。')
+      return
+    }
+    if (mode === CUSTOM_WINDOW_VALUE) {
+      if (startDate === '' || endDate === '') {
+        setError('请同时填写起始日期与截止日期。')
+        return
+      }
+      if (startDate >= endDate) {
+        setError('起始日期必须早于截止日期。')
+        return
+      }
+      if (endDate > todayIso) {
+        setError('截止日期不能晚于今天。')
+        return
+      }
+    }
+    const windowOptions: NewBacktestOptions = mode === CUSTOM_WINDOW_VALUE
+      ? { startDate, endDate }
+      : { years: Number(mode) }
+    onConfirm(parsedCapital === undefined ? windowOptions : { ...windowOptions, capital: parsedCapital })
+  }
+
+  return (
+    <DetailDialog
+      title="新建回测任务"
+      description="创建一条独立回测任务，完成后写入该策略的任务历史并刷新验证证据。"
+      eyebrow={`策略 ${strategyLabel(id)}`}
+      closeDisabled={busy}
+      onClose={onClose}
+      actions={<>
+        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onClose}>取消</button>
+        <button type="button" className={css.primaryButton} disabled={busy} onClick={submit}>
+          {busy ? '回测中…' : '开始回测'}
+        </button>
+      </>}
+    >
+      <label className={css.importField}>
+        <span>回测时间窗口</span>
+        <select
+          className={css.backtestWindowSelect}
+          value={mode}
+          disabled={busy}
+          onChange={(event) => { setMode(event.target.value) }}
+        >
+          {BACKTEST_WINDOW_OPTIONS.map(option => (
+            <option key={option.value} value={String(option.value)}>{option.label}</option>
+          ))}
+          <option value={CUSTOM_WINDOW_VALUE}>自定义起止日期</option>
+        </select>
+      </label>
+      {mode === CUSTOM_WINDOW_VALUE && (
+        <>
+          <label className={css.importField}>
+            <span>起始日期</span>
+            <input className={css.fieldInput} type="date" value={startDate} max={endDate === '' ? todayIso : endDate} disabled={busy} onChange={(event) => { setStartDate(event.target.value) }} />
+          </label>
+          <label className={css.importField}>
+            <span>截止日期</span>
+            <input className={css.fieldInput} type="date" value={endDate} max={todayIso} disabled={busy} onChange={(event) => { setEndDate(event.target.value) }} />
+          </label>
+        </>
+      )}
+      <label className={css.importField}>
+        <span>初始资金（元）</span>
+        <input
+          className={css.fieldInput}
+          type="number"
+          inputMode="numeric"
+          min="1"
+          step="1000"
+          value={capital}
+          placeholder="留空使用默认 100000"
+          disabled={busy}
+          onChange={(event) => { setCapital(event.target.value) }}
+        />
+      </label>
+      <p className={css.detailFootnote}>窗口越长样本外证据越足；样本内 70% / 样本外 30% 自动切分。</p>
+      {error !== '' && <p className={css.detailFootnote} role="alert">{error}</p>}
     </DetailDialog>
   )
 }
@@ -707,6 +913,7 @@ export function StrategyResearchPage({
   initialStage = 'form', onBackEvolution = onOpenEvolution,
 }: StrategyResearchPageProps) {
   const strategies = useDataResource(requestData)
+  const backtestTasks = useDataResource(requestData)
   const alive = useAliveRef()
   const [busyAction, setBusyAction] = useState('')
   const [notice, setNotice] = useState('')
@@ -715,8 +922,8 @@ export function StrategyResearchPage({
   const [evolutionEducationOpen, setEvolutionEducationOpen] = useState(false)
   const [suppressEvolutionEducation, setSuppressEvolutionEducation] = useState(false)
   const [filter, setFilter] = useState<StrategyFilter>('all')
-  const [backtestYears, setBacktestYears] = useState<number>(2)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
+  const [newTaskItem, setNewTaskItem] = useState<Record<string, unknown>>()
   const [archiveItem, setArchiveItem] = useState<Record<string, unknown>>()
   const [hypothesisPreview, setHypothesisPreview] = useState<StrategyHypothesisPreview>()
   const [hypothesisStatus, setHypothesisStatus] = useState('')
@@ -726,6 +933,15 @@ export function StrategyResearchPage({
     strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
   }, [strategies.run])
   useEffect(load, [load])
+  const detailId = text(detailItem?.id, '')
+  const refreshBacktestTasks = useCallback((): void => {
+    if (detailId === '') return
+    backtestTasks.run({ operation: 'trading-core.strategy-backtests', input: { strategy_id: detailId, limit: 50 } })
+  }, [detailId, backtestTasks.run])
+  useEffect(() => {
+    if (detailId !== '') refreshBacktestTasks()
+  }, [detailId, refreshBacktestTasks])
+  const backtestTaskList = records(asRecord(backtestTasks.state.value).tasks)
   const items = records(asRecord(strategies.state.value).items)
   const unresolvedSymbolKey = [...new Set(items.flatMap(item => (
     strategyTickers(item).filter(ticker => ticker.name === '').map(ticker => ticker.code)
@@ -825,14 +1041,17 @@ export function StrategyResearchPage({
     }
   }
 
-  const runStrategy = async (strategyId: string): Promise<void> => {
+  const runBacktest = async (strategyId: string, options: NewBacktestOptions): Promise<void> => {
     if (busyAction !== '') return
-    setBusyAction(`run:${strategyId}`); setNotice('正在启动样本内与样本外回测…'); setReportReady(false)
+    setBusyAction(`backtest:${strategyId}`); setNotice('正在启动样本内与样本外回测…'); setReportReady(false)
     try {
-      const started = await requestData({
-        operation: 'trading-core.strategy-run',
-        input: { strategy_id: strategyId, lookback_years: backtestYears, oos_frac: 0.3, min_oos_trades: 4 },
-      })
+      const windowInput = options.startDate !== undefined && options.endDate !== undefined
+        ? { strategy_id: strategyId, oos_frac: 0.3, min_oos_trades: 4, start_date: options.startDate, end_date: options.endDate }
+        : { strategy_id: strategyId, oos_frac: 0.3, min_oos_trades: 4, lookback_years: options.years ?? 2 }
+      const input = options.capital !== undefined && options.capital > 0
+        ? { ...windowInput, initial_capital: options.capital }
+        : windowInput
+      const started = await requestData({ operation: 'trading-core.strategy-run', input })
       const id = taskId(started)
       if (id === '') throw new Error('后端没有返回任务编号')
       const result = await waitForTask(
@@ -848,7 +1067,9 @@ export function StrategyResearchPage({
         ? '回测完成，正式结果已进入投研报告。'
         : '回测完成，但本次结果没有生成可归档报告。')
       setReportReady(archived)
+      if (text(newTaskItem?.id, '') === strategyId) setNewTaskItem(undefined)
       load()
+      refreshBacktestTasks()
     } catch (reason) {
       if (alive.current) setNotice(productErrorText(reason))
     } finally {
@@ -935,14 +1156,7 @@ export function StrategyResearchPage({
     <div className={css.pageScroll}>
       <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
         {view === 'pool' && <>
-          <label className={css.backtestWindow} title="回测样本窗口：按 70% 样本内 / 30% 样本外切分，窗口越长样本外证据越足">
-            <span>回测窗口</span>
-            <select className={css.backtestWindowSelect} value={backtestYears} disabled={busyAction !== ''} onChange={(event) => { setBacktestYears(Number(event.target.value)) }}>
-              {BACKTEST_WINDOW_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
+          <span className={css.backtestWindow} title="回测入口已并入策略详情：可自选预设窗口或自定义起止日期">回测入口：策略详情 → 回测管理</span>
           <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
           <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
             {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件新建策略'}
@@ -1073,8 +1287,8 @@ export function StrategyResearchPage({
                 )}
                 <div className={css.moduleToolbar}>
                   <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>查看详情</button>
-                  <button type="button" className={css.secondaryButton} disabled={busyAction !== '' || category === 'archived'} onClick={() => { onSelectStrategy(id); void runStrategy(id) }}>
-                    {busyAction === `run:${id}` ? '回测中…' : '运行回测'}
+                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setDetailItem(item) }}>
+                    回测管理
                   </button>
                   {status === 'candidate' && (
                     <button type="button" className={css.secondaryButton} disabled={busyAction !== '' || !hasBacktest} title={hasBacktest ? '人工确认策略生效' : '完成回测后才能确认生效'} onClick={() => { onSelectStrategy(id); void activate(id) }}>
@@ -1108,13 +1322,12 @@ export function StrategyResearchPage({
       {detailItem !== undefined && (
         <StrategyDetailDialog
           item={detailItem}
-          busy={busyAction === `run:${text(detailItem.id, '')}`}
+          tasks={backtestTaskList}
+          busy={busyAction === `backtest:${text(detailItem.id, '')}`}
+          tasksBusy={backtestTasks.state.phase === 'loading' && backtestTasks.state.value === undefined}
           onClose={() => { setDetailItem(undefined) }}
-          onRun={() => {
-            const id = text(detailItem.id, '')
-            setDetailItem(undefined)
-            if (id !== '') { onSelectStrategy(id); void runStrategy(id) }
-          }}
+          onRefreshTasks={() => { void refreshBacktestTasks() }}
+          onCreateTask={() => { setNewTaskItem(detailItem) }}
           onAnalyze={() => {
             const id = text(detailItem.id, '')
             setDetailItem(undefined)
@@ -1124,6 +1337,17 @@ export function StrategyResearchPage({
             const id = text(detailItem.id, '')
             setDetailItem(undefined)
             if (id !== '') { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }
+          }}
+        />
+      )}
+      {newTaskItem !== undefined && (
+        <NewBacktestTaskDialog
+          item={newTaskItem}
+          busy={busyAction === `backtest:${text(newTaskItem.id, '')}`}
+          onClose={() => { if (busyAction === '') setNewTaskItem(undefined) }}
+          onConfirm={(options) => {
+            const id = text(newTaskItem.id, '')
+            if (id !== '') void runBacktest(id, options)
           }}
         />
       )}
@@ -1184,9 +1408,22 @@ export function ShadowValidationPage({
   const alive = useAliveRef()
   const positions = useDataResource(requestData)
   const equity = useDataResource(requestData)
+  const history = useDataResource(requestData)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [reportReady, setReportReady] = useState(false)
+  // 影子验证历史两种粒度：有选中策略时默认「当前策略历史」，也可切到全局「全部策略运行记录」。
+  const [historyView, setHistoryView] = useState<'strategy' | 'all'>(selectedStrategyId === '' ? 'all' : 'strategy')
+  useEffect(() => {
+    setHistoryView(selectedStrategyId === '' ? 'all' : 'strategy')
+  }, [selectedStrategyId])
+  const refreshHistory = useCallback((): void => {
+    const single = historyView === 'strategy' && selectedStrategyId !== ''
+    history.run(single
+      ? { operation: 'trading-core.shadow-history', input: { strategy_id: selectedStrategyId, limit: 200 } }
+      : { operation: 'trading-core.shadow-history', input: { limit: 200 } })
+  }, [history.run, historyView, selectedStrategyId])
+  useEffect(() => { refreshHistory() }, [refreshHistory])
   const load = useCallback(() => {
     status.run({ operation: 'trading-core.shadow-status' })
     positions.run({
@@ -1197,7 +1434,8 @@ export function ShadowValidationPage({
       operation: 'trading-core.shadow-equity',
       input: selectedStrategyId === '' ? { limit: 30 } : { strategy_id: selectedStrategyId, limit: 30 },
     })
-  }, [equity.run, positions.run, selectedStrategyId, status.run])
+    refreshHistory()
+  }, [equity.run, positions.run, refreshHistory, selectedStrategyId, status.run])
   useEffect(load, [load])
 
   const start = async (): Promise<void> => {
@@ -1241,6 +1479,11 @@ export function ShadowValidationPage({
   const equityItems = records(asRecord(equity.state.value).items)
   const positionNames = useSecurityNames(requestData, positionItems.map(item => text(item.symbol, text(item.code))))
   const selectedStrategyName = strategyNames[selectedStrategyId]?.trim() ?? ''
+  const historyItems = records(asRecord(history.state.value).items)
+  const historyLoading = history.state.phase === 'loading' && history.state.value === undefined
+  const visibleHistoryItems = historyView === 'strategy' && selectedStrategyId !== ''
+    ? historyItems.filter(item => text(item.strategy_id, '') === selectedStrategyId)
+    : historyItems
   const firstError = [status.state, positions.state, equity.state].find(item => item.phase === 'error')
   const initialLoading = [status.state, positions.state, equity.state]
     .some(item => item.phase === 'loading' && item.value === undefined)
@@ -1354,6 +1597,79 @@ export function ShadowValidationPage({
             {equityItems.length === 0 && equity.state.phase === 'success' && <Empty>尚无净值历史，需要先运行影子验证。</Empty>}
           </div>
         </article>
+      </section>
+      <section className={css.detailSection} data-testid="shadow-run-history" aria-label={selectedStrategyId === '' ? '全部策略运行记录' : '影子验证历史'}>
+        <div className={css.sectionHeading}>
+          <div>
+            <strong>{selectedStrategyId === '' ? '全部策略运行记录' : '影子验证历史'}</strong>
+            <small>交易日 × 策略粒度的运行记录，来自每日影子快照</small>
+          </div>
+          {selectedStrategyId !== '' && (
+            <div className={`${css.segmented} ${css.strategyFilters}`} role="group" aria-label="影子运行记录视图">
+              <button type="button" aria-pressed={historyView === 'strategy'} className={historyView === 'strategy' ? css.segmentActive : undefined} onClick={() => { setHistoryView('strategy') }}>当前策略历史</button>
+              <button type="button" aria-pressed={historyView === 'all'} className={historyView === 'all' ? css.segmentActive : undefined} onClick={() => { setHistoryView('all') }}>全部策略运行记录</button>
+            </div>
+          )}
+        </div>
+        {historyLoading ? <BusyRows /> : (
+          <div className={css.strategyEvidenceTable}>
+            <table>
+              <thead><tr>
+                <th>验证日</th>
+                <th>策略</th>
+                <th>跟踪起始</th>
+                <th>初始资金</th>
+                <th>当前权益</th>
+                <th>净值</th>
+                <th>持仓数</th>
+                <th>平仓数</th>
+                <th>数据异常</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                {visibleHistoryItems.map(item => {
+                  const sid = text(item.strategy_id, '')
+                  const rawName = text(item.strategy_name, '')
+                  const resolvedName = strategyNames[sid]?.trim() ?? rawName
+                  const strategyDisplay = historyView === 'all'
+                    ? (resolvedName === '' ? sid : resolvedName)
+                    : (selectedStrategyName || resolvedName || selectedStrategyId)
+                  const symbolErrorCount = Object.keys(asRecord(item.symbol_errors)).length
+                  const strategyError = text(item.strategy_error, '')
+                  const anomaly = strategyError !== ''
+                    ? strategyError
+                    : symbolErrorCount > 0 ? `${symbolErrorCount} 个标的行情异常` : '—'
+                  return (
+                    <tr key={`${text(item.date)}-${sid}`}>
+                      <td>{text(item.date)}</td>
+                      <td>{strategyDisplay}</td>
+                      <td>{text(item.track_from, '—')}</td>
+                      <td>{money(number(item.initial_capital))}</td>
+                      <td>{money(number(item.equity))}</td>
+                      <td>{compactMetric(item.nav)}</td>
+                      <td>{number(item.open_positions)?.toFixed(0) ?? '—'}</td>
+                      <td>{number(item.closed_count)?.toFixed(0) ?? '0'}</td>
+                      <td>{anomaly}</td>
+                      <td>
+                        <button type="button" className={css.secondaryButton} onClick={onOpenReports}
+                          title={`打开 ${text(item.date)} 影子验证报告`}>影子报告</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!historyLoading && visibleHistoryItems.length === 0 && (
+          <p className={css.detailFootnote}>
+            {history.state.phase === 'error'
+              ? '运行记录加载失败，可点击顶部刷新重试。'
+              : selectedStrategyId === '' || historyView === 'all'
+                ? '暂无影子运行记录；生效策略运行影子验证后逐交易日生成。'
+                : '该策略尚无影子运行记录；生效并运行影子验证后逐交易日生成。'}
+          </p>
+        )}
       </section>
     </>}
     <div className={css.shadowFooterActions}>
@@ -1509,7 +1825,7 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
             <div><dt>下次自动运行</dt><dd>每日 {closedLoopTime}{!closedLoopEnabled && <StatusBadge value="waiting_data" />}</dd></div>
           </dl>
           <div className={css.lifecycleNav} aria-label="生命周期分组">
-            {(['active', 'candidate', 'mutated', 'retired'] as const).map(key => (
+            {(['active', 'candidate', 'retired'] as const).map(key => (
               <button
                 type="button"
                 data-active={openLifecycle === key || undefined}
@@ -1600,7 +1916,7 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
               const sid = text(item.strategy_id, '')
               const symbols = strings(item.symbols)
               const decision = text(item.decision, '')
-              const badge = decision === '' || decision === 'none' ? text(item.behavior, '带内运行') : decision
+              const badge = decision === '' || decision === 'none' ? text(item.behavior, '正常运行') : decision
               const attr = attrBySid.get(sid) ?? {}
               const expanded = expandedSid === sid
               const resolvedName = (code: string): string => {
