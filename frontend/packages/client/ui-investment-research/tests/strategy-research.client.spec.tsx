@@ -4,6 +4,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
 import css from '../src/client/InvestmentShell.module.css'
 
+const primaryRouteSurfaceClass = css.primaryRouteSurface
+if (primaryRouteSurfaceClass === undefined) {
+  throw new Error('primaryRouteSurface class missing from InvestmentShell.module.css')
+}
+
 afterEach(cleanup)
 
 function renderStrategyPage(
@@ -34,7 +39,7 @@ describe('策略研究产品事实与确认流程', () => {
     })
 
     const view = renderStrategyPage(requestData)
-    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
+    expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
     const card = (await screen.findByText('旧策略')).closest('article')
     fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测管理' }))
     expect(await screen.findByText(/历史未留存：该策略仅保留最近一次回测证据/)).toBeTruthy()
