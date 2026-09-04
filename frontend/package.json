@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-root",
-  "version": "0.1.0-rc.10",
+  "version": "0.1.0-rc.11",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -27,6 +27,7 @@
     "branch:cleanup": "tsx scripts/cleanup-merged-branches.ts",
     "change-scope": "tsx scripts/change-scope.ts",
     "typecheck": "npm run build:lib:host && npm run typecheck:contracts-ready",
+    "typecheck:startup": "tsx scripts/startup-typecheck.ts",
     "typecheck:contracts-ready": "tsc -b tsconfig.client.json",
     "lint": "npm run build:lib:host && npm run lint:contracts-ready",
     "lint:contracts-ready": "tsx scripts/run-oxlint.ts .",
