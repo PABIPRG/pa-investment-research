@@ -1151,7 +1151,7 @@ export function StrategyResearchPage({
   }
 
   return (
-    <div className={css.pageScroll}>
+    <div className={`${css.pageScroll} ${css.primaryRouteSurface}`}>
       <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
         <button
           type="button"
@@ -3724,7 +3724,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   )
 
   return (
-    <div className={css.pageScroll}>
+    <div className={`${css.pageScroll} ${css.primaryRouteSurface}`}>
       <PageHeading title="产业链" description="检索真实公司产业链，按层查看上下游关系与传导依据；事件传导作为次级参考单独展示">
         <button type="button" className={css.secondaryButton} onClick={refresh}>刷新</button>
         <button

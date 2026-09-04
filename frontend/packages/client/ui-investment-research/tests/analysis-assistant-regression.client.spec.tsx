@@ -7,8 +7,10 @@ import {
   InvestmentBrand, InvestmentPromptTemplateSelect, InvestmentShell, nextPromptTemplateDraft,
 } from '../src/client/InvestmentShell.tsx'
 import { AnalysisPromptTemplateController } from '../src/client/analysis-prompt-templates.ts'
+import { SmartAnalysisPage } from '../src/client/AnalysisPage.tsx'
 import type { AnalysisPromptTemplateId } from '../src/client/analysis-modules.ts'
 import { assistantPrompt, type AssistantIntent } from '../src/client/assistant-intent.ts'
+import css from '../src/client/InvestmentShell.module.css'
 import type {
   AssistantDisplayMode,
   AssistantModule,
@@ -176,6 +178,11 @@ function chooseAssistantModule(label: string): void {
 }
 
 describe('智能分析与全局 AI 助理回归', () => {
+  it('为智能分析真实页面根挂载一级路由视觉契约', () => {
+    const view = render(<SmartAnalysisPage onOpenReports={() => {}} onOpenAssistant={() => {}} />)
+    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
+  })
+
   it('提示词模板切换只替换自动内容，并允许回到开放式提问', () => {
     const stockPrompt = '个股模块自动提示'
     const briefPrompt = '市场简报模块自动提示'

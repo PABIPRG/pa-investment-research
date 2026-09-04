@@ -462,7 +462,7 @@ export function ResearchWorkbenchPage({
   const matchesAsOf = text(strategyValue.as_of, '')
 
   return (
-    <div className={css.pageScroll}>
+    <div className={`${css.pageScroll} ${css.primaryRouteSurface}`}>
       <div className={css.pageHeader}>
         <div>
           <h1>研究工作台</h1>

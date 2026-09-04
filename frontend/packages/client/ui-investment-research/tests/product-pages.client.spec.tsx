@@ -10,6 +10,7 @@ import {
   StrategyResearchPage,
 } from '../src/client/ProductPages.tsx'
 import { InvestmentShell, InvestmentSidebar } from '../src/client/InvestmentShell.tsx'
+import css from '../src/client/InvestmentShell.module.css'
 import type { AssistantIntent } from '../src/client/assistant-intent.ts'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
@@ -706,7 +707,8 @@ describe('投研产品闭环', () => {
       return Promise.reject(new Error(`unexpected operation ${request.operation}`))
     })
 
-    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
+    const view = render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
+    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
 
     expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
     expect(screen.getByText(/约 25 MB/)).toBeTruthy()

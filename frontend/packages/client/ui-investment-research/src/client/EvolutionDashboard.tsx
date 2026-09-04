@@ -302,13 +302,13 @@ export function EvolutionDashboard({
                 </button>
                 <div className={css.strategyDetail}>
                   {mutationSource !== '' && <span className={css.evolutionMutationSource}>变异来源：{mutationSource}</span>}
-                  <div className={css.evolutionFacts} aria-label={`${displayLabel}五维状态`}>
-                    <span>{`参与状态：${labels.participation}`}</span>
-                    <span>{`验证结果：${labels.verification}`}</span>
-                    <span>{`置信等级：${labels.confidence}`}</span>
-                    <span>{`来源：${labels.source}`}</span>
-                    <span>{`任务状态：${labels.task}`}</span>
-                  </div>
+                  <dl className={css.evolutionFacts} aria-label={`${displayLabel}五维状态`}>
+                    <div><dt>参与状态</dt><dd>{labels.participation}</dd></div>
+                    <div><dt>验证结果</dt><dd>{labels.verification}</dd></div>
+                    <div><dt>置信等级</dt><dd>{labels.confidence}</dd></div>
+                    <div><dt>来源</dt><dd>{labels.source}</dd></div>
+                    <div><dt>任务状态</dt><dd>{labels.task}</dd></div>
+                  </dl>
                   <dl className={css.strategyDetailGrid}>
                     <div><dt>影子净值</dt><dd>{metric(entry.nav)}</dd></div>
                     <div><dt>累计收益</dt><dd>{metric(strategyAttribution.return_pct, '%')}</dd></div>

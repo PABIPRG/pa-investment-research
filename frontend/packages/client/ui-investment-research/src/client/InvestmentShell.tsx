@@ -2001,7 +2001,7 @@ export function OpportunityPage({
   return (
     <div
       ref={pageScrollRef}
-      className={css.pageScroll}
+      className={`${css.pageScroll} ${css.primaryRouteSurface}`}
       data-testid="opportunity-root"
       data-assistant-layout={assistantLayout}
       data-density={density}

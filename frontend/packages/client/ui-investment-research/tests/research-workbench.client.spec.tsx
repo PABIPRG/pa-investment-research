@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { ResearchWorkbenchPage } from '../src/client/ResearchWorkbenchPage.tsx'
+import css from '../src/client/InvestmentShell.module.css'
 
 afterEach(() => {
   cleanup()
@@ -119,6 +120,8 @@ function deferred<T>() {
 describe('研究工作台', () => {
   it('从页头操作区打开偏好复盘', () => {
     const view = renderWorkbench()
+
+    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
 
     fireEvent.click(view.getByRole('button', { name: '偏好复盘' }))
 
