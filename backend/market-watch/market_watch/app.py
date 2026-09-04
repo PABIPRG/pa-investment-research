@@ -429,19 +429,22 @@ def _startup():
 
 
 def _warm_event_cache() -> None:
-    """后台预热事件流（含定向个股新闻），避免 trading-core 首次请求撞上冷抽取超时。
+    """后台常驻预热事件流（含定向个股新闻），避免请求撞上冷抽取超时。
 
     冷抽取（全量快讯 + LLM + 定向）在网络不佳时可到数十秒，而 trading-core 侧
-    fetch_events 只有 15s 超时；daemon 线程后台预跑一轮，让 _EVENT_CACHE 在
-    trading-core 首次面板请求前就绪。预抽取一次即覆盖 60s TTL，此后由正常请求续热。
+    fetch_events 超时仅 15s；单次预跑只覆盖 60s TTL，过期后请求仍会撞冷抽取。
+    改为常驻 daemon 线程：启动即跑一轮填 _EVENT_CACHE，随后按 event_warm_interval
+    （默认 45s，远小于 event_ttl=300s）周期 force 续热，使 /news/events 恒命中缓存。
+    force 续热受去重游标限制只增量抽取新快讯；单轮失败不退出，sleep 后下轮再试。
     """
 
     def run() -> None:
-        try:
-            events.extract_events(limit=60)
-            logger.info("事件流预热完成")
-        except Exception as exc:
-            logger.warning("事件流预热失败: %s", exc)
+        while True:
+            try:
+                events.extract_events(limit=60, force=True)
+            except Exception as exc:  # noqa: BLE001 — 后台预热失败不影响主服务
+                logger.warning("事件流预热失败: %s", exc)
+            time.sleep(settings.event_warm_interval)
 
     threading.Thread(target=run, name="event-warm", daemon=True).start()
 

@@ -184,15 +184,18 @@ def _extract_rule(it: dict, names: dict[str, str]) -> dict | None:
     }
 
 
-def extract_events(limit: int = 30) -> list[dict]:
+def extract_events(limit: int = 30, *, force: bool = False) -> list[dict]:
     """快讯 → 结构化事件列表。懒抽取（每轮最多 event_batch 条新快讯）+ TTL 缓存 + 去重游标。
+
+    force=True 由后台 event-warm 线程周期调用：跳过 TTL 命中直接续热刷新。
+    去重游标保证只增量抽取新快讯（无新内容时开销近零），缓存时间戳随之前移。
     LLM 不可用/失败 → 规则降级。event_enabled=false 返回空。"""
     limit = max(5, min(limit, 100))
     if not settings.event_enabled:
         return []
     now = time.time()
     hit = _EVENT_CACHE.get("events")
-    if hit and (now - hit[0]) < settings.event_ttl:
+    if hit and not force and (now - hit[0]) < settings.event_ttl:
         return hit[1][:limit]
 
     items = news.fetch_flash(limit=max(limit, 40), include_slow=True)["items"]
