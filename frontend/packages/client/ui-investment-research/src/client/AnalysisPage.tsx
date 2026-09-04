@@ -41,7 +41,7 @@ export function SmartAnalysisPage({ onOpenReports, onOpenAssistant }: SmartAnaly
   }
 
   return (
-    <div className={css.pageScroll} data-testid="analysis-workbench">
+    <div className={`${css.pageScroll} ${css.primaryRouteSurface}`} data-testid="analysis-workbench">
       <div className={css.pageHeader}>
         <div>
           <h1>智能分析</h1>

@@ -6,6 +6,22 @@ const styles = readFileSync(
   fileURLToPath(new URL('../src/client/InvestmentShell.module.css', import.meta.url)),
   'utf8',
 )
+const analysisPageSource = readFileSync(
+  fileURLToPath(new URL('../src/client/AnalysisPage.tsx', import.meta.url)),
+  'utf8',
+)
+const researchWorkbenchSource = readFileSync(
+  fileURLToPath(new URL('../src/client/ResearchWorkbenchPage.tsx', import.meta.url)),
+  'utf8',
+)
+const investmentShellSource = readFileSync(
+  fileURLToPath(new URL('../src/client/InvestmentShell.tsx', import.meta.url)),
+  'utf8',
+)
+const productPagesSource = readFileSync(
+  fileURLToPath(new URL('../src/client/ProductPages.tsx', import.meta.url)),
+  'utf8',
+)
 const conversationStyles = readFileSync(
   fileURLToPath(new URL('../../ui-conversation/src/client/skeleton/ConversationRoot.module.css', import.meta.url)),
   'utf8',
@@ -16,6 +32,10 @@ const inputBarStyles = readFileSync(
 )
 const baseStyles = readFileSync(
   fileURLToPath(new URL('../../web/src/base.css', import.meta.url)),
+  'utf8',
+)
+const design = readFileSync(
+  fileURLToPath(new URL('../../../../../DESIGN.md', import.meta.url)),
   'utf8',
 )
 
@@ -71,6 +91,71 @@ describe('投研工作台主题样式', () => {
     expect(styles).not.toMatch(/font(?:-size)?:[^;]*\dpx/)
     expect(inputBarStyles).not.toMatch(/font(?:-size)?:[^;]*\dpx/)
     expect(inputBarStyles).toMatch(/\.card\s*\{[^}]*font-size:\s*1rem;/s)
+  })
+
+  it('持仓卡片按容器宽度降列，并为名称保留独立布局行', () => {
+    expect(styles).toMatch(
+      /\.dashboardHoldingList\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*280px\),\s*1fr\)\);/s,
+    )
+    expect(styles).toMatch(
+      /\.dashboardHoldingList button\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s,
+    )
+    expect(styles).toMatch(/\.dashboardHoldingList button > span:last-child\s*\{[^}]*text-align:\s*left;/s)
+  })
+
+  it('自进化看板保留模块边界，但用分隔线代替策略条目的嵌套外框', () => {
+    expect(styles).toMatch(/\.evolutionDashboard\s*\{[^}]*background:\s*var\(--dsw-alias-bg-layer-1\);/s)
+    expect(styles).toMatch(/\.evolutionDashboard \.moduleCard\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);/s)
+    expect(styles).toMatch(/\.evolutionDashboard \.dataList:has\(> \.strategyEntry\)\s*\{[^}]*border:\s*0;/s)
+    expect(styles).toMatch(/\.evolutionDashboard \.strategyEntry\s*\{[^}]*border:\s*0;/s)
+    expect(styles).toMatch(/\.evolutionDashboard \.strategyEntry \+ \.strategyEntry\s*\{[^}]*border-top:\s*1px solid var\(--dsw-alias-border-l2\);/s)
+  })
+
+  it('持仓弹窗使用清晰的内容底色、表格层级和危险操作语义', () => {
+    expect(styles).toMatch(/\.detailDialogBody\s*\{[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
+    expect(styles).toMatch(/\.workbenchOverviewTableWrap\s*\{[^}]*border:\s*1px solid var\(--dsw-alias-border-l2\);[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
+    expect(styles).toMatch(/\.workbenchOverviewTable thead th\s*\{[^}]*background:\s*var\(--dsw-alias-bg-layer-2\);/s)
+    expect(styles).toMatch(/\.workbenchHoldingActions button\[aria-label\^='删除 '\]\s*\{[^}]*color:\s*var\(--dsw-alias-state-error-primary\);/s)
+  })
+
+  it('为指定一级路由建立统一的页面与大模块层级', () => {
+    expect(styles).not.toContain('--investment-route-canvas')
+    expect(styles).toMatch(/\.primaryRouteSurface\s*\{[^}]*display:\s*grid;[^}]*grid-auto-rows:\s*max-content;[^}]*gap:\s*20px;[^}]*background:\s*var\(--dsw-alias-bg-layer-1\);/s)
+    expect(styles).toMatch(/\.primaryRouteSurface > \.pageHeader\s*\{[^}]*margin-bottom:\s*0;[^}]*border-bottom:\s*1px solid var\(--dsw-alias-border-l2\);/s)
+    expect(styles).toMatch(/\.primaryRouteSurface > \.moduleGrid\s*\{[^}]*gap:\s*20px;/s)
+  })
+
+  it('让五个指定一级路由显式接入共享视觉契约', () => {
+    const sharedRoot = /className=\{`\$\{css\.pageScroll\} \$\{css\.primaryRouteSurface\}`\}/u
+    expect(researchWorkbenchSource).toMatch(sharedRoot)
+    expect(analysisPageSource).toMatch(sharedRoot)
+    expect(investmentShellSource.slice(investmentShellSource.indexOf('export function OpportunityPage'))).toMatch(sharedRoot)
+    const strategySource = productPagesSource.slice(
+      productPagesSource.indexOf('export function StrategyResearchPage'),
+      productPagesSource.indexOf('export function ShadowValidationPage'),
+    )
+    const industrySource = productPagesSource.slice(productPagesSource.indexOf('export function IndustryChainPage'))
+    expect(strategySource).toMatch(sharedRoot)
+    expect(industrySource).toMatch(sharedRoot)
+  })
+
+  it('强化五个路由的大模块边界并避免影子验证连续套框', () => {
+    expect(styles).not.toContain('.primaryRouteSurface .moduleCard {')
+    expect(styles).toMatch(/\.primaryRouteSurface \.strategyCard\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
+    expect(styles).toMatch(/\.primaryRouteSurface \.strategyCard\.reportItemActive\s*\{[^}]*border-color:\s*var\(--investment-primary\);[^}]*background:\s*var\(--investment-selected-surface\);/s)
+    expect(styles).toMatch(/\.primaryRouteSurface :is\(\.dashboardPanel, \.analysisOverview > div, \.analysisModuleCard\)\s*\{[^}]*padding:\s*16px;[^}]*border-color:\s*var\(--dsw-alias-border-l2\);[^}]*border-radius:\s*12px;[^}]*box-shadow:\s*none;/s)
+    expect(styles).toMatch(/\.primaryRouteSurface :is\(\.marketOverview, \.cardList, \.marketNewsPanel\)\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);/s)
+    expect(styles).toMatch(/\.primaryRouteSurface :is\(\.industrySearchPanel, \.industryChainPanel, \.industryImpactPanel\)\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);/s)
+    expect(styles).toMatch(/\.primaryRouteSurface \.embeddedShadow\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);[^}]*border-radius:\s*12px;[^}]*box-shadow:\s*none;/s)
+    expect(styles).toMatch(/\.primaryRouteSurface \.shadowRunSummary\s*\{[^}]*border:\s*0;/s)
+    expect(styles).toMatch(/\.shadowScopeBar \+ \.importNotice\s*\{[^}]*margin-top:\s*12px;/s)
+  })
+
+  it('在产品设计规范中固化一级路由模块层级', () => {
+    expect(design).toContain('## 一级路由模块层级')
+    expect(design).toContain('连续两层相同强度的完整边框')
+    expect(design).toContain('至少 `12px`')
+    expect(design).toContain('1440px 和 1024px')
   })
 
   it('把历史遮罩限制在助理浮层边界内', () => {

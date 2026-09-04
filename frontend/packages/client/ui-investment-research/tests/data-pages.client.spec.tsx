@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode, type ComponentProps } from 'react'
 import { OpportunityPage, PortfolioPage, safeExternalNewsUrl } from '../src/client/InvestmentShell.tsx'
+import css from '../src/client/InvestmentShell.module.css'
 
 type RequestData = ComponentProps<typeof OpportunityPage>['requestData']
 
@@ -196,6 +197,8 @@ describe('投研数据页慢请求状态', () => {
         onAnalyzeResearch={onAnalyzeResearch}
       />,
     )
+
+    expect(container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
 
     const item = await screen.findByRole('article', { name: '贵州茅台 600519' })
     expect(container.querySelector('button button')).toBeNull()

@@ -134,13 +134,13 @@ export function StrategyEvolutionDiagnostics({
             <div><dt>证据时点</dt><dd>{formatEvolutionTimestamp(statusRecord.as_of, '未返回')}</dd></div>
             <div><dt>下次自动运行</dt><dd>{statusRecord.closed_loop_enabled === true ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${text(statusRecord.closed_loop_time, '15:35')}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
           </dl>
-          <div className={css.evolutionFacts} aria-label="策略五维状态">
-            <span>{`参与状态：${labels.participation}`}</span>
-            <span>{`验证结果：${labels.verification}`}</span>
-            <span>{`置信等级：${labels.confidence}`}</span>
-            <span>{`来源：${labels.source}`}</span>
-            <span>{`任务状态：${labels.task}`}</span>
-          </div>
+          <dl className={css.evolutionFacts} aria-label="策略五维状态">
+            <div><dt>参与状态</dt><dd>{labels.participation}</dd></div>
+            <div><dt>验证结果</dt><dd>{labels.verification}</dd></div>
+            <div><dt>置信等级</dt><dd>{labels.confidence}</dd></div>
+            <div><dt>来源</dt><dd>{labels.source}</dd></div>
+            <div><dt>任务状态</dt><dd>{labels.task}</dd></div>
+          </dl>
           {labels.source === '变异来源' && <p className={css.evolutionMutationSource}>变异来源：{text(mergedFacts.mutated_from, text(asRecord(mergedFacts.evolve).mutated_from, '未返回母策略'))}</p>}
           <p>阈值理由：{text(scopedDecision.reason, '后端尚未返回判定理由。')}</p>
         </article>

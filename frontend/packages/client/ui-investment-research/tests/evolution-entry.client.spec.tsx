@@ -91,11 +91,11 @@ describe('自进化全局只读看板', () => {
     expect(screen.getByText('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
     expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
     expect(screen.getByText('样本外证据达标')).toBeTruthy()
-    expect(screen.getByText('参与状态：正常运行')).toBeTruthy()
-    expect(screen.getByText('验证结果：已验证通过')).toBeTruthy()
-    expect(screen.getByText('置信等级：已升级')).toBeTruthy()
-    expect(screen.getByText('来源：变异来源')).toBeTruthy()
-    expect(screen.getByText('任务状态：已完成')).toBeTruthy()
+    const facts = screen.getByLabelText(/升级策略.*五维状态/)
+    expect(within(facts).getAllByRole('term')).toHaveLength(5)
+    expect(within(facts).getAllByRole('definition')).toHaveLength(5)
+    expect(within(facts).getByText('参与状态')).toBeTruthy()
+    expect(within(facts).getByText('已验证通过')).toBeTruthy()
   })
 
   it('统一参与状态和置信层级，并把变异仅作为来源标记', async () => {
@@ -230,11 +230,11 @@ describe('策略研究单策略诊断', () => {
     })
     render(<StrategyEvolutionDiagnostics requestData={requestData} strategyId="strat-a" strategyLabel="策略 A" strategyStatus="active" onAnalyze={onAnalyze} onBack={() => {}} />)
 
-    expect(await screen.findByText('参与状态：正常运行')).toBeTruthy()
-    expect(screen.getByText('验证结果：已验证通过')).toBeTruthy()
-    expect(screen.getByText('置信等级：已升级')).toBeTruthy()
-    expect(screen.getByText('来源：变异来源')).toBeTruthy()
-    expect(screen.getByText('任务状态：已完成')).toBeTruthy()
+    const facts = await screen.findByLabelText('策略五维状态')
+    expect(within(facts).getAllByRole('term')).toHaveLength(5)
+    expect(within(facts).getAllByRole('definition')).toHaveLength(5)
+    expect(within(facts).getByText('参与状态')).toBeTruthy()
+    expect(within(facts).getByText('已验证通过')).toBeTruthy()
     expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'AI 解释当前判定' }))
     expect(onAnalyze).toHaveBeenCalledWith(expect.objectContaining({
