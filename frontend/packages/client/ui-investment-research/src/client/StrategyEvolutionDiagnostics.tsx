@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { asRecord, number, records, text } from './data.ts'
 import type { StrategyEvolutionDiagnosticsProps } from './evolution-types.ts'
+import {
+  evolutionSemanticLabels,
+  evolutionSemanticSummary,
+  formatEvolutionTimestamp,
+} from './evolution-types.ts'
 import css from './InvestmentShell.module.css'
 
 // 变异是来源标记（source/mutated_from）而非独立分组；mutated 保留为防御性兜底。
 const LIFECYCLE_LABELS: Readonly<Record<string, string>> = {
-  active: '生效', candidate: '候选', mutated: '变异', retired: '已淘汰/已退役', watch: '观察中', rejected: '已拒绝',
+  active: '正常运行', candidate: '候选', mutated: '变异来源', retired: '已淘汰', watch: '观察中', rejected: '已拒绝',
 }
 
 const LIFECYCLE_PRIORITY = ['retired', 'rejected', 'watch', 'candidate', 'active'] as const
@@ -36,21 +41,29 @@ export function StrategyEvolutionDiagnostics({
 }: StrategyEvolutionDiagnosticsProps) {
   const [status, setStatus] = useState<unknown>()
   const [attribution, setAttribution] = useState<unknown>()
+  const [strategyDetail, setStrategyDetail] = useState<unknown>()
+  const [strategyFactsUnavailable, setStrategyFactsUnavailable] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(() => {
     setLoading(true)
     setError('')
+    setStrategyFactsUnavailable(false)
     const input = { strategy_id: selectedStrategyId }
     void Promise.all([
       requestData({ operation: 'trading-core.evolution-status', input }),
       requestData({ operation: 'trading-core.evolution-attribution', input }),
-    ]).then(([nextStatus, nextAttribution]) => {
+      requestData({ operation: 'trading-core.strategy-detail', input }).catch(() => {
+        setStrategyFactsUnavailable(true)
+        return undefined
+      }),
+    ]).then(([nextStatus, nextAttribution, nextStrategyDetail]) => {
       setStatus(nextStatus)
       setAttribution(nextAttribution)
-    }).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      setStrategyDetail(nextStrategyDetail)
+    }).catch(() => {
+      setError('投研服务暂时不可用，请稍后重试。')
     }).finally(() => { setLoading(false) })
   }, [requestData, selectedStrategyId])
 
@@ -82,6 +95,9 @@ export function StrategyEvolutionDiagnostics({
     return strategyStatus
   }, [lifecycle, selectedStrategyId, strategyStatus])
   const lifecycleEntry = relationEntries.get(selectedStrategyId) ?? {}
+  const mergedFacts = { ...lifecycleEntry, ...asRecord(strategyDetail), ...scopedDecision }
+  const labels = evolutionSemanticLabels(mergedFacts, lifecycleGroup)
+  const semanticSummary = evolutionSemanticSummary(labels)
   const hasScopedEvidence = strategyId(scopedDecision) !== ''
     || strategyId(scopedAttribution) !== ''
     || strategyId(lifecycleEntry) !== ''
@@ -100,21 +116,30 @@ export function StrategyEvolutionDiagnostics({
         <div>
           <button type="button" className={css.secondaryButton} onClick={onBack}>返回自进化看板</button>
           {canReevaluate && <button type="button" className={css.secondaryButton} disabled={loading} onClick={load}>重新评估</button>}
-          <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'evolution', strategyId: selectedStrategyId }) }}>AI 解释当前判定</button>
+          <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'evolution', strategyId: selectedStrategyId, semanticSummary }) }}>AI 解释当前判定</button>
         </div>
       </div>
       {loading && status === undefined && <div className={css.loadingSkeleton} aria-label="正在读取策略诊断"><span /><span /><span /></div>}
       {error !== '' && <div className={css.errorCard} role="alert"><strong>策略诊断暂不可用</strong><p>{error}</p></div>}
+      {strategyFactsUnavailable && <div className={css.noticeCard} role="status">策略验证、来源和任务字段暂不可用；当前判定与影子证据仍可查看。</div>}
       {!loading && error === '' && !hasScopedEvidence && <div className={css.emptyPanel}>目标策略证据暂不可读取，未使用其他策略或全局数据替代。</div>}
       {hasScopedEvidence && <>
       <section className={css.moduleGrid} aria-label="诊断摘要">
         <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><strong>当前判定</strong><span>{LIFECYCLE_LABELS[lifecycleGroup] ?? lifecycleGroup}</span></div>
+          <div className={css.sectionHeading}><strong>当前判定</strong><span>{labels.participation}</span></div>
           <dl className={css.reportMeta}>
             <div><dt>预计动作</dt><dd>{DECISION_LABELS[text(scopedDecision.decision, 'none')] ?? text(scopedDecision.behavior, '正常运行')}</dd></div>
-            <div><dt>证据时点</dt><dd>{text(statusRecord.as_of, '未返回')}</dd></div>
-            <div><dt>下次自动运行</dt><dd>{statusRecord.closed_loop_enabled === true ? `每日 ${text(statusRecord.closed_loop_time, '15:35')}` : '自动闭环未启用'}</dd></div>
+            <div><dt>证据时点</dt><dd>{formatEvolutionTimestamp(statusRecord.as_of, '未返回')}</dd></div>
+            <div><dt>下次自动运行</dt><dd>{statusRecord.closed_loop_enabled === true ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${text(statusRecord.closed_loop_time, '15:35')}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
           </dl>
+          <div className={css.evolutionFacts} aria-label="策略五维状态">
+            <span>{`参与状态：${labels.participation}`}</span>
+            <span>{`验证结果：${labels.verification}`}</span>
+            <span>{`置信等级：${labels.confidence}`}</span>
+            <span>{`来源：${labels.source}`}</span>
+            <span>{`任务状态：${labels.task}`}</span>
+          </div>
+          {labels.source === '变异来源' && <p className={css.evolutionMutationSource}>变异来源：{text(mergedFacts.mutated_from, text(asRecord(mergedFacts.evolve).mutated_from, '未返回母策略'))}</p>}
           <p>阈值理由：{text(scopedDecision.reason, '后端尚未返回判定理由。')}</p>
         </article>
         <article className={css.moduleCard}>

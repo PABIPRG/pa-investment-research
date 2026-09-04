@@ -139,6 +139,55 @@ def _build_registry() -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from . import backtest_tasks as bt
+    from . import shadow_tasks as shadow_task_ledger
+    from .strategies import reconcile_completed_backtests
+
+    recovery_store = JsonStore()
+    recovered = bt.recover_tasks(recovery_store)
+    shadow_recovered = shadow_task_ledger.recover_tasks(recovery_store)
+    reconciled = reconcile_completed_backtests(recovery_store)
+    resumed = 0
+    for row in recovery_store.all(bt.COLLECTION).values():
+        if not isinstance(row, dict) or row.get("status") != "pending":
+            continue
+        params = row.get("request_params")
+        task_id = str(row.get("task_id") or "")
+        if not task_id or not isinstance(params, dict) or not params.get("strategy_id"):
+            if task_id:
+                bt.fail_task(
+                    recovery_store,
+                    task_id,
+                    "服务重启后缺少可恢复的请求参数，请重新运行",
+                    strategy_id=str(row.get("strategy_id") or ""),
+                    source=str(row.get("source") or "manual"),
+                )
+            continue
+        try:
+            app.state.manager.start(
+                params,
+                task_type="strategy",
+                task_id=task_id,
+            )
+            resumed += 1
+        except Exception:  # noqa: BLE001 — 单条恢复失败不阻断服务启动
+            logger.exception("恢复回测任务失败 task=%s", task_id)
+            bt.fail_task(
+                recovery_store,
+                task_id,
+                "服务重启后重新提交失败，请重新运行",
+                strategy_id=str(row.get("strategy_id") or ""),
+                source=str(row.get("source") or "manual"),
+            )
+    if recovered["interrupted"] or recovered["pending"]:
+        logger.info(
+            "回测任务恢复: %s，完成态补偿=%s，重新提交=%s",
+            recovered,
+            reconciled,
+            resumed,
+        )
+    if shadow_recovered["interrupted"]:
+        logger.info("影子验证任务恢复: %s", shadow_recovered)
     # 功能4：定时盘前/盘后简报（BRIEF_SCHEDULE_ENABLED=false 时返回 None）
     sched = setup_scheduler()
     app.state.scheduler = sched
@@ -468,13 +517,18 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     @app.get("/strategies", response_model=dict)
     async def strategies_list(limit: int = 50):
         """策略池列表（created_at 倒序）。"""
+        from . import backtest_tasks as bt
         from .strategies import project_strategy_verification
 
         store = JsonStore()
-        rows = [
-            project_strategy_verification(item)
-            for item in (store.all("strategies") or {}).values()
-        ]
+        rows = []
+        for item in (store.all("strategies") or {}).values():
+            sid = str(item.get("id") or "") if isinstance(item, dict) else ""
+            tasks = bt.list_tasks(store, strategy_id=sid, limit=1) if sid else []
+            rows.append(project_strategy_verification(
+                item,
+                task_status=str(tasks[0].get("status") or "") if tasks else None,
+            ))
         rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         return {"count": len(rows), "items": rows[: max(1, min(limit, 200))]}
 
@@ -518,13 +572,18 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     @app.get("/strategies/{sid}", response_model=dict)
     async def strategies_get(sid: str):
         """单条策略详情（含 backtest）。"""
+        from . import backtest_tasks as bt
         from .strategies import project_strategy_verification
 
         store = JsonStore()
         s = store.get("strategies", sid)
         if not s:
             raise HTTPException(status_code=404, detail="策略不存在")
-        return project_strategy_verification(s)
+        tasks = bt.list_tasks(store, strategy_id=sid, limit=1)
+        return project_strategy_verification(
+            s,
+            task_status=str(tasks[0].get("status") or "") if tasks else None,
+        )
 
     @app.get("/strategies/{sid}/backtests", response_model=dict)
     async def strategy_backtests(sid: str, limit: int = 50):
@@ -536,6 +595,52 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="策略不存在")
         tasks = bt.list_tasks(store, strategy_id=sid, limit=limit)
         return {"strategy_id": sid, "count": len(tasks), "tasks": tasks}
+
+    @app.get("/strategies/{sid}/backtests/{task_id}", response_model=dict)
+    async def strategy_backtest_detail(sid: str, task_id: str):
+        """单次回测任务详情，包含完整结果和报告引用。"""
+        from . import backtest_tasks as bt
+
+        task = bt.get_task(JsonStore(), task_id)
+        if not task or task.get("strategy_id") != sid:
+            raise HTTPException(status_code=404, detail="回测任务不存在")
+        return task
+
+    @app.post("/strategies/{sid}/backtests/{task_id}/cancel", response_model=dict)
+    async def strategy_backtest_cancel(sid: str, task_id: str):
+        """取消排队中或执行中的回测；已终止任务不可再取消。"""
+        from . import backtest_tasks as bt
+
+        store = JsonStore()
+        task = bt.get_task(store, task_id)
+        if not task or task.get("strategy_id") != sid:
+            raise HTTPException(status_code=404, detail="回测任务不存在")
+        memory_cancelled = manager.cancel(task_id)
+        durable_cancelled = bt.cancel_task(store, task_id)
+        if not memory_cancelled and not durable_cancelled:
+            raise HTTPException(status_code=409, detail="当前状态不可取消")
+        return {"task_id": task_id, "status": "cancelled"}
+
+    @app.post("/strategies/{sid}/backtests/{task_id}/retry", response_model=dict)
+    async def strategy_backtest_retry(sid: str, task_id: str):
+        """以原请求参数创建新任务，并保留 retry_of_task_id 追溯。"""
+        from . import backtest_tasks as bt
+
+        task = bt.get_task(JsonStore(), task_id)
+        if not task or task.get("strategy_id") != sid:
+            raise HTTPException(status_code=404, detail="回测任务不存在")
+        if task.get("status") not in ("completed", "failed", "cancelled"):
+            raise HTTPException(status_code=409, detail="任务结束后才能重新运行")
+        payload = dict(task.get("request_params") or {})
+        payload.pop("task_id", None)
+        payload.pop("dedupe_key", None)
+        payload.update(
+            strategy_id=sid,
+            source="manual",
+            retry_of_task_id=task_id,
+        )
+        new_task_id = manager.start(payload, task_type="strategy")
+        return {"task_id": new_task_id, "retry_of_task_id": task_id}
 
     @app.post("/strategies/{sid}/{action}", response_model=dict)
     async def strategies_transition(sid: str, action: Literal["activate", "reject", "retire"]):
@@ -558,13 +663,23 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     @app.post("/shadow/run", response_model=dict)
     async def shadow_run(req: ShadowRunRequest):
         """启动影子策略验证任务（paper trading 记账），返回 task_id。"""
-        task_id = manager.start(req.model_dump(), task_type="shadow")
+        task_id = manager.start(
+            {**req.model_dump(), "source": "manual"}, task_type="shadow"
+        )
         return {"task_id": task_id}
 
     @app.get("/shadow/status", response_model=dict)
     async def shadow_status():
         """最近一次影子运行汇总。"""
-        return JsonStore().get("shadows", "latest") or {"note": "尚未运行影子验证"}
+        from . import shadow_tasks as tasks
+
+        store = JsonStore()
+        latest = tasks.latest_task(store)
+        if latest is not None:
+            return latest
+        legacy = store.get("shadows", "latest")
+        return ({**legacy, "legacy": True} if isinstance(legacy, dict)
+                else {"note": "尚未运行影子验证"})
 
     @app.get("/shadow/positions", response_model=dict)
     async def shadow_positions(strategy_id: Optional[str] = None):
@@ -602,13 +717,17 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     @app.get("/shadow/history", response_model=dict)
     async def shadow_history(strategy_id: Optional[str] = None, limit: int = 200):
-        """影子验证运行历史：展平 交易日×策略 记录行（三块视图的数据源）。
+        """影子验证任务历史；旧数据在没有任务账本时按策略快照兼容返回。
 
-        数据来自 shadow_equity/{date} 快照：单策略历史传 strategy_id；不带 = 全部策略运行记录。
-        某日期未参与验证的策略不出行（与 /shadow/equity 语义一致）。行内含 open_positions
-        （per_symbol 中 qty>0 计数）与策略级 strategy_error（快照顶层，数据异常/失败原因）。
+        新记录来自 shadow_tasks/shadow_task_results，可按 strategy_id 过滤并保留任务状态、
+        来源、时间、失败原因和报告引用；旧 shadow_equity 快照仅作为 legacy 降级数据源。
         """
+        from . import shadow_tasks as tasks
+
         store = JsonStore()
+        ledger_rows = tasks.list_tasks(store, strategy_id=strategy_id, limit=limit)
+        if ledger_rows:
+            return {"count": len(ledger_rows), "items": ledger_rows}
         keys = sorted((store.all("shadow_equity") or {}).keys(), reverse=True)
         items = []
         for k in keys:
@@ -623,6 +742,9 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
                     if isinstance(v, dict) and (v.get("qty") or 0) > 0
                 )
                 items.append({
+                    "legacy": True,
+                    "task_id": None,
+                    "status": "completed",
                     "date": k,
                     "strategy_id": sid,
                     "strategy_name": s.get("name"),
@@ -637,6 +759,30 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
                     "strategy_error": top_errors.get(sid),
                 })
         return {"count": len(items), "items": items[: max(1, min(limit, 2000))]}
+
+    @app.get("/shadow/tasks/{task_id}", response_model=dict)
+    async def shadow_task_detail(task_id: str):
+        """读取持久化影子任务及逐策略结果。"""
+        from . import shadow_tasks as tasks
+
+        task = tasks.get_task_with_results(JsonStore(), task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="影子验证任务不存在")
+        return task
+
+    @app.post("/shadow/tasks/{task_id}/cancel", response_model=dict)
+    async def shadow_task_cancel(task_id: str):
+        """取消排队中或执行中的影子验证；已终止任务不可再取消。"""
+        from . import shadow_tasks as tasks
+
+        store = JsonStore()
+        if tasks.get_task(store, task_id) is None:
+            raise HTTPException(status_code=404, detail="影子验证任务不存在")
+        memory_cancelled = manager.cancel(task_id)
+        durable_cancelled = tasks.cancel_task(store, task_id)
+        if not memory_cancelled and not durable_cancelled:
+            raise HTTPException(status_code=409, detail="当前状态不可取消")
+        return {"task_id": task_id, "status": "cancelled"}
 
     # ---- 个性化右链（O 策略匹配 + D/P 资讯卡片 + R 行为捕获） ----------------
 
@@ -743,14 +889,38 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
         :8200 不可达时事件保持原样（impact 为空），用于验证优雅降级。
         """
-        from .strategies import fetch_events
+        from .strategies import fetch_events_with_status
 
-        # fetch_events 命中 TTL 缓存时忽略 limit（返回缓存整表），这里按本端点 limit 截断
         want = max(1, min(int(limit), 50))
-        events = (fetch_events(limit=want, timeout=15.0) or [])[:want]
+        fetched, event_status = fetch_events_with_status(
+            limit=want,
+            timeout=15.0,
+            allow_stale=False,
+        )
+        if event_status.get("degraded"):
+            raise HTTPException(
+                status_code=503,
+                detail="事件传导数据源暂时不可用，请稍后重试",
+            )
+        events = []
+        seen_ids: set[str] = set()
+        for event in fetched:
+            event_id = str(event.get("id") or "") if isinstance(event, dict) else ""
+            if event_id and event_id in seen_ids:
+                continue
+            if event_id:
+                seen_ids.add(event_id)
+            events.append(event)
+            if len(events) >= want:
+                break
         return {
             "as_of": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "count": len(events),
+            "page_info": {
+                "mode": "bounded",
+                "pagination_supported": False,
+                "max_visible": 50,
+            },
             "events": [{
                 "id": e.get("id"), "tickers": e.get("tickers"),
                 "industries": e.get("industries"), "direction": e.get("direction"),
@@ -860,7 +1030,26 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     async def result(task_id: str):
         """最终结果（Signal + 分步报告）。任务未完成返回 409。"""
         if not manager.exists(task_id):
-            raise HTTPException(status_code=404, detail="任务不存在")
+            from . import shadow_tasks as tasks
+            from . import backtest_tasks as backtests
+
+            task = tasks.get_task(JsonStore(), task_id)
+            if task is not None:
+                if task.get("status") not in tasks.TERMINAL_STATUSES:
+                    raise HTTPException(status_code=409, detail="任务尚未完成")
+                persisted = task.get("result")
+                if not isinstance(persisted, dict):
+                    raise HTTPException(status_code=409, detail="任务没有可读取结果")
+                return persisted
+            task = backtests.get_task(JsonStore(), task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            if task.get("status") != "completed":
+                raise HTTPException(status_code=409, detail="任务尚未完成")
+            persisted = task.get("result")
+            if not isinstance(persisted, dict):
+                raise HTTPException(status_code=409, detail="任务没有可读取结果")
+            return persisted
         if manager._status.get(task_id) != "done":
             raise HTTPException(status_code=409, detail="任务尚未完成")
         return manager.result(task_id)
@@ -869,7 +1058,38 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     async def status(task_id: str):
         """状态查询：pending/running/done/failed。"""
         if not manager.exists(task_id):
-            raise HTTPException(status_code=404, detail="任务不存在")
+            from . import shadow_tasks as tasks
+            from . import backtest_tasks as backtests
+
+            task = tasks.get_task(JsonStore(), task_id)
+            if task is not None:
+                task_status = str(task.get("status") or "pending")
+                if task_status in ("completed", "partial"):
+                    transport_status = "done"
+                elif task_status == "cancelled":
+                    transport_status = "cancelled"
+                elif task_status in ("failed", "interrupted"):
+                    transport_status = "failed"
+                else:
+                    transport_status = task_status
+                return {
+                    "task_id": task_id,
+                    "task_type": "shadow",
+                    "status": transport_status,
+                    "task_status": task_status,
+                    "error": task.get("error"),
+                }
+            task = backtests.get_task(JsonStore(), task_id)
+            if task is None:
+                raise HTTPException(status_code=404, detail="任务不存在")
+            task_status = str(task.get("status") or "pending")
+            transport_status = "done" if task_status == "completed" else task_status
+            return {
+                "task_id": task_id,
+                "task_type": "strategy",
+                "status": transport_status,
+                "error": task.get("failure_reason"),
+            }
         return manager.status(task_id)
 
     return app

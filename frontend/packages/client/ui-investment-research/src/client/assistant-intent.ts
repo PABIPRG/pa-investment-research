@@ -7,7 +7,7 @@ export type AssistantIntent =
   | { readonly kind: 'watch'; readonly code?: string }
   | { readonly kind: 'strategy'; readonly strategyId?: string }
   | { readonly kind: 'shadow'; readonly strategyId?: string }
-  | { readonly kind: 'evolution'; readonly strategyId?: string }
+  | { readonly kind: 'evolution'; readonly strategyId?: string; readonly semanticSummary?: string }
   | { readonly kind: 'reports'; readonly reportId?: string }
   | { readonly kind: 'industry'; readonly reference?: string }
   | {
@@ -52,9 +52,13 @@ export function assistantPrompt(intent: AssistantIntent): string {
   }
   if (intent.kind === 'evolution') {
     const target = intent.strategyId?.trim()
+    const semantics = intent.semanticSummary?.trim()
+    const factContext = semantics === undefined || semantics === ''
+      ? ''
+      : ` 系统确定性语义：${semantics}。这些字段是产品事实，不由模型推断。`
     return target === undefined || target === ''
-      ? '请调用 investment_context 工具读取 evolution 上下文，解释闭环状态、生命周期、策略判定和最近自动动作；只解释现有证据，不请求写入。'
-      : `请调用 investment_context 工具读取 evolution 上下文，并把 strategy_id 设为 ${target}，解释策略 ${target} 的证据、预计判定和自动进化历史；下一次统一自动闭环会按届时最新证据重新判定，不请求写入。`
+      ? `请调用 investment_context 工具读取 evolution 上下文，解释闭环状态、生命周期、策略判定和最近自动动作；只解释现有证据，不请求写入。${factContext}`
+      : `请调用 investment_context 工具读取 evolution 上下文，并把 strategy_id 设为 ${target}，解释策略 ${target} 的证据、预计判定和自动进化历史；下一次统一自动闭环会按届时最新证据重新判定，不请求写入。${factContext}`
   }
   if (intent.kind === 'reports') {
     const target = intent.reportId?.trim()

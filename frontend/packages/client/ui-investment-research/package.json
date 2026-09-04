@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-investment-research",
   "description": "Profile-scoped investment research navigation, session drawer, and backend workbenches",
-  "version": "0.1.0-rc.8",
+  "version": "0.1.0-rc.10",
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",

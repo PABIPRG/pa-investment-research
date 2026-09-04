@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import requests
 
-from adapter import risk_engine, strategies
+from adapter import impact, risk_engine, strategies
 from adapter.config import settings
 from adapter.store import JsonStore
 
@@ -50,6 +50,17 @@ class _Response:
         return {"items": self.items}
 
 
+class _PayloadResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
 class _FakeClock:
     def __init__(self, now=100.0):
         self.now = now
@@ -65,10 +76,92 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
     def setUp(self):
         risk_engine._reset_risk_cache_for_tests()
         strategies._reset_event_cache_for_tests()
+        impact._IMPACT_CACHE.clear()
+        impact._IC_DOWN_UNTIL = 0.0
 
     def tearDown(self):
         risk_engine._reset_risk_cache_for_tests()
         strategies._reset_event_cache_for_tests()
+        impact._IMPACT_CACHE.clear()
+        impact._IC_DOWN_UNTIL = 0.0
+
+    def test_one_event_expansion_failure_does_not_block_later_events(self):
+        calls: list[str] = []
+
+        def response(url: str, **_kwargs):
+            calls.append(url)
+            if url.endswith("/graph/chain/000001"):
+                raise requests.HTTPError("first event chain unavailable")
+            if "/graph/chain/000002" in url:
+                return _PayloadResponse({
+                    "center": {"code": "000002"},
+                    "up_levels": [{
+                        "nodes": [{"id": "600000", "name": "后续事件供应商"}],
+                    }],
+                    "down_levels": [],
+                })
+            return _PayloadResponse({"items": []})
+
+        events = [
+            {
+                "id": "event-1",
+                "tickers": [{"code": "000001"}],
+                "industries": ["行业一"],
+            },
+            {
+                "id": "event-2",
+                "tickers": [{"code": "000002"}],
+                "industries": ["行业二"],
+            },
+        ]
+
+        with patch.object(impact.requests, "get", side_effect=response):
+            expanded = impact.expand_events(events)
+
+        self.assertTrue(any("/graph/chain/000002" in url for url in calls))
+        self.assertEqual(expanded[1]["impact_codes"], ["600000"])
+        self.assertEqual(impact._IC_DOWN_UNTIL, 0.0)
+
+    def test_whole_industry_service_failure_opens_breaker_after_two_requests(self):
+        calls = 0
+
+        def unavailable(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise requests.Timeout("industry service unavailable")
+
+        events = [{
+            "id": f"event-{index}",
+            "tickers": [{"code": f"{index + 1:06d}"}],
+            "industries": [f"行业{index}"],
+        } for index in range(50)]
+
+        with patch.object(impact.requests, "get", side_effect=unavailable):
+            expanded = impact.expand_events(events)
+
+        self.assertEqual(calls, 2)
+        self.assertGreater(impact._IC_DOWN_UNTIL, time.time())
+        self.assertEqual(len(expanded), 50)
+
+    def test_event_cache_tracks_covered_limit_and_truncates_cache_hits(self):
+        calls: list[int] = []
+
+        def response(url: str, **_kwargs):
+            requested = int(url.rsplit("=", 1)[-1])
+            calls.append(requested)
+            return _Response([{"id": f"event-{index}"} for index in range(requested)])
+
+        with patch.object(settings, "event_cache_ttl", 60.0), \
+             patch.object(strategies.requests, "get", side_effect=response), \
+             patch.object(strategies, "_expand_events", side_effect=lambda events, cached_impact: events):
+            first_20 = strategies.fetch_events(limit=20)
+            expanded_50 = strategies.fetch_events(limit=50)
+            cached_20 = strategies.fetch_events(limit=20)
+
+        self.assertEqual(calls, [20, 50])
+        self.assertEqual(len(first_20), 20)
+        self.assertEqual(len(expanded_50), 50)
+        self.assertEqual(len(cached_20), 20)
 
     def test_concurrent_portfolio_and_alerts_share_one_portfolio_computation(self):
         store = _store()

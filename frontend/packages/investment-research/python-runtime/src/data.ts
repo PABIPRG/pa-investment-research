@@ -870,6 +870,30 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       return `/strategies/${sid}/backtests?limit=${integer(input, 'limit', 50, 1, 500)}`
     },
   },
+  'trading-core.strategy-backtest-detail': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'task_id'])
+      return `/strategies/${strategyIdentifier(input, 'strategy_id')}/backtests/${taskIdentifier(input, 'task_id')}`
+    },
+  },
+  'trading-core.strategy-backtest-cancel': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'task_id'])
+      return `/strategies/${strategyIdentifier(input, 'strategy_id')}/backtests/${taskIdentifier(input, 'task_id')}/cancel`
+    },
+  },
+  'trading-core.strategy-backtest-retry': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: (input) => {
+      knownKeys(input, ['strategy_id', 'task_id'])
+      return `/strategies/${strategyIdentifier(input, 'strategy_id')}/backtests/${taskIdentifier(input, 'task_id')}/retry`
+    },
+  },
   'trading-core.backtest-run': {
     backendId: 'trading-core',
     method: 'POST',
@@ -948,6 +972,22 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
         force: optionalBoolean(input, 'force') ?? false,
         ...(strategyId === undefined ? {} : { strategy_id: strategyId }),
       }
+    },
+  },
+  'trading-core.shadow-task-detail': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['task_id'])
+      return `/shadow/tasks/${taskIdentifier(input, 'task_id')}`
+    },
+  },
+  'trading-core.shadow-task-cancel': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: (input) => {
+      knownKeys(input, ['task_id'])
+      return `/shadow/tasks/${taskIdentifier(input, 'task_id')}/cancel`
     },
   },
   'trading-core.evolution-status': evolutionRead('/evolution/status'),

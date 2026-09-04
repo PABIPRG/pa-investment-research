@@ -27,3 +27,11 @@ class HealthContractTests(unittest.TestCase):
         stop_scheduler.assert_called_once_with()
         stop_news.assert_called_once_with()
         stop_quotes.assert_called_once_with()
+
+    def test_disabled_scheduler_starts_and_stops_cleanly(self):
+        scheduler.stop_scheduler()
+        with patch.object(scheduler.settings, "schedule_enabled", False):
+            instance = scheduler.start_scheduler()
+            self.assertFalse(instance.running)
+            scheduler.stop_scheduler()
+        self.assertIsNone(scheduler._scheduler)

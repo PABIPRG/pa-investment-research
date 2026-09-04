@@ -8,11 +8,68 @@ import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
 import {
   evolutionConfidenceLabel,
   evolutionParticipationLabel,
+  evolutionSemanticLabels,
+  formatEvolutionTimestamp,
 } from '../src/client/evolution-types.ts'
 
 afterEach(cleanup)
 
 describe('自进化全局只读看板', () => {
+  it('原样消费后端四桶、完整运行时间和五维策略语义', async () => {
+    expect(formatEvolutionTimestamp('2026-09-04T15:35:00+08:00')).toBe('2026-09-04 15:35:00 UTC+08:00')
+    expect(evolutionSemanticLabels({
+      participation_status: 'active',
+      verification_status: 'passed',
+      confidence_tier: 2,
+      source: 'evolution',
+      task_status: 'completed',
+    })).toEqual({
+      participation: '正常运行',
+      verification: '已验证通过',
+      confidence: '已升级',
+      source: '变异来源',
+      task: '已完成',
+    })
+
+    const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
+      if (operation === 'trading-core.evolution-status') return {
+        closed_loop_enabled: true,
+        lifecycle: {
+          active: [{ strategy_id: 'strat-upgraded', name: '升级策略', tier: 2, source: 'evolution', mutated_from: 'strat-parent' }],
+          mutated: [{ strategy_id: 'strat-upgraded', name: '升级策略', mutated_from: 'strat-parent' }],
+        },
+        per_strategy: [{ strategy_id: 'strat-upgraded', name: '升级策略', reason: '证据达标' }],
+        evolution_counts: { normal: 7, watch: 6, promote: 5, retire: 4 },
+        counts: { active: 99, mutated: 88 },
+        recent_run_at: '2026-09-04T00:25:53+08:00',
+        next_scheduled_run_at: '2026-09-04T15:35:00+08:00',
+        recent_applied: [{ applied_at: '2026-09-04 00:20:00', count: 1, actions: [{ sid: 'strat-upgraded', type: 'promote', reason: '样本外证据达标' }] }],
+      }
+      if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (operation === 'trading-core.strategies') return { items: [{
+        id: 'strat-upgraded', name: '升级策略', participation_status: 'active', verification_status: 'passed',
+        confidence_tier: 2, source: 'evolution', task_status: 'completed', mutated_from: 'strat-parent',
+      }] }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={() => {}} />)
+    const summary = await screen.findByTestId('evolution-status-summary')
+    expect(summary.textContent).toContain('正常运行7')
+    expect(summary.textContent).toContain('观察中6')
+    expect(summary.textContent).toContain('已升级5')
+    expect(summary.textContent).toContain('已淘汰4')
+    expect(summary.textContent).not.toContain('变异')
+    expect(screen.getByText('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
+    expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
+    expect(screen.getByText('样本外证据达标')).toBeTruthy()
+    expect(screen.getByText('参与状态：正常运行')).toBeTruthy()
+    expect(screen.getByText('验证结果：已验证通过')).toBeTruthy()
+    expect(screen.getByText('置信等级：已升级')).toBeTruthy()
+    expect(screen.getByText('来源：变异来源')).toBeTruthy()
+    expect(screen.getByText('任务状态：已完成')).toBeTruthy()
+  })
+
   it('统一参与状态和置信层级，并把变异仅作为来源标记', async () => {
     expect(evolutionParticipationLabel('active')).toBe('正常运行')
     expect(evolutionParticipationLabel('watch')).toBe('观察中')
@@ -36,6 +93,7 @@ describe('自进化全局只读看板', () => {
           { strategy_id: 'strat-upgraded', name: '升级策略', decision: 'promote', reason: '证据达标', tier: 2, mutated_from: 'strat-parent' },
         ],
         recent_applied: [],
+        evolution_counts: { normal: 1, watch: 1, promote: 1, retire: 1 },
         counts: { active: 2, watch: 1, retired: 1, mutated: 1 },
       }
       if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
@@ -77,8 +135,9 @@ describe('自进化全局只读看板', () => {
     expect(requestData.mock.calls.map(([request]) => request.operation)).toEqual([
       'trading-core.evolution-status',
       'trading-core.evolution-attribution',
+      'trading-core.strategies',
     ])
-    expect(screen.getByText(/自动闭环未启用/)).toBeTruthy()
+    expect(screen.getAllByText(/自动闭环未启用/).length).toBeGreaterThan(0)
     expect(screen.queryByText(/正在每日自动运行/)).toBeNull()
   })
 
@@ -124,6 +183,38 @@ describe('自进化全局只读看板', () => {
 })
 
 describe('策略研究单策略诊断', () => {
+  it('详情展示与列表一致的五维字段和完整计划时间', async () => {
+    const onAnalyze = vi.fn()
+    const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
+      if (operation === 'trading-core.evolution-status') return {
+        closed_loop_enabled: true,
+        next_scheduled_run_at: '2026-09-04T15:35:00+08:00',
+        lifecycle: { active: [{ strategy_id: 'strat-a', name: '策略 A', source: 'evolution', mutated_from: 'strat-parent' }] },
+        per_strategy: [{ strategy_id: 'strat-a', decision: 'none', reason: '仍在阈值带内' }],
+        recent_applied: [],
+      }
+      if (operation === 'trading-core.evolution-attribution') return { strategies: [{ strategy_id: 'strat-a' }] }
+      if (operation === 'trading-core.strategy-detail') return {
+        id: 'strat-a', participation_status: 'active', verification_status: 'passed', confidence_tier: 2,
+        source: 'evolution', task_status: 'completed', mutated_from: 'strat-parent',
+      }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+    render(<StrategyEvolutionDiagnostics requestData={requestData} strategyId="strat-a" strategyLabel="策略 A" strategyStatus="active" onAnalyze={onAnalyze} onBack={() => {}} />)
+
+    expect(await screen.findByText('参与状态：正常运行')).toBeTruthy()
+    expect(screen.getByText('验证结果：已验证通过')).toBeTruthy()
+    expect(screen.getByText('置信等级：已升级')).toBeTruthy()
+    expect(screen.getByText('来源：变异来源')).toBeTruthy()
+    expect(screen.getByText('任务状态：已完成')).toBeTruthy()
+    expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'AI 解释当前判定' }))
+    expect(onAnalyze).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'evolution',
+      semanticSummary: '参与状态：正常运行；验证结果：已验证通过；置信等级：已升级；来源：变异来源；任务状态：已完成',
+    }))
+  })
+
   it('响应缺少目标策略时不回退展示其他策略或全局归因', async () => {
     const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
       if (operation === 'trading-core.evolution-status') return {
@@ -213,9 +304,9 @@ describe('策略研究单策略诊断', () => {
       onBack={() => {}}
     />)
     fireEvent.click(await screen.findByRole('button', { name: '重新评估' }))
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(4) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(6) })
     expect(requestData.mock.calls.every(([request]) => (
-      ['trading-core.evolution-status', 'trading-core.evolution-attribution'].includes(request.operation)
+      ['trading-core.evolution-status', 'trading-core.evolution-attribution', 'trading-core.strategy-detail'].includes(request.operation)
       && request.input?.strategy_id === 'strat-a'
     ))).toBe(true)
   })

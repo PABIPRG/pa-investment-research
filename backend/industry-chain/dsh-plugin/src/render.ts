@@ -4,7 +4,18 @@
 type Num = number | null | undefined
 
 function shareTxt(v: unknown): string {
-  return typeof v === 'number' && v ? `${v}%` : '-'
+  return typeof v === 'number' ? `${v}%` : '-'
+}
+
+function relationTxt(r: Record<string, unknown>): string {
+  const source = r.share_source
+  if (source === 'inferred' || r.type === 'inferred') {
+    const confidence = typeof r.confidence === 'number' ? ` · 置信度 ${Math.round(r.confidence * 100)}%` : ''
+    return `推断关系${confidence}`
+  }
+  const share = shareTxt(r.share)
+  if (source === 'default') return share === '-' ? '默认关系权重' : `默认关系权重 ${share}（非披露占比）`
+  return share === '-' ? '' : `披露关系占比 ${share}`
 }
 
 function viaTxt(v: unknown): string {
@@ -61,8 +72,8 @@ export function renderGraph(value: {
     lines.push('', `### ${title}（${list.length}）`)
     lines.push(
       ...list.slice(0, 15).map((r) => {
-        const share = shareTxt(r.share)
-        return `- ${r.name ?? '-'}${share !== '-' ? `（${share}）` : ''}${viaTxt(r.vias)}`
+        const relation = relationTxt(r)
+        return `- ${r.name ?? '-'}${relation ? `（${relation}）` : ''}${viaTxt(r.vias)}`
       }),
     )
     if (list.length > 15) lines.push(`- …等共 ${list.length} 项`)
@@ -86,8 +97,8 @@ export function renderExpand(value: {
 
   const renderLevel = (l: Level): string[] =>
     (l.nodes ?? []).map((n) => {
-      const share = shareTxt(n.share)
-      return `- ${n.name ?? '-'}${share !== '-' ? `（${share}）` : ''}${viaTxt(n.via)}`
+      const relation = relationTxt(n)
+      return `- ${n.name ?? '-'}${relation ? `（${relation}）` : ''}${viaTxt(n.via)}`
     })
 
   if (down.length) {

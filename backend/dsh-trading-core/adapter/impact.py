@@ -6,7 +6,7 @@ trading-core 无独立图数据，复用 industry-chain(:8200) 只读接口：
   - GET /companies?keyword={industry}&limit=50       → 同行业公司（行业模糊子串）
 
 每事件 ≤2 次子请求、timeout=1.5、proxies={}；TTL 300s 内存缓存；
-:8200 不可达 → 快速失败并记 30s backoff（期间跳过）→ 优雅降级：
+:8200 连续两次请求不可达 → 记 30s backoff（期间跳过）→ 优雅降级：
 chain 挂掉时事件保持原样（不 500、不拖慢、不影响卡片/假设）。
 
 注入点 = strategies.fetch_events（market-watch 返回后、TTL 缓存前），
@@ -44,8 +44,8 @@ def _mark_down() -> None:
     logger.warning("industry-chain :8200 不可达，事件影响图谱降级 %ss", _DOWN_BACKOFF)
 
 
-def _chain_expand(code: str) -> tuple[list[str], list[str]]:
-    """直连标的 → (波及代码, 展示名)，上下游各 1 跳；失败置 backoff 返回空。"""
+def _chain_expand(code: str) -> tuple[list[str], list[str], bool]:
+    """直连标的 → (波及代码, 展示名, 请求成功)，上下游各 1 跳。"""
     try:
         r = requests.get(
             settings.ic_url.rstrip("/") + f"/graph/chain/{code}",
@@ -56,10 +56,9 @@ def _chain_expand(code: str) -> tuple[list[str], list[str]]:
         data = r.json() or {}
     except Exception as exc:  # noqa: BLE001 — :8200 挂掉不拖慢事件流
         logger.debug("产业链扩展失败 %s: %s", code, exc)
-        _mark_down()
-        return [], []
+        return [], [], False
     if not isinstance(data, dict) or "center" not in data:
-        return [], []  # 非核心公司 → {"detail": "未找到..."}
+        return [], [], True  # 非核心公司 → {"detail": "未找到..."}
     codes, names = [], []
     for lvl_key in ("up_levels", "down_levels"):
         for lvl in data.get(lvl_key) or []:
@@ -69,11 +68,11 @@ def _chain_expand(code: str) -> tuple[list[str], list[str]]:
                     continue
                 codes.append(c)
                 names.append(str(node.get("name") or c))
-    return codes, names
+    return codes, names, True
 
 
-def _industry_expand(keyword: str) -> tuple[list[str], list[str]]:
-    """行业 → (公司代码, 公司名)；失败置 backoff 返回空。"""
+def _industry_expand(keyword: str) -> tuple[list[str], list[str], bool]:
+    """行业 → (公司代码, 公司名, 请求成功)。"""
     try:
         r = requests.get(
             settings.ic_url.rstrip("/") + "/companies",
@@ -84,8 +83,7 @@ def _industry_expand(keyword: str) -> tuple[list[str], list[str]]:
         items = (r.json() or {}).get("items") or []
     except Exception as exc:  # noqa: BLE001
         logger.debug("行业扩展失败 %s: %s", keyword, exc)
-        _mark_down()
-        return [], []
+        return [], [], False
     codes, names = [], []
     for it in items or []:
         c = _normalize_symbol(it.get("code"))
@@ -93,7 +91,7 @@ def _industry_expand(keyword: str) -> tuple[list[str], list[str]]:
             continue
         codes.append(c)
         names.append(str(it.get("name") or c))
-    return codes, names
+    return codes, names, True
 
 
 def _display(pairs: list[tuple[str, str]]) -> str:
@@ -101,16 +99,26 @@ def _display(pairs: list[tuple[str, str]]) -> str:
     return "/".join(f"{n}({c})" if n != c else c for n, c in pairs)
 
 
-def _expand_one(ev: dict) -> dict:
-    """单事件扩展：≤2 次 HTTP（首个直连码产业链 + 首个行业），TTL 缓存。"""
+def _expand_one(ev: dict) -> tuple[dict, tuple[bool, ...]]:
+    """单事件扩展并返回本次子请求健康结果；TTL 命中不产生健康样本。"""
     now = time.time()
     key = str(ev.get("id") or "")
     memo = _IMPACT_CACHE.get(key)
     if memo and (now - memo[0]) < _CACHE_TTL:
         codes, industries, by = memo[1], memo[2], memo[3]
-        return {**ev, "impact_codes": codes, "impact_industries": industries, "impact_by": by}
+        return ({
+            **ev,
+            "impact_codes": codes,
+            "impact_industries": industries,
+            "impact_by": by,
+        }, ())
     if _ic_down():
-        return {**ev, "impact_codes": [], "impact_industries": [], "impact_by": []}
+        return ({
+            **ev,
+            "impact_codes": [],
+            "impact_industries": [],
+            "impact_by": [],
+        }, ())
     if len(_IMPACT_CACHE) >= _CACHE_MAX:
         _IMPACT_CACHE.clear()
 
@@ -119,10 +127,12 @@ def _expand_one(ev: dict) -> dict:
     industries: list[str] = [str(x).strip() for x in (ev.get("industries") or []) if str(x or "").strip()][:1]
     codes: list[str] = []
     by: list[str] = []
+    request_health: list[bool] = []
 
     direct = next(iter(own), None)
     if direct:
-        ch_codes, ch_names = _chain_expand(direct)
+        ch_codes, ch_names, healthy = _chain_expand(direct)
+        request_health.append(healthy)
         fresh = [c for c in ch_codes if c not in own and c not in codes]
         codes.extend(fresh)
         if fresh:
@@ -130,7 +140,8 @@ def _expand_one(ev: dict) -> dict:
             by.append(f"{direct} 产业链: " + _display(pairs))
     if industries:
         ind = industries[0]
-        co_codes, co_names = _industry_expand(ind)
+        co_codes, co_names, healthy = _industry_expand(ind)
+        request_health.append(healthy)
         fresh = [c for c in co_codes if c not in own and c not in codes]
         codes.extend(fresh)
         if fresh:
@@ -138,7 +149,12 @@ def _expand_one(ev: dict) -> dict:
             by.append(f"行业「{ind}」: " + _display(pairs))
 
     _IMPACT_CACHE[key] = (now, codes, industries, by)
-    return {**ev, "impact_codes": codes, "impact_industries": industries, "impact_by": by}
+    return ({
+        **ev,
+        "impact_codes": codes,
+        "impact_industries": industries,
+        "impact_by": by,
+    }, tuple(request_health))
 
 
 def expand_events(events: list[dict] | None) -> list[dict]:
@@ -146,12 +162,19 @@ def expand_events(events: list[dict] | None) -> list[dict]:
     if not events:
         return events or []
     out: list[dict] = []
+    consecutive_failures = 0
     for e in events:
         if not isinstance(e, dict):
             out.append(e)
             continue
         try:
-            out.append(_expand_one(e))
+            expanded, request_health = _expand_one(e)
+            out.append(expanded)
+            for healthy in request_health:
+                consecutive_failures = 0 if healthy else consecutive_failures + 1
+                if consecutive_failures >= 2:
+                    _mark_down()
+                    break
         except Exception as exc:  # noqa: BLE001 — 单事件扩展失败保持原样
             logger.warning("事件影响图谱扩展失败（保持原样）: %s", exc)
             out.append(e)

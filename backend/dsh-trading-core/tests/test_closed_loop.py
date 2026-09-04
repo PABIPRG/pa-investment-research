@@ -9,15 +9,22 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("ADAPTER_RUNNER", "fake")
 os.environ.setdefault("BRIEF_SCHEDULE_ENABLED", "false")
 os.environ.setdefault("SHADOW_SCHEDULE_ENABLED", "false")
 os.environ.setdefault("CLOSED_LOOP_ENABLED", "false")
 
-from adapter.scheduler import _run_closed_loop_job, setup_scheduler
+from adapter.scheduler import (
+    _run_closed_loop_job,
+    next_closed_loop_run_at,
+    setup_scheduler,
+    should_run_startup_backtest_catchup,
+)
 from adapter.store import JsonStore
 
 
@@ -26,6 +33,13 @@ def _temp_store() -> JsonStore:
 
 
 class ClosedLoopSchedulerTests(unittest.TestCase):
+    def test_next_closed_loop_run_is_timezone_aware_and_rolls_forward(self):
+        now = datetime(2026, 9, 4, 15, 36, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch.object(__import__("adapter.scheduler", fromlist=["settings"]).settings, "closed_loop_enabled", True), \
+                patch.object(__import__("adapter.scheduler", fromlist=["settings"]).settings, "closed_loop_time", "15:35"):
+            result = next_closed_loop_run_at(now=now, timezone_name="Asia/Shanghai")
+        self.assertEqual(result, "2026-09-05T15:35:00+08:00")
+
     def test_non_trading_day_skips_everything(self):
         store = _temp_store()
         with patch("adapter.scheduler.JsonStore", return_value=store), \
@@ -68,56 +82,55 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
             _run_closed_loop_job()
 
         self.assertEqual(calls, ["event", "shadow", "evolve", "push"])
+        runtime = store.get("evolution_previews", "_closed_loop_runtime")
+        self.assertEqual(runtime["status"], "completed")
+        self.assertRegex(runtime["recent_run_at"], r"T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$")
 
-    def test_candidate_auto_backtest_routes_passed_failed_pending(self):
+    def test_candidate_auto_backtest_creates_durable_initial_tasks(self):
         store = _temp_store()
-        # s-pass 将"通过回测"→自动激活；s-fail→淘汰；s-pend→样本外不足保持；
-        # s-skip 已 passed 不再重复回测。
-        for sid, vs in [("s-pass", "passed"), ("s-fail", "failed"), ("s-pend", "pending"), ("s-skip", "passed")]:
+        for sid, vs in [
+            ("s-new", "insufficient"),
+            ("s-not-passed", "not_passed"),
+            ("s-complete", "passed"),
+        ]:
             store.set("strategies", sid, {
                 "id": sid, "name": sid, "kind": "momentum", "direction": "利好",
                 "symbols": ["600000"], "params": {"n": 10},
                 "status": "candidate",
-                "verification_status": "pending" if sid != "s-skip" else "passed",
+                "verification_status": vs,
                 "backtest": {},
             })
-
-        outcome = {"s-pass": "passed", "s-fail": "failed", "s-pend": "pending"}
-        backtested: list[str] = []
-
-        def fake_backtest(params, cb):
-            sid = params["strategy_id"]
-            backtested.append(sid)
-            return {"verification_status": outcome[sid]}
+        store.set("strategy_backtests", "done", {
+            "task_id": "done", "strategy_id": "s-complete", "status": "completed",
+            "completed_at": "2026-09-01 09:00:00",
+        })
+        queued: list[str] = []
 
         with patch("adapter.scheduler.JsonStore", return_value=store), \
                 patch("adapter.brief_engine._is_trading_day", return_value=True), \
                 patch("adapter.scheduler._run_event_generation", return_value={"n_events": 0, "candidates": []}), \
                 patch("adapter.shadow.ShadowRunner") as shadow, \
                 patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
-                patch("adapter.strategies.StrategyBacktestRunner") as btr, \
+                patch("adapter.backtest_tasks.trigger_first_backtests") as trigger, \
                 patch("adapter.push.PusherManager") as pusher:
             shadow.return_value.run.return_value = {"skipped": False, "overall_nav": 1.0, "strategies": {}}
-            btr.return_value.run.side_effect = fake_backtest
+            trigger.side_effect = lambda ids: queued.extend(ids) or {"enqueued": len(ids)}
             pusher.return_value.push.return_value = []
             _run_closed_loop_job()
 
-        self.assertEqual(backtested, ["s-pass", "s-fail", "s-pend"])
-        self.assertEqual(store.get("strategies", "s-pass")["status"], "active")
-        self.assertEqual(store.get("strategies", "s-fail")["status"], "rejected")
-        self.assertEqual(store.get("strategies", "s-pend")["status"], "candidate")
-        self.assertEqual(store.get("strategies", "s-skip")["status"], "candidate")
+        self.assertEqual(queued, ["s-new"])
+        self.assertEqual(store.get("strategies", "s-new")["status"], "candidate")
 
-    def test_stale_failed_candidates_cleaned_up(self):
-        """已回测失败但仍留 candidate 池的候选 → 闭环自动淘汰（不重跑回测）。"""
+    def test_not_passed_candidate_is_intentionally_excluded(self):
+        """验证未通过是产品定义的复测排除条件，不自动淘汰也不重跑。"""
         store = _temp_store()
-        for sid, vs in [("s-old-fail", "failed"), ("s-pend", "pending"), ("s-passed", "passed")]:
+        for sid, vs in [("s-not-passed", "not_passed"), ("s-new", "insufficient")]:
             store.set("strategies", sid, {
                 "id": sid, "name": sid, "kind": "momentum", "direction": "利好",
                 "symbols": ["600000"], "params": {"n": 10},
                 "status": "candidate", "verification_status": vs, "backtest": {},
             })
-        backtested: list[str] = []
+        queued: list[str] = []
         pushed: list[tuple[str, str]] = []
 
         with patch("adapter.scheduler.JsonStore", return_value=store), \
@@ -125,21 +138,17 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
                 patch("adapter.scheduler._run_event_generation", return_value={"n_events": 0, "candidates": []}), \
                 patch("adapter.shadow.ShadowRunner") as shadow, \
                 patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
-                patch("adapter.strategies.StrategyBacktestRunner") as btr, \
+                patch("adapter.backtest_tasks.trigger_first_backtests") as trigger, \
                 patch("adapter.push.PusherManager") as pusher:
             shadow.return_value.run.return_value = {"skipped": False, "overall_nav": 1.0, "strategies": {}}
-            btr.return_value.run.side_effect = lambda params, cb: backtested.append(params["strategy_id"]) or {"verification_status": "pending"}
+            trigger.side_effect = lambda ids: queued.extend(ids) or {"enqueued": len(ids)}
             pusher.return_value.push.side_effect = lambda title, content: pushed.append((title, content)) or []
             _run_closed_loop_job()
 
-        # 只有 pending 的 s-pend 走回测；passed 的 s-passed 天然跳过；failed 的 s-old-fail 直接清理不重跑
-        self.assertEqual(backtested, ["s-pend"])
-        self.assertEqual(store.get("strategies", "s-old-fail")["status"], "rejected")
-        self.assertEqual(store.get("strategies", "s-pend")["status"], "candidate")
-        self.assertEqual(store.get("strategies", "s-passed")["status"], "candidate")
-        # 日报记录清理数
+        self.assertEqual(queued, ["s-new"])
+        self.assertEqual(store.get("strategies", "s-not-passed")["status"], "candidate")
         self.assertEqual(len(pushed), 1)
-        self.assertIn("清理 1 条失败遗留", pushed[0][1])
+        self.assertIn("新建/恢复首测任务 1 条", pushed[0][1])
 
     def test_evolve_actions_appear_in_push_content(self):
         store = _temp_store()
@@ -207,7 +216,8 @@ class SetupSchedulerGatingTests(unittest.TestCase):
     def test_all_disabled_returns_none(self):
         with patch("adapter.scheduler.settings.closed_loop_enabled", False), \
                 patch("adapter.scheduler.settings.schedule_enabled", False), \
-                patch("adapter.scheduler.settings.shadow_schedule_enabled", False):
+                patch("adapter.scheduler.settings.shadow_schedule_enabled", False), \
+                patch("adapter.scheduler.settings.auto_retest_enabled", False):
             self.assertIsNone(setup_scheduler())
 
     def test_closed_loop_enabled_registers_daily_job(self):
@@ -223,6 +233,38 @@ class SetupSchedulerGatingTests(unittest.TestCase):
             # apscheduler CronTrigger 的 hour/minute 由表达式承载（repr 可读）
             self.assertIn("hour='15'", repr(job.trigger))
             self.assertIn("minute='35'", repr(job.trigger))
+
+    def test_auto_retest_registers_daily_job_without_early_catchup(self):
+        now = datetime(2026, 9, 4, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch("adapter.scheduler.settings.closed_loop_enabled", False), \
+                patch("adapter.scheduler.settings.schedule_enabled", False), \
+                patch("adapter.scheduler.settings.shadow_schedule_enabled", False), \
+                patch("adapter.scheduler.settings.auto_retest_enabled", True), \
+                patch("adapter.scheduler.settings.auto_retest_time", "15:40"):
+            sched = setup_scheduler(now=now)
+            self.addCleanup(sched.shutdown if sched else lambda: None)
+            self.assertIsNotNone(sched)
+            self.assertIsNotNone(sched.get_job("backtest_patrol_daily"))
+            self.assertIsNone(sched.get_job("backtest_patrol_startup_catchup"))
+
+    def test_startup_catchup_is_registered_once_after_missed_time(self):
+        now = datetime(2026, 9, 4, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch("adapter.scheduler.settings.closed_loop_enabled", False), \
+                patch("adapter.scheduler.settings.schedule_enabled", False), \
+                patch("adapter.scheduler.settings.shadow_schedule_enabled", False), \
+                patch("adapter.scheduler.settings.auto_retest_enabled", True), \
+                patch("adapter.scheduler.settings.auto_retest_time", "15:40"):
+            sched = setup_scheduler(now=now)
+            self.addCleanup(sched.shutdown if sched else lambda: None)
+            self.assertIsNotNone(sched)
+            jobs = [job for job in sched.get_jobs() if job.id == "backtest_patrol_startup_catchup"]
+            self.assertEqual(len(jobs), 1)
+
+    def test_startup_catchup_boundary_uses_service_timezone(self):
+        before = datetime(2026, 9, 4, 15, 39, tzinfo=ZoneInfo("Asia/Shanghai"))
+        at_time = datetime(2026, 9, 4, 15, 40, tzinfo=ZoneInfo("Asia/Shanghai"))
+        self.assertFalse(should_run_startup_backtest_catchup(before, "15:40"))
+        self.assertTrue(should_run_startup_backtest_catchup(at_time, "15:40"))
 
 
 if __name__ == "__main__":

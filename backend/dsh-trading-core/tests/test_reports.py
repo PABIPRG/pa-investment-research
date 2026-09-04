@@ -4,6 +4,7 @@
 import asyncio
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -54,6 +55,41 @@ class _ImmediateRunner:
 
     def run(self, params: dict, progress_cb) -> dict:
         return self.result
+
+
+class _DurableStrategyRunner(_ImmediateRunner):
+    name = "strategy-backtest"
+
+    def __init__(self, result: dict):
+        super().__init__(result)
+        self.prepared: list[tuple[str, dict]] = []
+        self.attached: list[tuple[str, str]] = []
+
+    def prepare_task(self, task_id: str, params: dict) -> None:
+        self.prepared.append((task_id, dict(params)))
+
+    def attach_report(self, task_id: str, report_id: str) -> None:
+        self.attached.append((task_id, report_id))
+
+
+class _CompletedDurableRunner(_ImmediateRunner):
+    name = "strategy-backtest"
+
+    def cancel_task(self, task_id: str) -> bool:
+        return False
+
+
+class _CanonicalTaskRunner(_ImmediateRunner):
+    def __init__(self, result: dict):
+        super().__init__(result)
+        self.run_count = 0
+
+    def prepare_task(self, task_id: str, params: dict) -> dict:
+        return {"task_id": FIRST_ID}
+
+    def run(self, params: dict, progress_cb) -> dict:
+        self.run_count += 1
+        return super().run(params, progress_cb)
 
 
 class ReportStoreTests(unittest.TestCase):
@@ -160,6 +196,39 @@ class ReportStoreTests(unittest.TestCase):
 
 
 class QuantitativeTaskReportTests(unittest.TestCase):
+    def test_strategy_report_uses_current_verification_labels(self):
+        base = {"id": "strategy-1", "symbols": ["600519"]}
+        not_passed = render_strategy_report(
+            base, "active", {"verification_status": "not_passed"}
+        )
+        insufficient = render_strategy_report(
+            base, "active", {"verification_status": "insufficient"}
+        )
+
+        self.assertIn("验证分类：验证未通过", not_passed)
+        self.assertIn("参与状态：正常运行", not_passed)
+        self.assertIn("验证分类：样本不足", insufficient)
+
+    def test_strategy_report_uses_shared_five_dimension_wording(self):
+        report = render_strategy_report(
+            {
+                "id": "variant-1",
+                "source": "evolution",
+                "evolve": {"tier": 2},
+            },
+            "candidate",
+            {"verification_status": "not_passed"},
+            task_status="running",
+        )
+        for line in (
+            "参与状态：候选",
+            "验证分类：验证未通过",
+            "置信层级：已升级",
+            "来源：变异来源",
+            "任务状态：运行中",
+        ):
+            self.assertIn(line, report)
+
     def test_backtest_strategy_and_shadow_render_non_empty_auditable_reports(self):
         backtest = render_backtest_report(
             {
@@ -239,11 +308,51 @@ class QuantitativeTaskReportTests(unittest.TestCase):
 
 
 class TaskManagerReportPersistenceTests(unittest.TestCase):
+    def test_start_returns_prepare_canonical_id_and_dispatches_only_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = _CanonicalTaskRunner(_stock_result())
+            manager = TaskManager(
+                registry={"stock": runner},
+                report_store=ReportStore(JsonStore(Path(temporary))),
+            )
+
+            async def start_twice() -> tuple[str, str]:
+                first = manager.start({"ticker": "600519"}, "stock", task_id=SECOND_ID)
+                second = manager.start({"ticker": "600519"}, "stock", task_id="c" * 32)
+                for _ in range(200):
+                    if manager.status(first)["status"] not in ("pending", "running"):
+                        break
+                    await asyncio.sleep(0.005)
+                return first, second
+
+            try:
+                with patch(
+                    "adapter.analyzer.DecisionRecorder.maybe_record", return_value=None
+                ):
+                    self.assertEqual(asyncio.run(start_twice()), (FIRST_ID, FIRST_ID))
+                self.assertEqual(runner.run_count, 1)
+                self.assertFalse(manager.exists(SECOND_ID))
+            finally:
+                manager.executor.shutdown(wait=True)
+
+    def test_cancel_does_not_override_a_durably_completed_task(self):
+        runner = _CompletedDurableRunner({})
+        manager = TaskManager(registry={"strategy": runner})
+        task_id = "completed-race"
+        event = threading.Event()
+        manager._status[task_id] = "running"
+        manager._task_types[task_id] = "strategy"
+        manager._cancel_events[task_id] = event
+
+        self.assertFalse(manager.cancel(task_id))
+        self.assertEqual(manager.status(task_id)["status"], "running")
+        self.assertFalse(event.is_set())
+
     def _run_task(self, manager: TaskManager, params: dict, task_type: str) -> str:
         async def run_and_wait() -> str:
             task_id = manager.start(params, task_type=task_type)
             for _ in range(200):
-                if manager.status(task_id)["status"] != "running":
+                if manager.status(task_id)["status"] not in ("pending", "running"):
                     return task_id
                 await asyncio.sleep(0.005)
             self.fail("任务未在预期时间内结束")
@@ -266,6 +375,55 @@ class TaskManagerReportPersistenceTests(unittest.TestCase):
                 self.assertIsNotNone(persisted)
                 self.assertEqual(persisted["id"], task_id)
                 self.assertEqual(persisted["reports"]["market"], "# 市场分析\n\n正文")
+            finally:
+                manager.executor.shutdown(wait=True)
+
+    def test_strategy_task_is_prepared_before_submit_and_links_saved_report(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report_store = ReportStore(JsonStore(Path(temporary)))
+            runner = _DurableStrategyRunner({
+                "signal": {"strategy_id": "strategy-1", "strategy_name": "策略一"},
+                "reports": {"strategy": "# 策略报告\n\n正文"},
+            })
+            manager = TaskManager(registry={"strategy": runner}, report_store=report_store)
+            try:
+                task_id = self._run_task(
+                    manager, {"strategy_id": "strategy-1"}, "strategy"
+                )
+                self.assertEqual(runner.prepared, [(
+                    task_id,
+                    {"strategy_id": "strategy-1", "task_id": task_id},
+                )])
+                self.assertEqual(runner.attached, [(task_id, task_id)])
+            finally:
+                manager.executor.shutdown(wait=True)
+
+    def test_recovered_task_can_resume_with_its_original_id(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = _DurableStrategyRunner({
+                "signal": {"strategy_id": "strategy-1"},
+                "reports": {"strategy": "# 报告\n\n正文"},
+            })
+            manager = TaskManager(
+                registry={"strategy": runner},
+                report_store=ReportStore(JsonStore(Path(temporary))),
+            )
+
+            async def resume() -> str:
+                task_id = manager.start(
+                    {"strategy_id": "strategy-1"},
+                    task_type="strategy",
+                    task_id=FIRST_ID,
+                )
+                for _ in range(200):
+                    if manager.status(task_id)["status"] not in ("pending", "running"):
+                        return task_id
+                    await asyncio.sleep(0.005)
+                self.fail("恢复任务未结束")
+
+            try:
+                self.assertEqual(asyncio.run(resume()), FIRST_ID)
+                self.assertEqual(runner.prepared[0][0], FIRST_ID)
             finally:
                 manager.executor.shutdown(wait=True)
 

@@ -8,8 +8,8 @@
 - 回测：baostock 前复权日线 → 内联轻量指标（ma/rsi，纯 pandas，不 import tradingagents）
   → 全序列先算信号（因果、无 look-ahead）→ 按行数切样本内(70%)/样本外(30%) →
   统一「bar t 信号 → bar t+1 开盘价成交」状态机逐笔成交 → compute_summary 聚合副口径
-  + 合成组合净值曲线自算日频回撤/Sharpe 主口径。回测只更新 verification_status，
-  不直接改变 candidate/active/rejected/retired 生命周期。
+  + 合成组合净值曲线自算日频回撤/Sharpe 主口径。首次回测任务完成后，
+  candidate 进入 active；验证结果只表达证据分类，不是人工生效开关。
 """
 
 import hashlib
@@ -26,13 +26,13 @@ import requests
 
 from .config import settings
 from .store import JsonStore
-from .task_report_render import render_strategy_report
+from .task_report_render import render_strategy_report, strategy_semantic_labels
 
 logger = logging.getLogger("adapter.strategies")
 
 # 支持的策略 kind
 KINDS = ("ma_cross", "rsi_reversal", "momentum", "breakout", "bollinger", "volume_breakout")
-VERIFICATION_STATUSES = frozenset({"pending", "passed", "failed", "archived"})
+VERIFICATION_STATUSES = frozenset({"passed", "not_passed", "insufficient"})
 # A 股可交易前缀：0=深主板/中小、3=创业板、6=沪主板/科创板；4/8=北交所排除，2/9=B 股排除
 _ALLOWED_PREFIXES = ("0", "3", "6")
 # 利空只允许超跌反弹（系统做多）
@@ -47,7 +47,7 @@ _DEFAULT_PARAMS = {
     "volume_breakout": {"n": 20, "vol_mult": 1.5},
 }
 
-_EVENTS_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_EVENTS_CACHE: dict[str, tuple[float, list[dict], int] | tuple[float, list[dict]]] = {}
 _EVENTS_CACHE_LOCK = threading.Lock()
 _EVENTS_REFRESH_LOCK = threading.Lock()
 _EVENTS_FAILURE: tuple[float, str] | None = None
@@ -65,33 +65,56 @@ def _str2md5(s: str) -> str:
 def _verification_from_backtest(backtest: object) -> str:
     """从最新回测证据派生验证分类，不使用生命周期状态兜底。"""
     if not isinstance(backtest, dict) or not backtest:
-        return "pending"
+        return "insufficient"
     if backtest.get("thresholds_pass") is True:
         return "passed"
     if backtest.get("thresholds_pass") is False:
         reason = str(backtest.get("reason") or "")
         if "成交不足" in reason or "样本不足" in reason:
-            return "pending"
-        return "failed"
-    return "pending"
+            return "insufficient"
+        return "not_passed"
+    return "insufficient"
 
 
 def strategy_verification_status(strategy: object) -> str:
     """返回稳定验证分类，并为缺少新字段的历史记录提供只读兼容投影。"""
     if not isinstance(strategy, dict):
-        return "pending"
-    if strategy.get("status") == "retired":
-        return "archived"
+        return "insufficient"
     explicit = strategy.get("verification_status")
-    if explicit in VERIFICATION_STATUSES and explicit != "archived":
+    if explicit in VERIFICATION_STATUSES:
         return str(explicit)
+    if explicit == "failed":
+        return "not_passed"
+    if explicit in ("pending", "archived"):
+        return _verification_from_backtest(strategy.get("backtest"))
     return _verification_from_backtest(strategy.get("backtest"))
 
 
-def project_strategy_verification(strategy: object) -> dict:
-    """复制策略并补齐 verification_status，不在列表读取时隐式改写磁盘。"""
+def project_strategy_verification(
+    strategy: object,
+    *,
+    task_status: str | None = None,
+) -> dict:
+    """复制策略并投影五维语义，不在列表读取时隐式改写磁盘。"""
     projected = dict(strategy) if isinstance(strategy, dict) else {}
     projected["verification_status"] = strategy_verification_status(projected)
+    participation_status = str(projected.get("status") or "")
+    evolve = projected.get("evolve")
+    evolve = evolve if isinstance(evolve, dict) else {}
+    try:
+        confidence_tier = int(evolve.get("tier") or 1)
+    except (TypeError, ValueError):
+        confidence_tier = 1
+    projected["participation_status"] = participation_status
+    projected["confidence_tier"] = confidence_tier
+    projected["task_status"] = task_status
+    projected["semantic_labels"] = strategy_semantic_labels(
+        participation_status,
+        projected["verification_status"],
+        confidence_tier,
+        projected.get("source"),
+        task_status,
+    )
     return projected
 
 
@@ -101,10 +124,10 @@ def _verification_outcome(out_summary: dict, min_oos: int) -> tuple[str, bool, s
     oos_wr = out_summary.get("win_rate_pct")
     oos_avg = out_summary.get("avg_simulated_return_pct")
     if oos_n < min_oos:
-        return "pending", False, f"样本外成交不足({oos_n}<{min_oos})"
+        return "insufficient", False, f"样本外成交不足({oos_n}<{min_oos})"
     if oos_wr is not None and oos_avg is not None and oos_wr >= 50.0 and oos_avg > 0:
         return "passed", True, "样本外胜率/均收益达标"
-    return "failed", False, f"样本外未达标(wr={oos_wr}, avg={oos_avg})"
+    return "not_passed", False, f"样本外未达标(wr={oos_wr}, avg={oos_avg})"
 
 
 def _persist_strategy_backtest(
@@ -113,22 +136,31 @@ def _persist_strategy_backtest(
     fallback_strategy: dict,
     backtest: dict,
     verification_status: str,
+    *,
+    task_id: str | None = None,
+    completed_sequence: int = 0,
 ) -> dict:
-    """原子保存回测证据；生命周期由用户动作维护，回测不得覆盖。"""
-    if verification_status not in VERIFICATION_STATUSES - {"archived"}:
+    """原子保存回测证据；首次完成会将 candidate 推进到 active。"""
+    if verification_status not in VERIFICATION_STATUSES:
         raise ValueError(f"非法验证分类: {verification_status}")
 
     def persist_result(current):
         record = dict(current or fallback_strategy)
+        current_sequence = int(record.get("latest_backtest_sequence") or 0)
+        if current_sequence > int(completed_sequence or 0):
+            return record
         lifecycle_status = record.get("status") or "candidate"
+        if lifecycle_status == "candidate":
+            lifecycle_status = "active"
         record.update(
             status=lifecycle_status,
-            verification_status=(
-                "archived" if lifecycle_status == "retired" else verification_status
-            ),
+            verification_status=verification_status,
             backtest=backtest,
             updated_at=_now(),
         )
+        if completed_sequence:
+            record["latest_backtest_sequence"] = int(completed_sequence)
+            record["latest_backtest_task_id"] = task_id
         return record
 
     return store.mutate("strategies", strategy_id, persist_result)
@@ -144,13 +176,210 @@ def transition_strategy(store: JsonStore, strategy_id: str, action: str) -> dict
         if not isinstance(current, dict) or not current:
             raise KeyError(strategy_id)
         next_record = {**current, "status": statuses[action], "updated_at": _now()}
-        next_record["verification_status"] = (
-            "archived" if action == "retire"
-            else strategy_verification_status(next_record)
-        )
+        next_record["verification_status"] = strategy_verification_status(next_record)
         return next_record
 
     return store.mutate("strategies", strategy_id, transition)
+
+
+def finalize_completed_backtest(
+    store: JsonStore,
+    task_id: str,
+    fallback_strategy: dict | None = None,
+) -> dict:
+    """幂等补齐 completed 任务对应的策略快照、生命周期和报告引用。"""
+    from . import backtest_tasks as bt
+
+    task = bt.get_task(store, task_id) or {}
+    if task.get("status") != "completed" or not isinstance(task.get("result"), dict):
+        raise ValueError(f"任务尚未完成或缺少结果: {task_id}")
+    sid = str(task.get("strategy_id") or "")
+    strategy = store.get("strategies", sid) or fallback_strategy
+    if not isinstance(strategy, dict) or not strategy:
+        raise ValueError(f"策略不存在: {sid}")
+    backtest = dict(task["result"])
+    verification_status = bt.normalize_verification_status(
+        task.get("verification_status"), backtest
+    )
+    backtest["verification_status"] = verification_status
+    saved = _persist_strategy_backtest(
+        store,
+        sid,
+        strategy,
+        backtest,
+        verification_status,
+        task_id=task_id,
+        completed_sequence=int(task.get("completed_sequence") or 0),
+    )
+    lifecycle_status = str(saved.get("status") or "candidate")
+    saved_verification = verification_status
+    output = _completed_backtest_output(
+        task, strategy, backtest, lifecycle_status, saved_verification
+    )
+    _ensure_completed_report(store, task_id, task, output)
+    return output
+
+
+def _completed_backtest_output(
+    task: dict,
+    strategy: dict,
+    backtest: dict,
+    lifecycle_status: str,
+    verification_status: str,
+) -> dict:
+    output = {
+        "strategy_id": str(task.get("strategy_id") or ""),
+        "status": lifecycle_status,
+        "verification_status": verification_status,
+        "backtest": backtest,
+        "symbol_errors": backtest.get("symbol_errors") or {},
+        "signal": {
+            "signal_type": "strategy_backtest",
+            "strategy_id": str(task.get("strategy_id") or ""),
+            "strategy_name": strategy.get("name"),
+            "status": lifecycle_status,
+            "verification_status": verification_status,
+            "thresholds_pass": task.get("thresholds_pass"),
+        },
+        "reports": {
+            "strategy": render_strategy_report(
+                strategy,
+                lifecycle_status,
+                backtest,
+                task_status=str(task.get("status") or "completed"),
+            )
+        },
+    }
+    return output
+
+
+def _ensure_completed_report(
+    store: JsonStore,
+    task_id: str,
+    task: dict,
+    output: dict,
+) -> None:
+    from . import backtest_tasks as bt
+    from .report_store import ReportStore
+
+    report_store = ReportStore(store)
+    report = report_store.get_report(task_id)
+    if report is None:
+        report = report_store.save_task_result(
+            task_id, "strategy", dict(task.get("request_params") or {}), output
+        )
+    if report is not None:
+        bt.attach_report(store, task_id, report["id"])
+
+
+def reconcile_completed_backtests(store: JsonStore) -> dict[str, int]:
+    """服务启动时补偿 completed 与策略/报告跨文件写入中断。"""
+    repaired = failed = 0
+    from . import backtest_tasks as bt
+
+    completed_rows = {
+        str(task_id): row
+        for task_id, row in (store.all(bt.COLLECTION) or {}).items()
+        if isinstance(row, dict) and row.get("status") == "completed"
+    }
+    latest_by_strategy: dict[str, str] = {}
+    for task_id, row in completed_rows.items():
+        sid = str(row.get("strategy_id") or "")
+        old_id = latest_by_strategy.get(sid)
+        old = completed_rows.get(old_id or "", {})
+        key = (
+            int(row.get("completed_sequence") or 0),
+            str(row.get("completed_at") or ""),
+            int(row.get("created_sequence") or 0),
+            str(row.get("created_at") or ""),
+            task_id,
+        )
+        old_key = (
+            int(old.get("completed_sequence") or 0),
+            str(old.get("completed_at") or ""),
+            int(old.get("created_sequence") or 0),
+            str(old.get("created_at") or ""),
+            old_id or "",
+        )
+        if old_id is None or key > old_key:
+            latest_by_strategy[sid] = task_id
+
+    for task_id, row in completed_rows.items():
+        if not isinstance(row, dict) or row.get("status") != "completed":
+            continue
+        sid = str(row.get("strategy_id") or "")
+        strategy = store.get("strategies", sid) or {}
+        latest_row = completed_rows.get(latest_by_strategy.get(sid) or "", {})
+        if int(latest_row.get("completed_sequence") or 0) > 0:
+            strategy_matches_completed = strategy.get("backtest") == latest_row.get("result")
+        else:
+            # 旧数据没有可靠的完成顺序；若当前快照能对应任一历史完成任务，
+            # 不用随机 task_id 把它回滚。新任务一律用 completed_sequence 精确补偿。
+            strategy_matches_completed = any(
+                candidate.get("strategy_id") == sid
+                and strategy.get("backtest") == candidate.get("result")
+                for candidate in completed_rows.values()
+            )
+        strategy_consistent = (
+            strategy.get("status") != "candidate" and strategy_matches_completed
+        )
+        needs_strategy_repair = (
+            latest_by_strategy.get(sid) == task_id and not strategy_consistent
+        )
+        needs_report_repair = not bool(row.get("report_id"))
+        if not needs_strategy_repair and not needs_report_repair:
+            continue
+        try:
+            if needs_strategy_repair:
+                finalize_completed_backtest(store, task_id)
+            else:
+                verification = str(
+                    row.get("verification_status")
+                    or (row.get("result") or {}).get("verification_status")
+                    or "insufficient"
+                )
+                output = _completed_backtest_output(
+                    row,
+                    strategy,
+                    dict(row.get("result") or {}),
+                    str(strategy.get("status") or "candidate"),
+                    verification,
+                )
+                _ensure_completed_report(store, task_id, row, output)
+            repaired += 1
+        except Exception:  # noqa: BLE001 — 单条补偿失败不阻断启动
+            failed += 1
+            logger.exception("补偿已完成回测失败 task=%s", task_id)
+    return {"repaired": repaired, "failed": failed}
+
+
+def finalize_completed_backtest_resilient(
+    store: JsonStore, task_id: str, fallback_strategy: dict | None = None
+) -> dict:
+    """完成态跨文件写入瞬时失败时，立即执行一次幂等补偿。"""
+    try:
+        return finalize_completed_backtest(store, task_id, fallback_strategy)
+    except Exception as original:
+        logger.exception("回测完成态写入中断，立即补偿 task=%s", task_id)
+        reconcile_completed_backtests(store)
+        from . import backtest_tasks as bt
+
+        task = bt.get_task(store, task_id) or {}
+        strategy = store.get("strategies", str(task.get("strategy_id") or "")) or {}
+        if (
+            task.get("status") != "completed"
+            or not task.get("report_id")
+            or strategy.get("status") == "candidate"
+            or strategy.get("backtest") != task.get("result")
+        ):
+            raise original
+        backtest = dict(task.get("result") or {})
+        verification = bt.normalize_verification_status(
+            task.get("verification_status"), backtest
+        )
+        return _completed_backtest_output(
+            task, strategy, backtest, str(strategy.get("status") or "active"), verification
+        )
 
 
 # ---- 事件源 -------------------------------------------------------------
@@ -195,8 +424,9 @@ def fetch_events_with_status(
         hit = _EVENTS_CACHE.get("events")
         failure = _EVENTS_FAILURE
     age = (now - hit[0]) if hit else None
-    if hit and age is not None and age < max(0.0, settings.event_cache_ttl):
-        return _expand_events(hit[1], cached_impact), _event_status(
+    coverage = (hit[2] if len(hit) > 2 else len(hit[1])) if hit else 0
+    if hit and coverage >= limit and age is not None and age < max(0.0, settings.event_cache_ttl):
+        return _expand_events(hit[1][:limit], cached_impact), _event_status(
             source="fresh-cache",
             age_seconds=round(age, 3),
             deadline_seconds=deadline,
@@ -261,7 +491,7 @@ def fetch_events_with_status(
             )
         refreshed_at = _EVENTS_CLOCK()
         with _EVENTS_CACHE_LOCK:
-            _EVENTS_CACHE["events"] = (refreshed_at, events)
+            _EVENTS_CACHE["events"] = (refreshed_at, events, limit)
             _EVENTS_FAILURE = None
         return _expand_events(events, cached_impact), _event_status(
             source="upstream",
@@ -280,8 +510,9 @@ def fetch_events(limit: int = 20, timeout: float = 4.0) -> list[dict]:
     now = _EVENTS_CLOCK()
     with _EVENTS_CACHE_LOCK:
         hit = _EVENTS_CACHE.get("events")
-    if hit and (now - hit[0]) < max(0.0, settings.event_cache_ttl):
-        return _expand_events(hit[1], cached_impact=False)
+    coverage = (hit[2] if len(hit) > 2 else len(hit[1])) if hit else 0
+    if hit and coverage >= limit and (now - hit[0]) < max(0.0, settings.event_cache_ttl):
+        return _expand_events(hit[1][:limit], cached_impact=False)
     try:
         response = requests.get(
             settings.mw_url.rstrip("/") + f"/news/events?limit={limit}",
@@ -297,7 +528,7 @@ def fetch_events(limit: int = 20, timeout: float = 4.0) -> list[dict]:
         logger.warning("拉取 market-watch 事件失败（假设/个性化 fail-open）: %s", exc)
         return []
     with _EVENTS_CACHE_LOCK:
-        _EVENTS_CACHE["events"] = (_EVENTS_CLOCK(), events)
+        _EVENTS_CACHE["events"] = (_EVENTS_CLOCK(), events, limit)
         _EVENTS_FAILURE = None
     return _expand_events(events, cached_impact=False)
 
@@ -794,7 +1025,7 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
             "source_event_summary": ev.get("summary") or "",
             "holding_window_days": int(h.get("holding_window_days", 20)),
             "status": "candidate",
-            "verification_status": "pending",
+            "verification_status": "insufficient",
             "backtest": None,
             "created_at": _now(), "updated_at": _now(),
         }
@@ -837,6 +1068,48 @@ class StrategyBacktestRunner:
         self._hist_cache[sym] = hist
         return hist
 
+    @staticmethod
+    def _task_window(params: dict) -> tuple[str, str, float | None]:
+        lookback_years = float(params.get("lookback_years", 2.0))
+        requested_start = str(params.get("start_date") or "").strip()
+        requested_end = str(params.get("end_date") or "").strip()
+        if requested_start and requested_end:
+            return requested_start, requested_end, None
+        end = requested_end or date.today().isoformat()
+        start = (date.today() - timedelta(days=int(lookback_years * 366))).isoformat()
+        return start, end, lookback_years
+
+    def prepare_task(self, task_id: str, params: dict) -> dict:
+        """在 worker 提交前持久化 pending，避免队列窗口期丢任务。"""
+        from . import backtest_tasks as bt
+
+        start, end, window_lookback = self._task_window(params)
+        source = bt.normalize_source(params.get("source"))
+        capital = float(params.get("initial_capital") or settings.shadow_initial_capital)
+        return bt.create_pending_task(
+            self.store,
+            task_id=task_id,
+            strategy_id=str(params.get("strategy_id") or ""),
+            source=source,
+            window_start=start,
+            window_end=end,
+            lookback_years=window_lookback,
+            initial_capital=capital,
+            request_params=params,
+            dedupe_key=params.get("dedupe_key"),
+            retry_of_task_id=params.get("retry_of_task_id"),
+        )
+
+    def attach_report(self, task_id: str, report_id: str) -> None:
+        from . import backtest_tasks as bt
+
+        bt.attach_report(self.store, task_id, report_id)
+
+    def cancel_task(self, task_id: str) -> bool:
+        from . import backtest_tasks as bt
+
+        return bt.cancel_task(self.store, task_id)
+
     def run(self, params: dict, progress_cb: Callable) -> dict:
         """统一入口：手动/自动回测都建任务行，成功/失败都写回策略回测任务历史。
 
@@ -846,18 +1119,27 @@ class StrategyBacktestRunner:
         from . import backtest_tasks as bt
 
         task_id = str(params.get("task_id") or uuid.uuid4().hex)
-        source = "auto" if str(params.get("source") or "") == "auto" else "manual"
+        source = bt.normalize_source(params.get("source"))
+        claimed = False
         try:
+            if self.store.get(bt.COLLECTION, task_id) is None:
+                row = self.prepare_task(task_id, params)
+                task_id = str(row.get("task_id") or task_id)
+                params = {**params, "task_id": task_id}
+            claimed = bt.claim_task(self.store, task_id)
+            if not claimed:
+                raise RuntimeError(f"回测任务不可执行: {task_id}")
             return self._run_impl(params, progress_cb, task_id=task_id, source=source)
         except Exception as exc:  # noqa: BLE001 — 收尾失败记录后照常向上抛
-            try:
-                bt.fail_task(
-                    self.store, task_id, f"{type(exc).__name__}: {exc}",
-                    strategy_id=str(params.get("strategy_id") or ""),
-                    source=source,
-                )
-            except Exception:  # noqa: BLE001 — 记账异常不掩盖原始失败
-                logger.exception("回测失败任务记账出错 task=%s", task_id)
+            if claimed:
+                try:
+                    bt.fail_task(
+                        self.store, task_id, f"{type(exc).__name__}: {exc}",
+                        strategy_id=str(params.get("strategy_id") or ""),
+                        source=source,
+                    )
+                except Exception:  # noqa: BLE001 — 记账异常不掩盖原始失败
+                    logger.exception("回测失败任务记账出错 task=%s", task_id)
             raise
 
     def _run_impl(self, params: dict, progress_cb: Callable, *,
@@ -877,22 +1159,7 @@ class StrategyBacktestRunner:
         capital = float(params.get("initial_capital") or settings.shadow_initial_capital)
         min_oos = int(params.get("min_oos_trades", 4))
 
-        # 显式 start_date/end_date → 用给定窗口（lookback 记为空）；否则默认 lookback_years 窗口。
-        requested_start = str(params.get("start_date") or "").strip()
-        requested_end = str(params.get("end_date") or "").strip()
-        if requested_start and requested_end:
-            start, end = requested_start, requested_end
-            window_lookback = None
-        else:
-            end = requested_end or date.today().isoformat()
-            start = (date.today() - timedelta(days=int(lookback_years * 366))).isoformat()
-            window_lookback = lookback_years
-
-        bt.begin_task(
-            self.store, task_id=task_id, strategy_id=sid, source=source,
-            window_start=start, window_end=end,
-            lookback_years=window_lookback, initial_capital=capital,
-        )
+        start, end, _window_lookback = self._task_window(params)
 
         progress_cb(f"📐 策略 {kind} {symbols} · {lookback_years}年 · 样本外{oos_frac:.0%}")
 
@@ -903,7 +1170,14 @@ class StrategyBacktestRunner:
         per_out: dict[str, tuple] = {}
         per_symbol: dict[str, dict] = {}
 
+        def check_cancelled() -> None:
+            cancel_event = params.get("_cancel_event")
+            if cancel_event is not None and cancel_event.is_set():
+                bt.cancel_task(self.store, task_id)
+                raise RuntimeError("回测任务已取消")
+
         for i, sym in enumerate(symbols):
+            check_cancelled()
             progress_cb(f"🧮 回测 {i + 1}/{len(symbols)} {sym}…")
             try:
                 hist = self._fetch_hist(sym, start, end)
@@ -929,6 +1203,9 @@ class StrategyBacktestRunner:
                 symbol_errors[sym] = f"{type(exc).__name__}: {exc}"
                 per_symbol[sym] = {"error": symbol_errors[sym]}
 
+        if not per_in:
+            raise RuntimeError("没有可用的标的行情，本次回测无法执行")
+
         n = max(len(symbols), 1)
         capital_per = capital / n
 
@@ -943,6 +1220,7 @@ class StrategyBacktestRunner:
             return summary
 
         progress_cb("📈 聚合样本内/样本外指标 + 组合净值…")
+        check_cancelled()
         in_summary = _agg(all_in, per_in, "in")
         out_summary = _agg(all_out, per_out, "out")
 
@@ -958,35 +1236,19 @@ class StrategyBacktestRunner:
             "per_symbol": per_symbol,
             "symbol_errors": symbol_errors,
         }
-        saved = _persist_strategy_backtest(
-            self.store, sid, strategy, backtest, verification_status
-        )
-        bt.complete_task(
+        check_cancelled()
+        completed = bt.complete_task(
             self.store, task_id,
             verification_status=verification_status,
             thresholds_pass=bool(passed),
             result=backtest,
         )
-        lifecycle_status = str(saved.get("status") or "candidate")
-        saved_verification = str(saved["verification_status"])
+        if not completed:
+            raise RuntimeError(f"回测任务已取消或不再可完成: {task_id}")
+        output = finalize_completed_backtest_resilient(self.store, task_id, strategy)
+        lifecycle_status = str(output["status"])
+        saved_verification = str(output["verification_status"])
         progress_cb(
-            f"🏁 验证 → {saved_verification}；生命周期保持 {lifecycle_status}（{reason}）"
+            f"🏁 验证 → {saved_verification}；生命周期进入 {lifecycle_status}（{reason}）"
         )
-        return {
-            "strategy_id": sid,
-            "status": lifecycle_status,
-            "verification_status": saved_verification,
-            "backtest": backtest,
-            "symbol_errors": symbol_errors,
-            "signal": {
-                "signal_type": "strategy_backtest",
-                "strategy_id": sid,
-                "strategy_name": strategy.get("name"),
-                "status": lifecycle_status,
-                "verification_status": saved_verification,
-                "thresholds_pass": passed,
-            },
-            "reports": {
-                "strategy": render_strategy_report(strategy, lifecycle_status, backtest)
-            },
-        }
+        return output

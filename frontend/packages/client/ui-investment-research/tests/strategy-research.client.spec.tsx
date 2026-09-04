@@ -20,6 +20,24 @@ function renderStrategyPage(
 }
 
 describe('策略研究产品事实与确认流程', () => {
+  it('旧策略只有最近回测快照时明确提示历史未留存', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.strategies') return {
+        items: [{
+          id: 'legacy-strategy', name: '旧策略', status: 'active',
+          verification_status: 'passed', backtest: { ran_at: '2026-08-20 15:00:00' },
+        }],
+      }
+      if (request.operation === 'trading-core.strategy-backtests') return { tasks: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    const card = (await screen.findByText('旧策略')).closest('article')
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测管理' }))
+    expect(await screen.findByText(/历史未留存：该策略仅保留最近一次回测证据/)).toBeTruthy()
+  })
+
   it('生命周期默认收起，帮助弹层按所选策略证据高亮并提供可操作入口', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.strategies') {
@@ -58,7 +76,7 @@ describe('策略研究产品事实与确认流程', () => {
     const lifecycleHelp = [
       [formation, '从真实市场事件形成候选；点击查看全部候选。'],
       [backtest, '候选产生回测证据后进入；点击筛选待验证策略。'],
-      [within(lifecycle).getByRole('button', { name: /3.*影子验证/u }), '回测通过并激活后进入；点击打开纸面账户验证。'],
+      [within(lifecycle).getByRole('button', { name: /3.*影子验证/u }), '首次回测任务完成后自动进入；验证结果不作为人工生效开关。'],
       [within(lifecycle).getByRole('button', { name: /4.*进化诊断/u }), '影子验证积累证据后查看判定；进入前需先选择策略。'],
     ] as const
     for (const [button, help] of lifecycleHelp) {
@@ -81,6 +99,59 @@ describe('策略研究产品事实与确认流程', () => {
     view.rerender(<StrategyResearchPage {...props} selectedStrategyId="" />)
     fireEvent.click(screen.getByRole('button', { name: '了解策略生命周期' }))
     expect(screen.getByRole('navigation', { name: '策略生命周期步骤' }).querySelector('[aria-current="step"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: '人工确认生效' })).toBeNull()
+  })
+
+  it('回测历史展示新状态与来源，并提供取消、重跑和报告入口', async () => {
+    const onOpenReports = vi.fn()
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return { items: [{ id: 's-1', name: '任务化策略', status: 'active', verification_status: 'not_passed' }] }
+      }
+      if (request.operation === 'trading-core.strategy-backtests') {
+        return { tasks: [
+          { task_id: 't-pending', status: 'pending', source: 'initial_auto', created_at: '2026-09-03 09:00:00' },
+          { task_id: 't-cancelled', status: 'cancelled', source: 'periodic_retest', created_at: '2026-09-02 09:00:00' },
+          { task_id: 't-completed', status: 'completed', source: 'manual', verification_status: 'not_passed', thresholds_pass: false, report_id: 'a'.repeat(32), created_at: '2026-09-01 09:00:00' },
+        ] }
+      }
+      if (request.operation === 'trading-core.strategy-backtest-cancel') return { status: 'cancelled' }
+      if (request.operation === 'trading-core.strategy-backtest-retry') return { task_id: 't-retry' }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<StrategyResearchPage
+      requestData={requestData as never}
+      selectedStrategyId=""
+      onSelectStrategy={() => {}}
+      onOpenShadow={() => {}}
+      onOpenReports={onOpenReports}
+      onAnalyze={() => {}}
+    />)
+    const card = (await screen.findByText('任务化策略')).closest('article')
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测管理' }))
+    const dialog = await screen.findByRole('dialog', { name: '任务化策略' })
+    expect(within(dialog).getAllByText('首次自动').length).toBeGreaterThan(0)
+    expect(within(dialog).getByText('周期复测')).toBeTruthy()
+    expect(within(dialog).getByText('已取消')).toBeTruthy()
+    expect(within(dialog).getAllByText('未通过').length).toBeGreaterThan(0)
+
+    const cancelButton = within(dialog).getByRole('button', { name: '取消任务' })
+    fireEvent.click(cancelButton)
+    fireEvent.click(cancelButton)
+    await waitFor(() => expect(requestData).toHaveBeenCalledWith({
+      operation: 'trading-core.strategy-backtest-cancel',
+      input: { strategy_id: 's-1', task_id: 't-pending' },
+    }))
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.strategy-backtest-cancel')).toHaveLength(1)
+    const cancelledRow = within(dialog).getByText('周期复测').closest('tr')
+    fireEvent.click(within(cancelledRow as HTMLElement).getByRole('button', { name: '重新运行' }))
+    await waitFor(() => expect(requestData).toHaveBeenCalledWith({
+      operation: 'trading-core.strategy-backtest-retry',
+      input: { strategy_id: 's-1', task_id: 't-cancelled' },
+    }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '查看报告' }))
+    expect(onOpenReports).toHaveBeenCalledWith('a'.repeat(32))
   })
 
   it('策略归档需要二次确认，确认后以 retire 迁移并进入已归档分类', async () => {
@@ -338,11 +409,11 @@ describe('策略研究产品事实与确认流程', () => {
     renderStrategyPage(requestData)
     expect(await screen.findByRole('button', { name: '已验证通过 1' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '验证未通过 1' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '已归档 1' })).toBeTruthy()
-    const unverified = screen.getByRole('button', { name: '未验证 2' })
+    expect(screen.getByRole('button', { name: '已归档 2' })).toBeTruthy()
+    const unverified = screen.getByRole('button', { name: '未验证 1' })
     fireEvent.click(unverified)
-    expect(screen.getByText('仅生命周期退役')).toBeTruthy()
     expect(screen.getByText('仅生命周期生效')).toBeTruthy()
+    expect(screen.queryByText('仅生命周期退役')).toBeNull()
     expect(screen.queryByText('明确通过')).toBeNull()
   })
 

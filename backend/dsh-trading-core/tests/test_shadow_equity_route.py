@@ -53,6 +53,20 @@ class ShadowEquityRouteTests(unittest.TestCase):
 
         self.assertEqual([item["overall_nav"] for item in payload["items"]], [1.08, 1.05])
 
+    def test_legacy_history_keeps_snapshot_evidence_without_fabricated_task_or_report(self):
+        with patch("adapter.app.JsonStore", return_value=_ShadowStore()):
+            app = create_app()
+            endpoint = next(route.endpoint for route in app.routes if route.path == "/shadow/history")
+            payload = asyncio.run(endpoint(strategy_id="strategy-a", limit=30))
+
+        self.assertEqual(payload["count"], 1)
+        row = payload["items"][0]
+        self.assertTrue(row["legacy"])
+        self.assertIsNone(row["task_id"])
+        self.assertEqual(row["date"], "2026-08-26")
+        self.assertEqual(row["nav"], 1.03)
+        self.assertNotIn("report_id", row)
+
 
 if __name__ == "__main__":
     unittest.main()
