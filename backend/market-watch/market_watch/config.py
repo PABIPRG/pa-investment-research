@@ -107,7 +107,12 @@ class Settings:
         # 事件驱动（快讯 → 结构化事件 → 命中自选/持仓预警 → 个性化）
         self.event_enabled = _true("MW_EVENT_ENABLED", default=True)
         self.event_batch = int(os.getenv("MW_EVENT_BATCH", "15"))
-        self.event_ttl = float(os.getenv("MW_EVENT_TTL", "60"))
+        # 缓存 TTL 拉长：冷抽取（flash+LLM+定向）可达数十秒，trading-core 拉取超时仅 15s；
+        # 60s 太短导致请求几乎每分钟撞一次冷抽取。事件改由后台 event-warm 线程按
+        # event_warm_interval 周期续热（增量，无新快讯近零开销），TTL 因而可安全放宽。
+        self.event_ttl = float(os.getenv("MW_EVENT_TTL", "300"))
+        # 后台预热轮询间隔（秒）。远小于 event_ttl，保证 /news/events 恒命中缓存秒回。
+        self.event_warm_interval = float(os.getenv("MW_EVENT_WARM_INTERVAL", "45"))
         self.trading_core_url = os.getenv("MW_TRADING_CORE", "http://127.0.0.1:8000")
         # 事件驱动 · 定向个股新闻（按持仓+自选逐只拉东财搜索，直标注 code，不走 LLM；频率受 event_ttl 限，无需独立 TTL）
         self.directed_news_enabled = _true("MW_DIRECTED_NEWS_ENABLED", default=True)
