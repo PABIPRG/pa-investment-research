@@ -874,6 +874,7 @@ export function InvestmentShell({
   const [historyClosing, setHistoryClosing] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
   const [materialsOpen, setMaterialsOpen] = useState(false)
+  const [requestedReportId, setRequestedReportId] = useState('')
   const historyTriggerRef = useRef<HTMLButtonElement>(null)
   const reportTriggerRef = useRef<HTMLButtonElement>(null)
   const assistantTriggerRef = useRef<HTMLButtonElement>(null)
@@ -1353,6 +1354,7 @@ export function InvestmentShell({
 
   const closeReports = useCallback(() => {
     setReports(false)
+    setRequestedReportId('')
     window.requestAnimationFrame(() => { reportTriggerRef.current?.focus() })
   }, [setReports])
 
@@ -1476,7 +1478,7 @@ export function InvestmentShell({
         {analysisVisited && (
           <div className={css.routeSurface} hidden={!isAnalysisRoute}>
             <SmartAnalysisPage
-              onOpenReports={() => { setReports(true) }}
+              onOpenReports={() => { setRequestedReportId(''); setReports(true) }}
               onOpenAssistant={prepareAssistantWithoutReturn}
             />
           </div>
@@ -1547,7 +1549,7 @@ export function InvestmentShell({
             selectedStrategyId={snapshot.selectedStrategyId}
             onSelectStrategy={selectStrategy}
             onOpenShadow={(strategyId) => { navigate('projects', { strategyId }) }}
-            onOpenReports={() => { setReports(true) }}
+            onOpenReports={(reportId) => { setRequestedReportId(reportId ?? ''); setReports(true) }}
             onAnalyze={prepareAssistantWithoutReturn}
             initialView={snapshot.route === 'projects' ? 'shadow' : 'pool'}
             onOpenEvolution={() => { navigate('tasks') }}
@@ -1657,7 +1659,7 @@ export function InvestmentShell({
         />
       )}
       {snapshot.reportsOpen && (
-        <ReportCenter requestData={requestData} onClose={closeReports} onAnalyze={prepareAssistantWithoutReturn} />
+        <ReportCenter requestData={requestData} onClose={closeReports} onAnalyze={prepareAssistantWithoutReturn} initialReportId={requestedReportId} />
       )}
       {conversationPrimary && materialsOpen && (
         <div

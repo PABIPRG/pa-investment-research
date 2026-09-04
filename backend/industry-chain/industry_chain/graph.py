@@ -205,9 +205,10 @@ def _external_index() -> dict:
                         "company_code": ccode,
                         "company_name": cname,
                         "item": m.get("name"),
-                        "share": s.get("share"),
+                        **_relation_weight(s, 20),
                         "type": s.get("type") or "direct",
                         "note": s.get("note"),
+                        "confidence": s.get("confidence"),
                     }
                 )
         for p in c.get("products") or []:
@@ -225,9 +226,10 @@ def _external_index() -> dict:
                         "company_code": ccode,
                         "company_name": cname,
                         "item": p.get("name"),
-                        "share": cu.get("share"),
+                        **_relation_weight(cu, 10),
                         "type": cu.get("type") or "direct",
                         "note": cu.get("note"),
+                        "confidence": cu.get("confidence"),
                     }
                 )
     return idx
@@ -339,28 +341,84 @@ def company_profile(code: str) -> dict | None:
 # ---- 上下游获取（镜像 iducsite getDirectUpstream/Downstream 逻辑） -------
 
 
+def _relation_weight(relation: dict, default_share: float) -> dict:
+    """投影关系权重及来源；合法的 0 必须保留，推断边不伪装成占比。"""
+    existing_source = relation.get("share_source")
+    if existing_source == "inferred":
+        return {"share": None, "share_source": "inferred"}
+    if existing_source in ("default", "disclosed"):
+        return {"share": relation.get("share"), "share_source": existing_source}
+    if relation.get("type") == "inferred":
+        return {"share": None, "share_source": "inferred"}
+    share = relation.get("share")
+    if isinstance(share, (int, float)) and not isinstance(share, bool):
+        return {"share": share, "share_source": "disclosed"}
+    return {"share": default_share, "share_source": "default"}
+
+
+def _merge_relation_node(
+    aggregate: dict[str, dict], relation: dict, via: str | None, default_share: float
+) -> None:
+    """按实体聚合直接关系；披露值优先于默认值，默认值优先于推断值。"""
+    key = relation.get("id") or relation.get("name")
+    if not key:
+        return
+    weight = _relation_weight(relation, default_share)
+    candidate = {
+        "id": relation.get("id"),
+        "name": relation.get("name"),
+        "type": relation.get("type") or "direct",
+        **weight,
+        "confidence": relation.get("confidence"),
+        "note": relation.get("note"),
+        "vias": [via] if via else [],
+    }
+    current = aggregate.get(key)
+    if current is None:
+        aggregate[key] = candidate
+        return
+    rank = {"inferred": 0, "default": 1, "disclosed": 2}
+    incoming_rank = rank.get(candidate["share_source"], -1)
+    current_rank = rank.get(current.get("share_source"), -1)
+    if incoming_rank > current_rank or (
+        incoming_rank == current_rank
+        and candidate["share"] is not None
+        and (current.get("share") is None or candidate["share"] > current["share"])
+    ):
+        for field in ("share", "share_source", "type", "note"):
+            current[field] = candidate[field]
+    confidence = candidate.get("confidence")
+    if confidence is not None and (
+        current.get("confidence") is None or confidence > current["confidence"]
+    ):
+        current["confidence"] = confidence
+    if via and via not in current["vias"]:
+        current["vias"].append(via)
+
+
+def _direct_relation_rows(
+    company: dict, group_key: str, relation_key: str, default_share: float
+) -> list[dict]:
+    aggregate: dict[str, dict] = {}
+    comp_name, comp_code = company.get("name"), company.get("code")
+    for group in company.get(group_key) or []:
+        via = group.get("name")
+        for relation in group.get(relation_key) or []:
+            if relation.get("name") in (comp_name, comp_code) or relation.get("id") in (comp_name, comp_code):
+                continue
+            _merge_relation_node(aggregate, relation, via, default_share)
+    rows = []
+    for node in aggregate.values():
+        rows.append({**node, "via": "、".join(node["vias"])})
+    rows.sort(key=lambda row: row["share"] or 0, reverse=True)
+    return rows
+
+
 def _direct_upstream_list(code: str, limit: int | None = None) -> list[dict]:
     c = _view(code)
     if not c:
         return []
-    comp_name, comp_code = c.get("name"), c.get("code")
-    rows: list[dict] = []
-    for m in c.get("materials") or []:
-        mname = m.get("name")
-        for s in m.get("suppliers") or []:
-            if s.get("name") in (comp_name, comp_code) or s.get("id") in (comp_name, comp_code):
-                continue  # 自环：复合型企业自身不作为自身外部供应商
-            rows.append(
-                {
-                    "id": s.get("id"),
-                    "name": s.get("name"),
-                    "share": s.get("share") if s.get("share") not in (None, 0) else 20,
-                    "type": s.get("type") or "direct",
-                    "via": mname,
-                    "note": s.get("note"),
-                }
-            )
-    rows.sort(key=lambda r: r["share"] or 0, reverse=True)
+    rows = _direct_relation_rows(c, "materials", "suppliers", 20)
     return rows[:limit] if limit else rows
 
 
@@ -368,24 +426,7 @@ def _direct_downstream_list(code: str, limit: int | None = None) -> list[dict]:
     c = _view(code)
     if not c:
         return []
-    comp_name, comp_code = c.get("name"), c.get("code")
-    rows: list[dict] = []
-    for p in c.get("products") or []:
-        pname = p.get("name")
-        for cu in p.get("customers") or []:
-            if cu.get("name") in (comp_name, comp_code) or cu.get("id") in (comp_name, comp_code):
-                continue  # 自环
-            rows.append(
-                {
-                    "id": cu.get("id"),
-                    "name": cu.get("name"),
-                    "share": cu.get("share") if cu.get("share") not in (None, 0) else 10,
-                    "type": cu.get("type") or "direct",
-                    "via": pname,
-                    "note": cu.get("note"),
-                }
-            )
-    rows.sort(key=lambda r: r["share"] or 0, reverse=True)
+    rows = _direct_relation_rows(c, "products", "customers", 10)
     return rows[:limit] if limit else rows
 
 
@@ -409,58 +450,15 @@ def graph_single(code: str) -> dict | None:
         for p in (c.get("products") or [])
     ]
 
-    suppliers: dict[str, dict] = {}
-    for m in c.get("materials") or []:
-        mname = m.get("name")
-        for s in m.get("suppliers") or []:
-            if s.get("name") in (c.get("name"), c.get("code")) or s.get("id") in (c.get("name"), c.get("code")):
-                continue
-            key = s.get("id") or s.get("name")
-            if not key:
-                continue
-            node = suppliers.setdefault(
-                key,
-                {
-                    "id": s.get("id"),
-                    "name": s.get("name"),
-                    "type": s.get("type") or "direct",
-                    "share": s.get("share") if s.get("share") not in (None, 0) else 20,
-                    "note": s.get("note"),
-                    "vias": [],
-                },
-            )
-            if mname and mname not in node["vias"]:
-                node["vias"].append(mname)
-
-    customers: dict[str, dict] = {}
-    for p in c.get("products") or []:
-        pname = p.get("name")
-        for cu in p.get("customers") or []:
-            if cu.get("name") in (c.get("name"), c.get("code")) or cu.get("id") in (c.get("name"), c.get("code")):
-                continue
-            key = cu.get("id") or cu.get("name")
-            if not key:
-                continue
-            node = customers.setdefault(
-                key,
-                {
-                    "id": cu.get("id"),
-                    "name": cu.get("name"),
-                    "type": cu.get("type") or "direct",
-                    "share": cu.get("share") if cu.get("share") not in (None, 0) else 10,
-                    "note": cu.get("note"),
-                    "vias": [],
-                },
-            )
-            if pname and pname not in node["vias"]:
-                node["vias"].append(pname)
+    suppliers = _direct_relation_rows(c, "materials", "suppliers", 20)
+    customers = _direct_relation_rows(c, "products", "customers", 10)
 
     return {
         "company": company_profile(code),
         "materials": materials,
-        "suppliers": list(suppliers.values()),
+        "suppliers": suppliers,
         "products": products,
-        "customers": list(customers.values()),
+        "customers": customers,
     }
 
 
@@ -567,13 +565,29 @@ def _resolve_a_share(ent: dict) -> str | None:
 
 def _merge_edge(agg: dict, src: str, tgt: str, kind: str, share, type_: str, item: str, confidence=None) -> None:
     """(src,tgt) 有向 pair 去重聚合；share / confidence 取 max（前端线宽/置信度），item 聚合。"""
+    weight = _relation_weight(
+        {"share": share, "type": type_},
+        20 if kind == "supplier" else 10,
+    )
+    share = weight["share"]
+    share_source = weight["share_source"]
     e = agg.get((src, tgt))
     if e is None:
         agg[(src, tgt)] = {"kind": kind, "share": share, "type": type_, "item": item or "",
-                           "count": 1, "confidence": confidence}
+                           "count": 1, "confidence": confidence,
+                           "share_source": share_source}
         return
-    if share is not None and (e["share"] is None or share > e["share"]):
+    provenance_rank = {"inferred": 0, "default": 1, "disclosed": 2}
+    incoming_rank = provenance_rank.get(share_source, -1)
+    existing_rank = provenance_rank.get(e.get("share_source"), -1)
+    if incoming_rank > existing_rank or (
+        incoming_rank == existing_rank
+        and share is not None
+        and (e["share"] is None or share > e["share"])
+    ):
         e["share"] = share
+        e["share_source"] = share_source
+        e["type"] = type_
     if confidence is not None and (e["confidence"] is None or confidence > e["confidence"]):
         e["confidence"] = confidence
     if item and item not in e["item"]:
@@ -648,6 +662,7 @@ def a_share_links() -> dict:
     for (src, tgt), e in agg.items():
         links.append({"source": src, "target": tgt, "kind": e["kind"],
                       "type": e["type"], "share": e["share"],
+                      "share_source": e["share_source"],
                       "item": e["item"], "count": e["count"],
                       "confidence": e.get("confidence")})
         degrees.setdefault(src, {"up": 0, "down": 0})
@@ -708,6 +723,8 @@ def _universe_layout() -> dict:
             xx += w + GAP
         yy += row_h + GAP
 
+    if not out:
+        return {}
     xs = [p["x"] for p in out.values()]
     ys = [p["y"] for p in out.values()]
     bw, bh = (max(xs) - min(xs)) or 1, (max(ys) - min(ys)) or 1
@@ -846,7 +863,14 @@ def graph_network(
     for l in raw_links:
         if l["source"] not in valid or l["target"] not in valid:
             continue
-        if min_share > 0 and l.get("share") is not None and l["share"] < min_share:
+        weight = _relation_weight(
+            l, 20 if l.get("kind") == "supplier" else 10
+        )
+        if (
+            min_share > 0
+            and weight["share"] is not None
+            and weight["share"] < min_share
+        ):
             continue
         filtered_links.append(
             {
@@ -854,8 +878,9 @@ def graph_network(
                 "target": l["target"],
                 "kind": l.get("kind"),
                 "type": l.get("type"),
-                "share": l.get("share"),
+                **weight,
                 "item": l.get("item"),
+                "confidence": l.get("confidence"),
             }
         )
 

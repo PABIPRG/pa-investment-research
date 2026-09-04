@@ -18,6 +18,8 @@ SCRIPTS=(
   "backend-stop|停止手动常驻投研后台|scripts/stop-investment-backends.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"
   "demo-evolution-data|演示数据：准备最近历史5个交易日的影子验证数据，让自进化页面可以展示进化闭环|scripts/prepare-demo-evolution-data.sh"
+  "demo-rc10-preflight|rc.10 演示前检查：状态隔离、开关、历史、权重来源、报告与 AI 边界|scripts/prepare-demo-evolution-data.sh preflight"
+  "demo-rc10-runbook|rc.10 中文全链路彩排脚本|scripts/run-rc10-demo.sh"
 )
 
 # Colors (disabled if not a tty or terminal doesn't support)

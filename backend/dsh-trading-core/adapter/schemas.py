@@ -127,7 +127,7 @@ class StrategyRunRequest(BaseModel):
         default=0.0, ge=0.0, description="回测初始资金（0=用 SHADOW_INITIAL_CAPITAL）"
     )
     min_oos_trades: int = Field(
-        default=4, ge=1, le=100, description="样本外最低成交数（不足保持 candidate）"
+        default=4, ge=1, le=100, description="样本外最低成交数（不足标记 insufficient；任务完成后策略仍进入 active）"
     )
     # 显式时间窗口（可选）：提供时必须 start_date + end_date 同时给出并满足 start<end≤today，
     # 此时 runner 用显式区间回测而忽略 lookback_years。

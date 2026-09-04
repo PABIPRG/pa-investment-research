@@ -120,9 +120,9 @@ export function apply(ctx: Context, config: Config) {
           properties: {
             company: { type: 'json', description: '核心公司档案（同 chain_profile）' },
             materials: { type: 'json', description: '原材料 [{id,name,share,confidence}]' },
-            suppliers: { type: 'json', description: '供应商 [{id,name,type,share,note,vias}]' },
+            suppliers: { type: 'json', description: '供应商 [{id,name,type,share,share_source,confidence,note,vias}]' },
             products: { type: 'json', description: '主营产品 [{id,name,share,confidence}]' },
-            customers: { type: 'json', description: '下游客户 [{id,name,type,share,note,vias}]' },
+            customers: { type: 'json', description: '下游客户 [{id,name,type,share,share_source,confidence,note,vias}]' },
           },
         },
         render: (_args, value) => [{ type: 'text' as const, text: renderGraph(value as Record<string, unknown>) }],
@@ -153,7 +153,7 @@ export function apply(ctx: Context, config: Config) {
           additionalProperties: false,
           properties: {
             center: { type: 'json', description: '中心公司档案' },
-            up_levels: { type: 'json', description: '上游各层 [{level,nodes:[{id,name,share,type,via,note,parent_id,depth}]}]' },
+            up_levels: { type: 'json', description: '上游各层 [{level,nodes:[{id,name,share,share_source,confidence,type,via,note,parent_id,depth}]}]' },
             down_levels: { type: 'json', description: '下游各层 [{level,nodes:[...]}]' },
           },
         },

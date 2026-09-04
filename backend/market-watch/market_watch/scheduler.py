@@ -275,7 +275,8 @@ def start_scheduler() -> BackgroundScheduler:
 def stop_scheduler() -> None:
     global _scheduler
     if _scheduler is not None:
-        _scheduler.shutdown(wait=False)
+        if _scheduler.running:
+            _scheduler.shutdown(wait=False)
         _scheduler = None
 
 

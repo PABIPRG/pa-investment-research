@@ -34,6 +34,7 @@ import re
 import secrets
 import threading
 import time
+from datetime import datetime
 
 from .config import settings
 from .store import JsonStore
@@ -43,6 +44,7 @@ from .strategies import _str2md5
 _MUTABLE_KINDS = ("ma_cross", "rsi_reversal", "momentum", "breakout", "bollinger", "volume_breakout")
 _PREVIEW_COLLECTION = "evolution_previews"
 _CURRENT_PREVIEW_KEY = "_current"
+_CLOSED_LOOP_RUNTIME_KEY = "_closed_loop_runtime"
 _PREVIEW_TTL_SECONDS = 30 * 60
 _EVOLUTION_LOCK = threading.Lock()
 _STRATEGY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$")
@@ -863,7 +865,6 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             else:  # retire
                 ev.update({"state": "retired", "updated_at": ts, "note": a["reason"]})
                 rec["status"] = "retired"
-                rec["verification_status"] = "archived"
                 rec["retire_reason"] = a["reason"]
             rec["evolve"] = ev
             return rec
@@ -890,7 +891,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             "symbols": a["symbols"],
             "params": a["params"],
             "status": "candidate",
-            "verification_status": "pending",
+            "verification_status": "insufficient",
             "source": "evolution",
             "mutated_from": a["parent"],
             "generation": generation,
@@ -962,6 +963,53 @@ def _lifecycle(
     }
 
 
+def record_closed_loop_run(
+    store: JsonStore,
+    *,
+    run_at: str,
+    status_value: str,
+    action_count: int,
+) -> dict:
+    """在既有进化审计集合中保存最近一次真实闭环运行，不创建平行状态。"""
+    parsed = datetime.fromisoformat(run_at)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("run_at 必须是带时区的 ISO-8601 时间")
+    if status_value not in {"completed", "partial", "failed"}:
+        raise ValueError(f"非法闭环运行状态: {status_value}")
+    record = {
+        "recent_run_at": parsed.isoformat(timespec="seconds"),
+        "status": status_value,
+        "action_count": max(0, int(action_count)),
+    }
+    store.set(_PREVIEW_COLLECTION, _CLOSED_LOOP_RUNTIME_KEY, record)
+    return record
+
+
+def _evolution_counts(strategies: dict) -> dict[str, int]:
+    """把权威 lifecycle/evolve 字段投影为互斥的四类首屏摘要。"""
+    counts = {"normal": 0, "watch": 0, "promote": 0, "retire": 0}
+    for record in strategies.values():
+        if not isinstance(record, dict):
+            continue
+        lifecycle = str(record.get("status") or "")
+        evolve = record.get("evolve")
+        evolve = evolve if isinstance(evolve, dict) else {}
+        evolve_state = str(evolve.get("state") or "")
+        try:
+            tier = int(evolve.get("tier") or 1)
+        except (TypeError, ValueError):
+            tier = 1
+        if lifecycle == "retired" or evolve_state == "retired":
+            counts["retire"] += 1
+        elif lifecycle == "active" and evolve_state == "watch":
+            counts["watch"] += 1
+        elif lifecycle == "active" and tier >= 2:
+            counts["promote"] += 1
+        elif lifecycle == "active":
+            counts["normal"] += 1
+    return counts
+
+
 def status(
     store: JsonStore | None = None,
     strategy_id: str | None = None,
@@ -1028,12 +1076,16 @@ def status(
                 ),
             }
         )
+    runtime = store.get(_PREVIEW_COLLECTION, _CLOSED_LOOP_RUNTIME_KEY) or {}
+    from .scheduler import next_closed_loop_run_at
+
     return {
         "as_of": _now(),
         "days_of_data": n,
         "min_days": settings.evolve_min_days,
         "ready": ready,
         "counts": counts,
+        "evolution_counts": _evolution_counts(strats),
         "lifecycle": lifecycle,
         "note": (
             None
@@ -1043,6 +1095,8 @@ def status(
         "last_applied_at": _last_applied_at(store, strategy_id),
         "closed_loop_enabled": settings.closed_loop_enabled,
         "closed_loop_time": settings.closed_loop_time,
+        "recent_run_at": runtime.get("recent_run_at"),
+        "next_scheduled_run_at": next_closed_loop_run_at(),
         "per_strategy": per_strategy,
         "recent_applied": _recent_applied(store, strategy_id=strategy_id, limit=5),
     }

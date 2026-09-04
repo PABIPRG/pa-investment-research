@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { asRecord, number, records, text } from './data.ts'
 import type { EvolutionDashboardProps, EvolutionLifecycleGroup } from './evolution-types.ts'
-import { evolutionConfidenceLabel, evolutionParticipationLabel } from './evolution-types.ts'
+import {
+  evolutionSemanticLabels,
+  formatEvolutionTimestamp,
+} from './evolution-types.ts'
 import css from './InvestmentShell.module.css'
 
 // 变异是来源标记（source/mutated_from）而非独立分组：策略按真实状态落桶。mutated 保留为防御性兜底。
@@ -81,6 +84,8 @@ export function EvolutionDashboard({
 }: EvolutionDashboardProps) {
   const [status, setStatus] = useState<unknown>()
   const [attribution, setAttribution] = useState<unknown>()
+  const [strategies, setStrategies] = useState<unknown>()
+  const [strategyFactsUnavailable, setStrategyFactsUnavailable] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [openGroup, setOpenGroup] = useState<EvolutionLifecycleGroup>(initialLifecycleGroup)
@@ -88,14 +93,20 @@ export function EvolutionDashboard({
   const load = useCallback(() => {
     setLoading(true)
     setError('')
+    setStrategyFactsUnavailable(false)
     void Promise.all([
       requestData({ operation: 'trading-core.evolution-status' }),
       requestData({ operation: 'trading-core.evolution-attribution' }),
-    ]).then(([nextStatus, nextAttribution]) => {
+      requestData({ operation: 'trading-core.strategies', input: { limit: 500 } }).catch(() => {
+        setStrategyFactsUnavailable(true)
+        return { items: [] }
+      }),
+    ]).then(([nextStatus, nextAttribution, nextStrategies]) => {
       setStatus(nextStatus)
       setAttribution(nextAttribution)
-    }).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : String(reason))
+      setStrategies(nextStrategies)
+    }).catch(() => {
+      setError('投研服务暂时不可用，请稍后重试。')
     }).finally(() => { setLoading(false) })
   }, [requestData])
 
@@ -103,8 +114,11 @@ export function EvolutionDashboard({
 
   const statusRecord = asRecord(status)
   const attributionRecord = asRecord(attribution)
+  const strategyRecords = records(asRecord(strategies).items)
+  const strategyById = new Map(strategyRecords.map(entry => [strategyId(entry), entry]))
   const lifecycle = asRecord(statusRecord.lifecycle)
   const counts = asRecord(statusRecord.counts)
+  const evolutionCounts = asRecord(statusRecord.evolution_counts)
   const perStrategy = records(statusRecord.per_strategy)
   const attributionByStrategy = new Map(records(attributionRecord.strategies).map(entry => [strategyId(entry), entry]))
   const recentApplied = records(statusRecord.recent_applied)
@@ -121,13 +135,7 @@ export function EvolutionDashboard({
     }
   }
   const mutationByStrategy = new Map(mutationEntries.map(entry => [strategyId(entry), entry]))
-  const activeEntries = records(lifecycle.active)
-  const statusSummary = {
-    normal: activeEntries.filter(entry => number(entry.tier) !== 2).length,
-    watch: records(lifecycle.watch).length,
-    upgraded: activeEntries.filter(entry => number(entry.tier) === 2).length,
-    retired: records(lifecycle.retired).length,
-  }
+  const statusSummary = Object.keys(evolutionCounts).length > 0 ? evolutionCounts : counts
 
   const lineage = useMemo(() => {
     const entries = new Map<string, Record<string, unknown>>()
@@ -177,20 +185,23 @@ export function EvolutionDashboard({
         </div>
       </div>
       {error !== '' && <div className={css.errorCard} role="alert"><strong>真实数据暂不可用</strong><p>{error}</p><button type="button" onClick={load}>重试</button></div>}
+      {strategyFactsUnavailable && <div className={css.noticeCard} role="status">策略验证、来源和任务字段暂不可用；闭环状态与影子证据仍可查看。</div>}
       {loading && status === undefined && <div className={css.loadingSkeleton} aria-label="正在读取进化状态"><span /><span /><span /></div>}
 
       <section className={css.moduleGrid} aria-label="闭环状态与生命周期">
         <article className={css.moduleCard}>
           <div className={css.sectionHeading}><strong>闭环运行状态</strong><span>{closedLoopEnabled ? `每日 ${closedLoopTime}` : '未启用'}</span></div>
           <dl className={css.reportMeta}>
-            <div><dt>上次自动应用</dt><dd>{text(statusRecord.last_applied_at, '尚未应用')}</dd></div>
+            <div><dt>最近自动运行</dt><dd>{formatEvolutionTimestamp(statusRecord.recent_run_at, '尚无运行记录')}</dd></div>
+            <div><dt>下次计划运行</dt><dd>{closedLoopEnabled ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${closedLoopTime}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
+            <div><dt>上次自动应用</dt><dd>{formatEvolutionTimestamp(statusRecord.last_applied_at, '尚未应用')}</dd></div>
             <div><dt>数据完成度</dt><dd>{number(statusRecord.days_of_data)?.toFixed(0) ?? '—'} / {number(statusRecord.min_days)?.toFixed(0) ?? '—'} 日</dd></div>
           </dl>
           <dl className={css.evolutionStatusSummary} data-testid="evolution-status-summary">
-            <div><dt>正常运行</dt><dd>{statusSummary.normal}</dd></div>
-            <div><dt>观察中</dt><dd>{statusSummary.watch}</dd></div>
-            <div><dt>已升级</dt><dd>{statusSummary.upgraded}</dd></div>
-            <div><dt>已淘汰</dt><dd>{statusSummary.retired}</dd></div>
+            <div><dt>正常运行</dt><dd>{number(statusSummary.normal)?.toFixed(0) ?? '—'}</dd></div>
+            <div><dt>观察中</dt><dd>{number(statusSummary.watch)?.toFixed(0) ?? '—'}</dd></div>
+            <div><dt>已升级</dt><dd>{number(statusSummary.promote)?.toFixed(0) ?? '—'}</dd></div>
+            <div><dt>已淘汰</dt><dd>{number(statusSummary.retire)?.toFixed(0) ?? '—'}</dd></div>
           </dl>
           <div className={css.lifecycleNav} aria-label="生命周期分组">
             {GROUPS.map(group => (
@@ -223,7 +234,7 @@ export function EvolutionDashboard({
           </dl>
         </article>
         <article className={`${css.moduleCard} ${css.lineageCard}`}>
-          <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅生效策略及母链</span></div>
+          <div className={css.sectionHeading}><strong>策略演化链路</strong><span>仅正常运行策略及母链</span></div>
           <div className={css.lineageTree}>{lineage.roots.map(sid => (
             <LineageNode
               key={sid}
@@ -234,7 +245,7 @@ export function EvolutionDashboard({
               returnGroup={openGroup}
             />
           ))}</div>
-          {lineage.roots.length === 0 && !loading && <div className={css.emptyPanel}>暂无生效中的演化链路。</div>}
+          {lineage.roots.length === 0 && !loading && <div className={css.emptyPanel}>暂无正常运行中的演化链路。</div>}
         </article>
       </section>
 
@@ -248,19 +259,28 @@ export function EvolutionDashboard({
               const strategyAttribution = attributionByStrategy.get(sid) ?? {}
               const symbols = strings(entry.symbols).length > 0 ? strings(entry.symbols) : strings(strategyAttribution.symbols)
               const lifecycleState = lifecycleByStrategy.get(sid)
-              const tier = number(entry.tier) ?? number(lifecycleState?.entry.tier)
               const mutationEntry = mutationByStrategy.get(sid)
-              const mutationSource = text(entry.mutated_from, text(lifecycleState?.entry.mutated_from, text(mutationEntry?.mutated_from, '')))
+              const strategyFacts = strategyById.get(sid) ?? {}
+              const mergedFacts = { ...lifecycleState?.entry, ...strategyFacts, ...entry }
+              const mutationSource = text(mergedFacts.mutated_from, text(mutationEntry?.mutated_from, text(asRecord(mergedFacts.evolve).mutated_from, '')))
+              const labels = evolutionSemanticLabels(mergedFacts, lifecycleState?.status ?? '')
               return <div className={css.strategyEntry} key={`${sid}-${index}`}>
                 <button type="button" className={css.dataRow} aria-label={`${strategyName(entry)} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}>
                   <div><strong>{strategyName(entry)}</strong><small>{reason}</small></div>
                   <span className={css.evolutionStatusStack}>
-                    <strong>{evolutionParticipationLabel(lifecycleState?.status ?? text(entry.status, ''))}</strong>
-                    <small>{evolutionConfidenceLabel(tier)}</small>
+                    <strong>{labels.participation}</strong>
+                    <small>{labels.confidence}</small>
                   </span>
                 </button>
                 <div className={css.strategyDetail}>
                   {mutationSource !== '' && <span className={css.evolutionMutationSource}>变异来源：{mutationSource}</span>}
+                  <div className={css.evolutionFacts} aria-label={`${strategyName(entry)}五维状态`}>
+                    <span>{`参与状态：${labels.participation}`}</span>
+                    <span>{`验证结果：${labels.verification}`}</span>
+                    <span>{`置信等级：${labels.confidence}`}</span>
+                    <span>{`来源：${labels.source}`}</span>
+                    <span>{`任务状态：${labels.task}`}</span>
+                  </div>
                   <dl className={css.strategyDetailGrid}>
                     <div><dt>影子净值</dt><dd>{metric(entry.nav)}</dd></div>
                     <div><dt>累计收益</dt><dd>{metric(strategyAttribution.return_pct, '%')}</dd></div>

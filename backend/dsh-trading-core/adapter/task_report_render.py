@@ -5,6 +5,63 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+_SEMANTIC_LABELS = {
+    "participation": {
+        "candidate": "候选",
+        "active": "正常运行",
+        "retired": "已淘汰",
+        "rejected": "已拒绝",
+    },
+    "verification": {
+        "passed": "已验证通过",
+        "not_passed": "验证未通过",
+        "insufficient": "样本不足",
+    },
+    "source": {
+        "evolution": "变异来源",
+        "manual": "人工",
+        "event": "事件生成",
+        "demo_fixture": "演示数据",
+        "initial_auto": "自动首测",
+        "periodic_retest": "自动复测",
+    },
+    "task": {
+        "pending": "排队中",
+        "running": "运行中",
+        "completed": "已完成",
+        "partial": "部分完成",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "interrupted": "已中断",
+    },
+}
+
+
+def strategy_semantic_labels(
+    participation_status: object,
+    verification_status: object,
+    confidence_tier: object,
+    source: object,
+    task_status: object,
+) -> dict[str, str]:
+    """统一五维确定性文案；未知值保留原值，缺失值不补造业务状态。"""
+    def label(group: str, value: object, fallback: str) -> str:
+        key = str(value or "").strip()
+        return _SEMANTIC_LABELS[group].get(key, key or fallback)
+
+    try:
+        tier = int(confidence_tier or 1)
+    except (TypeError, ValueError):
+        tier = 1
+    return {
+        "participation": label("participation", participation_status, "未知"),
+        "verification": label("verification", verification_status, "样本不足"),
+        "confidence": "已升级" if tier >= 2 else "基础层级",
+        "source": label("source", source, "未标注"),
+        "task": label("task", task_status, "暂无任务"),
+    }
+
+
 def _text(value: Any, fallback: str = "—") -> str:
     if value is None:
         return fallback
@@ -62,6 +119,8 @@ def render_strategy_report(
     strategy: Mapping[str, Any],
     status: str,
     backtest: Mapping[str, Any],
+    *,
+    task_status: str | None = None,
 ) -> str:
     """渲染候选策略的样本内/样本外证据及独立生命周期、验证分类。"""
     in_sample = backtest.get("in_sample")
@@ -76,16 +135,23 @@ def render_strategy_report(
         if backtest.get("thresholds_pass") is True:
             verification_status = "passed"
         elif "成交不足" in reason or "样本不足" in reason:
-            verification_status = "pending"
+            verification_status = "insufficient"
         else:
-            verification_status = "failed"
-    verification_labels = {
-        "pending": "未验证",
-        "passed": "已验证通过",
-        "failed": "验证未通过",
-        "archived": "已归档",
-    }
-    verification_label = verification_labels.get(verification_status, "数据不足")
+            verification_status = "not_passed"
+    if verification_status == "pending":
+        verification_status = "insufficient"
+    elif verification_status == "failed":
+        verification_status = "not_passed"
+    labels = strategy_semantic_labels(
+        status,
+        verification_status,
+        (strategy.get("evolve") or {}).get("tier")
+        if isinstance(strategy.get("evolve"), Mapping)
+        else 1,
+        strategy.get("source"),
+        task_status,
+    )
+    verification_label = labels["verification"]
     return "\n".join(
         [
             "# 策略样本外回测报告",
@@ -96,7 +162,11 @@ def render_strategy_report(
             f"- 研究方向：{_text(strategy.get('direction'))}",
             f"- 标的：{symbol_text or '—'}",
             f"- 生命周期状态：{_text(status)}",
+            f"- 参与状态：{labels['participation']}",
             f"- 验证分类：{verification_label}",
+            f"- 置信层级：{labels['confidence']}",
+            f"- 来源：{labels['source']}",
+            f"- 任务状态：{labels['task']}",
             "",
             "| 指标 | 样本内 | 样本外 |",
             "| --- | ---: | ---: |",

@@ -251,6 +251,7 @@ describe('智能分析与全局 AI 助理回归', () => {
     } as never))
 
     expect(screen.getByText(`${packageManifest.version} · 智能投研系统`)).toBeTruthy()
+    expect(packageManifest.version).toBe('0.1.0-rc.10')
   })
 
   it('智能分析只展示能力介绍，并在助理模式切换时保留页面', () => {

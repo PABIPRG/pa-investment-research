@@ -11,6 +11,115 @@ from adapter.store import JsonStore
 
 
 class ShadowBusinessRuleTests(unittest.TestCase):
+    @staticmethod
+    def _single_loss_history(extra_cycle: bool = False) -> list[dict]:
+        closes = [10, 11, 10, 9, 9, 9, 9, 9, 9, 9]
+        if extra_cycle:
+            closes.extend([10, 9, 8])
+        return [
+            {
+                "date": f"2026-08-{index + 1:02d}",
+                "open": float(close),
+                "high": float(close),
+                "low": float(close),
+                "close": float(close),
+                "volume": 1000,
+            }
+            for index, close in enumerate(closes)
+        ]
+
+    def test_replaying_same_shadow_history_does_not_inflate_evolution_evidence(self):
+        from adapter import evolution
+        from adapter.config import settings
+
+        with tempfile.TemporaryDirectory() as temporary:
+            store = JsonStore(Path(temporary))
+            strategy = {
+                "id": "stable-ledger",
+                "name": "稳定台账",
+                "status": "active",
+                "kind": "momentum",
+                "symbols": ["600000"],
+                "params": {"n": 1},
+                "evolve": {"state": "active", "tier": 1},
+            }
+            store.set("strategies", strategy["id"], strategy)
+            runner = ShadowRunner(store)
+            meta = {
+                strategy["id"]: {
+                    "track_from": "2026-08-01",
+                    "initial_capital": 100000.0,
+                    "activated_at": "2026-08-01 09:00:00",
+                }
+            }
+            history = self._single_loss_history()
+
+            with patch.object(runner, "_fetch_hist", return_value=history):
+                for _ in range(3):
+                    runner._run_strategy(
+                        strategy, "2026-08-10", "2025-01-01", meta, lambda _m: None
+                    )
+
+            for day in range(1, 6):
+                store.set("shadow_equity", f"2026-08-{day:02d}", {
+                    "overall_nav": 1.0,
+                    "strategies": {strategy["id"]: {"nav": 1.0}},
+                })
+
+            with patch.object(settings, "evolve_min_days", 5), \
+                    patch.object(settings, "evolve_retire_nav", 0.5), \
+                    patch.object(settings, "evolve_demote_nav", 0.5), \
+                    patch.object(settings, "evolve_promote_nav", 2.0):
+                attribution = evolution.attribution(store, strategy["id"])
+                preview = evolution.evolve(store, strategy_id=strategy["id"])
+
+            trades = store.get("shadows", f"trades:{strategy['id']}")
+            metrics = attribution["strategies"][0]
+            self.assertEqual(len(trades), 1)
+            self.assertEqual(metrics["closed_trades"], 1)
+            self.assertEqual(metrics["closed_cum_return_pct"], -10.0)
+            self.assertFalse(any(action["type"] == "retire" for action in preview["actions"]))
+
+    def test_replay_merge_keeps_a_genuinely_new_closed_trade(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = JsonStore(Path(temporary))
+            strategy = {
+                "id": "growing-ledger",
+                "name": "新增成交",
+                "status": "active",
+                "kind": "momentum",
+                "symbols": ["600000"],
+                "params": {"n": 1},
+            }
+            runner = ShadowRunner(store)
+            meta = {
+                strategy["id"]: {
+                    "track_from": "2026-08-01",
+                    "initial_capital": 100000.0,
+                    "activated_at": "2026-08-01 09:00:00",
+                }
+            }
+
+            with patch.object(
+                runner, "_fetch_hist", return_value=self._single_loss_history()
+            ):
+                runner._run_strategy(
+                    strategy, "2026-08-10", "2025-01-01", meta, lambda _m: None
+                )
+            with patch.object(
+                runner, "_fetch_hist", return_value=self._single_loss_history(extra_cycle=True)
+            ):
+                runner._run_strategy(
+                    strategy, "2026-08-13", "2025-01-01", meta, lambda _m: None
+                )
+
+            trades = store.get("shadows", f"trades:{strategy['id']}")
+            self.assertEqual(len(trades), 2)
+            self.assertEqual(
+                {(trade["entry_date"], trade["exit_date"]) for trade in trades},
+                {("2026-08-03", "2026-08-04"), ("2026-08-12", "2026-08-13")},
+            )
+
     def test_failed_symbol_capital_refunded_as_idle_cash(self):
         """拉数失败的符号资本按闲置现金计入，不机械压低 NAV（3 符号中 1 失败仍 nav=1）。"""
         import pandas as pd

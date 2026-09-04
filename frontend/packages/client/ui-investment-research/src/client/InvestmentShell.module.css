@@ -544,6 +544,8 @@
 .evolutionStatusStack { display: grid; justify-items: end; gap: 2px; }
 .evolutionStatusStack strong { color: var(--dsw-alias-label-primary); font-size: 0.8571rem; }
 .evolutionStatusStack small { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; }
+.evolutionFacts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+.evolutionFacts span { min-width: max-content; }
 .evolutionMutationSource { display: inline-flex; margin-bottom: 9px; padding: 3px 7px; border-radius: 999px; color: var(--investment-primary); background: var(--investment-selected-surface); font-size: 0.7857rem; }
 
 .dashboardError { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border: 1px solid var(--dsw-alias-state-error-secondary); border-radius: 9px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
@@ -979,8 +981,8 @@
 .statusBadge[data-status='positive'], .statusBadge[data-status='bullish'], .statusBadge[data-status='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .statusBadge[data-status='negative'], .statusBadge[data-status='bearish'], .statusBadge[data-status='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
 .statusBadge[data-status='failed'], .statusBadge[data-status='error'], .statusBadge[data-status='rejected'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
-.statusBadge[data-status='paused'], .statusBadge[data-status='pending'], .statusBadge[data-status='preview'], .statusBadge[data-status='waiting_data'], .statusBadge[data-status='warning'] { color: var(--dsw-alias-state-warn-label); border-color: var(--dsw-alias-state-warn-secondary); background: var(--dsw-alias-state-warn-tertiary); }
-.statusBadge[data-status='retired'] { color: var(--dsw-alias-label-tertiary); border-style: dashed; background: var(--dsw-alias-bg-layer-2); }
+.statusBadge[data-status='paused'], .statusBadge[data-status='pending'], .statusBadge[data-status='preview'], .statusBadge[data-status='waiting_data'], .statusBadge[data-status='warning'], .statusBadge[data-status='partial'], .statusBadge[data-status='interrupted'], .statusBadge[data-status='skipped'] { color: var(--dsw-alias-state-warn-label); border-color: var(--dsw-alias-state-warn-secondary); background: var(--dsw-alias-state-warn-tertiary); }
+.statusBadge[data-status='retired'], .statusBadge[data-status='cancelled'] { color: var(--dsw-alias-label-tertiary); border-style: dashed; background: var(--dsw-alias-bg-layer-2); }
 
 .lifecyclePanel { position: relative; margin-bottom: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; background: var(--dsw-alias-bg-base); }
 .lifecycleIntro { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
@@ -1700,6 +1702,32 @@
 .shadowPositionRow > span:last-child { text-align: right; }
 .shadowPositionRow b { font-size: var(--investment-font-secondary); }
 .shadowFooterActions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--dsw-alias-border-l1); flex-wrap: wrap; }
+.shadowTaskList { display: grid; gap: 10px; }
+.shadowTaskCard { min-width: 0; padding: 13px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-base); }
+.shadowTaskCard[data-legacy='true'] { border-style: dashed; background: var(--dsw-alias-bg-layer-1); }
+.shadowTaskCard > p { margin: 9px 0 0; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-secondary); line-height: 1.45; }
+.shadowTaskHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
+.shadowTaskHead > div { min-width: 0; }
+.shadowTaskHead strong, .shadowTaskHead small { display: block; }
+.shadowTaskHead strong { font-size: var(--investment-font-body); }
+.shadowTaskHead small { margin-top: 3px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.legacyBadge { flex: none; padding: 3px 7px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 99px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.shadowTaskId code { overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-family: var(--ds-font-family-code); }
+.shadowTaskMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 0; }
+.shadowTaskMeta > div { min-width: 0; padding: 8px 9px; border-radius: 8px; background: var(--dsw-alias-bg-layer-1); }
+.shadowTaskMeta dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.shadowTaskMeta dd { margin: 3px 0 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: var(--investment-font-secondary); }
+.shadowTaskSummary { font-weight: 650; }
+.shadowTaskError { padding: 8px 9px; border: 1px solid var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
+.shadowTaskDetails { margin-top: 10px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.shadowTaskDetails > summary { min-height: 36px; padding: 9px 2px 0; color: var(--investment-primary); font-size: var(--investment-font-secondary); font-weight: 650; cursor: pointer; }
+.shadowTaskDetails > summary:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; border-radius: 4px; }
+.shadowResultList { display: grid; gap: 7px; padding-top: 8px; }
+.shadowResultRow { min-width: 0; padding: 9px 10px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; background: var(--dsw-alias-bg-layer-1); }
+.shadowResultRow > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.shadowResultRow p, .shadowResultRow small { display: block; margin: 5px 0 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-caption); line-height: 1.45; }
+.shadowResultRow p { color: var(--dsw-alias-state-error-primary); }
+.shadowTaskActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
 
 /* Global AI assistant: one Host conversation, two display modes, no route replacement. */
 .assistantLauncher { position: fixed; right: 24px; bottom: 24px; z-index: 900; display: grid; width: 50px; height: 50px; place-items: center; padding: 0; border: 1px solid color-mix(in srgb, var(--investment-primary) 72%, transparent); border-radius: 15px; color: var(--dsw-alias-label-primary-foreground); background: var(--investment-primary); box-shadow: var(--dsw-shadow-lv3); cursor: pointer; pointer-events: auto; transition: background 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
@@ -2116,6 +2144,10 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .embeddedShadowHeader > div:last-child button { flex: 1; min-height: var(--investment-touch-target); height: auto; }
   .shadowScopeBar > span { align-self: flex-start; }
   .shadowRunSummary .reportMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shadowTaskHead { align-items: flex-start; }
+  .shadowTaskMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shadowTaskActions { align-items: stretch; flex-direction: column; }
+  .shadowTaskActions button { min-height: var(--investment-touch-target); height: auto; }
   .shadowFooterActions { align-items: stretch; flex-direction: column; }
   .shadowFooterActions button { min-height: var(--investment-touch-target); height: auto; }
   .evolutionEvidenceCard .dataRow { border-right: 0; }
@@ -2150,6 +2182,8 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 }
 
 @media (max-width: 420px) {
+  .shadowTaskHead { flex-direction: column; }
+  .shadowTaskMeta { grid-template-columns: 1fr; }
   :global([data-composer-card='true']):has(.researchContextControls) { padding-bottom: 60px; }
   .researchContextControls { gap: 4px; }
   .researchContextControls { position: absolute; right: 8px; bottom: 8px; left: 8px; justify-content: flex-start; width: auto; }

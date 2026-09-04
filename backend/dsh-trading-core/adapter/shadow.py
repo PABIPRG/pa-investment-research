@@ -10,18 +10,22 @@
   （确定性单一路径，等价于逐日增量，天然幂等）。
 - 当日数据滞后：baostock 日线收盘后才出现当日 bar。缺当日 bar 时，重放止于最近 bar，
   只 mark-to-market 不成交当天；次日 bar 出现后按 t-1 意图→t 开盘自然补成交。
-- 幂等：shadow_equity/{trade_date} 已存在且非 force → skipped。
+- 幂等：同交易日、同作用域的非 force 请求复用 shadow_tasks 中的既有任务；force 新建任务并追溯原任务。
 
 数据落点（collection/key）：
   shadows/meta            {sid: {track_from, initial_capital, activated_at}}
   shadows/pos/{sid}:{sym} {qty, entry_price, entry_date, avg_cost, cash, last_price}
   shadows/trades/{sid}    平仓明细列表（追加）
-  shadow_equity/{date}    {sid: {equity, nav, per_symbol}, overall_nav, as_of}
+  shadow_tasks/{task_id}  任务状态、来源、作用域、汇总、报告与重跑关系
+  shadow_task_results/*   逐策略 success/failed/skipped 结果及净值证据引用
+  shadow_equity/{date}    最新兼容快照 + runs/{task_id} 不可变运行证据
   shadows/latest          最近一次运行汇总（指针 + 快照摘要）
 """
 
+import json
 import logging
 import time
+import uuid
 from datetime import date, timedelta
 
 from .config import settings
@@ -97,6 +101,35 @@ def _replay_pos(df_track, sig_track, capital: float, symbol: str) -> dict:
     }
 
 
+def _closed_trade_identity(trade: dict) -> tuple:
+    """同一历史重放的平仓身份；旧记录缺关键日期时退化为完整内容。"""
+    symbol = trade.get("symbol")
+    entry_date = trade.get("entry_date")
+    exit_date = trade.get("exit_date")
+    if symbol and entry_date and exit_date:
+        return ("closed", str(symbol), str(entry_date), str(exit_date))
+    return (
+        "legacy",
+        json.dumps(trade, ensure_ascii=False, sort_keys=True, default=str),
+    )
+
+
+def _merge_closed_trades(fresh: list[dict], current: object) -> list[dict]:
+    """新鲜重放优先覆盖同身份旧记录，并保留本次未重放到的历史成交。"""
+    merged: list[dict] = []
+    seen: set[tuple] = set()
+    existing = current if isinstance(current, list) else []
+    for trade in [*fresh, *existing]:
+        if not isinstance(trade, dict):
+            continue
+        identity = _closed_trade_identity(trade)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(trade)
+    return merged[:200]
+
+
 class ShadowRunner:
     """影子策略验证 runner：只做多 active 策略的记账，无 LLM。"""
 
@@ -127,29 +160,106 @@ class ShadowRunner:
             s = self.store.get("strategies", strategy_id)
             if not s:
                 raise ValueError(f"策略不存在: {strategy_id}")
-            return [s] if s.get("status") == "active" else []
+            return [s] if s.get("status") in ("active", "watch") else []
         all_s = self.store.all("strategies") or {}
-        return [s for s in all_s.values() if s.get("status") == "active"]
+        return [s for s in all_s.values() if s.get("status") in ("active", "watch")]
+
+    def prepare_task(self, task_id: str, params: dict) -> dict:
+        """在 worker 提交前持久化 pending，并原子复用同日同作用域任务。"""
+        from . import shadow_tasks as tasks
+
+        trade_date = str(params.get("trade_date") or _latest_trade_date())
+        strategy_id = str(params.get("strategy_id") or "").strip() or None
+        scope = "single" if strategy_id else "batch"
+        if strategy_id:
+            strategy_ids = [strategy_id]
+        else:
+            strategy_ids = sorted(
+                str(row.get("id")) for row in self._active_strategies(None)
+                if row.get("id")
+            )
+        force = bool(params.get("force", False))
+        dedupe_key = None if force else tasks.scope_key(
+            trade_date, scope, strategy_ids
+        )
+        latest = tasks.find_latest_for_scope(
+            self.store, trade_date, scope, strategy_ids
+        ) if force else None
+        request_params = {
+            **params,
+            "task_id": task_id,
+            "trade_date": trade_date,
+            "source": tasks.normalize_source(params.get("source")),
+        }
+        return tasks.create_pending_task(
+            self.store,
+            task_id=task_id,
+            source=str(request_params["source"]),
+            scope=scope,
+            strategy_ids=strategy_ids,
+            trade_date=trade_date,
+            force=force,
+            request_params=request_params,
+            dedupe_key=dedupe_key,
+            rerun_of_task_id=(str(latest.get("task_id")) if latest else None),
+        )
+
+    def attach_report(self, task_id: str, report_id: str) -> None:
+        from . import shadow_tasks as tasks
+
+        tasks.attach_report(self.store, task_id, report_id)
+
+    def fail_task(self, task_id: str, reason: str) -> None:
+        from . import shadow_tasks as tasks
+
+        tasks.fail_task(self.store, task_id, reason)
+
+    def cancel_task(self, task_id: str) -> bool:
+        from . import shadow_tasks as tasks
+
+        return tasks.cancel_task(self.store, task_id)
 
     # ---- 主流程 -------------------------------------------------------
 
     def run(self, params: dict, progress_cb) -> dict:
+        from . import shadow_tasks as tasks
+
+        params = dict(params)
+        if not params.get("task_id") and not params.get("source"):
+            params["source"] = "scheduled"
+        cancel_event = params.get("_cancel_event")
+
+        def ensure_not_cancelled() -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("影子验证任务已取消")
+
+        task_id = str(params.get("task_id") or uuid.uuid4().hex)
         force = bool(params.get("force", False))
         strategy_id = params.get("strategy_id")
+        row = tasks.get_task(self.store, task_id)
+        if row is None:
+            prepared = self.prepare_task(task_id, params)
+            task_id = str(prepared["task_id"])
+            row = tasks.get_task(self.store, task_id)
+        if row and row.get("status") in tasks.TERMINAL_STATUSES:
+            persisted = row.get("result")
+            if isinstance(persisted, dict):
+                return dict(persisted)
+        if not tasks.claim_task(self.store, task_id):
+            raise RuntimeError(f"影子验证任务不可执行: {task_id}")
 
-        trade_date = _latest_trade_date()
+        trade_date = str((row or {}).get("trade_date") or params.get("trade_date") or _latest_trade_date())
         progress_cb(f"📅 影子验证 · 交易日 {trade_date}")
 
-        # 幂等：同日已运行且非 force → skipped
-        existing = self.store.get("shadow_equity", trade_date)
-        if existing and not force:
-            return {"skipped": True, "trade_date": trade_date,
-                    "reason": f"{trade_date} 已运行（force=true 可重跑）"}
-
-        strategies = self._active_strategies(strategy_id)
-        if not strategies:
-            return {"skipped": True, "trade_date": trade_date,
-                    "reason": "无 active 策略（先回测过阈值激活，或指定 strategy_id）"}
+        requested_ids = list((row or {}).get("strategy_ids") or [])
+        strategies = []
+        skipped_ids = []
+        for sid in requested_ids:
+            strategy = self.store.get("strategies", sid)
+            if isinstance(strategy, dict) and strategy.get("status") in ("active", "watch"):
+                strategies.append(strategy)
+            else:
+                skipped_ids.append(sid)
 
         meta = dict(self.store.get("shadows", "meta") or {})
         initial_meta_keys = set(meta)
@@ -157,17 +267,56 @@ class ShadowRunner:
         strategy_results: dict[str, dict] = {}
         strategy_errors: dict[str, str] = {}
 
+        for sid in skipped_ids:
+            ensure_not_cancelled()
+            tasks.save_strategy_result(
+                self.store,
+                task_id=task_id,
+                strategy_id=sid,
+                status="skipped",
+                reason="无 active 策略（active/watch 参与状态；需先完成首次回测）",
+                snapshot=None,
+                trade_date=trade_date,
+            )
+
         for s in strategies:
+            ensure_not_cancelled()
             sid = s["id"]
+            started_at = _now()
             progress_cb(f"🔄 {s.get('name')}（{sid}）…")
             try:
                 res = self._run_strategy(s, trade_date, history_start, meta, progress_cb)
+                ensure_not_cancelled()
                 strategy_results[sid] = res
+                tasks.save_strategy_result(
+                    self.store,
+                    task_id=task_id,
+                    strategy_id=sid,
+                    status="success",
+                    reason=None,
+                    snapshot=_snapshot(res),
+                    trade_date=trade_date,
+                    started_at=started_at,
+                    completed_at=_now(),
+                )
             except Exception as exc:  # noqa: BLE001 — 单策略失败不拖垮整体
+                ensure_not_cancelled()
                 strategy_errors[sid] = f"{type(exc).__name__}: {exc}"
+                tasks.save_strategy_result(
+                    self.store,
+                    task_id=task_id,
+                    strategy_id=sid,
+                    status="failed",
+                    reason=strategy_errors[sid],
+                    snapshot=None,
+                    trade_date=trade_date,
+                    started_at=started_at,
+                    completed_at=_now(),
+                )
                 logger.warning("影子验证 %s 失败: %s", sid, exc)
 
         # 汇总
+        ensure_not_cancelled()
         overall = _overall_nav(strategy_results)
         snapshot = {
             "as_of": _now(), "trade_date": trade_date,
@@ -175,12 +324,19 @@ class ShadowRunner:
             "overall_nav": overall,
             "strategy_errors": strategy_errors,
         }
-        self.store.set("shadow_equity", trade_date, snapshot)
-        self.store.set("shadows", "latest", {
-            "trade_date": trade_date, "ran_at": _now(),
-            "overall_nav": overall,
-            "strategy_count": len(strategy_results),
-        })
+        if strategy_results:
+            def save_equity(current):
+                persisted = dict(current or {})
+                runs = dict(persisted.get("runs") or {})
+                runs[task_id] = snapshot
+                return {**snapshot, "runs": runs, "latest_task_id": task_id}
+
+            self.store.mutate("shadow_equity", trade_date, save_equity, {})
+        if strategy_results:
+            self.store.set("shadows", "latest", {
+                "task_id": task_id, "trade_date": trade_date, "ran_at": _now(),
+                "overall_nav": overall, "strategy_count": len(strategy_results),
+            })
         new_meta = {sid: rec for sid, rec in meta.items() if sid not in initial_meta_keys}
         if new_meta:
             self.store.mutate(
@@ -191,8 +347,15 @@ class ShadowRunner:
             )
         progress_cb("🏁 影子记账完成")
         snapshots = {sid: _snapshot(r) for sid, r in strategy_results.items()}
-        return {
-            "skipped": False,
+        task_results = tasks.list_task_results(self.store, task_id)
+        task_status = tasks.aggregate_status(task_results)
+        all_skipped = not task_results or all(
+            item.get("status") == "skipped" for item in task_results
+        )
+        result = {
+            "task_id": task_id,
+            "task_status": task_status,
+            "skipped": all_skipped,
             "trade_date": trade_date,
             "strategies": snapshots,
             "overall_nav": overall,
@@ -207,12 +370,16 @@ class ShadowRunner:
                 "trade_date": trade_date,
                 "overall_nav": overall,
             },
-            "reports": {
+            **({"reason": "无 active 策略（active/watch 参与状态；需先完成首次回测）"}
+               if all_skipped else {}),
+            **({"reports": {
                 "shadow": render_shadow_report(
                     trade_date, snapshots, overall, strategy_errors
                 )
-            },
+            }} if not all_skipped else {}),
         }
+        tasks.finalize_task(self.store, task_id, overall_nav=overall, result=result)
+        return result
 
     def _run_strategy(self, s: dict, trade_date: str, history_start: str,
                       meta: dict, progress_cb) -> dict:
@@ -270,7 +437,7 @@ class ShadowRunner:
             except Exception as exc:  # noqa: BLE001 — 单 symbol 失败跳过
                 symbol_errors[sym] = f"{type(exc).__name__}: {exc}"
 
-        # 持久化持仓 + 平仓台账（append）
+        # 持久化持仓 + 平仓台账（完整历史重放按平仓身份幂等合并）
         for sym, st in symbol_results.items():
             self.store.set("shadows", f"pos:{sid}:{sym}", {
                 "strategy_id": sid, "symbol": sym, "qty": st["qty"],
@@ -282,7 +449,7 @@ class ShadowRunner:
             self.store.mutate(
                 "shadows",
                 f"trades:{sid}",
-                lambda current: (closed_log + list(current or []))[:200],
+                lambda current: _merge_closed_trades(closed_log, current),
                 [],
             )
 

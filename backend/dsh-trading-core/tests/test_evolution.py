@@ -31,6 +31,7 @@ from adapter.evolution import (
     decision_outcome,
     evolve,
     evolve_auto,
+    record_closed_loop_run,
     status,
 )
 from adapter.personalize import _active_strategies
@@ -194,14 +195,14 @@ class EvolveTests(unittest.TestCase):
         bad = store.get("strategies", "strat-bad")
         self.assertEqual(good["evolve"]["tier"], 2)
         self.assertEqual(bad["status"], "retired")
-        self.assertEqual(bad["verification_status"], "archived")
+        self.assertEqual(bad.get("verification_status"), None)
         kids = [k for k, v in store.all("strategies").items()
                 if isinstance(v, dict) and v.get("source") == "evolution"]
         self.assertEqual(len(kids), 2)
         for kid in kids:
             rec = store.get("strategies", kid)
             self.assertEqual(rec["status"], "candidate")
-            self.assertEqual(rec["verification_status"], "pending")
+            self.assertEqual(rec["verification_status"], "insufficient")
             self.assertEqual(rec["mutated_from"], "strat-good")
 
     def test_preview_includes_per_strategy_decision_reasons(self):
@@ -472,6 +473,29 @@ class StatusTests(unittest.TestCase):
         # 最近自动进化记录
         self.assertGreaterEqual(len(st["recent_applied"]), 1)
         self.assertGreater(st["recent_applied"][0]["count"], 0)
+
+    def test_status_exposes_persisted_run_next_schedule_and_four_way_summary(self):
+        store = _store()
+        _plant(store)
+        _preview_and_apply(store)
+        record_closed_loop_run(
+            store,
+            run_at="2026-09-04T15:35:00+08:00",
+            status_value="completed",
+            action_count=3,
+        )
+        with patch(
+            "adapter.scheduler.next_closed_loop_run_at",
+            return_value="2026-09-05T15:35:00+08:00",
+        ):
+            st = status(store)
+
+        self.assertEqual(st["recent_run_at"], "2026-09-04T15:35:00+08:00")
+        self.assertEqual(st["next_scheduled_run_at"], "2026-09-05T15:35:00+08:00")
+        self.assertEqual(set(st["evolution_counts"]), {"normal", "watch", "promote", "retire"})
+        self.assertEqual(st["evolution_counts"]["promote"], 1)
+        self.assertEqual(st["evolution_counts"]["retire"], 1)
+        self.assertNotIn("mutated", st["evolution_counts"])
 
     def test_status_per_strategy_waiting_when_data_insufficient(self):
         """数据不足时各策略判定为「待判定」，不进归因计算。"""

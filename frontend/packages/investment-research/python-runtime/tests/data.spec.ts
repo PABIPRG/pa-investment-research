@@ -351,6 +351,52 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledTimes(21)
   })
 
+  it('maps strategy backtest detail, cancel and retry routes', async () => {
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
+    const calls: Array<[string, string]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init?.method ?? 'GET'])
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const input = { strategy_id: 'strategy:alpha', task_id: 'task:one' }
+    await requestInvestmentData({ operation: 'trading-core.strategy-backtest-detail', input }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.strategy-backtest-cancel', input }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.strategy-backtest-retry', input }, acquire)
+
+    expect(calls).toEqual([
+      ['http://127.0.0.1:8000/strategies/strategy%3Aalpha/backtests/task%3Aone', 'GET'],
+      ['http://127.0.0.1:8000/strategies/strategy%3Aalpha/backtests/task%3Aone/cancel', 'POST'],
+      ['http://127.0.0.1:8000/strategies/strategy%3Aalpha/backtests/task%3Aone/retry', 'POST'],
+    ])
+  })
+
+  it('maps shadow task detail and cancel routes', async () => {
+    const release = vi.fn(async () => {})
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
+    const calls: Array<[string, string]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init?.method ?? 'GET'])
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }))
+
+    const input = { task_id: '4'.repeat(32) }
+    await requestInvestmentData({ operation: 'trading-core.shadow-task-detail', input } as never, acquire)
+    await requestInvestmentData({ operation: 'trading-core.shadow-task-cancel', input } as never, acquire)
+
+    expect(calls).toEqual([
+      [`http://127.0.0.1:8000/shadow/tasks/${'4'.repeat(32)}`, 'GET'],
+      [`http://127.0.0.1:8000/shadow/tasks/${'4'.repeat(32)}/cancel`, 'POST'],
+    ])
+  })
+
   it('rejects unsafe path identifiers, unsupported transitions and unknown workflow keys before acquiring', async () => {
     const acquire = vi.fn()
     await expect(requestInvestmentData({

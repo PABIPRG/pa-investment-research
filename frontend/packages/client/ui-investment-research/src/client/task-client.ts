@@ -29,6 +29,7 @@ export async function waitForTask(
     const phase = text(status.status, 'pending')
     onProgress(phase === 'pending' ? '等待执行…' : phase === 'running' ? '正在执行…' : '正在收尾…')
     if (phase === 'failed') throw new Error(text(status.error, '任务执行失败'))
+    if (phase === 'cancelled') throw new Error('任务已取消')
     if (phase === 'done') {
       const result = asRecord(await requestData({ operation: 'trading-core.task-result', input: { task_id: id } }))
       return isActive() ? result : TASK_CANCELLED

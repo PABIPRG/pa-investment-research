@@ -33,4 +33,14 @@ describe('assistantPrompt', () => {
     expect(globalPrompt).not.toContain('人工应用')
     expect(scopedPrompt).not.toContain('人工应用')
   })
+
+  it('carries deterministic evolution semantics without asking the model to infer facts', () => {
+    const prompt = assistantPrompt({
+      kind: 'evolution',
+      strategyId: 'strategy-1',
+      semanticSummary: '参与状态：正常运行；验证结果：已验证通过；置信等级：已升级；来源：变异来源；任务状态：已完成',
+    })
+    expect(prompt).toContain('系统确定性语义：参与状态：正常运行；验证结果：已验证通过；置信等级：已升级；来源：变异来源；任务状态：已完成')
+    expect(prompt).toContain('这些字段是产品事实，不由模型推断')
+  })
 })
