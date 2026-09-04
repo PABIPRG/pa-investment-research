@@ -17,6 +17,11 @@ import type {
   InvestmentUiSnapshot,
 } from '../src/client/state.ts'
 
+const primaryRouteSurfaceClass = css.primaryRouteSurface
+if (primaryRouteSurfaceClass === undefined) {
+  throw new Error('primaryRouteSurface class missing from InvestmentShell.module.css')
+}
+
 afterEach(() => {
   cleanup()
   delete document.body.dataset.investmentAssistantMode
@@ -180,7 +185,7 @@ function chooseAssistantModule(label: string): void {
 describe('智能分析与全局 AI 助理回归', () => {
   it('为智能分析真实页面根挂载一级路由视觉契约', () => {
     const view = render(<SmartAnalysisPage onOpenReports={() => {}} onOpenAssistant={() => {}} />)
-    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
+    expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
   })
 
   it('提示词模板切换只替换自动内容，并允许回到开放式提问', () => {

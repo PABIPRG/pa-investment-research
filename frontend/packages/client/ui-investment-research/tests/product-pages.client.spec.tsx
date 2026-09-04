@@ -14,6 +14,11 @@ import css from '../src/client/InvestmentShell.module.css'
 import type { AssistantIntent } from '../src/client/assistant-intent.ts'
 import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
+const primaryRouteSurfaceClass = css.primaryRouteSurface
+if (primaryRouteSurfaceClass === undefined) {
+  throw new Error('primaryRouteSurface class missing from InvestmentShell.module.css')
+}
+
 afterEach(cleanup)
 
 const neverGlobalHook = (() => { throw new Error('global hook is not used in this scenario') }) as never
@@ -708,7 +713,7 @@ describe('投研产品闭环', () => {
     })
 
     const view = render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
-    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
+    expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
 
     expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
     expect(screen.getByText(/约 25 MB/)).toBeTruthy()

@@ -5,6 +5,11 @@ import { StrictMode, type ComponentProps } from 'react'
 import { OpportunityPage, PortfolioPage, safeExternalNewsUrl } from '../src/client/InvestmentShell.tsx'
 import css from '../src/client/InvestmentShell.module.css'
 
+const primaryRouteSurfaceClass = css.primaryRouteSurface
+if (primaryRouteSurfaceClass === undefined) {
+  throw new Error('primaryRouteSurface class missing from InvestmentShell.module.css')
+}
+
 type RequestData = ComponentProps<typeof OpportunityPage>['requestData']
 
 function requestDataWithMarketNews(handler: RequestData): ReturnType<typeof vi.fn<RequestData>> {
@@ -198,7 +203,7 @@ describe('投研数据页慢请求状态', () => {
       />,
     )
 
-    expect(container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
+    expect(container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
 
     const item = await screen.findByRole('article', { name: '贵州茅台 600519' })
     expect(container.querySelector('button button')).toBeNull()

@@ -5,6 +5,11 @@ import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-r
 import { ResearchWorkbenchPage } from '../src/client/ResearchWorkbenchPage.tsx'
 import css from '../src/client/InvestmentShell.module.css'
 
+const primaryRouteSurfaceClass = css.primaryRouteSurface
+if (primaryRouteSurfaceClass === undefined) {
+  throw new Error('primaryRouteSurface class missing from InvestmentShell.module.css')
+}
+
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
@@ -121,7 +126,7 @@ describe('研究工作台', () => {
   it('从页头操作区打开偏好复盘', () => {
     const view = renderWorkbench()
 
-    expect(view.container.firstElementChild?.classList.contains(css.primaryRouteSurface)).toBe(true)
+    expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
 
     fireEvent.click(view.getByRole('button', { name: '偏好复盘' }))
 
