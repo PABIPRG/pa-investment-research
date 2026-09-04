@@ -131,8 +131,10 @@ describe('策略研究产品事实与确认流程', () => {
     const card = (await screen.findByText('任务化策略')).closest('article')
     fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测管理' }))
     const dialog = await screen.findByRole('dialog', { name: '任务化策略' })
+    expect(within(dialog).getByRole('list', { name: '回测任务历史' })).toBeTruthy()
     expect(within(dialog).getAllByText('首次自动').length).toBeGreaterThan(0)
-    expect(within(dialog).getByText('周期复测')).toBeTruthy()
+    const taskList = within(dialog).getByRole('list', { name: '回测任务历史' })
+    expect(within(taskList).getByRole('listitem', { name: '周期复测 · 已取消' })).toBeTruthy()
     expect(within(dialog).getByText('已取消')).toBeTruthy()
     expect(within(dialog).getAllByText('未通过').length).toBeGreaterThan(0)
 
@@ -144,7 +146,7 @@ describe('策略研究产品事实与确认流程', () => {
       input: { strategy_id: 's-1', task_id: 't-pending' },
     }))
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.strategy-backtest-cancel')).toHaveLength(1)
-    const cancelledRow = within(dialog).getByText('周期复测').closest('tr')
+    const cancelledRow = within(taskList).getByRole('listitem', { name: '周期复测 · 已取消' })
     fireEvent.click(within(cancelledRow as HTMLElement).getByRole('button', { name: '重新运行' }))
     await waitFor(() => expect(requestData).toHaveBeenCalledWith({
       operation: 'trading-core.strategy-backtest-retry',
@@ -235,6 +237,35 @@ describe('策略研究产品事实与确认流程', () => {
     const direction = screen.getByText('利空')
     expect(direction.getAttribute('data-direction')).toBe('利空')
     expect(screen.queryByText('利空·rsi_reversal·600519')).toBeNull()
+  })
+
+  it('进化诊断标题使用证券名称、代码和中文策略类型', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') return { items: [{
+        id: 'legacy-rsi', name: '利空·rsi_reversal·601398', kind: 'rsi_reversal', status: 'active', symbols: ['601398'],
+      }] }
+      if (request.operation === 'market-watch.security-search') return { items: [{ code: request.input?.query, name: '工商银行' }] }
+      if (request.operation === 'trading-core.evolution-status') return {
+        lifecycle: { active: [{ strategy_id: 'legacy-rsi', symbols: ['601398'] }] },
+        per_strategy: [{ strategy_id: 'legacy-rsi', decision: 'none' }], recent_applied: [],
+      }
+      if (request.operation === 'trading-core.evolution-attribution') return { strategies: [{ strategy_id: 'legacy-rsi' }] }
+      if (request.operation === 'trading-core.strategy-detail') return { id: 'legacy-rsi', kind: 'rsi_reversal', symbols: ['601398'] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<StrategyResearchPage
+      requestData={requestData as never}
+      selectedStrategyId="legacy-rsi"
+      onSelectStrategy={() => {}}
+      onOpenShadow={() => {}}
+      onOpenReports={() => {}}
+      onAnalyze={() => {}}
+      initialStage="evolution"
+    />)
+
+    expect(await screen.findByRole('heading', { name: '工商银行(601398) · 超跌反弹 · 进化诊断' })).toBeTruthy()
+    expect(screen.queryByText(/rsi_reversal/u)).toBeNull()
   })
 
   it('参数缺失时不补造默认规则，未知类型也不解释成动量策略', async () => {

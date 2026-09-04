@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { EvolutionDashboard } from '../src/client/EvolutionDashboard.tsx'
@@ -15,6 +15,34 @@ import {
 afterEach(cleanup)
 
 describe('自进化全局只读看板', () => {
+  it('首屏先展示演化关系和紧凑运行摘要，明细列表后置', async () => {
+    const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
+      if (operation === 'trading-core.evolution-status') return {
+        closed_loop_enabled: false,
+        lifecycle: { candidate: [{ strategy_id: 'strat-candidate', name: '候选策略' }] },
+        per_strategy: [{ strategy_id: 'strat-candidate', name: '候选策略', reason: '等待验证' }],
+        recent_applied: [],
+        counts: { candidate: 1 },
+      }
+      if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={() => {}} initialLifecycleGroup="candidate" />)
+
+    const overview = await screen.findByRole('region', { name: '演化关系' })
+    const runtime = screen.getByRole('region', { name: '运行状态摘要' })
+    const distribution = screen.getByRole('region', { name: '策略状态分布' })
+    const diagnostics = screen.getByRole('region', { name: '策略现状与诊断' })
+    const history = screen.getByRole('region', { name: '历史进化动作' })
+    expect(overview.compareDocumentPosition(runtime) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(runtime.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(distribution.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(diagnostics.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(overview).getByText('尚未发生自动进化')).toBeTruthy()
+    expect(screen.getByRole('region', { name: '候选策略列表' }).className).toContain('evolutionLifecycleList')
+  })
+
   it('原样消费后端四桶、完整运行时间和五维策略语义', async () => {
     expect(formatEvolutionTimestamp('2026-09-04T15:35:00+08:00')).toBe('2026-09-04 15:35:00 UTC+08:00')
     expect(evolutionSemanticLabels({
@@ -278,8 +306,8 @@ describe('策略研究单策略诊断', () => {
     render(<StrategyEvolutionDiagnostics requestData={requestData} strategyId="strat-parent" strategyLabel="母策略" strategyStatus="active" onAnalyze={() => {}} onBack={() => {}} />)
 
     expect(await screen.findByText('自动生成子策略')).toBeTruthy()
-    expect(screen.getByText('子策略')).toBeTruthy()
-    expect(screen.getByText(/子策略 · 候选/)).toBeTruthy()
+    const childRow = screen.getByText('子策略').closest('[class*="dataRow"]')
+    expect(childRow?.textContent).toContain('候选')
   })
 
   it('重新评估只读取当前策略且不调用 preview/run', async () => {

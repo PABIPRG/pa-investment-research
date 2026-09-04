@@ -675,6 +675,9 @@ describe('投研产品闭环', () => {
 
     render(<ReportCenter requestData={requestData as never} onClose={() => {}} onAnalyze={() => {}} />)
     expect(await screen.findByText('保留正文')).toBeTruthy()
+    const refreshButton = screen.getByRole('button', { name: '刷新报告' })
+    expect(refreshButton.className).toContain('primaryButton')
+    expect(refreshButton.className).toContain('reportRefreshButton')
     fireEvent.click(screen.getByRole('button', { name: /将被移除的报告/ }))
     expect(await screen.findByText('旧正文')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '刷新报告' }))
@@ -1182,6 +1185,7 @@ describe('投研产品闭环', () => {
   })
 
   it('已选策略时默认单策略历史，可切到全部策略运行记录', async () => {
+    const onShowAllStrategies = vi.fn()
     const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
       if (request.operation === 'trading-core.shadow-status') {
         return { trade_date: '2026-09-01', strategy_count: 1, ran_at: '2026-09-01 15:30:00', overall_nav: 1.012 }
@@ -1210,7 +1214,11 @@ describe('投研产品闭环', () => {
       onOpenEvolution={() => {}}
       onOpenReports={() => {}}
       onAnalyze={() => {}}
+      onShowAllStrategies={onShowAllStrategies}
     />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '查看全部策略' }))
+    expect(onShowAllStrategies).toHaveBeenCalledTimes(1)
 
     const region = await screen.findByRole('region', { name: '影子验证历史' })
     // 默认当前策略历史：只见 strat-1 行
@@ -1221,6 +1229,28 @@ describe('投研产品闭环', () => {
     fireEvent.click(within(region).getByRole('button', { name: '全部策略运行记录' }))
     expect(await within(region).findByText(/2026-08-28/)).toBeTruthy()
     expect(within(region).getByText('无关策略')).toBeTruthy()
+  })
+
+  it('产业链目录不把缺少 A 股代码误写成实体档案', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'industry-chain.data-status') return { status: 'ready' }
+      if (request.operation === 'industry-chain.stats') return { subject_count: 1, total_nodes: 2, total_edges: 1, relationships: 1 }
+      if (request.operation === 'industry-chain.companies') return { items: [{ code: '300750', name: '宁德时代', industry: '动力电池' }] }
+      if (request.operation === 'industry-chain.chain') return {
+        center: { code: '300750', name: '宁德时代', industry: '动力电池' },
+        up_levels: [{ level: -1, nodes: [{ id: 'overseas-1', code: null, name: '海外供应商', via: '电池材料', type: 'direct' }] }],
+        down_levels: [],
+      }
+      if (request.operation === 'trading-core.personalized-impact') return { events: [] }
+      if (request.operation === 'market-watch.security-search') return { items: [] }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    render(<IndustryChainPage requestData={requestData as never} query="300750" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /宁德时代/u }))
+    expect((await screen.findAllByText('未关联 A 股代码')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('实体档案')).toBeNull()
   })
 
   it('真实影子任务历史展示任务与逐策略结果，并按精确报告编号打开和保留历史重跑', async () => {

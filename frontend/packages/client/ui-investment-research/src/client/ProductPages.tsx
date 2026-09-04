@@ -11,6 +11,9 @@ import { DetailDialog } from './DetailDialogs.tsx'
 import { formatEvolutionTimestamp } from './evolution-types.ts'
 import { useSecurityNames } from './security-names.ts'
 import { StrategyEvolutionDiagnostics } from './StrategyEvolutionDiagnostics.tsx'
+import {
+  strategyDirectionLabel, strategyEvolutionLabel, strategyKindLabel, strategyTargetLabel, strategyTickers,
+} from './strategy-display.ts'
 import type { StrategyResearchStage } from './state.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
 import css from './InvestmentShell.module.css'
@@ -105,56 +108,6 @@ function impactSourceSecurityNames(value: unknown): Record<string, string> {
     }
   }
   return names
-}
-
-interface StrategyTicker {
-  readonly code: string
-  readonly name: string
-}
-
-function strategyTickers(item: Record<string, unknown>): StrategyTicker[] {
-  const embedded = Array.isArray(item.tickers) ? item.tickers : []
-  const byCode = new Map<string, string>()
-  for (const value of embedded) {
-    const ticker = asRecord(value)
-    const code = text(ticker.code, '').trim()
-    const name = text(ticker.name, '').trim()
-    if (code !== '') byCode.set(code, name)
-  }
-  for (const code of strings(item.symbols)) {
-    if (!byCode.has(code)) byCode.set(code, '')
-  }
-  return [...byCode].map(([code, name]) => ({ code, name }))
-}
-
-function strategyKindLabel(value: unknown): string {
-  const kind = text(value, '')
-  return {
-    ma_cross: '均线趋势',
-    rsi_reversal: '超跌反弹',
-    momentum: '动量跟随',
-    breakout: '通道突破',
-    bollinger: '布林超跌',
-    volume_breakout: '放量突破',
-  }[kind] ?? (kind === '' ? '策略类型未返回' : '其他策略')
-}
-
-function strategyDirectionLabel(value: unknown): string {
-  const direction = text(value, '').trim()
-  const normalized = direction.toLowerCase()
-  if (['利好', 'long', 'bullish', 'positive', 'up'].includes(normalized)) return '利好'
-  if (['利空', 'short', 'bearish', 'negative', 'down'].includes(normalized)) return '利空'
-  return direction
-}
-
-function strategyTargetLabel(item: Record<string, unknown>, resolved: Readonly<Record<string, string>>): string {
-  const tickers = strategyTickers(item)
-  const labels = tickers.map((ticker) => {
-    const name = ticker.name || resolved[ticker.code] || ''
-    return name === '' || name === ticker.code ? ticker.code : `${name} · ${ticker.code}`
-  })
-  if (labels.length > 0) return labels.slice(0, 2).join('、') + (labels.length > 2 ? `等${labels.length}只` : '')
-  return text(item.name, text(item.id, '未命名策略'))
 }
 
 function useAliveRef() {
@@ -584,6 +537,7 @@ function HypothesisPreviewDialog({
 function StrategyDetailDialog({
   item, tasks, busy, tasksBusy, onClose, onAnalyze, onShadow, onRefreshTasks, onCreateTask,
   onCancelTask, onRetryTask, onOpenTaskReport,
+  reportReady,
 }: {
   item: Record<string, unknown>
   tasks: readonly Record<string, unknown>[]
@@ -597,6 +551,7 @@ function StrategyDetailDialog({
   onCancelTask: (taskId: string) => void
   onRetryTask: (taskId: string) => void
   onOpenTaskReport: (reportId: string) => void
+  reportReady: boolean
 }) {
   const id = text(item.id, '未返回')
   const status = text(item.status, '')
@@ -639,10 +594,16 @@ function StrategyDetailDialog({
       <div data-testid="strategy-detail-dialog" className={css.detailTags} aria-label="策略标签">
         <span>{STRATEGY_CATEGORY_LABELS[category]}</span>
         <span>{status === '' ? '状态未返回' : statusLabel(status)}</span>
-        <span>{text(item.kind, '策略类型未返回')}</span>
+        <span>{strategyKindLabel(item.kind)}</span>
         {text(item.direction, '') !== '' && <span>{text(item.direction)}</span>}
         {symbols.map(symbol => <span key={symbol}>{symbol}</span>)}
       </div>
+      {reportReady && (
+        <div className={css.detailReportReady} role="status">
+          <span>本次回测报告已归档。</span>
+          <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport('') }}>查看本次投研报告</button>
+        </div>
+      )}
       <dl className={css.detailMetaGrid}>
         <div><dt>策略标识</dt><dd>{id}</dd></div>
         <div><dt>验证分类</dt><dd>{STRATEGY_CATEGORY_LABELS[category]}</dd></div>
@@ -675,11 +636,13 @@ function StrategyDetailDialog({
         </div>
         {symbolErrors.length > 0 && <p className={css.detailFootnote}>行情获取异常标的：{symbolErrors.join('、')}</p>}
       </section>
-      <section className={css.detailSection} data-testid="backtest-management" aria-label="回测管理">
-        <h3>回测管理</h3>
+      <section className={`${css.detailSection} ${css.backtestManagement}`} data-testid="backtest-management" aria-label="回测管理">
+        <div className={css.sectionHeading}>
+          <div><h3>回测管理</h3><p>任务彼此独立，最新完成结果会同步到上方验证结论。</p></div>
+          <span>{tasks.length} 条任务</span>
+        </div>
         <p className={css.detailFootnote}>
-          每次手动或自动回测都是一条独立任务；自动任务由策略首次入池与每 15 天复测巡检创建，
-          统一进入下方历史清单。最新一次证据会同步到“验证结论/样本内外证据”。
+          自动任务来自策略首次入池与每 15 天复测巡检；手动任务不会覆盖历史证据。
         </p>
         {latestTask === undefined ? (
           <p className={css.detailFootnote}>{Object.keys(backtest).length > 0
@@ -704,11 +667,8 @@ function StrategyDetailDialog({
           </button>
         </div>
         {tasks.length > 0 ? (
-          <div className={css.strategyEvidenceTable}>
-            <table>
-              <thead><tr><th>时间窗口</th><th>来源</th><th>状态</th><th>创建时间</th><th>开始 / 完成</th><th>结果</th><th>失败原因</th><th>操作</th></tr></thead>
-              <tbody>
-                {tasks.map((task) => {
+          <div className={css.backtestTaskList} role="list" aria-label="回测任务历史">
+            {tasks.map((task) => {
                   const taskIdText = text(task.task_id, '')
                   const summary = asRecord(task.summary)
                   const failed = text(task.status, '') === 'failed'
@@ -717,15 +677,17 @@ function StrategyDetailDialog({
                   const trades = number(summary.oos_trades)
                   const verdict = failed ? '—' : `${backtestVerdictLabel(task)}${trades === undefined ? '' : ` · 样本外${trades}笔`}`
                   return (
-                    <tr key={taskIdText}>
-                      <td>{backtestWindowLabel(task)}</td>
-                      <td>{backtestSourceLabel(task.source)}</td>
-                      <td>{taskStatusLabel(task.status)}</td>
-                      <td>{reportTimeLabel(task.created_at)}</td>
-                      <td>{reportTimeLabel(task.started_at)} → {reportTimeLabel(task.completed_at)}</td>
-                      <td>{verdict}</td>
-                      <td>{failed ? text(task.failure_reason, '') : ''}</td>
-                      <td><div className={css.moduleToolbar}>
+                    <article key={taskIdText} className={css.backtestTaskCard} role="listitem" aria-label={`${backtestSourceLabel(task.source)} · ${taskStatusLabel(task.status)}`}>
+                      <div className={css.backtestTaskHead}>
+                        <div><strong>{backtestWindowLabel(task)}</strong><small>{backtestSourceLabel(task.source)} · 创建于 {reportTimeLabel(task.created_at)}</small></div>
+                        <span className={css.statusBadge} data-status={taskStatus}>{taskStatusLabel(task.status)}</span>
+                      </div>
+                      <dl className={css.backtestTaskFacts}>
+                        <div><dt>开始 / 完成</dt><dd>{reportTimeLabel(task.started_at)} → {reportTimeLabel(task.completed_at)}</dd></div>
+                        <div><dt>验证结果</dt><dd>{verdict}</dd></div>
+                        {failed && <div><dt>失败原因</dt><dd>{text(task.failure_reason, '后端未返回失败原因')}</dd></div>}
+                      </dl>
+                      <div className={css.moduleToolbar}>
                         {(taskStatus === 'pending' || taskStatus === 'running') && (
                           <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onCancelTask(taskIdText) }}>取消任务</button>
                         )}
@@ -735,12 +697,10 @@ function StrategyDetailDialog({
                         {reportId !== '' && (
                           <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport(reportId) }}>查看报告</button>
                         )}
-                      </div></td>
-                    </tr>
+                      </div>
+                    </article>
                   )
                 })}
-              </tbody>
-            </table>
           </div>
         ) : (
           <p className={css.detailFootnote}>暂无回测任务历史。</p>
@@ -1181,7 +1141,8 @@ export function StrategyResearchPage({
     return <div className={css.pageScroll}><StrategyEvolutionDiagnostics
       requestData={requestData}
       strategyId={selectedStrategyId}
-      strategyLabel={text(selectedItem?.name, selectedStrategyId || '未选择策略')}
+      strategyLabel={strategyEvolutionLabel(selectedItem ?? {}, securityNames)}
+      securityNames={securityNames}
       strategyStatus={selectedStatus}
       archived={strategyCategory(selectedItem ?? {}) === 'archived'}
       onAnalyze={onAnalyze}
@@ -1281,7 +1242,7 @@ export function StrategyResearchPage({
       {view === 'pool' ? <>
         <div className={css.contextHint}>AI 评审会自动读取当前策略上下文；页面只保存策略标识，不会复制或覆盖策略内容。</div>
         {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
-        {reportReady && (
+        {reportReady && currentDetailItem === undefined && (
           <div className={css.moduleToolbar}>
             <button type="button" className={css.secondaryButton} onClick={() => { onOpenReports() }}>查看本次投研报告</button>
           </div>
@@ -1366,6 +1327,7 @@ export function StrategyResearchPage({
           onAnalyze={onAnalyze}
           onOpenStock={onOpenStock}
           strategyNames={strategyNames}
+          onShowAllStrategies={() => { onSelectStrategy('') }}
         />
       )}
       {currentDetailItem !== undefined && (
@@ -1380,6 +1342,7 @@ export function StrategyResearchPage({
           onCancelTask={(taskIdValue) => { void updateBacktestTask('cancel', taskIdValue) }}
           onRetryTask={(taskIdValue) => { void updateBacktestTask('retry', taskIdValue) }}
           onOpenTaskReport={(reportId) => { onOpenReports(reportId) }}
+          reportReady={reportReady}
           onAnalyze={() => {
             const id = text(currentDetailItem.id, '')
             setDetailItem(undefined)
@@ -1449,12 +1412,13 @@ interface ShadowValidationPageProps {
   readonly onOpenStock?: (code: string) => void
   readonly strategyNames?: Readonly<Record<string, string>>
   readonly embedded?: boolean
+  readonly onShowAllStrategies?: () => void
 }
 
 /** Paper-account evidence; no real order is placed from this UI. */
 export function ShadowValidationPage({
   requestData, selectedStrategyId, onOpenEvolution, onOpenReports, onAnalyze,
-  onOpenStock = () => {}, strategyNames = {}, embedded = false,
+  onOpenStock = () => {}, strategyNames = {}, embedded = false, onShowAllStrategies,
 }: ShadowValidationPageProps) {
   const status = useDataResource(requestData)
   const alive = useAliveRef()
@@ -1586,7 +1550,12 @@ export function ShadowValidationPage({
         <strong>{selectedStrategyId === '' ? '全部参与策略' : selectedStrategyName || '已选策略'}</strong>
         <small>{selectedStrategyId === '' ? '每条参与策略独立使用纸面账户记账' : '只展示这条策略的持仓与净值证据'}</small>
       </div>
-      <span>真实行情 · 虚拟资金 · 不会下单</span>
+      <div className={css.shadowScopeActions}>
+        {selectedStrategyId !== '' && onShowAllStrategies !== undefined && (
+          <button type="button" className={css.secondaryButton} onClick={onShowAllStrategies}>查看全部策略</button>
+        )}
+        <span>真实行情 · 虚拟资金 · 不会下单</span>
+      </div>
     </div>
     {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
     {firstError !== undefined && <DataError message={firstError.error} retry={load} />}
@@ -3252,7 +3221,7 @@ function IndustryGraphExplorer({
         <div className={css.industryGraphDetailHeader}>
           <span>{relationLabel}</span>
           <strong>{focusedNode.name}</strong>
-          <small>{focusedNode.code || '非上市实体'} · {focusedNode.loaded ? '完整链路已载入' : '当前图谱节点'}</small>
+          <small>{focusedNode.code || '未关联 A 股代码'} · {focusedNode.loaded ? '完整链路已载入' : '当前图谱节点'}</small>
         </div>
         <dl className={css.industryGraphDetailGrid}>
           <div><dt>传导环节</dt><dd>{selectedRelation.via || '未标注'}</dd></div>
@@ -3339,7 +3308,7 @@ function IndustryGraphExplorer({
               onDoubleClick={() => { drillNode(node) }}
             >
               <span><b>{node.name}</b><small>{node.direction === 'up' ? '上游' : node.direction === 'down' ? '下游' : '旁支'} · {node.direction === 'related' ? '关联分支' : `第 ${node.depth} 层`} · {node.via || '传导未标注'}</small></span>
-              <span><b>{industryWeightLabel(node.share, node.shareSource, node.confidence)}</b><small>{node.loaded ? '已展开' : node.code === '' ? '实体档案' : node.code}</small></span>
+              <span><b>{industryWeightLabel(node.share, node.shareSource, node.confidence)}</b><small>{node.loaded ? '已展开' : node.code === '' ? '未关联 A 股代码' : node.code}</small></span>
             </button>
           ))}
         </section>
@@ -4107,7 +4076,6 @@ export function ReportCenter({ requestData, onClose, onAnalyze, initialReportId 
     document.addEventListener('keydown', keydown)
     return () => { document.removeEventListener('keydown', keydown) }
   }, [onClose])
-
   const report = asRecord(detail.state.value)
   const sections = records(report.sections)
   const fallbackReports = asRecord(report.reports)
@@ -4125,7 +4093,7 @@ export function ReportCenter({ requestData, onClose, onAnalyze, initialReportId 
         </header>
         <div className={css.reportLayout}>
           <aside className={css.reportList} aria-label="报告列表">
-            <button type="button" className={css.secondaryButton} onClick={load}>刷新报告</button>
+            <button type="button" className={`${css.primaryButton} ${css.reportRefreshButton}`} onClick={load}>刷新报告</button>
             {list.state.phase === 'loading' && list.state.value === undefined && <BusyRows />}
             {list.state.phase === 'error' && <DataError message={list.state.error} retry={load} />}
             {items.map((item, index) => {

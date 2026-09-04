@@ -107,6 +107,8 @@
 .researchContextTrigger > em[data-tone='danger'] { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .researchContextTrigger > em[data-tone='muted'] { color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2); }
 .researchContextPopover { position: fixed; top: 0; right: auto; bottom: auto; left: 0; z-index: 1100; display: flex; box-sizing: border-box; width: min(420px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: min(560px, calc(100dvh - 24px)); overflow: hidden; flex-direction: column; padding: 10px; border: 1px solid var(--investment-line); border-radius: 14px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); }
+.researchContextMenuRoot > [role='menu'] { min-width: 260px; box-sizing: border-box; padding: 10px; border: 1px solid var(--investment-line); border-radius: 14px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); }
+.researchContextMenuRoot > [role='menu'] button { min-height: 42px; border-radius: 9px; }
 .researchContextPopoverHead { flex: none; padding: 3px 4px 10px; border-bottom: 1px solid var(--investment-line-soft); }
 .researchContextPopoverHead strong, .researchContextPopoverHead small { display: block; }
 .researchContextPopoverHead strong { font-size: var(--investment-font-base); }
@@ -1123,7 +1125,7 @@
 .detailBackdrop {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: 1000;
   display: grid;
   place-items: center;
   box-sizing: border-box;
@@ -1134,10 +1136,12 @@
 
 .detailDialog {
   display: flex;
+  gap: 0;
   flex-direction: column;
   width: min(720px, 100%);
   max-height: min(820px, 100%);
   overflow: hidden;
+  padding: 0;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 16px;
   color: var(--dsw-alias-label-primary);
@@ -1170,6 +1174,21 @@
 .detailSection h3 { margin: 0 0 8px; font-size: 0.9286rem; }
 .detailSection p { margin: 6px 0 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.7; overflow-wrap: anywhere; }
 .detailSection .detailFootnote { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.detailReportReady { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid var(--dsw-alias-state-success-secondary); border-radius: 9px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: var(--investment-font-secondary); }
+.backtestManagement > .sectionHeading { align-items: flex-start; }
+.backtestManagement > .sectionHeading h3, .backtestManagement > .sectionHeading p { margin: 0; }
+.backtestManagement > .sectionHeading p { margin-top: 4px; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-secondary); }
+.backtestTaskList { display: grid; gap: 10px; margin-top: 12px; }
+.backtestTaskCard { padding: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-base); }
+.backtestTaskHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.backtestTaskHead > div { min-width: 0; }
+.backtestTaskHead strong, .backtestTaskHead small { display: block; }
+.backtestTaskHead small { margin-top: 4px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.backtestTaskFacts { display: grid; grid-template-columns: minmax(220px, 1.4fr) minmax(160px, 1fr); gap: 12px; margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.backtestTaskFacts div { min-width: 0; }
+.backtestTaskFacts dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.backtestTaskFacts dd { margin: 4px 0 0; font-size: var(--investment-font-secondary); line-height: 1.5; overflow-wrap: anywhere; }
+.backtestTaskCard > .moduleToolbar { min-height: 0; margin-top: 10px; }
 .detailEvidenceRow { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 .detailEvidenceRow span { flex: 1; min-width: 180px; padding: 9px 10px; border-radius: 8px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); font-size: 0.8571rem; }
 .detailEvidenceRow strong { display: block; margin-top: 4px; color: var(--dsw-alias-label-primary); font-size: 0.9286rem; }
@@ -1284,12 +1303,15 @@
 
 .reportDrawer {
   display: flex;
+  gap: 0;
   flex-direction: column;
   width: min(960px, calc(100vw - 32px));
   max-width: 100%;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  padding: 0;
+  border-radius: 0;
   border-left: 1px solid var(--dsw-alias-border-l2);
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-base);
@@ -1309,6 +1331,7 @@
 
 .reportLayout { flex: 1; display: grid; grid-template-columns: minmax(248px, 320px) minmax(0, 1fr); min-width: 0; min-height: 0; }
 .reportList { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; overflow: auto; padding: 12px; border-right: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.reportRefreshButton { width: 100%; min-height: 42px; flex: none; border-radius: 9px; font-weight: 700; }
 .reportItem { display: block; width: 100%; min-width: 0; min-height: 64px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; color: inherit; background: var(--dsw-alias-bg-base); text-align: left; cursor: pointer; transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease, transform 140ms ease; }
 .reportItem:hover:not(:disabled) { border-color: var(--dsw-alias-border-l3); background: var(--dsw-alias-interactive-bg-hover); box-shadow: var(--dsw-shadow-lv2); }
 .reportItem:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
@@ -1680,7 +1703,41 @@
 .shadowScopeBar > div > span { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
 .shadowScopeBar strong { margin-top: 3px; font-size: 1rem; }
 .shadowScopeBar small { margin-top: 3px; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-caption); }
-.shadowScopeBar > span { flex: none; padding: 5px 8px; border-radius: 99px; color: var(--investment-primary); background: var(--dsw-alias-bg-base); font-size: var(--investment-font-caption); font-weight: 650; }
+.shadowScopeActions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
+.shadowScopeActions > span { flex: none; padding: 5px 8px; border-radius: 99px; color: var(--investment-primary); background: var(--dsw-alias-bg-base); font-size: var(--investment-font-caption); font-weight: 650; }
+
+.evolutionDashboard { display: grid; gap: 16px; }
+.evolutionDashboard > .pageHeader { margin-bottom: 0; padding-bottom: 16px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.evolutionDashboard > .moduleGrid { gap: 16px; }
+.evolutionDashboard .moduleCard { padding: 16px; border-radius: 12px; background: var(--dsw-alias-bg-base); box-shadow: none; }
+.evolutionLineageOverview { border-color: var(--investment-selected-surface); }
+.evolutionLineageOverview > .sectionHeading { margin-bottom: 12px; }
+.evolutionLead { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 12px 14px; border-radius: 9px; background: var(--dsw-alias-bg-layer-1); }
+.evolutionLead[data-state='evolved'] { color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.evolutionLead strong, .evolutionLead span { display: block; }
+.evolutionLead strong { flex: none; font-size: 0.9286rem; }
+.evolutionLead span { color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-secondary); line-height: 1.5; text-align: right; }
+.evolutionLineageOverview .lineageTree:not(:empty) { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.evolutionOverviewGrid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 16px; align-items: stretch; min-width: 0; }
+.evolutionRuntimeCard, .evolutionAttributionCard { height: 100%; box-sizing: border-box; }
+.evolutionRuntimeMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 0 0; }
+.evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.evolutionRuntimeMeta > div { min-width: 0; }
+.evolutionRuntimeMeta dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
+.evolutionRuntimeMeta dd { margin: 5px 0 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: var(--investment-font-secondary); font-weight: 650; line-height: 1.45; }
+.evolutionDistribution .evolutionStatusSummary { margin: 14px 0 12px; border-block: 1px solid var(--dsw-alias-border-l1); }
+.evolutionDashboard .evolutionStatusSummary div { padding: 10px 0; border-radius: 0; background: transparent; }
+.evolutionDistribution .lifecycleNav { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 0; }
+.evolutionDistribution .lifecycleNav button { border-right: 1px solid var(--dsw-alias-border-l1); border-bottom: 0; }
+.evolutionDistribution .lifecycleNav button:last-child { border-right: 0; }
+.evolutionLifecycleList { max-height: 288px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; }
+.evolutionLifecycleList:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.evolutionLifecycleList .dataRow { border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); border-radius: 0; }
+.evolutionLifecycleList .dataRow:last-child { border-bottom: 0; }
+.evolutionDashboard .strategyEntry { margin-top: 10px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; }
+.evolutionDashboard .strategyEntry .dataRow { border: 0; background: var(--dsw-alias-bg-base); }
+.evolutionDashboard .strategyDetail { padding: 12px 14px; border: 0; border-top: 1px solid var(--dsw-alias-border-l1); border-radius: 0; background: var(--dsw-alias-bg-layer-1); }
+.evolutionDashboard .evolutionFacts { gap: 6px 16px; margin: 0 0 12px; }
 .shadowRunSummary { min-width: 0; margin-top: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 11px; background: var(--dsw-alias-bg-layer-1); }
 .shadowRunSummary .reportMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .shadowRunSummary .reportMeta > div { min-width: 0; padding: 9px 10px; border-radius: 8px; background: var(--dsw-alias-bg-base); }
@@ -2031,6 +2088,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .analysisPipeline ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .assistantPanel { right: 16px; width: min(410px, calc(100vw - var(--dsh-sidebar-width, 56px) - 32px)); }
   .assistantLauncher[data-placement='research-minimized'] { right: max(14px, env(safe-area-inset-right)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 64px); }
+  .evolutionRuntimeMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   :global(body[data-investment-assistant-mode='docked']) :global([data-conversation-scroll]),
   :global(body[data-investment-assistant-mode='expanded']) :global([data-conversation-scroll]) { right: 17px; width: min(408px, calc(100vw - var(--dsh-sidebar-width, 56px) - 34px)); }
   :global(body[data-investment-assistant-mode='expanded']) :global([data-conversation-scroll]) { left: 17px; width: auto; }
@@ -2118,6 +2176,12 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .importActions .primaryButton, .importActions .secondaryButton { flex: 1 1 auto; min-height: var(--investment-touch-target); height: var(--investment-touch-target); }
   .moduleGrid { grid-template-columns: 1fr; }
   .moduleCard { padding: 14px; }
+  .evolutionOverviewGrid { grid-template-columns: 1fr; }
+  .evolutionLead { align-items: flex-start; flex-direction: column; }
+  .evolutionLead span { text-align: left; }
+  .evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .evolutionDistribution .lifecycleNav { grid-auto-flow: column; grid-auto-columns: minmax(112px, 1fr); grid-template-columns: none; overflow-x: auto; }
+  .evolutionDistribution .lifecycleNav button { border-right: 1px solid var(--dsw-alias-border-l1); }
   .moduleToolbar { gap: 8px; }
   .industryBootstrap { grid-template-columns: 1fr; align-items: stretch; }
   .industryBootstrap > .primaryButton { grid-column: 1; grid-row: auto; min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
@@ -2142,7 +2206,8 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .embeddedShadowHeader, .shadowScopeBar { align-items: stretch; flex-direction: column; }
   .embeddedShadowHeader > div:last-child { width: 100%; }
   .embeddedShadowHeader > div:last-child button { flex: 1; min-height: var(--investment-touch-target); height: auto; }
-  .shadowScopeBar > span { align-self: flex-start; }
+  .shadowScopeActions { align-items: flex-start; flex-wrap: wrap; }
+  .backtestTaskFacts { grid-template-columns: 1fr; }
   .shadowRunSummary .reportMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shadowTaskHead { align-items: flex-start; }
   .shadowTaskMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2201,6 +2266,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .importHead, .importBody { padding-inline: 14px; }
   .importActions { padding-inline: 14px; }
   .reportList { padding: 10px; }
+  .evolutionRuntimeMeta, .evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: 1fr; }
   .reportBody { padding: 12px; }
   .reportSections > section { padding: 12px; }
   .dashboardSummary { grid-template-columns: 1fr; }

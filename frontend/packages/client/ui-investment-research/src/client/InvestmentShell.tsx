@@ -598,6 +598,8 @@ export type InvestmentPromptTemplateProps = PropsRuntime<'conversation.input.lef
   & {
     readonly appearance?: 'assistant' | 'context'
     readonly visibleWhenClosed?: boolean
+    readonly open?: boolean
+    readonly onOpenChange?: (open: boolean) => void
   }
 
 /** Profile-specific research scope picker in the shared composer tool row. */
@@ -657,6 +659,7 @@ export function InvestmentAssistantModuleSelect({
 export function InvestmentPromptTemplateSelect({
   useInvestmentUi, promptTemplates, selectPromptTemplate,
   appearance = 'assistant', visibleWhenClosed = false, session,
+  open: controlledOpen, onOpenChange,
 }: InvestmentPromptTemplateProps) {
   const mode = useInvestmentUi(snapshot => snapshot.assistantMode)
   const sessionId = String(session.sessionId)
@@ -669,7 +672,13 @@ export function InvestmentPromptTemplateSelect({
     [promptTemplates, sessionId],
   )
   const template = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const [open, setOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = useCallback((next: boolean | ((current: boolean) => boolean)): void => {
+    const resolved = typeof next === 'function' ? next(open) : next
+    if (controlledOpen === undefined) setInternalOpen(resolved)
+    onOpenChange?.(resolved)
+  }, [controlledOpen, onOpenChange, open])
   const selected = ANALYSIS_MODULE_OPTIONS.find(item => item.id === template.templateId)
     ?? GENERAL_ANALYSIS_MODULE_OPTION
   const selectedLabel = selected.label
@@ -682,7 +691,7 @@ export function InvestmentPromptTemplateSelect({
   return (
     <Menu
       open={open}
-      className={css.assistantModuleMenuRoot ?? ''}
+      className={`${css.assistantModuleMenuRoot ?? ''} ${appearance === 'context' ? css.researchContextMenuRoot : ''}`}
       items={ANALYSIS_MODULE_OPTIONS.map(item => ({ id: item.id, label: item.label }))}
       selectedId={template.templateId}
       side="top"

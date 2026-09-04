@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh",
   "description": "dsh CLI: shipped application dispatch, profile boot, and plugin management",
-  "version": "0.1.0-rc.8",
+  "version": "0.1.0-rc.10",
   "publishConfig": {
     "access": "public"
   },

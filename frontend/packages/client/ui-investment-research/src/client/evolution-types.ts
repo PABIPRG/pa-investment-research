@@ -144,6 +144,7 @@ export interface StrategyEvolutionDiagnosticsProps {
   readonly requestData: EvolutionRequestData
   readonly strategyId: string
   readonly strategyLabel: string
+  readonly securityNames?: Readonly<Record<string, string>>
   readonly strategyStatus: string
   readonly archived?: boolean
   readonly onAnalyze: (intent: AssistantIntent) => void
