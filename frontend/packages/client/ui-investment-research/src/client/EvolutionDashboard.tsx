@@ -179,6 +179,20 @@ export function EvolutionDashboard({
       {error !== '' && <div className={css.errorCard} role="alert"><strong>真实数据暂不可用</strong><p>{error}</p><button type="button" onClick={load}>重试</button></div>}
       {loading && status === undefined && <div className={css.loadingSkeleton} aria-label="正在读取进化状态"><span /><span /><span /></div>}
 
+      <section className={css.moduleGrid} aria-label="最近自动进化">
+        <article className={css.moduleCard}>
+          <div className={css.sectionHeading}><strong>最近自动进化</strong><span>{recentApplied.length} 条</span></div>
+          <div className={css.dataList}>
+            {recentApplied.flatMap((round, roundIndex) => records(round.actions).map((action, actionIndex) => {
+              const sid = strategyId(action)
+              const label = `${text(round.applied_at, '')} · 自动应用 ${number(round.count)?.toFixed(0) ?? '0'} 项动作`
+              return <button type="button" className={css.dataRow} key={`${roundIndex}-${actionIndex}`} aria-label={label} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{label}</strong><small>{text(action.reason, '')}</small></div><span>{DECISION_LABELS[text(action.type, '')] ?? text(action.type, '')}</span></button>
+            }))}
+            {recentApplied.length === 0 && !loading && <div className={css.emptyPanel}>尚未有自动进化记录。</div>}
+          </div>
+        </article>
+      </section>
+
       <section className={css.moduleGrid} aria-label="闭环状态与生命周期">
         <article className={css.moduleCard}>
           <div className={css.sectionHeading}><strong>闭环运行状态</strong><span>{closedLoopEnabled ? `每日 ${closedLoopTime}` : '未启用'}</span></div>
@@ -273,20 +287,6 @@ export function EvolutionDashboard({
               </div>
             })}
             {perStrategy.length === 0 && !loading && <div className={css.emptyPanel}>暂无策略判定。</div>}
-          </div>
-        </article>
-      </section>
-
-      <section className={css.moduleGrid} aria-label="最近自动进化">
-        <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><strong>最近自动进化</strong><span>{recentApplied.length} 条</span></div>
-          <div className={css.dataList}>
-            {recentApplied.flatMap((round, roundIndex) => records(round.actions).map((action, actionIndex) => {
-              const sid = strategyId(action)
-              const label = `${text(round.applied_at, '')} · 自动应用 ${number(round.count)?.toFixed(0) ?? '0'} 项动作`
-              return <button type="button" className={css.dataRow} key={`${roundIndex}-${actionIndex}`} aria-label={label} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{label}</strong><small>{text(action.reason, '')}</small></div><span>{DECISION_LABELS[text(action.type, '')] ?? text(action.type, '')}</span></button>
-            }))}
-            {recentApplied.length === 0 && !loading && <div className={css.emptyPanel}>尚未有自动进化记录。</div>}
           </div>
         </article>
       </section>
