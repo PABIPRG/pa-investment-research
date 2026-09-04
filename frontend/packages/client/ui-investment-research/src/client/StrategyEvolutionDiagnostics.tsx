@@ -6,6 +6,7 @@ import {
   evolutionSemanticSummary,
   formatEvolutionTimestamp,
 } from './evolution-types.ts'
+import { strategyEvolutionLabel } from './strategy-display.ts'
 import css from './InvestmentShell.module.css'
 
 // 变异是来源标记（source/mutated_from）而非独立分组；mutated 保留为防御性兜底。
@@ -33,6 +34,7 @@ export function StrategyEvolutionDiagnostics({
   requestData,
   strategyId: selectedStrategyId,
   strategyLabel,
+  securityNames = {},
   strategyStatus,
   archived = false,
   onAnalyze,
@@ -167,7 +169,10 @@ export function StrategyEvolutionDiagnostics({
               ? '当前策略'
               : text(entry.mutated_from, '') === selectedStrategyId ? '子策略' : '母策略'
             const group = text(entry.lifecycle_group, '')
-            return <div className={css.dataRow} key={sid}><div><strong>{text(entry.name, sid)}</strong><small>{sid}</small></div><span>{relation} · {LIFECYCLE_LABELS[group] ?? group}</span></div>
+            const displayLabel = sid === selectedStrategyId
+              ? strategyLabel
+              : strategyEvolutionLabel(entry, securityNames)
+            return <div className={css.dataRow} key={sid}><div><strong>{displayLabel}</strong><small>{relation}</small></div><span>{LIFECYCLE_LABELS[group] ?? group}</span></div>
           })}</div>
           <div className={css.strategyDetailSymbols}>{symbols.map(code => <button type="button" className={css.strategySymbolChip} key={code} onClick={() => { onOpenStock(code) }}>{code}</button>)}</div>
         </article>

@@ -64,7 +64,7 @@ function containsSelectionSurface(
 export function InvestmentComposerContextControls(props: InvestmentComposerContextProps) {
   const route = props.useInvestmentUi(snapshot => snapshot.route)
   if (route === 'analysis' || route === 'assistant') {
-    return <InvestmentPromptTemplateSelect {...props} />
+    return <InvestmentPromptTemplateSelect {...props} appearance="context" visibleWhenClosed />
   }
   if (route !== 'portfolio') return <InvestmentAssistantModuleSelect {...props} />
   return <MyResearchComposerContextControls {...props} />
@@ -85,7 +85,8 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
     [researchChatContext, sessionId],
   )
   const entry = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-  const [open, setOpen] = useState(false)
+  const [openSurface, setOpenSurface] = useState<'template' | 'instrument' | null>(null)
+  const open = openSurface === 'instrument'
   const [query, setQuery] = useState('')
   const [instruments, setInstruments] = useState<ResearchChatInstrument[]>([])
   const [searchBusy, setSearchBusy] = useState(false)
@@ -135,7 +136,7 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
   }, [open, query, requestData, searchNonce])
 
   const closeSelector = useCallback((restoreFocus = false): void => {
-    setOpen(false)
+    setOpenSurface(null)
     setQuery('')
     if (restoreFocus) instrumentTriggerRef.current?.focus()
   }, [])
@@ -249,6 +250,8 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
           {...props}
           appearance="context"
           visibleWhenClosed
+          open={openSurface === 'template'}
+          onOpenChange={(nextOpen) => { setOpenSurface(nextOpen ? 'template' : null) }}
         />
       </div>
       <div className={css.researchContextControl}>
@@ -264,7 +267,7 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
           onClick={() => {
             setQuery('')
             setActiveIndex(0)
-            setOpen(current => !current)
+            setOpenSurface(current => current === 'instrument' ? null : 'instrument')
           }}
         >
           <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">⌖</span>

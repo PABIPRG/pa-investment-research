@@ -117,6 +117,25 @@ describe('investment composer research context controls', () => {
     )
   })
 
+  it('提示词模板和标的选择共享单一弹层状态', async () => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'trading-core.research-chat-context') return { exists: false, context: null }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+    renderReactiveControls(requestData)
+
+    const template = screen.getByRole('button', { name: '提示词模板，当前：普通对话' })
+    const instrument = screen.getByRole<HTMLButtonElement>('button', { name: '标的，当前：未选择' })
+    await waitFor(() => { expect(instrument.disabled).toBe(false) })
+    fireEvent.click(template)
+    expect(screen.getByRole('menu')).toBeTruthy()
+
+    fireEvent.click(instrument)
+
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(screen.getByRole('dialog', { name: '选择投资标的' })).toBeTruthy()
+  })
+
   it('恢复当前会话已确认的标的，但不恢复策略选择入口', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.research-chat-context') {
@@ -287,10 +306,12 @@ describe('investment composer research context controls', () => {
 
     const trigger = screen.getByRole('button', { name: '提示词模板，当前：个股多智能体分析' })
     expect(within(trigger).getByText('个股多智能体分析')).toBeTruthy()
-    expect(trigger.className).toContain('assistantModuleTrigger')
-    expect(trigger.className).not.toContain('researchContextTrigger')
+    expect(trigger.className).toContain('researchContextTrigger')
+    expect(trigger.querySelector('[data-context-control-icon]')).toBeTruthy()
     fireEvent.click(trigger)
-    expect(screen.getByRole('menuitem', { name: '普通对话' })).toBeTruthy()
+    const ordinaryConversation = screen.getByRole('menuitem', { name: '普通对话' })
+    expect(ordinaryConversation).toBeTruthy()
+    expect(ordinaryConversation.closest('[role="menu"]')?.parentElement?.className).toContain('researchContextMenuRoot')
     expect(screen.getByRole('menuitem', { name: '持仓风险分析' })).toBeTruthy()
     fireEvent.click(screen.getByRole('menuitem', { name: '市场简报' }))
     expect(screen.getByRole('button', { name: '提示词模板，当前：市场简报' })).toBeTruthy()

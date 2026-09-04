@@ -39,6 +39,11 @@ describe('投研工作台主题样式', () => {
     expect(styles).toContain('.drawerBackdrop.importBackdrop { position: fixed; z-index: 1000;')
   })
 
+  it('详情和报告使用同一模态层级，由后打开的 Portal 自然置顶', () => {
+    expect(styles).toMatch(/\.detailBackdrop\s*\{[^}]*z-index:\s*1000;/s)
+    expect(styles).toMatch(/\.reportBackdrop\s*\{[^}]*z-index:\s*1000;/s)
+  })
+
   it('让停靠态助理悬浮在业务页上方而不压缩工作台', () => {
     expect(styles).toMatch(/\.assistantPanel\s*\{\s*position:\s*fixed;/)
     expect(styles).not.toMatch(/data-investment-assistant-mode='docked'\]\)\s+\.workbench\s*\{[^}]*right:/)
