@@ -396,10 +396,11 @@ def attribution(
     }
     if not days:
         return {**base, "overall": None, "strategies": []}
-    ov0, ovN = days[0]["overall_nav"], days[-1]["overall_nav"]
-    total_ret = ovN / ov0 - 1 if ov0 > 0 else 0.0
+    ovN = days[-1]["overall_nav"]
+    # 收益率相对初始本金（影子净值天然以 1.0 为本金基准），而非相对首张快照
+    total_ret = ovN - 1.0
     overall = {
-        "start_nav": ov0,
+        "start_nav": 1.0,
         "end_nav": ovN,
         "return_pct": round(total_ret * 100, 2),
         "max_drawdown_pct": (
@@ -423,7 +424,7 @@ def attribution(
     for sid, pts in series.items():
         s = strats.get(sid) or {}
         navs = [p["nav"] for p in pts]
-        s_ret = navs[-1] / navs[0] - 1 if len(navs) >= 2 and navs[0] > 0 else None
+        s_ret = navs[-1] - 1.0 if navs else None
         trades = _closed_trades(store, sid)
         closed = len(trades)
         wins = sum(1 for t in trades if float(t.get("ret_pct") or 0) > 0)
@@ -666,8 +667,9 @@ def _per_strategy_decisions(
             )
             per_strategy.append(entry)
             continue
-        # 3) 降级观察
-        if nav is not None and nav <= settings.evolve_demote_nav and ev.get("state") == "active":
+        # 3) 降级观察（state 缺省视为 active：人工/事件生成经回测激活的策略没有 evolve.state，
+        #    若按 == "active" 判定会永远跳过降级，只在 0.90 才被淘汰，漏掉 0.95 观察线）
+        if nav is not None and nav <= settings.evolve_demote_nav and ev.get("state", "active") == "active":
             reason = (
                 f"影子净值 {nav:.4f} ≤ 观察线 {settings.evolve_demote_nav}，"
                 f"降级为观察（停止推荐、继续跑影子）"

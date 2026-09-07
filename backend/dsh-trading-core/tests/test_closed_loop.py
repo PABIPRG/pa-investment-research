@@ -9,7 +9,7 @@
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -211,6 +211,44 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
 
         event_gen.assert_not_called()
 
+    def test_same_day_runtime_record_skips_rerun(self):
+        """当日已留痕 → 闭环入口全程跳过（防 cron 与补建撞车 / 同日重启重复跑）。"""
+        store = _temp_store()
+        today = datetime.now().strftime("%Y-%m-%d")
+        store.set("evolution_previews", "_closed_loop_runtime", {
+            "recent_run_at": f"{today}T15:36:00+08:00", "status": "completed", "action_count": 0,
+        })
+        with patch("adapter.scheduler.JsonStore", return_value=store), \
+                patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.shadow.ShadowRunner") as shadow, \
+                patch("adapter.evolution.evolve_auto") as evolve_auto, \
+                patch("adapter.push.PusherManager") as pusher:
+            _run_closed_loop_job()
+        shadow.return_value.run.assert_not_called()
+        evolve_auto.assert_not_called()
+        pusher.return_value.push.assert_not_called()
+
+    def test_prior_day_runtime_record_still_runs_and_overwrites(self):
+        """昨日留痕 → 当日照常跑一轮，并刷新 recent_run_at 为今天。"""
+        store = _temp_store()
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        store.set("evolution_previews", "_closed_loop_runtime", {
+            "recent_run_at": f"{yesterday}T15:36:00+08:00", "status": "completed", "action_count": 0,
+        })
+        with patch("adapter.scheduler.JsonStore", return_value=store), \
+                patch("adapter.brief_engine._is_trading_day", return_value=True), \
+                patch("adapter.scheduler._run_event_generation", return_value={"n_events": 0, "candidates": []}), \
+                patch("adapter.shadow.ShadowRunner") as shadow, \
+                patch("adapter.evolution.evolve_auto", return_value={"status": "ready", "count": 0, "actions": []}), \
+                patch("adapter.push.PusherManager") as pusher:
+            shadow.return_value.run.return_value = {"skipped": False, "overall_nav": 1.0, "strategies": {}}
+            pusher.return_value.push.return_value = []
+            _run_closed_loop_job()
+        shadow.return_value.run.assert_called_once()
+        today = datetime.now().strftime("%Y-%m-%d")
+        runtime = store.get("evolution_previews", "_closed_loop_runtime")
+        self.assertEqual(runtime["recent_run_at"][:10], today)
+
 
 class SetupSchedulerGatingTests(unittest.TestCase):
     def test_all_disabled_returns_none(self):
@@ -248,7 +286,7 @@ class SetupSchedulerGatingTests(unittest.TestCase):
             self.assertIsNone(sched.get_job("backtest_patrol_startup_catchup"))
 
     def test_startup_catchup_is_registered_once_after_missed_time(self):
-        now = datetime(2026, 9, 4, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        now = datetime(2030, 1, 4, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
         with patch("adapter.scheduler.settings.closed_loop_enabled", False), \
                 patch("adapter.scheduler.settings.schedule_enabled", False), \
                 patch("adapter.scheduler.settings.shadow_schedule_enabled", False), \
@@ -265,6 +303,31 @@ class SetupSchedulerGatingTests(unittest.TestCase):
         at_time = datetime(2026, 9, 4, 15, 40, tzinfo=ZoneInfo("Asia/Shanghai"))
         self.assertFalse(should_run_startup_backtest_catchup(before, "15:40"))
         self.assertTrue(should_run_startup_backtest_catchup(at_time, "15:40"))
+
+    def test_closed_loop_startup_catchup_registered_after_missed_time(self):
+        now = datetime(2030, 1, 4, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch("adapter.scheduler.settings.closed_loop_enabled", True), \
+                patch("adapter.scheduler.settings.schedule_enabled", False), \
+                patch("adapter.scheduler.settings.shadow_schedule_enabled", False), \
+                patch("adapter.scheduler.settings.auto_retest_enabled", False), \
+                patch("adapter.scheduler.settings.closed_loop_time", "15:35"):
+            sched = setup_scheduler(now=now)
+            self.addCleanup(sched.shutdown if sched else lambda: None)
+            self.assertIsNotNone(sched)
+            jobs = [j for j in sched.get_jobs() if j.id == "closed_loop_startup_catchup"]
+            self.assertEqual(len(jobs), 1)
+
+    def test_closed_loop_no_catchup_before_time(self):
+        now = datetime(2030, 1, 4, 14, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with patch("adapter.scheduler.settings.closed_loop_enabled", True), \
+                patch("adapter.scheduler.settings.schedule_enabled", False), \
+                patch("adapter.scheduler.settings.shadow_schedule_enabled", False), \
+                patch("adapter.scheduler.settings.auto_retest_enabled", False), \
+                patch("adapter.scheduler.settings.closed_loop_time", "15:35"):
+            sched = setup_scheduler(now=now)
+            self.addCleanup(sched.shutdown if sched else lambda: None)
+            self.assertIsNotNone(sched)
+            self.assertIsNone(sched.get_job("closed_loop_startup_catchup"))
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@
 
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,6 +28,9 @@ from .store import JsonStore
 logger = logging.getLogger("adapter.scheduler")
 
 _TIMEZONE = os.getenv("TIMEZONE", "Asia/Shanghai")
+
+# 自进化闭环的单进程锁：防 15:35 cron 与启动补建在同一时刻并发双跑。
+_CLOSED_LOOP_LOCK = threading.Lock()
 
 
 def _run_brief_job(period: str) -> None:
@@ -197,11 +201,9 @@ def _run_event_generation(store: JsonStore) -> dict:
 
 
 def _run_closed_loop_job() -> None:
-    """全自动自进化闭环：拉事件生成候选 → shadow → 自动进化 → 候选回测激活 → 推送。
+    """全自动自进化闭环的调度入口：交易日 gate → 当日单次幂等 → 锁内跑一轮。
 
-    每个交易日跑一次；任一环节异常不拖垮整轮，进度由日志 + 推送日报留痕。
-    候选首测先落持久化 pending，再由后台 runner 执行；任务一旦 completed 即激活，
-    verification_status 只表达验证结论，不作为生命周期开关。not_passed 按产品约定排除复测。
+    每个交易日至多跑一轮；任一环节异常不拖垮整轮，进度由日志 + 推送日报留痕。
     """
     from .brief_engine import _is_trading_day  # lazy
     today = datetime.now().strftime("%Y-%m-%d")
@@ -210,9 +212,30 @@ def _run_closed_loop_job() -> None:
         logger.info("非交易日 %s，跳过自进化闭环", today)
         return
 
+    store = JsonStore()
+    runtime = store.get("evolution_previews", "_closed_loop_runtime") or {}
+    recent_run_at = runtime.get("recent_run_at") or ""
+    if recent_run_at[:10] == today:
+        logger.info("今日 %s 已运行自进化闭环（recent_run_at=%s），跳过", today, recent_run_at)
+        return
+
+    if not _CLOSED_LOOP_LOCK.acquire(False):
+        logger.info("自进化闭环已在运行中，跳过本轮")
+        return
+    try:
+        _run_closed_loop_once(store, today)
+    finally:
+        _CLOSED_LOOP_LOCK.release()
+
+
+def _run_closed_loop_once(store: JsonStore, today: str) -> None:
+    """跑一轮完整闭环：拉事件生成候选 → shadow → 自动进化 → 候选回测激活 → 推送。
+
+    候选首测先落持久化 pending，再由后台 runner 执行；任务一旦 completed 即激活，
+    verification_status 只表达验证结论，不作为生命周期开关。not_passed 按产品约定排除复测。
+    """
     run_at = datetime.now(ZoneInfo(_TIMEZONE)).isoformat(timespec="seconds")
     logger.info("🔁 自进化闭环（%s）…", today)
-    store = JsonStore()
     lines: list[str] = []
     # Step 0：拉事件 → 生成新策略候选（并入闭环，EVENT_GENERATION_ENABLED 控制）
     try:
@@ -336,6 +359,16 @@ def setup_scheduler(*, now: datetime | None = None) -> BackgroundScheduler | Non
             id="closed_loop_daily", replace_existing=True,
         )
         logger.info("🔁 定时自进化闭环已启动: %s:%02d", c_h, c_m)
+        current = now or datetime.now(ZoneInfo(_TIMEZONE))
+        if should_run_startup_backtest_catchup(current, settings.closed_loop_time):
+            run_at = current + timedelta(seconds=1)
+            sched.add_job(
+                _run_closed_loop_job,
+                DateTrigger(run_date=run_at, timezone=ZoneInfo(_TIMEZONE)),
+                id="closed_loop_startup_catchup",
+                replace_existing=True,
+            )
+            logger.info("🔁 已登记错过计划后的自进化闭环补建: %s", run_at.isoformat())
 
     if settings.auto_retest_enabled:
         p_h, p_m = _parse_hhmm(settings.auto_retest_time)

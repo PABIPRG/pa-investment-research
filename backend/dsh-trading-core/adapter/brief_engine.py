@@ -17,6 +17,7 @@ LLM 不可用时降级为确定性模板，保证简报始终可用。
 
 import json
 import logging
+import time
 from datetime import datetime
 
 from .holdings_runner import _bs_hist
@@ -72,21 +73,54 @@ def _to_yi(value) -> float | None:
         return None
 
 
-def _latest_trade_date() -> str:
-    """最近交易日（≤今天）YYYY-MM-DD。"""
+# 新浪全年交易日历缓存：拉取一次即缓存至进程结束（全年列表不变）。
+# 失败重试 1 次；仍失败且无历史缓存则返回空，交由调用方降级，避免静默漏判交易日。
+_TRADE_CAL_CACHE: list[str] = []
+
+
+def _sina_trade_dates() -> list[str]:
+    """拉取新浪全年交易日历（进程内缓存 + 失败重试 1 次）。"""
+    global _TRADE_CAL_CACHE
+    if _TRADE_CAL_CACHE:
+        return _TRADE_CAL_CACHE
     import akshare as ak
 
-    cal = ak.tool_trade_date_hist_sina()
+    for attempt in range(2):
+        try:
+            cal = ak.tool_trade_date_hist_sina()
+            dates = cal["trade_date"].astype(str).tolist()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("交易日历拉取失败（第 %d 次）: %s", attempt + 1, exc)
+            dates = []
+        if dates:
+            _TRADE_CAL_CACHE = dates
+            return dates
+        time.sleep(1)
+    return []
+
+
+def _latest_trade_date() -> str:
+    """最近交易日（≤今天）YYYY-MM-DD。"""
     today = datetime.now().strftime("%Y-%m-%d")
-    dates = [d for d in cal["trade_date"].astype(str).tolist() if d <= today]
+    dates = [d for d in _sina_trade_dates() if d <= today]
     return dates[-1] if dates else today
 
 
 def _is_trading_day(d: str) -> bool:
-    import akshare as ak
-
-    cal = ak.tool_trade_date_hist_sina()
-    return d in set(cal["trade_date"].astype(str))
+    dates = _sina_trade_dates()
+    if dates:
+        return d in set(dates)
+    # 官方日历完全不可用时降级：工作日按交易日处理，避免静默漏掉真实交易日。
+    # 幂等闭环在多跑一轮（假日）与漏跑一轮（真实交易日）之间，优先保住后者。
+    try:
+        weekday = datetime.strptime(d, "%Y-%m-%d").weekday()  # 0=周一 … 5/6=周末
+    except ValueError:
+        return False
+    is_weekend = weekday >= 5
+    logger.warning(
+        "交易日历不可用，降级为工作日启发式判定 %s → %s", d, "周末" if is_weekend else "工作日"
+    )
+    return not is_weekend
 
 
 # ---- 数据原语 -----------------------------------------------------------
