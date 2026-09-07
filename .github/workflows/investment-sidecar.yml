@@ -58,6 +58,11 @@ jobs:
           app_version=$(node -p "require('./package.json').version")
           echo "value=$app_version" >> "$GITHUB_OUTPUT"
 
+      - name: Record commit identity
+        id: commit
+        shell: bash
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Build test application and sidecar (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -95,7 +100,7 @@ jobs:
       - name: Upload downloadable test package
         uses: actions/upload-artifact@v4
         with:
-          name: investment-agent-${{ steps.app_version.outputs.value }}-${{ matrix.target }}
+          name: investment-agent-${{ steps.app_version.outputs.value }}-${{ steps.commit.outputs.short_sha }}-${{ matrix.target }}
           path: frontend/apps/electron/out/make/**
           if-no-files-found: error
           retention-days: 14
