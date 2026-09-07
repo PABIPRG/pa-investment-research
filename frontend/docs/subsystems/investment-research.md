@@ -167,6 +167,86 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 @Remote('request-data') requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>
 
 /**
+ * Read user-visible backup configuration without exposing internal upload paths.
+ * @returns The configured directory and stable backup-format capabilities.
+ */
+@Remote('backup-describe') backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }>
+
+/**
+ * Persist a user-selected backup directory.
+ * @param directory - Absolute directory selected by the local user.
+ * @returns The normalized directory persisted by the Host.
+ */
+@Remote('backup-set-directory') backupSetDirectory(directory: string): Promise<{ directory: string }>
+
+/**
+ * Create a manual or pre-danger backup and return only client-safe metadata.
+ * @param input - Selected data categories and the user-visible backup reason.
+ * @returns The readable filename and validated versioned manifest.
+ */
+@Remote('backup-create') async backupCreate(input: { categories: BackupCategory[]; reason: BackupReason }): Promise<{ filename: string manifest: BackupManifest }>
+
+/**
+ * List direct backup files, including damaged and future-version entries.
+ * @returns Client-safe metadata for each backup in the configured directory.
+ */
+@Remote('backup-list') backupList(): Promise<BackupListItem[]>
+
+/**
+ * Delete one explicit backup after the client has confirmed the operation.
+ * @param filename - Direct child filename returned by the backup list.
+ */
+@Remote('backup-delete') backupDelete(filename: string): Promise<void>
+
+/**
+ * Inspect one immutable source already present in the configured backup directory.
+ * @param filename - Direct child filename returned by the backup list.
+ * @returns A bounded preview with counts, conflicts, and an expiring preview id.
+ */
+@Remote('backup-preview-stored') backupPreviewStored(filename: string): Promise<BackupPreview>
+
+/**
+ * Allocate a bounded temporary-file upload session for an external backup.
+ * @param input - Original filename and exact byte size of the selected archive.
+ * @returns The opaque upload id and required maximum chunk size.
+ */
+@Remote('backup-upload-begin') backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>
+
+/**
+ * Append one ordered Base64 chunk to an upload session.
+ * @param input - Upload id, required byte offset, and bounded Base64 payload.
+ * @returns The total number of raw archive bytes received.
+ */
+@Remote('backup-upload-chunk') backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>
+
+/**
+ * Validate a complete upload and create an editable import preview.
+ * @param id - Opaque upload id allocated by {@link backupUploadBegin}.
+ * @returns A bounded preview with counts, conflicts, and an expiring preview id.
+ */
+@Remote('backup-upload-inspect') backupUploadInspect(id: string): Promise<BackupPreview>
+
+/**
+ * Explicitly release an incomplete upload.
+ * @param id - Opaque upload id allocated by {@link backupUploadBegin}.
+ */
+@Remote('backup-upload-cancel') backupUploadCancel(id: string): Promise<void>
+
+/**
+ * Apply a preview with user-selected conflict rules; the source remains untouched.
+ * @param input - Preview id, conflict rules, and optional safety-backup choice.
+ * @returns The applied status and categories committed across data domains.
+ */
+@Remote('backup-import') backupImport(input: { previewId: string rules: Partial<Record<BackupCategory, BackupConflictRule>> backupBefore: boolean }): Promise<{ status: 'applied'; categories: BackupCategory[] }>
+
+/**
+ * Clear current domain data only; configured and existing backups are never removed.
+ * @param input - Categories to clear and optional safety-backup choice.
+ * @returns The reset status and categories committed across data domains.
+ */
+@Remote('backup-reset') backupReset(input: { categories: BackupCategory[]; backupBefore: boolean }): Promise<{ status: 'reset' categories: BackupCategory[] }>
+
+/**
  * Request the launcher to restart the complete application after the Remote acknowledgement is sent.
  * @returns an accepted result, or an actionable unavailable result when this launcher cannot restart.
  */
@@ -179,5 +259,5 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 invariantSnapshot(): ReturnType<InvestmentBackendManager['invariantSnapshot']>
 ```
 
-Source: [`packages/investment-research/python-runtime/src/index.ts:69`](../../packages/investment-research/python-runtime/src/index.ts)
+Source: [`packages/investment-research/python-runtime/src/index.ts:85`](../../packages/investment-research/python-runtime/src/index.ts)
 <!-- END GENERATED cordis-surface -->

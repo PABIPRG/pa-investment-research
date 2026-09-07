@@ -52,6 +52,7 @@ interface Bench {
   readonly readiness: ReturnType<typeof vi.fn>
   readonly data: ReturnType<typeof vi.fn>
   readonly restart: ReturnType<typeof vi.fn>
+  readonly backup: ReturnType<typeof vi.fn>
   mount(): Promise<Fiber>
 }
 
@@ -119,6 +120,31 @@ async function bench(): Promise<Bench> {
   const restart = vi.fn<() => InvestmentRestartResult>()
     .mockReturnValue({ status: 'accepted' })
   const data = vi.fn().mockReturnValue({ items: [{ code: '600519' }] })
+  const backup = vi.fn((method: string) => {
+    if (method.endsWith('/backup-describe')) return { directory: '/safe/backups', format: 'pabackup', scheduledBackup: false }
+    if (method.endsWith('/backup-set-directory')) return { directory: '/safe/backups' }
+    if (method.endsWith('/backup-create')) return {
+      filename: '投研备份.pabackup',
+      manifest: {
+        format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-07T00:00:00.000Z',
+        createdByAppVersion: '0.1.0-rc.12', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+      },
+    }
+    if (method.endsWith('/backup-list')) return []
+    if (method.endsWith('/backup-upload-begin')) return { id: 'upload', chunkSize: 262144 }
+    if (method.endsWith('/backup-upload-chunk')) return { received: 42 }
+    if (method.endsWith('/backup-preview-stored') || method.endsWith('/backup-upload-inspect')) return {
+      id: 'preview', filename: '投研备份.pabackup',
+      manifest: {
+        format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-07T00:00:00.000Z',
+        createdByAppVersion: '0.1.0-rc.12', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+      },
+      domains: {}, expiresAt: '2026-09-08T00:00:00.000Z',
+    }
+    if (method.endsWith('/backup-import')) return { status: 'applied', categories: ['holdings'] }
+    if (method.endsWith('/backup-reset')) return { status: 'reset', categories: ['holdings'] }
+    return undefined
+  })
   const call = vi.fn<ConnectionHandle['rpc']['call']>(async (_path, method) => {
     if (method === 'investmentPythonRuntime/readiness') {
       return { ok: true, value: structuredClone(readiness()) }
@@ -129,6 +155,9 @@ async function bench(): Promise<Bench> {
     if (method === 'investmentPythonRuntime/request-data') {
       return { ok: true, value: structuredClone(data()) }
     }
+    if (method.startsWith('investmentPythonRuntime/backup-')) {
+      return { ok: true, value: structuredClone(backup(method)) }
+    }
     throw new Error(`unexpected Remote method: ${method}`)
   })
   const runtime = await runtimeBench(call)
@@ -137,6 +166,7 @@ async function bench(): Promise<Bench> {
     readiness,
     data,
     restart,
+    backup,
   }
 }
 
@@ -166,6 +196,18 @@ describe('investment research Runtime Client facade', () => {
 
     expect(b.ctx.get('investmentResearchRuntimeClient')).toBeDefined()
     expect(b.ctx.typert.remotes.list().map(entry => entry.id)).toEqual([
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-create',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-delete',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-describe',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-import',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-list',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-preview-stored',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-reset',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-set-directory',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-upload-begin',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-upload-cancel',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-upload-chunk',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-upload-inspect',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/readiness',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/request-data',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/request-restart',
@@ -178,6 +220,18 @@ describe('investment research Runtime Client facade', () => {
     const facade = b.ctx.investmentResearchRuntimeClient
 
     expect(Object.keys(facade).sort()).toEqual([
+      'backupCreate',
+      'backupDelete',
+      'backupDescribe',
+      'backupImport',
+      'backupList',
+      'backupPreviewStored',
+      'backupReset',
+      'backupSetDirectory',
+      'backupUploadBegin',
+      'backupUploadCancel',
+      'backupUploadChunk',
+      'backupUploadInspect',
       'getSnapshot',
       'refresh',
       'requestData',
@@ -190,6 +244,27 @@ describe('investment research Runtime Client facade', () => {
       .resolves.toEqual({ items: [{ code: '600519' }] })
     expect(b.restart).toHaveBeenCalledOnce()
     expect(b.data).toHaveBeenCalledOnce()
+  })
+
+  it('forwards the complete backup lifecycle through the narrow client facade', async () => {
+    const b = await bench()
+    await b.mount()
+    const facade = b.ctx.investmentResearchRuntimeClient
+
+    await facade.backupDescribe()
+    await facade.backupSetDirectory('/safe/backups')
+    await facade.backupCreate({ categories: ['holdings'], reason: 'manual' })
+    await facade.backupList()
+    await facade.backupPreviewStored('投研备份.pabackup')
+    await facade.backupUploadBegin({ filename: '外部.pabackup', size: 42 })
+    await facade.backupUploadChunk({ id: 'upload', offset: 0, base64: 'UEs=' })
+    await facade.backupUploadInspect('upload')
+    await facade.backupUploadCancel('upload')
+    await facade.backupImport({ previewId: 'preview', rules: { holdings: 'keep_local' }, backupBefore: true })
+    await facade.backupReset({ categories: ['holdings'], backupBefore: true })
+    await facade.backupDelete('投研备份.pabackup')
+
+    expect(b.backup).toHaveBeenCalledTimes(12)
   })
 
   it('loads on first subscription and refreshes only for the DeepSeek credential and reconnects', async () => {

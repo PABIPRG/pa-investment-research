@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   createSnapshotStore, type SessionId, type SessionListState,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
+import type { BackupCategory, BackupListItem, BackupPreview } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
 import type {
   InvestmentReadinessSectionInjected, ProjectModelSettings,
@@ -109,6 +110,10 @@ function mount(
     locale?: 'zh' | 'en'
     loadProjectModels?: () => Promise<ProjectModelSettings>
     saveProjectModel?: InvestmentReadinessSectionInjected['saveProjectModel']
+    backupList?: () => Promise<BackupListItem[]>
+    backupPreviewStored?: (filename: string) => Promise<BackupPreview>
+    backupReset?: InvestmentReadinessSectionInjected['backupReset']
+    pickBackupDirectory?: () => Promise<string | null>
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
@@ -123,10 +128,29 @@ function mount(
   const refresh = vi.fn(overrides.refresh ?? (() => Promise.resolve()))
   const downloadSession = vi.fn(overrides.downloadSession ?? (() => Promise.resolve()))
   const loadProjectModels = vi.fn(overrides.loadProjectModels ?? (() => Promise.resolve(PROJECT_MODELS)))
-  const saveProjectModel = vi.fn(overrides.saveProjectModel ?? ((selection) => Promise.resolve({
+  const saveProjectModel = vi.fn(overrides.saveProjectModel ?? (selection => Promise.resolve({
     ...PROJECT_MODELS, current: selection, revision: PROJECT_MODELS.revision + 1,
   })))
   const dictionary = overrides.locale === 'en' ? en : zh
+  const backup = {
+    backupDescribe: vi.fn(async () => ({ directory: '/Users/example/投研备份', format: 'pabackup' as const, scheduledBackup: false as const })),
+    backupSetDirectory: vi.fn(async (directory: string) => ({ directory })),
+    backupCreate: vi.fn(async () => ({
+      filename: '投研备份-全量数据-2026-09-07_14-35-20.pabackup',
+      manifest: { format: 'pa-investment-backup' as const, formatVersion: 1 as const, createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12', reason: 'manual' as const, scope: ['strategies', 'holdings', 'watchlist', 'research', 'preferences'] as BackupCategory[], contents: [], domains: [] },
+    })),
+    backupList: vi.fn(overrides.backupList ?? (async () => [])),
+    backupDelete: vi.fn(async () => {}),
+    backupPreviewStored: vi.fn(overrides.backupPreviewStored),
+    backupUploadBegin: vi.fn(),
+    backupUploadChunk: vi.fn(),
+    backupUploadInspect: vi.fn(),
+    backupUploadCancel: vi.fn(async () => {}),
+    backupImport: vi.fn(),
+    backupReset: vi.fn(overrides.backupReset ?? (async (input: { categories: BackupCategory[] }) => ({ status: 'reset' as const, categories: input.categories }))),
+    pickBackupDirectory: vi.fn(overrides.pickBackupDirectory ?? (async () => null)),
+    openBackupDirectory: vi.fn(async () => {}),
+  }
   const unusedHook = (() => { throw new Error('unused standing hook') }) as never
   const view = render(<InvestmentReadinessSection
     close={() => {}}
@@ -142,6 +166,7 @@ function mount(
     refresh={refresh}
     loadProjectModels={loadProjectModels}
     saveProjectModel={saveProjectModel}
+    {...backup}
     t={key => dictionary[key as InvestmentReadinessKey]}
   />)
   return {
@@ -155,6 +180,7 @@ function mount(
     refresh,
     loadProjectModels,
     saveProjectModel,
+    backup,
   }
 }
 
@@ -163,23 +189,24 @@ describe('InvestmentReadinessSection', () => {
     const chinese = mount(CONFIGURED)
 
     expect(screen.getByRole('heading', { name: '数据与备份' })).toBeTruthy()
-    expect(screen.getByText('已发送的对话与附件会自动保存在运行本应用的设备上。')).toBeTruthy()
+    expect(screen.getByText('创建可迁移的投研备份，或将其他电脑的数据增量导入当前状态。')).toBeTruthy()
+    expect(screen.getByText('导入不会移动、改名或删除这里的备份。')).toBeTruthy()
     expect(screen.getByText('导出内容仅包含当前对话、关联对话与附件。')).toBeTruthy()
     expect(chinese.container.textContent).not.toContain('工作区')
-    expect(chinese.container.textContent).not.toContain('存储位置')
+    expect(chinese.container.textContent).not.toContain('定时备份')
     expect(await screen.findByRole('combobox', { name: '默认主模型' })).toBeTruthy()
     chinese.unmount()
 
     const english = mount(CONFIGURED, { locale: 'en' })
     expect(screen.getByRole('heading', { name: 'Data & backup' })).toBeTruthy()
     expect(screen.getByText(
-      'Sent conversations and attachments are automatically saved on the device running this app.',
+      'Create a portable investment backup or merge data from another computer into the current state.',
     )).toBeTruthy()
     expect(screen.getByText(
       'The export contains only the current conversation, related conversations, and attachments.',
     )).toBeTruthy()
     expect(english.container.textContent?.toLowerCase()).not.toContain('workspace')
-    expect(english.container.textContent?.toLowerCase()).not.toContain('storage location')
+    expect(english.container.textContent?.toLowerCase()).not.toContain('scheduled backup')
   })
 
   it('shows the project default model, explains module routing, and persists a new default', async () => {
@@ -234,6 +261,112 @@ describe('InvestmentReadinessSection', () => {
     expect(downloadSession).not.toHaveBeenCalled()
   })
 
+  it('opens a working backup flow and creates all selected categories', async () => {
+    const { backup } = mount(CONFIGURED)
+
+    fireEvent.click(screen.getByRole('button', { name: '创建备份' }))
+    const dialog = screen.getByRole('dialog', { name: '创建投研备份' })
+    expect(dialog).toBeTruthy()
+    expect(screen.getAllByRole('checkbox')).toHaveLength(5)
+    fireEvent.click(within(dialog).getByRole('button', { name: '创建备份' }))
+
+    await waitFor(() => {
+      expect(backup.backupCreate).toHaveBeenCalledWith({
+        categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences'],
+        reason: 'manual',
+      })
+    })
+    expect(await screen.findByText(/投研备份-全量数据-2026-09-07_14-35-20\.pabackup/)).toBeTruthy()
+  })
+
+  it('imports from the backup list with editable rules and optional pre-import backup', async () => {
+    const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
+    const manifest = {
+      format: 'pa-investment-backup' as const, formatVersion: 1 as const,
+      createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12',
+      reason: 'manual' as const, scope: ['holdings'] as BackupCategory[],
+      contents: [{ category: 'holdings' as const, count: 1 }], domains: [],
+    }
+    const preview: BackupPreview = {
+      id: 'preview-1', filename, manifest, expiresAt: '2026-09-08T06:35:20.000Z',
+      domains: { 'trading-core': { currentRevision: 'local', categories: { holdings: { added: 1, conflicts: 1, defaultRule: 'keep_local' } } } },
+    }
+    const { backup } = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 2048, modifiedAt: manifest.createdAt, status: 'ready', manifest }],
+      backupPreviewStored: async () => preview,
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+
+    expect(await screen.findByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
+    expect(screen.getByText('导入只更新当前状态，不会修改、移动或删除来源备份。')).toBeTruthy()
+    const rule = screen.getByRole<HTMLSelectElement>('combobox', { name: /持仓/ })
+    expect(within(rule).getAllByRole('option').map(option => option.textContent)).toEqual(['保留本地', '使用导入数据'])
+    fireEvent.change(rule, { target: { value: 'use_import' } })
+    const safety = screen.getByRole('checkbox', { name: /导入前备份当前数据/ }) as HTMLInputElement
+    expect(safety.checked).toBe(true)
+    fireEvent.click(safety)
+    expect(screen.getByText(/已取消安全备份/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+    await waitFor(() => {
+      expect(backup.backupImport).toHaveBeenCalledWith({
+        previewId: 'preview-1', rules: { holdings: 'use_import' }, backupBefore: false,
+      })
+    })
+  })
+
+  it('closes a non-busy backup dialog with Escape and restores focus', async () => {
+    const parentEscapeHandler = vi.fn()
+    document.addEventListener('keydown', parentEscapeHandler)
+    try {
+      mount(CONFIGURED)
+      const trigger = screen.getByRole('button', { name: '创建备份' })
+      trigger.focus()
+      fireEvent.click(trigger)
+
+      expect(screen.getByRole('dialog', { name: '创建投研备份' })).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '取消' }))
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog', { name: '创建投研备份' })).toBeNull()
+      })
+      expect(parentEscapeHandler).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(trigger)
+    } finally {
+      document.removeEventListener('keydown', parentEscapeHandler)
+    }
+  })
+
+  it('focuses the safe dialog action without scrolling long modal content', () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      mount(CONFIGURED)
+      fireEvent.click(screen.getByRole('button', { name: '选择要清空的数据' }))
+
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '取消' }))
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+    } finally {
+      focus.mockRestore()
+    }
+  })
+
+  it('makes reset explicit, defaults its safety backup on, and explains that backups remain', async () => {
+    const { backup } = mount(CONFIGURED)
+    fireEvent.click(screen.getByRole('button', { name: '选择要清空的数据' }))
+
+    expect(screen.getByRole('dialog', { name: '清空本地投研数据' })).toBeTruthy()
+    expect(screen.getByText('已有备份不会被删除，之后仍可从备份列表重新导入。')).toBeTruthy()
+    const safety = screen.getByRole('checkbox', { name: /清空前备份当前数据/ }) as HTMLInputElement
+    expect(safety.checked).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '清空所选数据' }))
+    await waitFor(() => {
+      expect(backup.backupReset).toHaveBeenCalledWith({
+        categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences'], backupBefore: true,
+      })
+    })
+  })
+
   it('shows source-owned keyless readiness and routes the only credential action to Models', () => {
     const { container, openSection, requestRestart, refresh } = mount(MISSING)
 
@@ -249,7 +382,7 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.getByText('基础模板可用')).toBeTruthy()
     expect(screen.getByText('DeepSeek 增强')).toBeTruthy()
     expect(screen.getAllByText('DeepSeek API Key 未配置')).toHaveLength(2)
-    expect(container.querySelector('input')).toBeNull()
+    expect(container.querySelector('input:not([type="file"])')).toBeNull()
     expect(container.textContent).not.toContain('sk-dsh-secret-canary')
     expect(requestRestart).not.toHaveBeenCalled()
     expect(refresh).not.toHaveBeenCalled()

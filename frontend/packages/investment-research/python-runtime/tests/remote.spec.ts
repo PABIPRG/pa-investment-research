@@ -51,6 +51,18 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(remoteMethods(runtime)).toEqual([
       { method: 'readiness', invocation: { kind: 'direct' } },
       { method: 'requestData', exportName: 'request-data', invocation: { kind: 'direct' } },
+      { method: 'backupDescribe', exportName: 'backup-describe', invocation: { kind: 'direct' } },
+      { method: 'backupSetDirectory', exportName: 'backup-set-directory', invocation: { kind: 'direct' } },
+      { method: 'backupCreate', exportName: 'backup-create', invocation: { kind: 'direct' } },
+      { method: 'backupList', exportName: 'backup-list', invocation: { kind: 'direct' } },
+      { method: 'backupDelete', exportName: 'backup-delete', invocation: { kind: 'direct' } },
+      { method: 'backupPreviewStored', exportName: 'backup-preview-stored', invocation: { kind: 'direct' } },
+      { method: 'backupUploadBegin', exportName: 'backup-upload-begin', invocation: { kind: 'direct' } },
+      { method: 'backupUploadChunk', exportName: 'backup-upload-chunk', invocation: { kind: 'direct' } },
+      { method: 'backupUploadInspect', exportName: 'backup-upload-inspect', invocation: { kind: 'direct' } },
+      { method: 'backupUploadCancel', exportName: 'backup-upload-cancel', invocation: { kind: 'direct' } },
+      { method: 'backupImport', exportName: 'backup-import', invocation: { kind: 'direct' } },
+      { method: 'backupReset', exportName: 'backup-reset', invocation: { kind: 'direct' } },
       { method: 'requestRestart', exportName: 'request-restart', invocation: { kind: 'direct' } },
     ])
   })

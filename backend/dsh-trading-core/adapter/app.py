@@ -23,6 +23,7 @@ from . import kyc as kyc_mod
 from .analyzer import TaskManager
 from .backtest_engine import compute_summary
 from .decision_recorder import load_evaluated_results
+from .data_transfer import recover_incomplete_transactions, register_data_transfer_routes
 from .report_store import ReportStore, ReportValidationError
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
@@ -144,6 +145,7 @@ async def lifespan(app: FastAPI):
     from .strategies import reconcile_completed_backtests
 
     recovery_store = JsonStore()
+    recover_incomplete_transactions(recovery_store)
     recovered = bt.recover_tasks(recovery_store)
     shadow_recovered = shadow_task_ledger.recover_tasks(recovery_store)
     reconciled = reconcile_completed_backtests(recovery_store)
@@ -202,6 +204,7 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     app = FastAPI(title="TradingAgents Adapter", version="0.1.0", lifespan=lifespan)
     app.state.manager = manager
+    register_data_transfer_routes(app)
 
     # dsh 插件（Node/TS）跨进程调用，放开跨域
     app.add_middleware(

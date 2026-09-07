@@ -6,6 +6,7 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import { DataBackupSection, type DataBackupSectionProps } from './DataBackupSection.tsx'
 import type {
   createInvestmentReadinessStore,
   InvestmentReadinessSnapshot,
@@ -16,7 +17,10 @@ import type { InvestmentReadinessKey } from './locales.ts'
 import css from './InvestmentReadinessSection.module.css'
 
 /** Registration-side facade narrowed to the facts and actions this page consumes. */
-export interface InvestmentReadinessSectionInjected {
+export interface InvestmentReadinessSectionInjected extends Omit<
+  DataBackupSectionProps,
+  't' | 'currentSession' | 'useSessionLogDownload'
+> {
   hooks: {
     /** Secret-free Host readiness snapshot bound by the renderer. */
     investmentReadiness: HostObservable<InvestmentReadinessSnapshot>
@@ -163,15 +167,11 @@ function projectModelOption(
 export function InvestmentReadinessSection(props: InvestmentReadinessSectionProps): ReactNode {
   const snapshot = props.useInvestmentReadiness(value => value)
   const currentSession = props.useSessions(value => value.current)
-  const downloadStatus = props.useSessionLogDownload(value => currentSession === undefined
-    ? undefined
-    : value.bySession[String(currentSession)]?.status)
   const interaction = props.useStore(value => value)
   const [projectModels, setProjectModels] = useState<ProjectModelSettings>()
   const [projectModelsError, setProjectModelsError] = useState('')
   const [projectModelsBusy, setProjectModelsBusy] = useState(false)
   const restart = interaction.restart
-  const downloadBusy = downloadStatus === 'downloading'
   const needsModels = snapshot.backends.some(backend => backend.capability?.llm !== 'none'
     && (credentialOf(backend)?.status ?? 'missing') === 'missing')
   const needsRestart = snapshot.backends.some(backend => backend.restartRequired
@@ -233,31 +233,7 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
 
   return (
     <section className={css.section}>
-      <section className={css.dataBackup} aria-labelledby="investment-research-data-backup-title">
-        <div className={css.dataBackupCopy}>
-          <h2 id="investment-research-data-backup-title">{props.t('dataBackupTitle')}</h2>
-          <p>{props.t('dataBackupIntro')}</p>
-        </div>
-        <div className={css.dataBackupAction}>
-          <button
-            type="button"
-            className={css.primaryButton}
-            disabled={currentSession === undefined || downloadBusy}
-            aria-busy={downloadBusy}
-            aria-describedby="investment-research-export-scope"
-            onClick={currentSession === undefined
-              ? undefined
-              : () => { void props.downloadSession(currentSession) }}
-          >
-            {props.t(downloadBusy ? 'exportingCurrentConversation' : 'exportCurrentConversation')}
-          </button>
-          <p id="investment-research-export-scope">
-            {props.t(currentSession === undefined
-              ? 'exportNoCurrentConversation'
-              : 'exportCurrentConversationScope')}
-          </p>
-        </div>
-      </section>
+      <DataBackupSection {...props} currentSession={currentSession} useSessionLogDownload={props.useSessionLogDownload} />
 
       <section className={css.modelRouting} aria-labelledby="investment-project-model-title">
         <div className={css.modelRoutingHeading}>

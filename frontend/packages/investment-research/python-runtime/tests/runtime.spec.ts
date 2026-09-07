@@ -677,6 +677,36 @@ describe('InvestmentBackendManager', () => {
     await lease.release()
   })
 
+  it('injects the Host-only data-transfer token and coordinator path into owned children', async () => {
+    const current = await harness([refused, healthy])
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home, healthPollMs: 1 },
+      checkHealth: async () => current.specs.length === 0 ? refused : healthy,
+      resolvePaths: () => ({
+        source: 'source',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'env', 'bin', 'python'),
+      }),
+      executableExists: async () => true,
+      sleep: async () => {},
+      dataTransferEnvironment: {
+        DSH_DATA_TRANSFER_TOKEN: 'host-only-token',
+        DSH_DATA_TRANSFER_COORDINATOR_DIR: join(current.home, 'transactions'),
+      },
+    })
+    manager.register(definition)
+
+    const lease = await manager.acquire('trading-core')
+
+    expect(current.specs[0]?.env).toMatchObject({
+      DSH_DATA_TRANSFER_TOKEN: 'host-only-token',
+      DSH_DATA_TRANSFER_COORDINATOR_DIR: join(current.home, 'transactions'),
+    })
+    current.handle.exit()
+    await lease.release()
+  })
+
   it('adds only verified bundled import and writable state roots to an owned child', async () => {
     const current = await harness()
     let probes = 0
@@ -708,7 +738,13 @@ describe('InvestmentBackendManager', () => {
     await lease.release()
   })
 
-  it.each(['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR', 'PYTHONDONTWRITEBYTECODE'])('reserves the bundled Runtime environment key %s', async (key) => {
+  it.each([
+    'PYTHONPATH',
+    'DSH_INVESTMENT_STATE_DIR',
+    'PYTHONDONTWRITEBYTECODE',
+    'DSH_DATA_TRANSFER_TOKEN',
+    'DSH_DATA_TRANSFER_COORDINATOR_DIR',
+  ])('reserves the bundled Runtime environment key %s', async (key) => {
     const { manager } = await harness()
     expect(() => manager.register({ ...definition, managedEnv: { [key]: 'override' } })).toThrow(/reserved/)
     expect(() => manager.register({

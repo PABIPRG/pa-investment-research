@@ -1,5 +1,18 @@
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 
+export type {
+  BackupCategory,
+  BackupManifest,
+  BackupManifestDomain,
+  BackupReason,
+  DomainSnapshot,
+} from './backup-archive.ts'
+export type {
+  BackupConflictRule,
+  BackupListItem,
+  BackupPreview,
+} from './backup-service.ts'
+
 /** Stable investment Python backend identifiers. */
 export type InvestmentBackendId = 'trading-core' | 'market-watch' | 'industry-chain'
 
