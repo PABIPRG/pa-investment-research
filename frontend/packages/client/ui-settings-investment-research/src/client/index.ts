@@ -26,7 +26,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 const NS = 'settings.investmentResearch'
 
 /** Required services for the investment readiness Settings contribution. */
-export const inject = ['slots', 'locale', 'connection', 'investmentResearchRuntimeClient', 'sessionLogDownload']
+export const inject = ['slots', 'locale', 'connection', 'investmentResearchRuntimeClient', 'sessionLogDownload', 'workspaces']
 
 const DEFAULT_MODEL_NAMESPACE = 'agent-default-model'
 
@@ -102,6 +102,20 @@ export function apply(ctx: ClientContext): void {
     downloadSession: sessionId => ctx.sessionLogDownload.download(sessionId),
     refresh: () => runtime.refresh(),
     requestRestart: () => runtime.requestRestart(),
+    backupDescribe: () => runtime.backupDescribe(),
+    backupSetDirectory: directory => runtime.backupSetDirectory(directory),
+    backupCreate: input => runtime.backupCreate(input),
+    backupList: () => runtime.backupList(),
+    backupDelete: filename => runtime.backupDelete(filename),
+    backupPreviewStored: filename => runtime.backupPreviewStored(filename),
+    backupUploadBegin: input => runtime.backupUploadBegin(input),
+    backupUploadChunk: input => runtime.backupUploadChunk(input),
+    backupUploadInspect: id => runtime.backupUploadInspect(id),
+    backupUploadCancel: id => runtime.backupUploadCancel(id),
+    backupImport: input => runtime.backupImport(input),
+    backupReset: input => runtime.backupReset(input),
+    pickBackupDirectory: () => ctx.workspaces.pickDirectory(),
+    openBackupDirectory: path => ctx.workspaces.openPath(path),
     loadProjectModels: () => loadProjectModels(connection.api),
     saveProjectModel: (selection, revision) => saveProjectModel(connection.api, selection, revision),
   })

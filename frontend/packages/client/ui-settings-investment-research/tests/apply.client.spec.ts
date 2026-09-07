@@ -21,14 +21,21 @@ async function bench() {
     subscribe: vi.fn(() => () => {}),
     refresh: vi.fn(() => Promise.resolve()),
     requestRestart: vi.fn(() => Promise.resolve({ status: 'accepted' as const })),
+    backupDescribe: vi.fn(async () => ({ directory: '/backups', format: 'pabackup' as const, scheduledBackup: false as const })),
+    backupSetDirectory: vi.fn(async (directory: string) => ({ directory })),
+    backupCreate: vi.fn(), backupList: vi.fn(async () => []), backupDelete: vi.fn(), backupPreviewStored: vi.fn(),
+    backupUploadBegin: vi.fn(), backupUploadChunk: vi.fn(), backupUploadInspect: vi.fn(), backupUploadCancel: vi.fn(),
+    backupImport: vi.fn(), backupReset: vi.fn(),
   }
   ctx.provide('investmentResearchRuntimeClient', facade)
+  const workspaces = { pickDirectory: vi.fn(async () => null), openPath: vi.fn(async () => {}) }
+  ctx.provide('workspaces', workspaces as never)
   const sessionLogDownload = {
     store: createSnapshotStore<SessionLogDownloadState>({ bySession: {} }),
     download: vi.fn(() => Promise.resolve()),
   }
   ctx.provide('sessionLogDownload', sessionLogDownload as never)
-  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, facade, sessionLogDownload }
+  return { ctx, slots: ctx.get('slots') as SlotRegistry, locale, facade, sessionLogDownload, workspaces }
 }
 
 function declare(slots: SlotRegistry): () => void {
@@ -39,9 +46,9 @@ function declare(slots: SlotRegistry): () => void {
 }
 
 describe('ui-settings-investment-research apply', () => {
-  it('declares only its five required services', () => {
+  it('declares only its required services', () => {
     expect(inject).toEqual([
-      'slots', 'locale', 'connection', 'investmentResearchRuntimeClient', 'sessionLogDownload',
+      'slots', 'locale', 'connection', 'investmentResearchRuntimeClient', 'sessionLogDownload', 'workspaces',
     ])
   })
 

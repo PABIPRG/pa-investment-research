@@ -3,6 +3,7 @@
 
 import tempfile
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,6 +13,29 @@ from market_watch.store import JsonStore, JsonStoreCorruptionError
 
 
 class JsonStoreTests(unittest.TestCase):
+    def test_transaction_blocks_other_instances_until_batch_finishes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner = JsonStore(root)
+            contender = JsonStore(root)
+            started = threading.Event()
+            finished = threading.Event()
+
+            def write() -> None:
+                started.set()
+                contender.set("watchlist", "default", [{"code": "600519"}])
+                finished.set()
+
+            with owner.transaction():
+                thread = threading.Thread(target=write)
+                thread.start()
+                self.assertTrue(started.wait(timeout=1))
+                time.sleep(0.02)
+                self.assertFalse(finished.is_set())
+
+            thread.join(timeout=1)
+            self.assertTrue(finished.is_set())
+
     def test_instances_share_one_lock_for_the_same_normalized_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

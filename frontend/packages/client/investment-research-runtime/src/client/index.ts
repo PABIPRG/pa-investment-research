@@ -8,6 +8,12 @@ import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import investmentRuntimeRemote from '@deepseek-ai/dsh-investment-python-runtime/remote'
 import type {
+  BackupCategory,
+  BackupConflictRule,
+  BackupListItem,
+  BackupManifest,
+  BackupPreview,
+  BackupReason,
   InvestmentDataRequest,
   InvestmentJsonValue,
   InvestmentReadinessSnapshot,
@@ -16,6 +22,14 @@ import type {
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
 export type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-investment-python-runtime/types'
+export type {
+  BackupCategory,
+  BackupConflictRule,
+  BackupListItem,
+  BackupManifest,
+  BackupPreview,
+  BackupReason,
+} from '@deepseek-ai/dsh-investment-python-runtime/types'
 
 const DEEPSEEK_CREDENTIAL_REF = 'DEEPSEEK_API_KEY'
 const EMPTY_SNAPSHOT: InvestmentReadinessSnapshot = Object.freeze({
@@ -49,6 +63,28 @@ export interface InvestmentResearchRuntimeClient {
    * @returns the launcher-safe acknowledgement.
    */
   requestRestart(): Promise<InvestmentRestartResult>
+  backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }>
+  backupSetDirectory(directory: string): Promise<{ directory: string }>
+  backupCreate(input: { categories: BackupCategory[]; reason: BackupReason }): Promise<{
+    filename: string
+    manifest: BackupManifest
+  }>
+  backupList(): Promise<BackupListItem[]>
+  backupDelete(filename: string): Promise<void>
+  backupPreviewStored(filename: string): Promise<BackupPreview>
+  backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>
+  backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>
+  backupUploadInspect(id: string): Promise<BackupPreview>
+  backupUploadCancel(id: string): Promise<void>
+  backupImport(input: {
+    previewId: string
+    rules: Partial<Record<BackupCategory, BackupConflictRule>>
+    backupBefore: boolean
+  }): Promise<{ status: 'applied'; categories: BackupCategory[] }>
+  backupReset(input: { categories: BackupCategory[]; backupBefore: boolean }): Promise<{
+    status: 'reset'
+    categories: BackupCategory[]
+  }>
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -137,6 +173,76 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     return unwrapRemote(await this.remote['request-data'](request), 'request-data')
   }
 
+  async backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-describe'](), 'backup-describe')
+  }
+
+  async backupSetDirectory(directory: string): Promise<{ directory: string }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-set-directory'](directory), 'backup-set-directory')
+  }
+
+  async backupCreate(input: { categories: BackupCategory[]; reason: BackupReason }): Promise<{
+    filename: string
+    manifest: BackupManifest
+  }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-create'](input), 'backup-create')
+  }
+
+  async backupList(): Promise<BackupListItem[]> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-list'](), 'backup-list')
+  }
+
+  async backupDelete(filename: string): Promise<void> {
+    this.assertActive()
+    unwrapRemote(await this.remote['backup-delete'](filename), 'backup-delete')
+  }
+
+  async backupPreviewStored(filename: string): Promise<BackupPreview> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-preview-stored'](filename), 'backup-preview-stored')
+  }
+
+  async backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-upload-begin'](input), 'backup-upload-begin')
+  }
+
+  async backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-upload-chunk'](input), 'backup-upload-chunk')
+  }
+
+  async backupUploadInspect(id: string): Promise<BackupPreview> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-upload-inspect'](id), 'backup-upload-inspect')
+  }
+
+  async backupUploadCancel(id: string): Promise<void> {
+    this.assertActive()
+    unwrapRemote(await this.remote['backup-upload-cancel'](id), 'backup-upload-cancel')
+  }
+
+  async backupImport(input: {
+    previewId: string
+    rules: Partial<Record<BackupCategory, BackupConflictRule>>
+    backupBefore: boolean
+  }): Promise<{ status: 'applied'; categories: BackupCategory[] }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-import'](input), 'backup-import')
+  }
+
+  async backupReset(input: { categories: BackupCategory[]; backupBefore: boolean }): Promise<{
+    status: 'reset'
+    categories: BackupCategory[]
+  }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-reset'](input), 'backup-reset')
+  }
+
   refreshInBackground(reason: string): void {
     const flight = this.startRefresh()
     if (flight !== undefined) this.observeBackground(flight.promise, reason)
@@ -148,6 +254,10 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     this.listeners.clear()
   }
 
+  private assertActive(): void {
+    if (this.disposed) throw new Error('investment Runtime Client facade is disposed')
+  }
+
   /**
    * Publish only the facade contract, keeping the mounted Remote and lifecycle
    * state private to this controller.
@@ -155,6 +265,22 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
    */
   publicFace(): InvestmentResearchRuntimeClient {
     return Object.freeze({
+      backupCreate: (input: { categories: BackupCategory[]; reason: BackupReason }) => this.backupCreate(input),
+      backupDelete: (filename: string) => this.backupDelete(filename),
+      backupDescribe: () => this.backupDescribe(),
+      backupImport: (input: {
+        previewId: string
+        rules: Partial<Record<BackupCategory, BackupConflictRule>>
+        backupBefore: boolean
+      }) => this.backupImport(input),
+      backupList: () => this.backupList(),
+      backupPreviewStored: (filename: string) => this.backupPreviewStored(filename),
+      backupReset: (input: { categories: BackupCategory[]; backupBefore: boolean }) => this.backupReset(input),
+      backupSetDirectory: (directory: string) => this.backupSetDirectory(directory),
+      backupUploadBegin: (input: { filename: string; size: number }) => this.backupUploadBegin(input),
+      backupUploadCancel: (id: string) => this.backupUploadCancel(id),
+      backupUploadChunk: (input: { id: string; offset: number; base64: string }) => this.backupUploadChunk(input),
+      backupUploadInspect: (id: string) => this.backupUploadInspect(id),
       getSnapshot: this.getSnapshot,
       subscribe: this.subscribe,
       refresh: () => this.refresh(),

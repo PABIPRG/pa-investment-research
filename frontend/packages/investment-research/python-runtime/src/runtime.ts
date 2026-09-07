@@ -73,7 +73,13 @@ type EnvironmentKeyNormalizer = (key: string) => string
 type LogPathResolver = (dshHome: string, id: InvestmentBackendId) => BackendLogPaths
 
 const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-const BUNDLED_ENVIRONMENT_KEYS = ['PYTHONPATH', 'DSH_INVESTMENT_STATE_DIR', 'PYTHONDONTWRITEBYTECODE'] as const
+const BUNDLED_ENVIRONMENT_KEYS = [
+  'PYTHONPATH',
+  'DSH_INVESTMENT_STATE_DIR',
+  'PYTHONDONTWRITEBYTECODE',
+  'DSH_DATA_TRANSFER_TOKEN',
+  'DSH_DATA_TRANSFER_COORDINATOR_DIR',
+] as const
 
 interface StartupFlight {
   controller: AbortController
@@ -141,6 +147,8 @@ export interface InvestmentBackendManagerOptions {
   readonly executableExists?: (path: string) => Promise<boolean>
   readonly sleep?: (ms: number) => Promise<void>
   readonly now?: () => number
+  /** Host-owned secrets and recovery paths reserved for the data-transfer control plane. */
+  readonly dataTransferEnvironment?: Readonly<Record<string, string>>
 }
 
 function sameDefinition(left: PythonBackendDefinition, right: PythonBackendDefinition): boolean {
@@ -268,6 +276,7 @@ export class InvestmentBackendManager {
   private readonly describeCredential: CredentialDescriber | undefined
   private readonly resolveLogPaths: LogPathResolver
   private readonly normalizeEnvironmentKey: EnvironmentKeyNormalizer
+  private readonly dataTransferEnvironment: Readonly<Record<string, string>> | undefined
   private readonly readinessTracker = new InvestmentReadinessTracker()
   private readonly credentialGenerations = new Map<CredentialRef, number>()
   private readonly startupCredentialGenerations = new WeakMap<ActiveEntry, readonly CredentialGenerationCapture[]>()
@@ -287,6 +296,7 @@ export class InvestmentBackendManager {
     this.describeCredential = options.describeCredential
     this.resolveLogPaths = options.resolveLogPaths ?? backendLogPaths
     this.normalizeEnvironmentKey = options.normalizeEnvironmentKey ?? defaultNormalizeEnvironmentKey
+    this.dataTransferEnvironment = options.dataTransferEnvironment
     this.internals = {
       executableExists: options.executableExists ?? executableExists,
       sleep: options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms))),
@@ -692,12 +702,15 @@ export class InvestmentBackendManager {
         PYTHONDONTWRITEBYTECODE: '1',
       }
       : undefined
-    const spawnEnv = definition.managedEnv === undefined && credentialEnv === undefined && bundledEnv === undefined
+    const spawnEnv = definition.managedEnv === undefined
+      && credentialEnv === undefined
+      && bundledEnv === undefined
+      && this.dataTransferEnvironment === undefined
       ? undefined
-      : { ...definition.managedEnv, ...credentialEnv, ...bundledEnv }
+      : { ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...this.dataTransferEnvironment }
     const redactors = {
-      stdout: new CredentialOutputRedactor(credentialEnv),
-      stderr: new CredentialOutputRedactor(credentialEnv),
+      stdout: new CredentialOutputRedactor({ ...credentialEnv, ...this.dataTransferEnvironment }),
+      stderr: new CredentialOutputRedactor({ ...credentialEnv, ...this.dataTransferEnvironment }),
     }
     let handle: SubprocessHandle
     try {

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from . import briefs, events, news, quotes, rules, scanner, scheduler
 from .config import settings
+from .data_transfer import recover_incomplete_transactions, register_data_transfer_routes
 from .indicators import compute_indicators, summarize
 from .schemas import (
     AlertRule, BriefRequest, QuotesBatchRequest, ScanRequest, SecurityDetailRequest, TechSignalRequest,
@@ -36,6 +37,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 store = JsonStore()
+recover_incomplete_transactions(store)
+register_data_transfer_routes(app, lambda: store)
 
 
 def _list(key: str, default: list | None = None) -> list:

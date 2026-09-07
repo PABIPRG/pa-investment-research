@@ -1,0 +1,313 @@
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { BackupService } from '../src/backup-service.ts'
+import type { BackupBackendOperation } from '../src/backup-service.ts'
+import type { DomainSnapshot } from '../src/backup-archive.ts'
+
+const homes: string[] = []
+
+async function home(): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), 'investment-backup-service-'))
+  homes.push(path)
+  return path
+}
+
+afterEach(async () => {
+  const { rm } = await import('node:fs/promises')
+  await Promise.all(homes.splice(0).map(path => rm(path, { recursive: true, force: true })))
+})
+
+function requestCategories(input: Record<string, unknown>): string[] {
+  const categories = input.categories
+  if (!Array.isArray(categories) || !categories.every(category => typeof category === 'string')) {
+    throw new Error('test expected categories')
+  }
+  return categories
+}
+
+function requestSnapshot(input: Record<string, unknown>): DomainSnapshot {
+  const snapshot = input.snapshot
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    throw new Error('test expected snapshot')
+  }
+  return snapshot as DomainSnapshot
+}
+
+function tradingSnapshot(categories: string[]): DomainSnapshot {
+  return {
+    schemaVersion: 1,
+    backend: 'trading-core',
+    categories: Object.fromEntries(categories.map(category => [category, {
+      count: 1,
+      collections: { [category]: { default: [{ id: `${category}-1` }] } },
+    }])),
+    revision: 'revision-1',
+  }
+}
+
+describe('BackupService storage', () => {
+  it('uses the DSH home default, persists an explicit directory, and scans readable and damaged backups', async () => {
+    const dshHome = await home()
+    const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      if (operation === 'export') return tradingSnapshot(requestCategories(input))
+      throw new Error(`unexpected ${operation}`)
+    })
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+
+    expect((await service.describe()).directory).toBe(join(dshHome, 'investment-research', 'backups'))
+    const custom = join(dshHome, '共享备份')
+    await service.setDirectory(custom)
+    expect((await new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request }).describe()).directory)
+      .toBe(custom)
+
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    expect(created.filename).toMatch(/^投研备份-持仓-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.pabackup$/)
+    await writeFile(join(custom, '损坏备份.pabackup'), 'not-a-zip')
+
+    const list = await service.list()
+    const statuses = list
+      .map(item => ({ filename: item.filename, status: item.status }))
+      .sort((left, right) => left.filename.localeCompare(right.filename))
+    expect(statuses).toEqual([
+      { filename: '损坏备份.pabackup', status: 'damaged' },
+      { filename: created.filename, status: 'ready' },
+    ].sort((left, right) => left.filename.localeCompare(right.filename)))
+  })
+
+  it('deletes only an explicitly named direct backup file', async () => {
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        throw new Error(`unexpected ${operation}`)
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    await expect(service.delete('../secrets.pabackup')).rejects.toThrow(/文件名/)
+    await service.delete(created.filename)
+    await expect(stat(created.path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('streams an external backup through a bounded temporary file and enforces chunk order', async () => {
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        if (operation === 'preview') return {
+          currentRevision: 'local-revision',
+          categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } },
+        }
+        throw new Error(`unexpected ${operation}`)
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const bytes = await readFile(created.path)
+    const upload = await service.beginUpload({ filename: '来自另一台电脑.pabackup', size: bytes.byteLength })
+
+    await expect(service.appendUploadChunk({ id: upload.id, offset: 1, base64: bytes.toString('base64') }))
+      .rejects.toThrow(/顺序/)
+    await service.appendUploadChunk({ id: upload.id, offset: 0, base64: bytes.toString('base64') })
+    const preview = await service.inspectUpload(upload.id)
+
+    expect(preview.filename).toBe('来自另一台电脑.pabackup')
+    expect(preview.manifest.scope).toEqual(['holdings'])
+    await expect(stat(join(dshHome, 'investment-research', 'backup-uploads', `${upload.id}.part`)))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects an oversized RPC upload chunk before appending it', async () => {
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async () => { throw new Error('unexpected backend request') },
+    })
+    const upload = await service.beginUpload({ filename: '大分块.pabackup', size: 300_000 })
+    const oversized = Buffer.alloc(256 * 1024 + 1).toString('base64')
+
+    await expect(service.appendUploadChunk({ id: upload.id, offset: 0, base64: oversized }))
+      .rejects.toThrow(/256 KiB/)
+    await service.cancelUpload(upload.id)
+  })
+})
+
+describe('BackupService import safety', () => {
+  it('recovers an interrupted coordinator transaction before accepting new work', async () => {
+    const dshHome = await home()
+    const operations: Array<{ backend: string; operation: BackupBackendOperation }> = []
+    const request = vi.fn(async (
+      backend: 'trading-core' | 'market-watch',
+      operation: BackupBackendOperation,
+    ) => {
+      operations.push({ backend, operation })
+      if (operation === 'rollback') return { status: 'rolled_back' }
+      if (operation === 'finalize') return { status: 'finalized' }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const directory = join(dshHome, 'investment-research', 'transfer-transactions')
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, '77777777-7777-4777-8777-777777777777.json'), JSON.stringify({
+      schemaVersion: 1,
+      transactionId: '77777777-7777-4777-8777-777777777777',
+      phase: 'committing',
+      targets: ['trading-core', 'market-watch'],
+    }))
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+
+    await service.recoverPendingTransactions()
+
+    expect(operations).toEqual([
+      { backend: 'market-watch', operation: 'rollback' },
+      { backend: 'trading-core', operation: 'rollback' },
+      { backend: 'trading-core', operation: 'finalize' },
+      { backend: 'market-watch', operation: 'finalize' },
+    ])
+    await expect(stat(join(directory, '77777777-7777-4777-8777-777777777777.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('previews and imports without changing or consuming the source backup', async () => {
+    const dshHome = await home()
+    const calls: string[] = []
+    const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      calls.push(operation)
+      if (operation === 'export') return tradingSnapshot(requestCategories(input))
+      if (operation === 'preview') return {
+        currentRevision: 'local-revision',
+        categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } },
+      }
+      if (operation === 'prepare') return { status: 'prepared', categories: ['holdings'] }
+      if (operation === 'commit') return { status: 'applied', categories: ['holdings'] }
+      if (operation === 'finalize') return { status: 'finalized', categories: ['holdings'] }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const before = await readFile(created.path)
+
+    const preview = await service.previewFile(created.path)
+    await service.importPreview(preview.id, { holdings: 'keep_local' })
+
+    expect(await readFile(created.path)).toEqual(before)
+    expect(calls).toEqual(['export', 'preview', 'prepare', 'commit', 'finalize'])
+    expect((await service.list()).some(item => item.filename === created.filename)).toBe(true)
+  })
+
+  it('stops an import before apply when its default-on safety backup fails', async () => {
+    const dshHome = await home()
+    const calls: string[] = []
+    const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      calls.push(operation)
+      if (operation === 'export') return tradingSnapshot(requestCategories(input))
+      if (operation === 'preview') return {
+        currentRevision: 'local-revision',
+        categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } },
+      }
+      if (operation === 'prepare') return { status: 'prepared' }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const preview = await service.previewFile(created.path)
+    const blockedDirectory = join(dshHome, 'blocked-backup-location')
+    await service.setDirectory(blockedDirectory)
+    await rm(blockedDirectory, { recursive: true })
+    await writeFile(blockedDirectory, 'not a directory')
+
+    await expect(service.importPreview(preview.id, {}, true)).rejects.toThrow()
+    expect(calls.filter(operation => operation === 'prepare')).toHaveLength(0)
+    expect(await readFile(created.path)).toBeTruthy()
+  })
+
+  it('rolls back an already-applied domain when a later domain fails', async () => {
+    const dshHome = await home()
+    const calls: Array<{
+      backend: 'trading-core' | 'market-watch'
+      operation: BackupBackendOperation
+      input: Record<string, unknown>
+    }> = []
+    let failTradingCommit = false
+    const request = vi.fn(async (
+      backend: 'trading-core' | 'market-watch',
+      operation: BackupBackendOperation,
+      input: Record<string, unknown>,
+    ) => {
+      calls.push({ backend, operation, input })
+      if (operation === 'export') {
+        return {
+          schemaVersion: 1,
+          backend,
+          categories: Object.fromEntries(requestCategories(input).map(category => [category, {
+            count: 1,
+            collections: { [category]: { default: [{ id: `${backend}-${category}-local` }] } },
+          }])),
+          revision: `${backend}-revision`,
+        }
+      }
+      if (operation === 'preview') {
+        const snapshot = requestSnapshot(input)
+        return {
+          currentRevision: `${backend}-current`,
+          categories: Object.fromEntries(Object.keys(snapshot.categories).map(category => [category, {
+            added: 1,
+            conflicts: 0,
+            defaultRule: category === 'watchlist' ? 'merge' : 'keep_local',
+          }])),
+        }
+      }
+      if (operation === 'prepare') return { status: 'prepared' }
+      if (operation === 'rollback') return { status: 'rolled_back' }
+      if (operation === 'finalize') return { status: 'finalized' }
+      if (operation === 'commit') {
+        if (backend === 'trading-core' && failTradingCommit) throw new Error('trading commit failed')
+        return { status: 'applied' }
+      }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+    const created = await service.create({ categories: ['holdings', 'watchlist'], reason: 'manual' })
+    const preview = await service.previewFile(created.path)
+    failTradingCommit = true
+
+    await expect(service.importPreview(preview.id)).rejects.toThrow(/trading commit failed/)
+
+    const marketCalls = calls.filter(call => call.backend === 'market-watch')
+    expect(marketCalls.slice(-4).map(call => call.operation)).toEqual(['prepare', 'commit', 'rollback', 'finalize'])
+    expect(await readFile(created.path)).toBeTruthy()
+  })
+
+  it('keeps existing backups after reset and blocks reset when the safety backup fails', async () => {
+    const dshHome = await home()
+    const operations: string[] = []
+    const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      operations.push(operation)
+      if (operation === 'export') return tradingSnapshot(requestCategories(input))
+      if (operation === 'reset') return { status: 'prepared' }
+      if (operation === 'commit') return { status: 'reset' }
+      if (operation === 'finalize') return { status: 'finalized' }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+
+    await service.reset({ categories: ['holdings'], backupBefore: false })
+    expect(await readFile(created.path)).toBeTruthy()
+
+    const blockedDirectory = join(dshHome, 'blocked-reset-backup-location')
+    await mkdir(blockedDirectory)
+    await service.setDirectory(blockedDirectory)
+    await rm(blockedDirectory, { recursive: true })
+    await writeFile(blockedDirectory, 'not a directory')
+    const resetCountBefore = operations.filter(operation => operation === 'reset').length
+
+    await expect(service.reset({ categories: ['holdings'], backupBefore: true })).rejects.toThrow()
+    expect(operations.filter(operation => operation === 'reset')).toHaveLength(resetCountBefore)
+    expect(await readFile(created.path)).toBeTruthy()
+  })
+})

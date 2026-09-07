@@ -775,6 +775,76 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'The backend\'s lossless JSON response.',
       },
       {
+        signature: '@Remote(\'backup-describe\') backupDescribe(): Promise<{ directory: string; format: \'pabackup\'; scheduledBackup: false }>',
+        description: 'Read user-visible backup configuration without exposing internal upload paths.',
+        parameters: [],
+        returns: 'The configured directory and stable backup-format capabilities.',
+      },
+      {
+        signature: '@Remote(\'backup-set-directory\') backupSetDirectory(directory: string): Promise<{ directory: string }>',
+        description: 'Persist a user-selected backup directory.',
+        parameters: [{ name: 'directory', description: 'Absolute directory selected by the local user.' }],
+        returns: 'The normalized directory persisted by the Host.',
+      },
+      {
+        signature: '@Remote(\'backup-create\') async backupCreate(input: { categories: BackupCategory[]; reason: BackupReason }): Promise<{ filename: string manifest: BackupManifest }>',
+        description: 'Create a manual or pre-danger backup and return only client-safe metadata.',
+        parameters: [{ name: 'input', description: 'Selected data categories and the user-visible backup reason.' }],
+        returns: 'The readable filename and validated versioned manifest.',
+      },
+      {
+        signature: '@Remote(\'backup-list\') backupList(): Promise<BackupListItem[]>',
+        description: 'List direct backup files, including damaged and future-version entries.',
+        parameters: [],
+        returns: 'Client-safe metadata for each backup in the configured directory.',
+      },
+      {
+        signature: '@Remote(\'backup-delete\') backupDelete(filename: string): Promise<void>',
+        description: 'Delete one explicit backup after the client has confirmed the operation.',
+        parameters: [{ name: 'filename', description: 'Direct child filename returned by the backup list.' }],
+      },
+      {
+        signature: '@Remote(\'backup-preview-stored\') backupPreviewStored(filename: string): Promise<BackupPreview>',
+        description: 'Inspect one immutable source already present in the configured backup directory.',
+        parameters: [{ name: 'filename', description: 'Direct child filename returned by the backup list.' }],
+        returns: 'A bounded preview with counts, conflicts, and an expiring preview id.',
+      },
+      {
+        signature: '@Remote(\'backup-upload-begin\') backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>',
+        description: 'Allocate a bounded temporary-file upload session for an external backup.',
+        parameters: [{ name: 'input', description: 'Original filename and exact byte size of the selected archive.' }],
+        returns: 'The opaque upload id and required maximum chunk size.',
+      },
+      {
+        signature: '@Remote(\'backup-upload-chunk\') backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>',
+        description: 'Append one ordered Base64 chunk to an upload session.',
+        parameters: [{ name: 'input', description: 'Upload id, required byte offset, and bounded Base64 payload.' }],
+        returns: 'The total number of raw archive bytes received.',
+      },
+      {
+        signature: '@Remote(\'backup-upload-inspect\') backupUploadInspect(id: string): Promise<BackupPreview>',
+        description: 'Validate a complete upload and create an editable import preview.',
+        parameters: [{ name: 'id', description: 'Opaque upload id allocated by {@link backupUploadBegin}.' }],
+        returns: 'A bounded preview with counts, conflicts, and an expiring preview id.',
+      },
+      {
+        signature: '@Remote(\'backup-upload-cancel\') backupUploadCancel(id: string): Promise<void>',
+        description: 'Explicitly release an incomplete upload.',
+        parameters: [{ name: 'id', description: 'Opaque upload id allocated by {@link backupUploadBegin}.' }],
+      },
+      {
+        signature: '@Remote(\'backup-import\') backupImport(input: { previewId: string rules: Partial<Record<BackupCategory, BackupConflictRule>> backupBefore: boolean }): Promise<{ status: \'applied\'; categories: BackupCategory[] }>',
+        description: 'Apply a preview with user-selected conflict rules; the source remains untouched.',
+        parameters: [{ name: 'input', description: 'Preview id, conflict rules, and optional safety-backup choice.' }],
+        returns: 'The applied status and categories committed across data domains.',
+      },
+      {
+        signature: '@Remote(\'backup-reset\') backupReset(input: { categories: BackupCategory[]; backupBefore: boolean }): Promise<{ status: \'reset\' categories: BackupCategory[] }>',
+        description: 'Clear current domain data only; configured and existing backups are never removed.',
+        parameters: [{ name: 'input', description: 'Categories to clear and optional safety-backup choice.' }],
+        returns: 'The reset status and categories committed across data domains.',
+      },
+      {
         signature: '@Remote(\'request-restart\') requestRestart(): InvestmentRestartResult',
         description: 'Request the launcher to restart the complete application after the Remote acknowledgement is sent.',
         parameters: [],
@@ -2784,6 +2854,34 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export class BackendRegistry {\n    register(name: string, backend: StorageBackend): () => void;\n    get(name: string): StorageBackend;\n    names(): string[];\n}',
   },
   {
+    name: 'BackupCategory',
+    declaration: 'export type BackupCategory = \'strategies\' | \'holdings\' | \'watchlist\' | \'research\' | \'preferences\';',
+  },
+  {
+    name: 'BackupConflictRule',
+    declaration: 'export type BackupConflictRule = \'keep_both\' | \'keep_local\' | \'use_import\' | \'merge\';',
+  },
+  {
+    name: 'BackupListItem',
+    declaration: 'export interface BackupListItem {\n    filename: string;\n    size: number;\n    modifiedAt: string;\n    status: \'ready\' | \'damaged\' | \'unsupported\';\n    manifest?: BackupManifest;\n    problem?: string;\n}',
+  },
+  {
+    name: 'BackupManifest',
+    declaration: 'export interface BackupManifest {\n    format: typeof BACKUP_FORMAT;\n    formatVersion: typeof BACKUP_FORMAT_VERSION;\n    createdAt: string;\n    createdByAppVersion: string;\n    reason: BackupReason;\n    scope: BackupCategory[];\n    contents: Array<{\n        category: BackupCategory;\n        count: number;\n    }>;\n    domains: BackupManifestDomain[];\n}',
+  },
+  {
+    name: 'BackupManifestDomain',
+    declaration: 'export interface BackupManifestDomain {\n    id: string;\n    schemaVersion: number;\n    path: string;\n    bytes: number;\n    sha256: string;\n}',
+  },
+  {
+    name: 'BackupPreview',
+    declaration: 'export interface BackupPreview {\n    id: string;\n    filename: string;\n    manifest: BackupManifest;\n    domains: Record<string, BackupDomainPreview>;\n    expiresAt: string;\n}',
+  },
+  {
+    name: 'BackupReason',
+    declaration: 'export type BackupReason = \'manual\' | \'pre-import\' | \'pre-reset\';',
+  },
+  {
     name: 'BashEnvContributor',
     declaration: 'export interface BashEnvContributor {\n    name: string;\n    variables: Readonly<Record<DshEnvironmentKey, BashEnvVariable>>;\n    resolve(execution: ToolExecution): Readonly<Partial<Record<DshEnvironmentKey, string>>>;\n}',
   },
@@ -3245,7 +3343,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'InvestmentBackendManagerOptions',
-    declaration: 'export interface InvestmentBackendManagerOptions {\n    readonly subprocess: SubprocessRuntime;\n    readonly config?: Config;\n    readonly checkHealth?: HealthCheck;\n    readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths;\n    readonly resolveCredential?: CredentialResolver;\n    readonly describeCredential?: CredentialDescriber;\n    readonly resolveLogPaths?: LogPathResolver;\n    readonly normalizeEnvironmentKey?: EnvironmentKeyNormalizer;\n    readonly executableExists?: (path: string) => Promise<boolean>;\n    readonly sleep?: (ms: number) => Promise<void>;\n    readonly now?: () => number;\n}',
+    declaration: 'export interface InvestmentBackendManagerOptions {\n    readonly subprocess: SubprocessRuntime;\n    readonly config?: Config;\n    readonly checkHealth?: HealthCheck;\n    readonly resolvePaths?: (definition: PythonBackendDefinition) => ResolvedBackendPaths;\n    readonly resolveCredential?: CredentialResolver;\n    readonly describeCredential?: CredentialDescriber;\n    readonly resolveLogPaths?: LogPathResolver;\n    readonly normalizeEnvironmentKey?: EnvironmentKeyNormalizer;\n    readonly executableExists?: (path: string) => Promise<boolean>;\n    readonly sleep?: (ms: number) => Promise<void>;\n    readonly now?: () => number;\n    readonly dataTransferEnvironment?: Readonly<Record<string, string>>;\n}',
   },
   {
     name: 'InvestmentBackendMode',
@@ -3261,7 +3359,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'InvestmentDataOperation',
-    declaration: 'export type InvestmentDataOperation = \'market-watch.overview\' | \'market-watch.indices\' | \'market-watch.security-search\' | \'market-watch.security-detail\' | \'market-watch.security-news\' | \'market-watch.scan\' | \'market-watch.tech-signal\' | \'market-watch.news-flash\' | \'market-watch.news-events\' | \'market-watch.watchlist\' | \'market-watch.watch-add\' | \'market-watch.watch-remove\' | \'market-watch.alerts\' | \'market-watch.quotes-batch\' | \'trading-core.analyze\' | \'trading-core.watchlist\' | \'trading-core.watchlist-save\' | \'trading-core.holdings\' | \'trading-core.holdings-save\' | \'trading-core.holdings-analyze\' | \'trading-core.risk-portfolio\' | \'trading-core.risk-alerts\' | \'trading-core.personalized-cards\' | \'trading-core.personalized-feedback\' | \'trading-core.local-learning-events\' | \'trading-core.local-learning-status\' | \'trading-core.local-learning-settings\' | \'trading-core.local-learning-clear\' | \'trading-core.local-learning-review\' | \'trading-core.personalized-matches\' | \'trading-core.personalized-impact\' | \'trading-core.personalized-profile\' | \'trading-core.risk-profile\' | \'trading-core.kyc-profile\' | \'trading-core.kyc-questionnaire\' | \'trading-core.kyc-adjust\' | \'trading-core.kyc-parse\' | \'trading-core.brief-start\' | \'trading-core.brief-run\' | \'trading-core.reports\' | \'trading-core.report\' | \'trading-core.strategies\' | \'trading-core.strategy-detail\' | \'trading-core.strategies-hypothesize\' | \'trading-core.strategy-transition\' | \'trading-core.strategy-action\' | \'trading-core.strategy- /* …truncated — full shape in source */',
+    declaration: 'export type InvestmentDataOperation = \'market-watch.overview\' | \'market-watch.indices\' | \'market-watch.security-search\' | \'market-watch.security-detail\' | \'market-watch.security-news\' | \'market-watch.scan\' | \'market-watch.tech-signal\' | \'market-watch.news-flash\' | \'market-watch.news-events\' | \'market-watch.watchlist\' | \'market-watch.watch-add\' | \'market-watch.watch-remove\' | \'market-watch.alerts\' | \'market-watch.quotes-batch\' | \'trading-core.analyze\' | \'trading-core.watchlist\' | \'trading-core.watchlist-save\' | \'trading-core.holdings\' | \'trading-core.holdings-save\' | \'trading-core.holdings-analyze\' | \'trading-core.risk-portfolio\' | \'trading-core.risk-alerts\' | \'trading-core.personalized-cards\' | \'trading-core.personalized-feedback\' | \'trading-core.local-learning-events\' | \'trading-core.local-learning-status\' | \'trading-core.local-learning-settings\' | \'trading-core.local-learning-clear\' | \'trading-core.local-learning-review\' | \'trading-core.personalized-matches\' | \'trading-core.personalized-impact\' | \'trading-core.personalized-profile\' | \'trading-core.risk-profile\' | \'trading-core.kyc-profile\' | \'trading-core.kyc-questionnaire\' | \'trading-core.kyc-adjust\' | \'trading-core.kyc-parse\' | \'trading-core.brief-start\' | \'trading-core.brief-run\' | \'trading-core.reports\' | \'trading-core.report\' | \'trading-core.strategies\' | \'trading-core.strategy-detail\' | \'trading-core.research-chat-context\' | \'trading-core.research-chat-context-save\' | \'trading-core.strategies-hypothesize\' | \'trading-c /* …truncated — full shape in source */',
   },
   {
     name: 'InvestmentDataRequest',

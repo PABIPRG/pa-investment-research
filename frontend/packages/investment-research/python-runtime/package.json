@@ -53,6 +53,7 @@
     "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-timeout": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^",
+    "fflate": "^0.8.2",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
