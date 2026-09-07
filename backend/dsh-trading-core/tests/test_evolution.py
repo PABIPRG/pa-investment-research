@@ -110,6 +110,29 @@ class AttributionTests(unittest.TestCase):
         self.assertIsNotNone(a["data_note"])
         self.assertEqual(a["overall"]["max_drawdown_pct"], None)
 
+    def test_return_is_relative_to_initial_capital_not_first_snapshot(self):
+        """收益率相对初始本金(1.0)计，而非首张快照净值（首张快照可能已有盈亏）。"""
+        store = _store()
+        store.set("strategies", "strat-x", {
+            "id": "strat-x", "name": "已盈利", "kind": "momentum",
+            "direction": "利好", "symbols": ["600000"], "params": {"n": 10},
+            "status": "active",
+            "evolve": {"state": "active", "tier": 1},
+        })
+        # 首张快照净值已是 1.10（早前已有盈利），末日 1.05
+        for d, nav in [("2026-08-18", 1.10), ("2026-08-19", 1.08),
+                       ("2026-08-20", 1.06), ("2026-08-21", 1.05), ("2026-08-24", 1.05)]:
+            store.set("shadow_equity", d, {
+                "overall_nav": nav,
+                "strategies": {"strat-x": {"nav": nav}},
+            })
+        a = attribution(store)
+        self.assertEqual(a["overall"]["start_nav"], 1.0)
+        # 1.05 - 1.0 = 5%，而非 1.05 / 1.10 - 1
+        self.assertEqual(a["overall"]["return_pct"], 5.0)
+        rows = {r["strategy_id"]: r for r in a["strategies"]}
+        self.assertEqual(rows["strat-x"]["return_pct"], 5.0)
+
 
 class EvolveTests(unittest.TestCase):
     def test_apply_request_requires_well_formed_preview_token(self):
@@ -250,6 +273,27 @@ class EvolveTests(unittest.TestCase):
         self.assertEqual(per["strat-band"]["decision"], "none")
         self.assertIn("带内", per["strat-band"]["reason"])
         self.assertEqual(per["strat-band"]["behavior"], "正常运行")
+
+    def test_demote_fires_for_strategy_without_evolve_state(self):
+        """无 evolve.state 字段的 active 策略跌破观察线时也应降级（state 缺省视为 active）。"""
+        store = _store()
+        store.set("strategies", "strat-noevolve", {
+            "id": "strat-noevolve", "name": "无进化字段", "kind": "ma_cross",
+            "direction": "利好", "symbols": ["002169"], "params": {"fast": 3, "slow": 15},
+            "status": "active",
+            "backtest": {"out_of_sample": {"win_rate_pct": 50.0}},
+        })
+        for d, nav in [("2026-08-24", 1.0), ("2026-08-25", 0.99), ("2026-08-26", 0.97),
+                       ("2026-08-27", 0.96), ("2026-08-28", 0.94)]:
+            store.set("shadow_equity", d, {
+                "overall_nav": nav,
+                "strategies": {"strat-noevolve": {"nav": nav}},
+            })
+        preview = evolve(store, apply=False)
+        demote = [a for a in preview["actions"]
+                  if a["type"] == "demote" and a["sid"] == "strat-noevolve"]
+        self.assertEqual(len(demote), 1)
+        self.assertEqual(demote[0]["to"], "watch")
 
     def test_preview_exposes_last_applied_at_after_auto_apply(self):
         """闭环自动应用过进化后，再生成空预案也能带上轮应用时间供前端展示。"""
