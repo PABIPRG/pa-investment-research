@@ -113,6 +113,13 @@ const BUCKET_LABELS: Readonly<Record<string, string>> = Object.freeze({
   all: '全部', holdings: '持仓', watchlist: '自选', strategy: '策略', fresh: '市场',
 })
 
+// 事件类型徽标（与后端 events.TYPE_EMOJI 的中文事件名对齐；仅前端展示用）。
+// 大盘趋势事件（政策/宏观）即使未命中具体标的也会进入主列表，靠此徽标与命中卡区分。
+const EVENT_TYPE_BADGE: Readonly<Record<string, string>> = Object.freeze({
+  公告: '📋 公告', 业绩: '📈 业绩', 价格异动: '💰 价格异动', 政策: '🏛 政策',
+  产业: '🏭 产业', 合作: '🤝 合作', 评级: '⭐ 评级', 宏观: '🌐 宏观', 相关: '🔗 相关',
+})
+
 function tickerFromCard(card: Record<string, unknown>): { code: string; name: string } | undefined {
   const tickers: readonly unknown[] = Array.isArray(card.tickers) ? card.tickers : []
   const first = tickers[0]
@@ -538,7 +545,7 @@ export function ResearchWorkbenchPage({
 
           <section className={css.dashboardPanel} aria-labelledby="dashboard-events-title" aria-busy={cards.busy}>
             <div className={css.dashboardPanelHead}>
-              <div><h2 id="dashboard-events-title">关联资讯与事件</h2><p>只展示命中持仓、自选或生效策略的真实事件</p></div>
+              <div><h2 id="dashboard-events-title">关联资讯与事件</h2><p>命中你关注标的的真实事件，并补充反映大盘趋势的政策/宏观事件</p></div>
               <RegionMeta state={cards.state} settled={cardsAsOf === '' ? `${allCards.length} 条` : `更新于 ${displayTime(cardsAsOf)}`} />
             </div>
             <div className={css.segmented} role="group" aria-label="事件范围">
@@ -582,6 +589,9 @@ export function ResearchWorkbenchPage({
                 >
                   <div className={css.dashboardEventBody}>
                     <div className={css.dashboardEventMeta}>
+                      {EVENT_TYPE_BADGE[text(card.type, '')] !== undefined && (
+                        <span data-kind="type">{EVENT_TYPE_BADGE[text(card.type, '')]}</span>
+                      )}
                       <span>{BUCKET_LABELS[text(card.bucket, '')] ?? '关联事件'}</span>
                       {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
                       <span>{text(card.source, '来源未知')}</span>
