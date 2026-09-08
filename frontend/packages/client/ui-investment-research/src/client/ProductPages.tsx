@@ -467,6 +467,54 @@ function strategyRule(item: Record<string, unknown>): { trigger: string; exit: s
   }
 }
 
+function strategyTargetSummary(
+  item: Record<string, unknown>,
+  resolved: Readonly<Record<string, string>>,
+): { name: string; codes: string; fullCodes: string } {
+  const tickers = strategyTickers(item)
+  if (tickers.length === 0) {
+    return { name: text(item.name, text(item.id, '未命名策略')), codes: '', fullCodes: '' }
+  }
+  const names = tickers.map((ticker) => {
+    const name = ticker.name || resolved[ticker.code] || ''
+    return name === '' || name === ticker.code ? '证券名称待补充' : name
+  })
+  const name = names.slice(0, 2).join('、') + (names.length > 2 ? `等 ${names.length} 只` : '')
+  const visibleCodes = tickers.slice(0, 2).map(ticker => ticker.code).join(' / ')
+  const codes = tickers.length > 1 ? `${visibleCodes} · 共 ${tickers.length} 只` : visibleCodes
+  return { name, codes, fullCodes: tickers.map(ticker => ticker.code).join(' / ') }
+}
+
+function StrategyCodeSummary({ summary, fullCodes }: { readonly summary: string; readonly fullCodes: string }) {
+  const tooltipId = useId()
+  return (
+    <div
+      className={css.strategyCodeSummary}
+      tabIndex={0}
+      aria-describedby={tooltipId}
+      data-testid="strategy-code-summary"
+    >
+      <span>{summary}</span>
+      <span id={tooltipId} className={css.strategyCodeTooltip} role="tooltip">全部代码：{fullCodes}</span>
+    </div>
+  )
+}
+
+function StrategyRuleLine({ label, value }: { readonly label: string; readonly value: string }) {
+  const tooltipId = useId()
+  return (
+    <div
+      className={css.strategyRuleLine}
+      tabIndex={0}
+      aria-describedby={tooltipId}
+      data-testid="strategy-rule-line"
+    >
+      <p><strong>{label}：</strong>{value}</p>
+      <span id={tooltipId} className={css.strategyRuleTooltip} role="tooltip">{label}：{value}</span>
+    </div>
+  )
+}
+
 function verificationExplanation(category: StrategyCategory): string {
   return {
     verified: '样本外阈值已通过，可以进入影子验证继续积累真实行情下的纸面证据。',
@@ -1167,7 +1215,7 @@ export function StrategyResearchPage({
           </button>
         </>}
       </PageHeading>
-      <div className={css.segmented} role="group" aria-label="策略研究视图">
+      <div className={`${css.segmented} ${css.strategyViewTabs}`} role="group" aria-label="策略研究视图">
         <button type="button" aria-pressed={view === 'pool'} className={view === 'pool' ? css.segmentActive : undefined} onClick={() => { setView('pool') }}>策略池</button>
         <button type="button" aria-pressed={view === 'shadow'} className={view === 'shadow' ? css.segmentActive : undefined} onClick={() => { setView('shadow') }}>影子验证</button>
       </div>
@@ -1273,45 +1321,55 @@ export function StrategyResearchPage({
             const backtest = asRecord(item.backtest)
             const hasBacktest = Object.keys(backtest).length > 0
             const outOfSample = asRecord(backtest.out_of_sample)
-            const outOfSampleTrades = number(outOfSample.trades) ?? number(outOfSample.n_evaluated)
+            const outOfSamplePortfolio = asRecord(outOfSample.portfolio)
             const selected = selectedStrategyId === id
             const direction = strategyDirectionLabel(item.direction)
-            const holdingWindow = number(item.holding_window_days)?.toFixed(0)
+            const rule = strategyRule(item)
+            const target = strategyTargetSummary(item, securityNames)
             return (
               <article key={id} className={`${css.moduleCard} ${css.strategyCard} ${selected ? css.reportItemActive : ''}`}>
-                <div className={css.sectionHeading}>
-                  <div className={css.strategyCardTitle}>
+                <div className={`${css.sectionHeading} ${css.strategyCardTitle}`} aria-label="策略概览">
+                  <div className={css.strategyCardHeadline}>
                     {direction !== '' && <span data-direction={direction}>{direction}</span>}
-                    <strong>{strategyTargetLabel(item, securityNames)}</strong>
-                    <small>{strategyKindLabel(item.kind)}</small>
+                    <strong title={target.name}>{target.name}</strong>
                   </div>
-                  <div className={css.strategyCardBadges}>
-                    <span>{STRATEGY_CATEGORY_LABELS[category]}</span>
-                    <StatusBadge value={status} />
+                  <div className={css.strategyCardMeta} aria-label="策略元信息">
+                    <div className={css.strategyCardDescriptor}>
+                      <small>{strategyKindLabel(item.kind)}</small>
+                      {target.codes !== '' && <StrategyCodeSummary summary={target.codes} fullCodes={target.fullCodes} />}
+                    </div>
+                    <div className={css.strategyCardBadges}>
+                      <span>{STRATEGY_CATEGORY_LABELS[category]}</span>
+                      <StatusBadge value={status} />
+                    </div>
                   </div>
                 </div>
                 <p>{text(item.hypothesis, text(item.thesis, '后端未返回策略假设。'))}</p>
-                <dl className={css.reportMeta}>
-                  <div><dt>标的数</dt><dd>{strings(item.symbols).length || '—'}</dd></div>
-                  <div><dt>建议观察</dt><dd>{holdingWindow === undefined ? '—' : `${holdingWindow} 天`}</dd></div>
-                  <div><dt>样本外胜率</dt><dd>{compactMetric(outOfSample.win_rate_pct, '%')}</dd></div>
-                  <div><dt>样本外交易</dt><dd>{outOfSampleTrades?.toFixed(0) ?? '—'}</dd></div>
-                </dl>
+                <div className={css.strategyCardSummary}>
+                  <div className={css.strategyCardRules} aria-label="策略逻辑">
+                    <StrategyRuleLine label="触发规则" value={rule.trigger} />
+                    <StrategyRuleLine label="退出规则" value={rule.exit} />
+                  </div>
+                  <dl className={css.strategyCardMetrics}>
+                    <div><dt>样本外平均模拟收益</dt><dd>{compactMetric(outOfSample.avg_simulated_return_pct, '%')}</dd></div>
+                    <div><dt>样本外最大回撤</dt><dd>{compactMetric(outOfSamplePortfolio.portfolio_max_drawdown_pct, '%')}</dd></div>
+                  </dl>
+                </div>
                 {hasBacktest && text(backtest.reason, '') !== '' && (
                   <p className={css.contextHint}>回测结论：{text(backtest.reason)}</p>
                 )}
-                <div className={css.moduleToolbar}>
+                <div className={`${css.moduleToolbar} ${css.strategyActions}`} role="group" aria-label="策略操作">
                   <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>查看详情</button>
                   <button type="button" className={css.secondaryButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setDetailItem(item) }}>
                     回测管理
                   </button>
                   <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
+                  <button type="button" className={`${css.secondaryButton} ${css.strategyShadowAction}`} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>进入影子验证</button>
                   {category !== 'archived' && (
                     <button type="button" className={css.dangerButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setArchiveItem(item) }}>
                       {busyAction === `archive:${id}` ? '归档中…' : '归档'}
                     </button>
                   )}
-                  <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>进入影子验证</button>
                 </div>
               </article>
             )

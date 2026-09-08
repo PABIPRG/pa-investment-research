@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
+import { IconDislikeOutline16, IconLikeOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
 import { useQuotePolling } from './quote-polling.ts'
@@ -251,14 +252,16 @@ function PreferenceFeedback({
   useEffect(() => { setSentiment(current) }, [current])
 
   const submit = async (next: 'useful' | 'useless'): Promise<void> => {
-    if (busy || sentiment === next) return
+    if (busy) return
+    const requested = sentiment === next ? 'neutral' : next
     setBusy(true); setError('')
     try {
-      await requestData({
+      const response = asRecord(await requestData({
         operation: 'trading-core.personalized-feedback',
-        input: { card_id: cardId, sentiment: next, meta: { ...meta } },
-      })
-      setSentiment(next)
+        input: { card_id: cardId, sentiment: requested, meta: { ...meta } },
+      }))
+      if (response.stored !== true) throw new Error('feedback was not stored')
+      setSentiment(requested === 'neutral' ? '' : requested)
     } catch {
       setError('偏好未保存，请重试。')
     } finally {
@@ -267,10 +270,15 @@ function PreferenceFeedback({
   }
 
   return (
-    <div className={css.preferenceFeedback}>
-      <span>这条内容：</span>
-      <button type="button" aria-pressed={sentiment === 'useful'} disabled={busy} onClick={() => { void submit('useful') }}>值得关注</button>
-      <button type="button" aria-pressed={sentiment === 'useless'} disabled={busy} onClick={() => { void submit('useless') }}>减少此类</button>
+    <div className={css.preferenceFeedback} role="group" aria-label="内容偏好">
+      <button type="button" aria-pressed={sentiment === 'useful'} disabled={busy} onClick={() => { void submit('useful') }}>
+        <span className={css.preferenceFeedbackIcon} aria-hidden="true"><IconLikeOutline16 /></span>
+        值得关注
+      </button>
+      <button type="button" aria-pressed={sentiment === 'useless'} disabled={busy} onClick={() => { void submit('useless') }}>
+        <span className={css.preferenceFeedbackIcon} aria-hidden="true"><IconDislikeOutline16 /></span>
+        减少此类
+      </button>
       {error !== '' && <small role="alert">{error}</small>}
     </div>
   )
@@ -570,7 +578,6 @@ export function ResearchWorkbenchPage({
             {!cards.state.loaded && cards.state.error === '' && <RegionSkeleton rows={4} />}
             {cards.state.loaded && visibleCards.map((card, index) => {
               const ticker = tickerFromCard(card)
-              const strategyId = strategyFromCard(card)
               const reasons = stringItems(card.reasons)
               const cardRisk = asRecord(card.risk)
               const riskLevel = text(cardRisk.level, '')
@@ -620,36 +627,28 @@ export function ResearchWorkbenchPage({
                     {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
                   </div>
                   <div className={css.dashboardEventControls} role="group" aria-label="事件操作">
-                    <span className={css.dashboardActionLabel}>操作</span>
-                    <div className={css.dashboardEventActions}>
+                    <div className={css.dashboardEventActions} role="group" aria-label="快捷操作">
                       <button type="button" onClick={() => {
                         void trackTelemetry({
                           action: 'open', surface: 'dashboard', targetType: 'event',
                           targetId: text(card.card_id, `event-${index}`), context: eventTelemetryContext(card),
                         })
                         setSelectedEvent(card)
-                      }}>{text(card.report_id, '') === '' ? '查看事件详情' : '查看投研报告'}</button>
+                      }}>详情</button>
                       {ticker !== undefined && <button type="button" onClick={() => {
                         void trackTelemetry({
                           action: 'open', surface: 'dashboard', targetType: 'security', targetId: ticker.code,
                           context: { ticker: ticker.code },
                         })
                         navigate('stock-detail', { stockCode: ticker.code })
-                      }}>查看个股</button>}
-                      {strategyId !== '' && <button type="button" onClick={() => {
-                        void trackTelemetry({
-                          action: 'open', surface: 'dashboard', targetType: 'strategy', targetId: strategyId,
-                          context: { strategy_id: strategyId },
-                        })
-                        navigate('framework', { strategyId })
-                      }}>查看策略</button>}
+                      }}>个股</button>}
                       <button
                         type="button"
                         onClick={() => {
                           if (ticker !== undefined) onAnalyze({ kind: 'stock', code: ticker.code, name: ticker.name })
                           else onAnalyze({ kind: 'industry', reference: title })
                         }}
-                      >带入智能分析</button>
+                      >分析</button>
                     </div>
                     <PreferenceFeedback
                       cardId={text(card.card_id, `event-${index}`)}

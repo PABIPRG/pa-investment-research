@@ -292,8 +292,8 @@ class PersonalizedFeedbackRequest(BaseModel):
         min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$",
         description="卡片或预警结构化 id（预警用 /risk/alerts 的 id）",
     )
-    sentiment: Literal["useful", "useless"] = Field(
-        description="useful=有用/值得看，useless=没用/噪音"
+    sentiment: Literal["useful", "useless", "neutral"] = Field(
+        description="useful=有用/值得看，useless=没用/噪音，neutral=撤销当前反馈"
     )
     ts: Optional[str] = Field(
         default=None, description="客户端时间戳 %Y-%m-%d %H:%M:%S；缺省服务端记"

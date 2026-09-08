@@ -1113,14 +1113,16 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
 // 预警反馈：card_id 用 /risk/alerts 的 item.id，meta 带 {source, codes, title}
 { "card_id": "risk-abc123", "sentiment": "useless",
   "meta": { "source": "event", "codes": ["600519"], "title": "持仓利空事件" } }
+// 撤销反馈：删除该 card_id 的当前反馈值
+{ "card_id": "card-f87bec719", "sentiment": "neutral" }
 // 200
 { "ok": true, "stored": true, "sentiment": "useful", "card_id": "card-f87bec719" }
 ```
 
-- `sentiment` ∈ `useful`（有用/值得看）/ `useless`（没用/噪音）。
+- `sentiment` ∈ `useful`（有用/值得看）/ `useless`（没用/噪音）/ `neutral`（撤销当前反馈）。
 - 卡片反馈建议带 `meta{ticker, direction, industries}`（供画像归因）；
   预警反馈建议带 `meta{source, codes, title}`（`source` 决定是否触发 V→Q 灵敏度校准）。
-- fire-and-forget：前端不 await、失败静默，绝不阻塞渲染。
+- 反馈选择与撤销需等待保存成功后再更新本地选中态；失败时保留原状态并允许重试。
 
 ### 4.33 GET /evolution/status —— 自进化闭环状态
 
@@ -1714,7 +1716,7 @@ interface InteractionRecord {       // POST/GET /personalized/interactions
 // meta.direction: '利好' | '利空' | '' —— 前端补埋，供 K 方向偏差统计
 // meta.industries: string[] —— 前端补埋，供行业亲和归因
 
-interface FeedbackRecord {          // POST /personalized/feedback → 行为库 action=feedback
+interface FeedbackRecord {          // 行为库 action=feedback；POST 可用 neutral 删除当前记录
   card_id: string; sentiment: 'useful' | 'useless'
   ts: string; meta?: Record<string, unknown>; server_ts?: string
 }

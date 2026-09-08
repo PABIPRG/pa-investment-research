@@ -762,6 +762,11 @@ describe('investment data broker', () => {
       input: { card_id: 'card-1', sentiment: 'useful', meta: { ticker: '600519.SH', risk_source: 'event' } },
     }, acquire)
 
+    await requestInvestmentData({
+      operation: 'trading-core.personalized-feedback',
+      input: { card_id: 'card-1', sentiment: 'neutral' },
+    }, acquire)
+
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:8000/personalized/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -769,13 +774,14 @@ describe('investment data broker', () => {
         card_id: 'card-1', sentiment: 'useful', meta: { ticker: '600519.SH', risk_source: 'event' },
       }),
     })
-    expect(release).toHaveBeenCalledOnce()
+    expect(bodyOf(fetchMock, 1)).toEqual({ card_id: 'card-1', sentiment: 'neutral' })
+    expect(release).toHaveBeenCalledTimes(2)
 
     await expect(requestInvestmentData({
       operation: 'trading-core.personalized-feedback',
       input: { card_id: 'card-1', sentiment: 'maybe' },
-    }, acquire)).rejects.toThrow('sentiment must be useful or useless')
-    expect(acquire).toHaveBeenCalledOnce()
+    }, acquire)).rejects.toThrow('sentiment must be useful, useless, or neutral')
+    expect(acquire).toHaveBeenCalledTimes(2)
   })
 
   it('maps local learning events, status, settings, clear, and review to fixed local routes', async () => {

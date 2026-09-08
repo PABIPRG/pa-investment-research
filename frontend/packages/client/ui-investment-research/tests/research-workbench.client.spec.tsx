@@ -94,6 +94,7 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
       items: [{ code: '600519', name: '贵州茅台', price: 1450, pct_change: 1.2 }],
     }
   }
+  if (operation === 'trading-core.personalized-feedback') return { ok: true, stored: true }
   return {}
 }
 
@@ -760,7 +761,7 @@ describe('研究工作台', () => {
     expect(within(riskDialog).queryByText(/当前没有风险预警/)).toBeNull()
   })
 
-  it('显式反馈显示当前选择、支持纠正，并只发送白名单上下文', async () => {
+  it('显式反馈显示当前选择、支持撤销与纠正，并只发送白名单上下文', async () => {
     const view = renderWorkbench()
     const heading = await view.findByRole('heading', { name: '白酒板块经营数据改善' })
     const card = heading.closest('article')!
@@ -777,6 +778,17 @@ describe('研究工作台', () => {
       })
     })
     expect(controls.getByRole('button', { name: '值得关注' }).getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(controls.getByRole('button', { name: '值得关注' }))
+    await waitFor(() => {
+      expect(controls.getByRole('button', { name: '值得关注' }).getAttribute('aria-pressed')).toBe('false')
+    })
+    const undo = view.requestData.mock.calls
+      .map(([request]) => request)
+      .filter(request => request.operation === 'trading-core.personalized-feedback')
+      .at(-1)
+    expect(undo?.input?.card_id).toBe('card-holdings')
+    expect(undo?.input?.sentiment).toBe('neutral')
 
     fireEvent.click(controls.getByRole('button', { name: '减少此类' }))
     await waitFor(() => {
@@ -806,8 +818,14 @@ describe('研究工作台', () => {
     const article = heading.closest('article')!
     expect(within(article).queryByText('银行行业资金流出榜。')).toBeNull()
     const controls = within(article).getByRole('group', { name: '事件操作' })
-    expect(within(controls).getByRole('button', { name: '查看事件详情' })).toBeTruthy()
-    expect(within(controls).getByRole('button', { name: '带入智能分析' })).toBeTruthy()
+    const quickActions = within(controls).getByRole('group', { name: '快捷操作' })
+    expect(within(quickActions).getAllByRole('button').map(button => button.textContent)).toEqual([
+      '详情', '个股', '分析',
+    ])
+    const feedback = within(controls).getByRole('group', { name: '内容偏好' })
+    expect(within(feedback).getByRole('button', { name: '值得关注' }).querySelector('svg')).toBeTruthy()
+    expect(within(feedback).getByRole('button', { name: '减少此类' }).querySelector('svg')).toBeTruthy()
+    expect(within(controls).queryByRole('button', { name: '查看策略' })).toBeNull()
   })
 
   it('反馈失败给出局部重试提示，不阻塞事件详情', async () => {
@@ -820,8 +838,26 @@ describe('研究工作台', () => {
     const card = heading.closest('article')!
     fireEvent.click(within(card).getByRole('button', { name: '值得关注' }))
     expect((await within(card).findByRole('alert')).textContent).toContain('偏好未保存，请重试。')
-    fireEvent.click(within(card).getByRole('button', { name: '查看事件详情' }))
+    fireEvent.click(within(card).getByRole('button', { name: '详情' }))
     expect(await view.findByRole('dialog')).toBeTruthy()
+  })
+
+  it('后端未保存反馈时保留原选择并给出重试提示', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.personalized-feedback') {
+        return { ok: true, stored: false, reason: 'paused' }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    const heading = await view.findByRole('heading', { name: '白酒板块经营数据改善' })
+    const card = heading.closest('article')!
+    const useful = within(card).getByRole('button', { name: '值得关注' })
+
+    fireEvent.click(useful)
+
+    expect((await within(card).findByRole('alert')).textContent).toContain('偏好未保存，请重试。')
+    expect(useful.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('卡片进入一半视口并持续一秒后才记录有效曝光', async () => {
@@ -869,11 +905,11 @@ describe('研究工作台', () => {
     const view = renderWorkbench()
     const holdingsEvent = await view.findByText('白酒板块经营数据改善')
     const holdingsArticle = holdingsEvent.closest('article')!
-    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '查看个股' }))
+    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '个股' }))
     expect(view.navigate).toHaveBeenCalledWith('stock-detail', { stockCode: '600519' })
-    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '带入智能分析' }))
+    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '分析' }))
     expect(view.onAnalyze).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' })
-    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '查看事件详情' }))
+    fireEvent.click(within(holdingsArticle).getByRole('button', { name: '详情' }))
     const eventDialog = view.getByRole('dialog', { name: '白酒板块经营数据改善' })
     expect(within(eventDialog).getByText('事件研究详情')).toBeTruthy()
     expect(within(eventDialog).getByText(/暂未返回稳定事件标识/)).toBeTruthy()
@@ -882,8 +918,8 @@ describe('研究工作台', () => {
     fireEvent.click(view.getByRole('button', { name: '策略', pressed: false }))
     expect(view.queryByText('白酒板块经营数据改善')).toBeNull()
     const strategyEvent = view.getByText('半导体设备订单变化').closest('article')!
-    fireEvent.click(within(strategyEvent).getByRole('button', { name: '查看策略' }))
-    expect(view.navigate).toHaveBeenCalledWith('framework', { strategyId: 'strategy-alpha' })
+    expect(within(within(strategyEvent).getByRole('group', { name: '快捷操作' }))
+      .getAllByRole('button').map(button => button.textContent)).toEqual(['详情', '分析'])
 
     fireEvent.click(view.getByRole('button', { name: /设备景气策略/ }))
     expect(view.navigate).toHaveBeenCalledWith('framework', { strategyId: 'strategy-alpha' })

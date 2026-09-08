@@ -88,16 +88,16 @@ describe('策略研究产品事实与确认流程', () => {
     ] as const
     for (const [button, help] of lifecycleHelp) {
       fireEvent.mouseEnter(button)
-      const tooltip = screen.getByRole('tooltip')
+      const tooltip = within(helpDialog).getByRole('tooltip')
       expect(tooltip.textContent).toBe(help)
       expect(tooltip.style.position).toBe('absolute')
       expect(button.getAttribute('aria-describedby')).toBe(tooltip.id)
       fireEvent.mouseLeave(button)
-      expect(screen.queryByRole('tooltip')).toBeNull()
+      expect(within(helpDialog).queryByRole('tooltip')).toBeNull()
     }
 
     fireEvent.focus(backtest)
-    expect(screen.getByRole('tooltip').textContent).toContain('候选产生回测证据后进入')
+    expect(within(helpDialog).getByRole('tooltip').textContent).toContain('候选产生回测证据后进入')
     fireEvent.blur(backtest)
 
     fireEvent.click(backtest)
@@ -239,11 +239,91 @@ describe('策略研究产品事实与确认流程', () => {
     })
 
     renderStrategyPage(requestData)
-    expect(await screen.findByText('贵州茅台 · 600519')).toBeTruthy()
+    expect(await screen.findByText('贵州茅台')).toBeTruthy()
+    expect(screen.getByText('600519')).toBeTruthy()
+    expect(screen.queryByText('贵州茅台 · 600519')).toBeNull()
     expect(screen.getByText('超跌反弹')).toBeTruthy()
     const direction = screen.getByText('利空')
     expect(direction.getAttribute('data-direction')).toBe('利空')
     expect(screen.queryByText('利空·rsi_reversal·600519')).toBeNull()
+  })
+
+  it('候选卡按名称、元信息、证据与操作层级展示完整策略摘要', async () => {
+    const names: Record<string, string> = {
+      '301516': '中远通',
+      '300499': '高澜股份',
+      '601398': '工商银行',
+    }
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') {
+        return {
+          items: [{
+            id: 'volume-breakout', name: '放量突破策略', kind: 'volume_breakout',
+            status: 'active', verification_status: 'not_passed', direction: '利好',
+            symbols: ['301516', '300499', '601398'], hypothesis: '放量反弹后观察突破。',
+            params: { n: 20, vol_mult: 1.5 },
+            holding_window_days: 10,
+            backtest: {
+              out_of_sample: {
+                n_evaluated: 13,
+                win_rate_pct: 30,
+                avg_simulated_return_pct: -1.2413,
+                max_drawdown_pct: -32.891,
+                portfolio: { portfolio_max_drawdown_pct: -18.765 },
+              },
+            },
+          }],
+        }
+      }
+      if (request.operation === 'market-watch.security-search') {
+        const query = request.input?.query
+        const code = typeof query === 'string' ? query : ''
+        return { items: [{ code, name: names[code] }] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    const card = (await screen.findByText('放量反弹后观察突破。')).closest('article')
+    expect(card).not.toBeNull()
+    const candidate = within(card as HTMLElement)
+    const overview = candidate.getByLabelText('策略概览')
+    const strategyName = await within(overview).findByText('中远通、高澜股份等 3 只')
+    expect(strategyName.getAttribute('title')).toBe('中远通、高澜股份等 3 只')
+    const meta = within(overview).getByLabelText('策略元信息')
+    expect(within(meta).getByText('放量突破')).toBeTruthy()
+    expect(within(meta).getByText('301516 / 300499 · 共 3 只')).toBeTruthy()
+    const codeSummary = within(meta).getByTestId('strategy-code-summary')
+    const codeTooltip = within(meta).getByRole('tooltip')
+    expect(codeSummary.getAttribute('aria-describedby')).toBe(codeTooltip.id)
+    expect(codeTooltip.textContent).toBe('全部代码：301516 / 300499 / 601398')
+    expect(within(meta).getByText('验证未通过')).toBeTruthy()
+    expect(within(meta).getByText('生效中')).toBeTruthy()
+    expect(candidate.getByText('触发规则：').closest('p')?.textContent).toContain('收盘价突破前 20 日最高价')
+    expect(candidate.getByText('退出规则：').closest('p')?.textContent).toContain('收盘价跌破前 20 日最低价')
+    const ruleLines = candidate.getAllByTestId('strategy-rule-line')
+    const tooltips = candidate.getAllByRole('tooltip').filter(tooltip => tooltip !== codeTooltip)
+    expect(ruleLines).toHaveLength(2)
+    expect(tooltips).toHaveLength(2)
+    expect(ruleLines[0]?.getAttribute('aria-describedby')).toBe(tooltips[0]?.id)
+    expect(tooltips[0]?.textContent).toContain('收盘价突破前 20 日最高价')
+    expect(candidate.getByText('样本外平均模拟收益')).toBeTruthy()
+    expect(candidate.getByText('-1.24%')).toBeTruthy()
+    expect(candidate.getByText('样本外最大回撤')).toBeTruthy()
+    expect(candidate.getByText('-18.77%')).toBeTruthy()
+    expect(candidate.queryByText('-32.89%')).toBeNull()
+    expect(candidate.queryByText('标的数')).toBeNull()
+    expect(candidate.queryByText('建议观察')).toBeNull()
+    expect(candidate.queryByText('样本外胜率')).toBeNull()
+    expect(candidate.queryByText('样本外交易')).toBeNull()
+
+    const actions = candidate.getByRole('group', { name: '策略操作' })
+    expect(within(actions).getAllByRole('button').map(button => button.textContent)).toEqual([
+      '查看详情', '回测管理', 'AI 评审', '进入影子验证', '归档',
+    ])
+    const shadowButton = within(actions).getByRole('button', { name: '进入影子验证' })
+    expect(shadowButton.classList.contains(css.secondaryButton!)).toBe(true)
+    expect(shadowButton.classList.contains(css.primaryButton!)).toBe(false)
   })
 
   it('进化诊断标题使用证券名称、代码和中文策略类型', async () => {

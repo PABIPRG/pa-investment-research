@@ -58,9 +58,11 @@ describe('投研产品闭环', () => {
       onAnalyze={() => {}}
     />)
 
-    expect(await screen.findByText('贵州茅台 · 600519')).toBeTruthy()
+    expect(await screen.findByText('贵州茅台')).toBeTruthy()
+    expect(screen.getByText('600519')).toBeTruthy()
     expect(screen.getByText('利好').getAttribute('data-direction')).toBe('利好')
-    expect(screen.getByText('12')).toBeTruthy()
+    expect(screen.getByText('样本外平均模拟收益')).toBeTruthy()
+    expect(screen.getByText('样本外最大回撤')).toBeTruthy()
     expect(screen.getByText('回测结论：样本外胜率/均收益达标')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '进入影子验证' }))
 

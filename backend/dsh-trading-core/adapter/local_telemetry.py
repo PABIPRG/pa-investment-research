@@ -325,12 +325,12 @@ def record_feedback(
     *,
     now: Callable[[], datetime] = _utc_now,
 ) -> dict:
-    """记录当前显式反馈；同一对象最后值覆盖，避免纠正被重复计权。"""
-    if sentiment not in {"useful", "useless"}:
-        raise ValueError("sentiment 必须是 useful 或 useless")
+    """记录当前显式反馈；neutral 删除同一对象的当前值。"""
+    if sentiment not in {"useful", "useless", "neutral"}:
+        raise ValueError("sentiment 必须是 useful、useless 或 neutral")
     state = _settings(store)
     clean_id = _clean_identifier(card_id, field="card_id")
-    if not state["enabled"]:
+    if not state["enabled"] and sentiment != "neutral":
         return {"ok": True, "stored": False, "reason": "paused", "sentiment": sentiment, "card_id": clean_id}
     current_time = now().astimezone(timezone.utc)
     timestamp = _format_ts(current_time)
@@ -355,7 +355,7 @@ def record_feedback(
                 replaced = True
                 continue
             kept.append(row)
-        data["default"] = [rec] + kept
+        data["default"] = kept if sentiment == "neutral" else [rec] + kept
         return _prune_behavior_document(data, cutoff, state["event_cap"])
 
     store.mutate_document("behavior", transform)
