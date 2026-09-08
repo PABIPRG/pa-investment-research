@@ -559,10 +559,12 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     backendId: 'trading-core',
     method: 'GET',
     path: (input) => {
-      knownKeys(input, ['limit', 'bucket', 'match', 'comment', 'strategy_id'])
+      knownKeys(input, ['limit', 'offset', 'bucket', 'business_view', 'match', 'comment', 'strategy_id'])
       return query('/personalized/cards', {
         limit: integer(input, 'limit', 20, 1, 100),
+        offset: integer(input, 'offset', 0, 0, 100),
         bucket: optionalString(input, 'bucket') ?? 'all',
+        business_view: optionalString(input, 'business_view') ?? 'all',
         match: optionalBoolean(input, 'match') ?? false,
         comment: optionalBoolean(input, 'comment') ?? false,
         strategy_id: optionalString(input, 'strategy_id'),

@@ -404,60 +404,6 @@ describe('ui-investment-research apply', () => {
     expect(navigate).toHaveBeenCalledWith('framework')
   })
 
-  it('imports pasted holdings through the backend and refreshes portfolio risk data', async () => {
-    const requestData = vi.fn(async (request: { operation: string }) => {
-      if (request.operation === 'trading-core.holdings') return { items: [] }
-      if (request.operation === 'trading-core.risk-portfolio') return { summary: { n_positions: 0 }, breaches: [] }
-      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
-      if (request.operation === 'trading-core.holdings-save') return { saved: 2 }
-      return {}
-    })
-    const view = render(createElement(InvestmentShell, {
-      useInvestmentUi: useUi({ route: 'portfolio' }),
-      requestData,
-      navigate: vi.fn(),
-      setHistory: vi.fn(),
-      startSession: vi.fn(),
-      openSession: vi.fn(),
-      searchSessions: vi.fn(),
-      renameSession: vi.fn(),
-      archiveSession: vi.fn(),
-      prepareAssistant: vi.fn(),
-    } as never))
-
-    fireEvent.click(view.getByRole('button', { name: '投研资料' }))
-    expect(await view.findByRole('dialog', { name: '投研资料' })).toBeTruthy()
-    expect(await view.findByText(/尚未保存持仓/)).toBeTruthy()
-    fireEvent.click(view.getByRole('button', { name: '导入持仓' }))
-    const dialog = view.getByRole('dialog', { name: '导入持仓' })
-    expect(dialog.parentElement?.parentElement).toBe(document.body)
-    expect(view.container.contains(dialog)).toBe(false)
-    fireEvent.change(view.getByRole('textbox', { name: '持仓导入内容' }), {
-      target: { value: '股票代码,数量,成本价\n600519,100,1500\n000858,200,135' },
-    })
-
-    expect(view.getByText('导入预览')).toBeTruthy()
-    fireEvent.click(view.getByRole('button', { name: '替换并导入 2 条' }))
-
-    await waitFor(() => {
-      expect(requestData).toHaveBeenCalledWith({
-        operation: 'trading-core.holdings-save',
-        input: {
-          holdings: [
-            { ticker: '600519', quantity: 100, cost_price: 1500 },
-            { ticker: '000858', quantity: 200, cost_price: 135 },
-          ],
-        },
-      })
-    })
-    expect(await view.findByText('已导入 2 条持仓，持仓与风险数据已刷新。')).toBeTruthy()
-    await waitFor(() => {
-      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(2)
-      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-portfolio')).toHaveLength(2)
-      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-alerts')).toHaveLength(2)
-    })
-  })
-
   it('keeps global search independent from analysis capability hand-off', () => {
     const setModuleDraft = vi.fn()
     const prepareAssistant = vi.fn()

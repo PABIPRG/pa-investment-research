@@ -17,6 +17,7 @@ export type InvestmentRoute =
 export type AssistantDisplayMode = 'closed' | 'docked' | 'expanded'
 export type AssistantModule = 'general' | 'stock' | 'industry' | 'portfolio' | 'strategy' | 'watch'
 export type StrategyResearchStage = 'form' | 'backtest' | 'shadow' | 'evolution'
+export type StockDetailReturnRoute = Exclude<InvestmentRoute, 'stock-detail' | 'assistant'>
 
 export interface InvestmentUiSnapshot {
   readonly route: InvestmentRoute
@@ -35,6 +36,8 @@ export interface InvestmentUiSnapshot {
   readonly strategyResearchStage?: StrategyResearchStage
   /** Always populated by InvestmentUiState; optional for legacy snapshot providers. */
   readonly evolutionReturnGroup?: EvolutionLifecycleGroup
+  /** One session-local return point. Source pages stay mounted while stock detail is visible. */
+  readonly stockDetailReturnRoute?: StockDetailReturnRoute | undefined
 }
 
 export type InvestmentDraftKey = 'analysisQuery' | 'backtestQuery' | 'watchQuery' | 'chainQuery'
@@ -60,6 +63,7 @@ const INITIAL: InvestmentUiSnapshot = Object.freeze({
   selectedStrategyId: '',
   strategyResearchStage: 'form',
   evolutionReturnGroup: '',
+  stockDetailReturnRoute: undefined,
 })
 
 /** One profile-local navigation source shared by the sidebar and overlay surfaces. */
@@ -75,6 +79,14 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
 
   navigate(route: InvestmentRoute, context: InvestmentNavigationContext = {}): void {
     const nextRoute = route === 'assistant' ? 'analysis' : route
+    const currentRoute = this.snapshot.route === 'assistant' ? 'analysis' : this.snapshot.route
+    const returnRoute = nextRoute === 'stock-detail'
+      ? currentRoute === 'stock-detail'
+        ? this.snapshot.stockDetailReturnRoute
+        : currentRoute
+      : undefined
+    const returningToSource = currentRoute === 'stock-detail'
+      && nextRoute === this.snapshot.stockDetailReturnRoute
     this.publish({
       ...this.snapshot,
       route: nextRoute,
@@ -86,10 +98,11 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
       // concrete strategy id; a stale candidate selected while backtesting
       // must never leak into paper validation.
       selectedStrategyId: context.strategyId
-        ?? (nextRoute === 'projects' ? '' : this.snapshot.selectedStrategyId),
+        ?? (nextRoute === 'projects' && !returningToSource ? '' : this.snapshot.selectedStrategyId),
       strategyResearchStage: context.strategyStage
         ?? (nextRoute === 'framework' ? 'form' : this.snapshot.strategyResearchStage ?? 'form'),
       evolutionReturnGroup: context.evolutionReturnGroup ?? this.snapshot.evolutionReturnGroup ?? '',
+      stockDetailReturnRoute: returnRoute,
     })
   }
 
@@ -138,7 +151,8 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
       && next.selectedStockCode === this.snapshot.selectedStockCode
       && next.selectedStrategyId === this.snapshot.selectedStrategyId
       && next.strategyResearchStage === this.snapshot.strategyResearchStage
-      && next.evolutionReturnGroup === this.snapshot.evolutionReturnGroup) return
+      && next.evolutionReturnGroup === this.snapshot.evolutionReturnGroup
+      && next.stockDetailReturnRoute === this.snapshot.stockDetailReturnRoute) return
     this.snapshot = Object.freeze(next)
     for (const listener of [...this.listeners]) listener()
   }

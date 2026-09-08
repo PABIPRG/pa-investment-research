@@ -32,6 +32,7 @@ interface ResourceState {
   readonly loaded: boolean
   readonly value: unknown
   readonly error: string
+  readonly request?: InvestmentDataRequest
 }
 
 const EMPTY_RESOURCE: ResourceState = Object.freeze({
@@ -58,6 +59,7 @@ function useWorkbenchResource(requestData: RequestData) {
       loaded: previous.loaded && settledKey.current === key,
       value: previous.loaded && settledKey.current === key ? previous.value : undefined,
       error: '',
+      request,
     }))
     let flight = options?.fresh === true ? undefined : flights.current.get(key)
     if (flight === undefined || options?.trailing === true) {
@@ -74,7 +76,7 @@ function useWorkbenchResource(requestData: RequestData) {
     void flight.then((value) => {
       if (current !== generation.current) return
       settledKey.current = key
-      setState({ phase: 'success', loaded: true, value, error: '' })
+      setState({ phase: 'success', loaded: true, value, error: '', request })
     }, (reason: unknown) => {
       if (current !== generation.current) return
       setState(previous => ({ ...previous, phase: 'error', error: productErrorText(reason) }))
@@ -113,6 +115,38 @@ function costAmount(positions: readonly Record<string, unknown>[]): number {
 const BUCKET_LABELS: Readonly<Record<string, string>> = Object.freeze({
   all: '全部', holdings: '持仓', watchlist: '自选', strategy: '策略', fresh: '市场',
 })
+
+const EVENT_PAGE_SIZE = 10
+const EVENT_VIEW_LABELS = Object.freeze({
+  all: '全部',
+  position_risk: '持仓风险',
+  radar_opportunity: '雷达机会点',
+  neutral_event: '中性事件',
+})
+
+type EventView = keyof typeof EVENT_VIEW_LABELS
+type EventBusinessView = Exclude<EventView, 'all'>
+
+interface EventFeed {
+  readonly cards: readonly Record<string, unknown>[]
+  readonly total: number
+  readonly hasMore: boolean
+  readonly nextOffset: number
+  readonly asOf: string
+}
+
+const EMPTY_EVENT_CARDS: readonly Record<string, unknown>[] = Object.freeze([])
+
+function eventBusinessView(card: Record<string, unknown>): EventBusinessView {
+  const returned = text(card.business_view, '')
+  if (returned !== 'all' && returned in EVENT_VIEW_LABELS) return returned as EventBusinessView
+  const direction = text(card.direction, '中性')
+  const matchedHoldings = Array.isArray(asRecord(card.matched).holdings)
+    ? asRecord(card.matched).holdings as readonly unknown[]
+    : []
+  if (direction !== '利好' && direction !== '利空') return 'neutral_event'
+  return direction === '利空' && matchedHoldings.length > 0 ? 'position_risk' : 'radar_opportunity'
+}
 
 // 事件类型徽标（与后端 events.TYPE_EMOJI 的中文事件名对齐；仅前端展示用）。
 // 大盘趋势事件（政策/宏观）即使未命中具体标的也会进入主列表，靠此徽标与命中卡区分。
@@ -239,12 +273,13 @@ function ImpressionArticle({
 }
 
 function PreferenceFeedback({
-  cardId, current, meta, requestData,
+  cardId, current, meta, requestData, compact = false,
 }: {
   cardId: string
   current: string
   meta: LocalTelemetryContext
   requestData: RequestData
+  compact?: boolean
 }) {
   const [sentiment, setSentiment] = useState(current)
   const [busy, setBusy] = useState(false)
@@ -270,14 +305,14 @@ function PreferenceFeedback({
   }
 
   return (
-    <div className={css.preferenceFeedback} role="group" aria-label="内容偏好">
-      <button type="button" aria-pressed={sentiment === 'useful'} disabled={busy} onClick={() => { void submit('useful') }}>
+    <div className={`${css.preferenceFeedback} ${compact ? css.preferenceFeedbackCompact : ''}`} role="group" aria-label="内容偏好">
+      <button type="button" aria-label="值得关注" title="值得关注；再次点击可取消" aria-pressed={sentiment === 'useful'} disabled={busy} onClick={() => { void submit('useful') }}>
         <span className={css.preferenceFeedbackIcon} aria-hidden="true"><IconLikeOutline16 /></span>
-        值得关注
+        {!compact && '值得关注'}
       </button>
-      <button type="button" aria-pressed={sentiment === 'useless'} disabled={busy} onClick={() => { void submit('useless') }}>
+      <button type="button" aria-label="减少此类" title="减少此类；再次点击可取消" aria-pressed={sentiment === 'useless'} disabled={busy} onClick={() => { void submit('useless') }}>
         <span className={css.preferenceFeedbackIcon} aria-hidden="true"><IconDislikeOutline16 /></span>
-        减少此类
+        {!compact && '减少此类'}
       </button>
       {error !== '' && <small role="alert">{error}</small>}
     </div>
@@ -323,8 +358,6 @@ interface ResearchWorkbenchPageProps {
   readonly trackTelemetry: TrackLocalTelemetry
 }
 
-type EventBucket = 'all' | 'holdings' | 'watchlist' | 'strategy'
-
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
   requestData, navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
@@ -338,14 +371,25 @@ export function ResearchWorkbenchPage({
   const quotes = useWorkbenchResource(requestData)
   const alive = useRef(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
-  const [bucket, setBucket] = useState<EventBucket>('all')
+  const [eventView, setEventView] = useState<EventView>('all')
+  const [eventOffset, setEventOffset] = useState(0)
+  const [eventFeeds, setEventFeeds] = useState<Partial<Record<EventView, EventFeed>>>({})
+  const [eventCounts, setEventCounts] = useState<Readonly<Record<string, number>>>({})
+  const [lastEventAsOf, setLastEventAsOf] = useState('')
+  const eventListRef = useRef<HTMLDivElement>(null)
+  const eventLoadMoreRef = useRef<HTMLDivElement>(null)
+  const attentionListRef = useRef<HTMLDivElement>(null)
+  const [attentionEdges, setAttentionEdges] = useState({ top: true, bottom: false })
   const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown>>()
   const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
+  const [riskDetailOrigin, setRiskDetailOrigin] = useState<'panel' | 'overview'>('panel')
   const [selectedOverview, setSelectedOverview] = useState<WorkbenchDetailKind>()
   const [brief, setBrief] = useState<{
     phase: 'idle' | 'running' | 'background' | 'done' | 'error'
     message: string
   }>({ phase: 'idle', message: '' })
+  const eventFeed = eventFeeds[eventView]
+  const eventCards = eventFeed?.cards ?? EMPTY_EVENT_CARDS
 
   useEffect(() => {
     alive.current = true
@@ -364,9 +408,12 @@ export function ResearchWorkbenchPage({
   useEffect(() => {
     cards.run({
       operation: 'trading-core.personalized-cards',
-      input: { limit: 20, bucket: 'all', match: true, comment: false },
+      input: {
+        limit: EVENT_PAGE_SIZE, offset: eventOffset, bucket: 'all', business_view: eventView,
+        match: true, comment: false,
+      },
     }, refreshVersion === 0 ? undefined : { trailing: true })
-  }, [cards.run, refreshVersion])
+  }, [cards.run, eventOffset, eventView, refreshVersion])
 
   const positions = records(asRecord(holdings.state.value).items)
   useQuotePolling(quotes, holdings.state.value, refreshVersion)
@@ -388,8 +435,6 @@ export function ResearchWorkbenchPage({
   const riskSummary = asRecord(riskValue.summary)
   const alertValue = asRecord(alerts.state.value)
   const alertItems = records(alertValue.items)
-  const cardValue = asRecord(cards.state.value)
-  const allCards = records(cardValue.cards)
   const strategyValue = asRecord(matches.state.value)
   const strategyItems = records(strategyValue.items)
   const missingHoldingCodes = positions
@@ -399,14 +444,14 @@ export function ResearchWorkbenchPage({
       return name === '' || name === code
     })
     .map(item => text(item.ticker, ''))
-  const knownCardCodes = new Set(allCards.flatMap(card => records(card.tickers))
+  const knownCardCodes = new Set(eventCards.flatMap(card => records(card.tickers))
     .filter((item) => {
       const code = text(item.code, '')
       const name = text(item.name, '').trim()
       return code !== '' && name !== '' && name !== code
     })
     .map(item => text(item.code, '')))
-  const reasonCodes = allCards.flatMap(card => stringItems(card.reasons)
+  const reasonCodes = eventCards.flatMap(card => stringItems(card.reasons)
     .map(holdingReasonCode)
     .filter((code): code is string => code !== undefined))
   const securityNames = useSecurityNames(requestData, [
@@ -424,21 +469,97 @@ export function ResearchWorkbenchPage({
       currentPrice: number(asRecord(quoteMap.get(code)).price),
     }
   })
-  const visibleCards = useMemo(() => (
-    bucket === 'all' ? allCards : allCards.filter(item => text(item.bucket, '') === bucket)
-  ), [allCards, bucket])
+  const visibleCards = useMemo(
+    () => eventView === 'all' ? eventCards : eventCards.filter(item => eventBusinessView(item) === eventView),
+    [eventCards, eventView],
+  )
+  const eventTotal = eventFeed?.total ?? eventCounts[eventView] ?? eventCards.length
+  const hasNextEventPage = eventFeed?.hasMore ?? false
+  const nextEventOffset = eventFeed?.nextOffset ?? EVENT_PAGE_SIZE
+  const allEventCount = Object.keys(eventCounts).length === 0
+    ? undefined
+    : eventCounts.all ?? ['position_risk', 'radar_opportunity', 'neutral_event']
+      .reduce((sum, key) => sum + (eventCounts[key] ?? 0), 0)
   const actionableAlerts = alertItems.filter(item => (
     text(item.source, '') !== 'profile' && text(item.severity, '低') !== '低'
   ))
   const allBusy = [holdings, risk, alerts, kyc, cards, matches].some(resource => resource.busy)
+
+  useEffect(() => {
+    if (!cards.state.loaded || cards.state.error !== '') return
+    const nextValue = asRecord(cards.state.value)
+    const nextPage = asRecord(nextValue.page_info)
+    const nextPageCards = records(nextValue.cards)
+    const settledInput = asRecord(cards.state.request?.input)
+    const settledView = text(settledInput.business_view, '')
+    if (!(settledView in EVENT_VIEW_LABELS)) return
+    const responseView = settledView as EventView
+    const responseOffset = number(settledInput.offset) ?? number(nextPage.offset) ?? 0
+    const pageLimit = number(nextPage.limit) ?? EVENT_PAGE_SIZE
+    const nextTotal = number(nextPage.total) ?? number(nextValue.total) ?? nextPageCards.length
+    const nextAsOf = text(nextValue.as_of, '')
+    if (nextAsOf !== '') setLastEventAsOf(nextAsOf)
+    const nextCounts = Object.fromEntries(Object.entries(asRecord(nextValue.business_view_counts))
+      .flatMap(([key, value]) => {
+        const count = number(value)
+        return count === undefined ? [] : [[key, count]]
+      }))
+    if (Object.keys(nextCounts).length > 0) setEventCounts(nextCounts)
+    setEventFeeds(current => {
+      const currentFeed = current[responseView]
+      const currentCards = currentFeed?.cards ?? EMPTY_EVENT_CARDS
+      const ids = new Set(currentCards.map((card, index) => text(card.card_id, `existing-${index}`)))
+      const mergedCards = responseOffset === 0
+        ? nextPageCards
+        : [...currentCards, ...nextPageCards.filter((card, index) => !ids.has(text(card.card_id, `page-${responseOffset}-${index}`)))]
+      return {
+        ...current,
+        [responseView]: {
+          cards: mergedCards,
+          total: nextTotal,
+          hasMore: nextPage.has_more === true,
+          nextOffset: number(nextPage.next_offset) ?? responseOffset + pageLimit,
+          asOf: nextAsOf || currentFeed?.asOf || '',
+        },
+      }
+    })
+  }, [cards.state.error, cards.state.loaded, cards.state.request, cards.state.value])
+
+  useEffect(() => {
+    const target = eventLoadMoreRef.current
+    const root = eventListRef.current
+    if (target === null || root === null || !hasNextEventPage || cards.busy || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) setEventOffset(nextEventOffset)
+    }, { root, rootMargin: '160px 0px' })
+    observer.observe(target)
+    return () => { observer.disconnect() }
+  }, [cards.busy, eventView, hasNextEventPage, nextEventOffset])
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const node = attentionListRef.current
+      if (node === null) return
+      setAttentionEdges({
+        top: node.scrollTop <= 1,
+        bottom: node.scrollTop + node.clientHeight >= node.scrollHeight - 1,
+      })
+    })
+    return () => { window.cancelAnimationFrame(frame) }
+  }, [actionableAlerts.length])
+
+  const refreshDashboard = useCallback((): void => {
+    setEventOffset(0)
+    setRefreshVersion(value => value + 1)
+  }, [])
 
   const saveHoldings = useCallback(async (next: readonly WorkbenchHoldingInput[]): Promise<void> => {
     await requestData({
       operation: 'trading-core.holdings-save',
       input: { holdings: next.map(item => ({ ...item })) },
     })
-    if (alive.current) setRefreshVersion(value => value + 1)
-  }, [requestData])
+    if (alive.current) refreshDashboard()
+  }, [refreshDashboard, requestData])
 
   const startBrief = async (): Promise<void> => {
     if (brief.phase === 'running') return
@@ -473,7 +594,7 @@ export function ResearchWorkbenchPage({
 
   const riskAsOf = text(riskValue.as_of, '')
   const alertsAsOf = text(alertValue.as_of, '')
-  const cardsAsOf = text(cardValue.as_of, '')
+  const cardsAsOf = eventFeed?.asOf ?? lastEventAsOf
   const matchesAsOf = text(strategyValue.as_of, '')
 
   return (
@@ -490,7 +611,7 @@ export function ResearchWorkbenchPage({
             className={css.secondaryButton}
             aria-busy={allBusy}
             disabled={allBusy}
-            onClick={() => { setRefreshVersion(value => value + 1) }}
+            onClick={refreshDashboard}
           >{allBusy ? '更新中…' : '刷新数据'}</button>
           <button
             type="button"
@@ -515,12 +636,11 @@ export function ResearchWorkbenchPage({
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('cost') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价 →</small></button>
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('market-value') }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small>数量 × 实时价，不含现金 →</small></button>
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-center') }}><span>需关注预警</span><strong data-tone={actionableAlerts.length > 0 ? 'danger' : undefined}>{alerts.state.loaded ? String(actionableAlerts.length) : '—'}</strong><small>{alerts.state.loaded ? '高/中风险，点击查看 →' : '组合、影子与事件'}</small></button>
       </section>
 
       <div className={css.dashboardGrid}>
         <div className={css.dashboardPrimary}>
-          <section className={css.dashboardPanel} aria-labelledby="dashboard-holdings-title" aria-busy={holdings.busy}>
+          <section className={`${css.dashboardPanel} ${css.dashboardOverviewPanel}`} aria-labelledby="dashboard-holdings-title" aria-busy={holdings.busy}>
             <div className={css.dashboardPanelHead}>
               <div><h2 id="dashboard-holdings-title">持仓概览</h2><p>快速确认当前研究对象，可在当前页查看并维护完整持仓</p></div>
               <RegionMeta state={holdings.state} settled={`${positions.length} 项`} />
@@ -554,29 +674,53 @@ export function ResearchWorkbenchPage({
           <section className={css.dashboardPanel} aria-labelledby="dashboard-events-title" aria-busy={cards.busy}>
             <div className={css.dashboardPanelHead}>
               <div><h2 id="dashboard-events-title">关联资讯与事件</h2><p>命中你关注标的的真实事件，并补充反映大盘趋势的政策/宏观事件</p></div>
-              <RegionMeta state={cards.state} settled={cardsAsOf === '' ? `${allCards.length} 条` : `更新于 ${displayTime(cardsAsOf)}`} />
+              <span className={`${css.dashboardRegionMeta} ${css.dashboardEventHeaderMeta}`} aria-live="polite">
+                {cardsAsOf === '' ? (cards.busy ? '加载中…' : `${eventCards.length} 条`) : `更新于 ${displayTime(cardsAsOf)}`}
+              </span>
             </div>
-            <div className={css.segmented} role="group" aria-label="事件范围">
-              {(['all', 'holdings', 'watchlist', 'strategy'] as const).map(value => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={bucket === value}
-                  className={bucket === value ? css.segmentActive : undefined}
-                  onClick={() => { setBucket(value) }}
-                >{BUCKET_LABELS[value]}</button>
-              ))}
+            <div className={css.segmented} role="group" aria-label="事件业务视角">
+              {(Object.keys(EVENT_VIEW_LABELS) as EventView[]).map(value => {
+                const count = value === 'all' ? allEventCount : eventCounts[value]
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={eventView === value}
+                    className={eventView === value ? css.segmentActive : undefined}
+                    onClick={() => {
+                      if (eventView === value) return
+                      setEventView(value)
+                      setEventOffset(0)
+                      if (eventListRef.current !== null) eventListRef.current.scrollTop = 0
+                    }}
+                  >{EVENT_VIEW_LABELS[value]}{count === undefined ? '' : ` ${count}`}</button>
+                )
+              })}
             </div>
+            <div
+              className={css.dashboardEventViewport}
+              ref={eventListRef}
+              role="region"
+              aria-label="关联资讯列表"
+              aria-busy={cards.busy}
+              tabIndex={0}
+            >
             {cards.state.error !== '' && (
               <RegionError
                 title="关联事件暂不可用"
                 message={cards.state.error}
-                retained={cards.state.loaded}
-                retry={() => { cards.run({ operation: 'trading-core.personalized-cards', input: { limit: 20, bucket: 'all', match: true, comment: false } }) }}
+                retained={eventCards.length > 0}
+                retry={() => { cards.run({
+                  operation: 'trading-core.personalized-cards',
+                  input: {
+                    limit: EVENT_PAGE_SIZE, offset: eventOffset, bucket: 'all', business_view: eventView,
+                    match: true, comment: false,
+                  },
+                }) }}
               />
             )}
-            {!cards.state.loaded && cards.state.error === '' && <RegionSkeleton rows={4} />}
-            {cards.state.loaded && visibleCards.map((card, index) => {
+            {!cards.state.loaded && eventCards.length === 0 && cards.state.error === '' && <RegionSkeleton rows={4} />}
+            {visibleCards.map((card, index) => {
               const ticker = tickerFromCard(card)
               const reasons = stringItems(card.reasons)
               const cardRisk = asRecord(card.risk)
@@ -595,16 +739,16 @@ export function ResearchWorkbenchPage({
                   }}
                 >
                   <div className={css.dashboardEventBody}>
+                    <h3>{title}</h3>
                     <div className={css.dashboardEventMeta}>
+                      <time>{displayTime(card.time)}</time>
                       {EVENT_TYPE_BADGE[text(card.type, '')] !== undefined && (
                         <span data-kind="type">{EVENT_TYPE_BADGE[text(card.type, '')]}</span>
                       )}
                       <span>{BUCKET_LABELS[text(card.bucket, '')] ?? '关联事件'}</span>
                       {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
                       <span>{text(card.source, '来源未知')}</span>
-                      <time>{displayTime(card.time)}</time>
                     </div>
-                    <h3>{title}</h3>
                     {showSummary && <p>{summary}</p>}
                     {reasons.length > 0 && (
                       <div className={css.dashboardReasons}>
@@ -635,13 +779,6 @@ export function ResearchWorkbenchPage({
                         })
                         setSelectedEvent(card)
                       }}>详情</button>
-                      {ticker !== undefined && <button type="button" onClick={() => {
-                        void trackTelemetry({
-                          action: 'open', surface: 'dashboard', targetType: 'security', targetId: ticker.code,
-                          context: { ticker: ticker.code },
-                        })
-                        navigate('stock-detail', { stockCode: ticker.code })
-                      }}>个股</button>}
                       <button
                         type="button"
                         onClick={() => {
@@ -655,69 +792,109 @@ export function ResearchWorkbenchPage({
                       current={text(card.feedback_sentiment, '')}
                       meta={eventTelemetryContext(card)}
                       requestData={requestData}
+                      compact
                     />
                   </div>
                 </ImpressionArticle>
               )
             })}
-            {cards.state.loaded && visibleCards.length === 0 && (
-              <div className={css.dashboardEmpty}>当前筛选未返回关联事件。可以切换范围或稍后刷新；事件源尚未完成更新时也可能暂时为空。</div>
+            {cards.state.loaded && eventCards.length === 0 && (
+              <div className={css.dashboardEmpty}>当前业务视角没有关联事件。可以切换分类或稍后刷新；事件源尚未完成更新时也可能暂时为空。</div>
             )}
+            {eventCards.length > 0 && eventTotal > 0 && (
+              <div ref={eventLoadMoreRef} className={css.dashboardEventLoadMore} data-testid="event-load-more-sentinel" role="status" aria-live="polite">
+                {cards.busy ? '正在加载更多…' : hasNextEventPage ? '继续向下滚动加载' : `已加载全部 ${eventTotal} 条`}
+              </div>
+            )}
+            </div>
           </section>
         </div>
 
         <aside className={css.dashboardSide} aria-label="风险与策略">
-          <section className={css.dashboardPanel} tabIndex={-1} aria-labelledby="dashboard-alerts-title" aria-busy={alerts.busy}>
+          <section className={`${css.dashboardPanel} ${css.dashboardOverviewPanel}`} tabIndex={-1} aria-labelledby="dashboard-alerts-title" aria-busy={alerts.busy}>
             <div className={css.dashboardPanelHead}>
-              <div><h2 id="dashboard-alerts-title">风险预警</h2><p>按严重度优先处理</p></div>
-              <RegionMeta state={alerts.state} settled={alertsAsOf === '' ? `${alertItems.length} 条` : `更新于 ${displayTime(alertsAsOf)}`} />
+              <div className={css.dashboardAttentionHeading}>
+                <div className={css.dashboardAttentionTitle}>
+                  <h2 id="dashboard-alerts-title">重点关注</h2>
+                  <span aria-live="polite">{alerts.state.loaded ? `${actionableAlerts.length} 条` : '—'}</span>
+                </div>
+                <RegionMeta state={alerts.state} settled={alertsAsOf === '' ? '等待更新时间' : `更新于 ${displayTime(alertsAsOf)}`} />
+              </div>
+              <div className={css.dashboardAttentionHeadActions}>
+                <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-center') }}>查看详情 →</button>
+              </div>
             </div>
             {alertValue.degraded === true && <div className={css.dashboardDegraded}>关联事件暂未更新，组合与画像预警仍可用。</div>}
             {alerts.state.error !== '' && (
-              <RegionError title="风险预警暂不可用" message={alerts.state.error} retained={alerts.state.loaded} retry={() => { alerts.run({ operation: 'trading-core.risk-alerts' }) }} />
+              <RegionError title="重点关注暂不可用" message={alerts.state.error} retained={alerts.state.loaded} retry={() => { alerts.run({ operation: 'trading-core.risk-alerts' }) }} />
             )}
             {!alerts.state.loaded && alerts.state.error === '' && <RegionSkeleton />}
-            {alerts.state.loaded && alertItems.slice(0, 5).map((item, index) => {
-              return (
-                <ImpressionArticle
-                  className={css.dashboardAlert}
-                  key={text(item.id, String(index))}
-                  trackTelemetry={trackTelemetry}
-                  impression={{
-                    action: 'impression', surface: 'dashboard', targetType: 'risk',
-                    targetId: text(item.id, `risk-${index}`), context: riskTelemetryContext(item),
-                  }}
-                >
-                  <span data-severity={text(item.severity, '低')}>{text(item.severity, '低')}</span>
-                  <div><strong>{text(item.title, '风险提醒')}</strong><p>{text(item.detail, '')}</p><small>{displayTime(item.ts)}</small></div>
-                  <button
-                    type="button"
-                    data-action="risk-detail"
-                    data-risk-id={text(item.id, text(item.indicator, text(item.title, String(index))))}
-                    aria-haspopup="dialog"
-                    onClick={() => {
-                      void trackTelemetry({
-                        action: 'open', surface: 'dashboard', targetType: 'risk',
-                        targetId: text(item.id, `risk-${index}`), context: riskTelemetryContext(item),
-                      })
-                      setSelectedRisk({
-                        ...item,
-                        degraded: alertValue.degraded === true,
-                        degraded_reason: text(alertValue.degraded_reason, '关联事件暂未更新，组合与画像预警仍可用。'),
-                      })
+            {alerts.state.loaded && actionableAlerts.length > 0 && (
+              <div className={css.dashboardAttentionViewport} data-at-top={attentionEdges.top} data-at-bottom={attentionEdges.bottom}>
+              <div
+                className={css.dashboardAttentionList}
+                ref={attentionListRef}
+                role="region"
+                aria-label={`重点关注列表，共 ${actionableAlerts.length} 条`}
+                tabIndex={0}
+                onScroll={(event) => {
+                  const node = event.currentTarget
+                  setAttentionEdges({
+                    top: node.scrollTop <= 1,
+                    bottom: node.scrollTop + node.clientHeight >= node.scrollHeight - 1,
+                  })
+                }}
+              >
+                {actionableAlerts.map((item, index) => (
+                  <ImpressionArticle
+                    className={css.dashboardAlert}
+                    key={text(item.id, String(index))}
+                    trackTelemetry={trackTelemetry}
+                    impression={{
+                      action: 'impression', surface: 'dashboard', targetType: 'risk',
+                      targetId: text(item.id, `risk-${index}`), context: riskTelemetryContext(item),
                     }}
-                  >查看详情</button>
-                  <PreferenceFeedback
-                    cardId={text(item.id, `risk-${index}`)}
-                    current={text(asRecord(item.feedback).current, '')}
-                    meta={riskTelemetryContext(item)}
-                    requestData={requestData}
-                  />
-                </ImpressionArticle>
-              )
-            })}
-            {alerts.state.loaded && alertItems.length === 0 && <div className={css.dashboardGood}>当前没有风险预警</div>}
-            <button type="button" className={css.dashboardTextButton} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-center') }}>查看完整风险详情 →</button>
+                  >
+                    <span data-severity={text(item.severity, '中')}>{text(item.severity, '中')}</span>
+                    <div className={css.dashboardAlertTitleRow}>
+                      <strong>{text(item.title, '风险提醒')}</strong>
+                      <button
+                        className={css.dashboardAlertDetailButton}
+                        type="button"
+                        data-action="risk-detail"
+                        data-risk-id={text(item.id, text(item.indicator, text(item.title, String(index))))}
+                        aria-haspopup="dialog"
+                        onClick={() => {
+                          void trackTelemetry({
+                            action: 'open', surface: 'dashboard', targetType: 'risk',
+                            targetId: text(item.id, `risk-${index}`), context: riskTelemetryContext(item),
+                          })
+                          setRiskDetailOrigin('panel')
+                          setSelectedRisk({
+                            ...item,
+                            degraded: alertValue.degraded === true,
+                            degraded_reason: text(alertValue.degraded_reason, '关联事件暂未更新，组合与画像预警仍可用。'),
+                          })
+                        }}
+                      >查看详情</button>
+                    </div>
+                    <p className={css.dashboardAlertDescription}>{text(item.detail, '')}</p>
+                    <div className={css.dashboardAlertFooter}>
+                      <time>{displayTime(item.ts)}</time>
+                      <PreferenceFeedback
+                        cardId={text(item.id, `risk-${index}`)}
+                        current={text(asRecord(item.feedback).current, '')}
+                        meta={riskTelemetryContext(item)}
+                        requestData={requestData}
+                        compact
+                      />
+                    </div>
+                  </ImpressionArticle>
+                ))}
+              </div>
+              </div>
+            )}
+            {alerts.state.loaded && actionableAlerts.length === 0 && <div className={css.dashboardGood}>当前没有需要重点关注的高/中影响事项</div>}
           </section>
 
           <KycProfilePanel
@@ -799,6 +976,15 @@ export function ResearchWorkbenchPage({
           quotesState={{ loaded: quotes.state.loaded, busy: quotes.busy, error: quotes.state.error }}
           riskState={{ loaded: risk.state.loaded, busy: risk.busy, error: risk.state.error }}
           alertsState={{ loaded: alerts.state.loaded, busy: alerts.busy, error: alerts.state.error }}
+          onOpenAlert={(item) => {
+            setRiskDetailOrigin('overview')
+            setSelectedOverview(undefined)
+            setSelectedRisk({
+              ...item,
+              degraded: alertValue.degraded === true,
+              degraded_reason: text(alertValue.degraded_reason, '关联事件暂未更新，组合与画像预警仍可用。'),
+            })
+          }}
           onSaveHoldings={saveHoldings}
           onClose={() => { setSelectedOverview(undefined) }}
         />
@@ -806,10 +992,15 @@ export function ResearchWorkbenchPage({
       {selectedRisk !== undefined && (
         <RiskDetailDialog
           item={selectedRisk}
-          onClose={() => { setSelectedRisk(undefined) }}
+          onClose={() => {
+            setSelectedRisk(undefined)
+            if (riskDetailOrigin === 'overview') setSelectedOverview('risk-center')
+            setRiskDetailOrigin('panel')
+          }}
           onAnalyze={() => {
             const target = riskIntentTarget(selectedRisk)
             setSelectedRisk(undefined)
+            setRiskDetailOrigin('panel')
             if (target.strategyId !== undefined) onAnalyze({ kind: 'strategy', strategyId: target.strategyId })
             else if (target.code !== undefined) onAnalyze({ kind: 'stock', code: target.code })
             else onAnalyze({ kind: 'portfolio' })

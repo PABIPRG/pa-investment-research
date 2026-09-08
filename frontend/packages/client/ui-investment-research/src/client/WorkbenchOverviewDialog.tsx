@@ -38,6 +38,7 @@ interface WorkbenchOverviewDialogProps {
   readonly quotesState: WorkbenchResourceStatus
   readonly riskState: WorkbenchResourceStatus
   readonly alertsState: WorkbenchResourceStatus
+  readonly onOpenAlert: (item: Record<string, unknown>) => void
   readonly onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[]) => Promise<void>
   readonly onClose: () => void
 }
@@ -645,7 +646,7 @@ function RiskProfileDetail({ risk, riskAsOf }: { risk: Record<string, unknown>; 
 }
 
 function RiskCenterDetail({
-  risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason, riskState, alertsState,
+  risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason, riskState, alertsState, onOpenAlert,
 }: Omit<WorkbenchOverviewDialogProps, 'kind' | 'positions' | 'onClose' | 'onSaveHoldings'>) {
   const summary = asRecord(risk.summary)
   const breaches = records(risk.breaches)
@@ -693,6 +694,7 @@ function RiskCenterDetail({
                 </div>
                 <small>{text(item.ts, '时间未知')}</small>
               </div>
+              <button type="button" className={css.workbenchRiskDetailButton} aria-haspopup="dialog" onClick={() => { onOpenAlert(item) }}>查看详情</button>
             </li>
           ))}</ul>}
       </section>
@@ -713,7 +715,7 @@ function RiskCenterDetail({
 
 export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
-  holdingsState, quotesState, riskState, alertsState, onSaveHoldings, onClose,
+  holdingsState, quotesState, riskState, alertsState, onOpenAlert, onSaveHoldings, onClose,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
@@ -755,6 +757,7 @@ export function WorkbenchOverviewDialog({
               quotesState={quotesState}
               riskState={riskState}
               alertsState={alertsState}
+              onOpenAlert={onOpenAlert}
             />}
     </DetailDialog>
   )

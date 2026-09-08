@@ -38,6 +38,8 @@ const scrollResourceLeases = new WeakMap<HTMLElement, ScrollResourceLease>()
 
 export interface ResearchFloatingSurfaceProps {
   readonly mode: ResearchSurfaceMode
+  /** Keeps the mounted research tree alive while another primary route is temporarily visible. */
+  readonly suspended?: boolean
   readonly subject: ResearchSubject
   readonly dockedWidth?: number
   readonly triggerRef: RefObject<HTMLElement>
@@ -176,7 +178,7 @@ function acquireModalResources(
 }
 
 export function ResearchFloatingSurface({
-  mode,
+  mode, suspended = false,
   subject,
   dockedWidth,
   triggerRef,
@@ -204,12 +206,13 @@ export function ResearchFloatingSurface({
       ?? widthAnchorRef.current?.ownerDocument.defaultView
     return ownerWindow?.matchMedia(MOBILE_QUERY).matches ?? false
   })
-  const modal = mode === 'expanded' || (mode === 'docked' && mobile)
+  const effectiveMode: ResearchSurfaceMode = suspended ? 'closed' : mode
+  const modal = effectiveMode === 'expanded' || (effectiveMode === 'docked' && mobile)
   const subjectName = subject.name?.trim() || subject.code
   const subjectLabel = subject.code === subjectName
     ? subjectName
     : `${subjectName}（${subject.code}）`
-  const announcementSignature = `${mode}\u0000${subjectLabel}`
+  const announcementSignature = `${effectiveMode}\u0000${subjectLabel}`
   const previousAnnouncementSignatureRef = useRef(announcementSignature)
 
   useEffect(() => {
@@ -228,7 +231,7 @@ export function ResearchFloatingSurface({
   }, [backgroundRef, scrollContainerRef, triggerRef, widthAnchorRef])
 
   useLayoutEffect(() => {
-    if (mode !== 'docked' || mobile) {
+    if (effectiveMode !== 'docked' || mobile) {
       surfaceRef.current?.style.removeProperty('--investment-research-surface-width')
       return
     }
@@ -260,17 +263,17 @@ export function ResearchFloatingSurface({
       resizeObserver?.disconnect()
       ownerWindow.removeEventListener('resize', updateWidth)
     }
-  }, [dockedWidth, mobile, mode, widthAnchorRef])
+  }, [dockedWidth, effectiveMode, mobile, widthAnchorRef])
 
   useEffect(() => {
     const surface = surfaceRef.current
     if (surface === null) return
     surface.inert = !interactionEnabled
     return () => { surface.inert = false }
-  }, [interactionEnabled, mode])
+  }, [interactionEnabled, effectiveMode])
 
   useEffect(() => {
-    if (!isSurfaceMode(mode) || !interactionEnabled || !escapeEnabled) return
+    if (!isSurfaceMode(effectiveMode) || !interactionEnabled || !escapeEnabled) return
     const ownerDocument = surfaceRef.current?.ownerDocument
     if (ownerDocument === undefined) return
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
@@ -280,7 +283,7 @@ export function ResearchFloatingSurface({
     }
     ownerDocument.addEventListener('keydown', onKeyDown)
     return () => { ownerDocument.removeEventListener('keydown', onKeyDown) }
-  }, [escapeEnabled, interactionEnabled, mode, onModeChange])
+  }, [effectiveMode, escapeEnabled, interactionEnabled, mode, onModeChange])
 
   useEffect(() => {
     if (!modal || !modalResourcesEnabled) return
@@ -355,9 +358,9 @@ export function ResearchFloatingSurface({
     }
 
     const previousMode = previousModeRef.current
-    previousModeRef.current = mode
+    previousModeRef.current = effectiveMode
     const wasSurface = isSurfaceMode(previousMode)
-    const isSurface = isSurfaceMode(mode)
+    const isSurface = isSurfaceMode(effectiveMode)
     if (!wasSurface && isSurface) entryTriggerRef.current = triggerRef.current
     else if (wasSurface && !isSurface) {
       const entryTrigger = entryTriggerRef.current
@@ -386,11 +389,11 @@ export function ResearchFloatingSurface({
         restoreFocusFrameRef.current = undefined
       }
     }
-  }, [interactionEnabled, mode, restoreFocusOnExit, triggerRef])
+  }, [effectiveMode, interactionEnabled, restoreFocusOnExit, triggerRef])
 
   useLayoutEffect(() => {
-    if (isSurfaceMode(mode)) entryTriggerRef.current = triggerRef.current
-  }, [mode, subject.code, triggerRef])
+    if (isSurfaceMode(effectiveMode)) entryTriggerRef.current = triggerRef.current
+  }, [effectiveMode, subject.code, triggerRef])
 
   useEffect(() => {
     if (previousAnnouncementSignatureRef.current === announcementSignature) return
@@ -401,8 +404,8 @@ export function ResearchFloatingSurface({
       docked: '已悬浮',
       expanded: '已展开',
     }
-    setAnnouncement(`${subjectLabel}研究窗${modeText[mode]}`)
-  }, [announcementSignature, mode, subjectLabel])
+    setAnnouncement(`${subjectLabel}研究窗${modeText[effectiveMode]}`)
+  }, [announcementSignature, effectiveMode, subjectLabel])
 
   const status = (
     <span
@@ -422,6 +425,7 @@ export function ResearchFloatingSurface({
         <button
           type="button"
           className={css.researchFloatingRestore}
+          hidden={suspended}
           aria-label={`恢复${subjectName}研究窗`}
           disabled={!interactionEnabled}
           onClick={() => { onModeChange('docked') }}
@@ -445,6 +449,7 @@ export function ResearchFloatingSurface({
       <section
         ref={surfaceRef}
         className={css.researchFloatingSurface}
+        hidden={suspended}
         data-mode={mode}
         data-modal={modal ? 'true' : 'false'}
         data-placement={modal ? 'modal' : 'viewport'}

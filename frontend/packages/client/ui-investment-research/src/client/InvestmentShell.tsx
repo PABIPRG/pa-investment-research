@@ -186,8 +186,8 @@ export type InvestmentWelcomeProps = PropsRuntime<'conversation.hero.welcome'> &
 
 type NavigationRoute = Exclude<InvestmentRoute, 'stock-detail' | 'assistant' | 'projects'>
 
-function navigationModule(route: InvestmentRoute): NavigationRoute {
-  if (route === 'stock-detail') return 'opportunity'
+function navigationModule(route: InvestmentRoute, stockDetailReturnRoute?: InvestmentUiSnapshot['stockDetailReturnRoute']): NavigationRoute {
+  if (route === 'stock-detail') return navigationModule(stockDetailReturnRoute ?? 'opportunity')
   if (route === 'assistant') return 'analysis'
   if (route === 'projects') return 'framework'
   return route
@@ -382,10 +382,8 @@ export function InvestmentWelcome(_props: InvestmentWelcomeProps) {
 export function InvestmentSidebar({
   wide, useInvestmentUi, navigate,
 }: InvestmentSidebarProps) {
-  const route = useInvestmentUi(s => s.route)
-  const activeRoute: NavigationRoute = route === 'stock-detail'
-    ? 'opportunity'
-    : route === 'projects' ? 'framework' : route === 'assistant' ? 'analysis' : route
+  const snapshot = useInvestmentUi(s => s)
+  const activeRoute = navigationModule(snapshot.route, snapshot.stockDetailReturnRoute)
 
   return (
     <div className={wide ? css.sidebarRegion : `${css.sidebarRegion} ${css.sidebarRegionCompact}`}>
@@ -882,7 +880,6 @@ export function InvestmentShell({
   const [switchingSessionId, setSwitchingSessionId] = useState<SessionId | undefined>()
   const [historyClosing, setHistoryClosing] = useState(false)
   const [sessionError, setSessionError] = useState<string | null>(null)
-  const [materialsOpen, setMaterialsOpen] = useState(false)
   const [requestedReportId, setRequestedReportId] = useState('')
   const historyTriggerRef = useRef<HTMLButtonElement>(null)
   const reportTriggerRef = useRef<HTMLButtonElement>(null)
@@ -890,11 +887,8 @@ export function InvestmentShell({
   const researchTriggerRef = useRef<HTMLElement>(null)
   const opportunityScrollRef = useRef<HTMLDivElement>(null)
   const opportunityResearchWidthAnchorRef = useRef<HTMLDivElement>(null)
-  const materialsTriggerRef = useRef<HTMLButtonElement>(null)
-  const materialsCloseRef = useRef<HTMLButtonElement>(null)
-  const materialsDrawerRef = useRef<HTMLElement>(null)
   const workbenchRef = useRef<HTMLElement>(null)
-  const previousNavigationModuleRef = useRef(navigationModule(snapshot.route))
+  const previousNavigationModuleRef = useRef(navigationModule(snapshot.route, snapshot.stockDetailReturnRoute))
   const navigationEpochRef = useRef(0)
   const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
   const assistantExitReasonRef = useRef<AssistantExitReason>('none')
@@ -910,6 +904,8 @@ export function InvestmentShell({
   const [researchReturnTarget, setResearchReturnTarget] = useState<ResearchReturnTarget>()
   const researchSurfaceRef = useRef(researchSurface)
   const researchReturnTargetRef = useRef(researchReturnTarget)
+  const stockDetailReturnRoute = snapshot.stockDetailReturnRoute ?? 'opportunity'
+  const retainedRoute = snapshot.route === 'stock-detail' ? stockDetailReturnRoute : undefined
   const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
   const [dashboardView, setDashboardView] = useState<'workbench' | 'preferences'>('workbench')
@@ -1172,8 +1168,8 @@ export function InvestmentShell({
     if (isAnalysisRoute) setAnalysisVisited(true)
   }, [isAnalysisRoute])
   useEffect(() => {
-    if (snapshot.route !== 'dashboard') setDashboardView('workbench')
-  }, [snapshot.route])
+    if (snapshot.route !== 'dashboard' && retainedRoute !== 'dashboard') setDashboardView('workbench')
+  }, [retainedRoute, snapshot.route])
   useEffect(() => {
     document.body.dataset.investmentAssistantMode = conversationPrimary ? 'closed' : assistantMode
     if (conversationPrimary) {
@@ -1242,7 +1238,7 @@ export function InvestmentShell({
     }
   }, [assistantCloseRequestGeneration, assistantMode, updateResearchReturnTarget, updateResearchSurface])
   useLayoutEffect(() => {
-    const nextModule = navigationModule(snapshot.route)
+    const nextModule = navigationModule(snapshot.route, snapshot.stockDetailReturnRoute)
     const previousModule = previousNavigationModuleRef.current
     previousNavigationModuleRef.current = nextModule
     if (previousModule === nextModule) return
@@ -1256,7 +1252,7 @@ export function InvestmentShell({
     updateResearchSurface(INITIAL_RESEARCH_SURFACE)
     if (previousModule === 'opportunity' && typeof setModuleDraft === 'function') setModuleDraft('watchQuery', '')
     if (assistantModeRef.current !== 'closed' && typeof setAssistantMode === 'function') setAssistantMode('closed')
-  }, [recordAssistantSurfaceIntent, setAssistantMode, setModuleDraft, snapshot.route, updateResearchReturnTarget, updateResearchSurface])
+  }, [recordAssistantSurfaceIntent, setAssistantMode, setModuleDraft, snapshot.route, snapshot.stockDetailReturnRoute, updateResearchReturnTarget, updateResearchSurface])
   useEffect(() => () => {
     navigationEpochRef.current += 1
     pendingResearchActivationRef.current = undefined
@@ -1274,37 +1270,6 @@ export function InvestmentShell({
       workbench.removeAttribute('aria-hidden')
     }
   }, [assistantMode, conversationPrimary, opportunityAssistantOverlay])
-  useEffect(() => {
-    if (!conversationPrimary) setMaterialsOpen(false)
-  }, [conversationPrimary])
-  useEffect(() => {
-    if (!materialsOpen) return
-    materialsCloseRef.current?.focus()
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setMaterialsOpen(false)
-        return
-      }
-      if (event.key !== 'Tab') return
-      const controls = [...(materialsDrawerRef.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      ) ?? [])]
-      if (controls.length === 0) return
-      const first = controls[0]
-      const last = controls[controls.length - 1]
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault(); last?.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault(); first?.focus()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-      materialsTriggerRef.current?.focus()
-    }
-  }, [materialsOpen])
   useEffect(() => {
     if (assistantMode === 'closed') return
     const assistantIsModal = assistantMode === 'expanded' || opportunityAssistantOverlay
@@ -1441,15 +1406,6 @@ export function InvestmentShell({
                 aria-expanded={snapshot.historyOpen}
                 onClick={() => { setHistoryClosing(false); setHistory(true) }}
               ><HistoryIcon /><span className={css.actionLabel}>历史对话</span></button>
-              <button
-                ref={materialsTriggerRef}
-                type="button"
-                className={css.secondaryButton}
-                aria-label="投研资料"
-                aria-haspopup="dialog"
-                aria-expanded={materialsOpen}
-                onClick={() => { setMaterialsOpen(true) }}
-              ><ReportIcon /><span className={css.actionLabel}>投研资料</span></button>
             </>
           )}
           <button
@@ -1492,11 +1448,12 @@ export function InvestmentShell({
             />
           </div>
         )}
-        {snapshot.route === 'dashboard' && (
+        {(snapshot.route === 'dashboard' || retainedRoute === 'dashboard') && (
           <div
             className={css.dashboardViewTransition}
             data-testid="dashboard-view-transition"
             data-view={dashboardView}
+            hidden={snapshot.route !== 'dashboard'}
           >
             <div className={css.dashboardViewPane} data-dashboard-view="workbench" hidden={dashboardView !== 'workbench'}>
               <ResearchWorkbenchPage
@@ -1523,7 +1480,8 @@ export function InvestmentShell({
             )}
           </div>
         )}
-        {snapshot.route === 'opportunity' && (
+        {(snapshot.route === 'opportunity' || retainedRoute === 'opportunity') && (
+          <div className={css.routeSurface} hidden={snapshot.route !== 'opportunity'}>
           <OpportunityPage
             requestData={requestData}
             assistantLayout={opportunitySurfaceLayout}
@@ -1540,19 +1498,22 @@ export function InvestmentShell({
             onOpenResearch={openResearch}
             onAnalyzeResearch={prepareAssistantFromOpportunity}
           />
+          </div>
         )}
         {snapshot.route === 'stock-detail' && (
           <StockDetailPage
             requestData={requestData}
             code={snapshot.selectedStockCode}
+            backDestination={stockDetailReturnRoute}
             onBack={() => {
-              setModuleDraft('watchQuery', snapshot.selectedStockCode)
-              navigate('opportunity')
+              if (stockDetailReturnRoute === 'opportunity') setModuleDraft('watchQuery', snapshot.selectedStockCode)
+              navigate(stockDetailReturnRoute)
             }}
             onAnalyze={prepareAssistantWithoutReturn}
           />
         )}
-        {(snapshot.route === 'framework' || snapshot.route === 'projects') && (
+        {(snapshot.route === 'framework' || snapshot.route === 'projects' || retainedRoute === 'framework' || retainedRoute === 'projects') && (
+          <div className={css.routeSurface} hidden={snapshot.route !== 'framework' && snapshot.route !== 'projects'}>
           <StrategyResearchPage
             requestData={requestData}
             selectedStrategyId={snapshot.selectedStrategyId}
@@ -1560,14 +1521,16 @@ export function InvestmentShell({
             onOpenShadow={(strategyId) => { navigate('projects', { strategyId }) }}
             onOpenReports={(reportId) => { setRequestedReportId(reportId ?? ''); setReports(true) }}
             onAnalyze={prepareAssistantWithoutReturn}
-            initialView={snapshot.route === 'projects' ? 'shadow' : 'pool'}
+            initialView={(snapshot.route === 'projects' || retainedRoute === 'projects') ? 'shadow' : 'pool'}
             onOpenEvolution={() => { navigate('tasks') }}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
             initialStage={snapshot.strategyResearchStage ?? 'form'}
             onBackEvolution={() => { navigate('tasks', { evolutionReturnGroup: snapshot.evolutionReturnGroup ?? '' }) }}
           />
+          </div>
         )}
-        {snapshot.route === 'tasks' && (
+        {(snapshot.route === 'tasks' || retainedRoute === 'tasks') && (
+          <div className={css.routeSurface} hidden={snapshot.route !== 'tasks'}>
           <EvolutionDashboard
             requestData={requestData}
             onAnalyze={prepareAssistantWithoutReturn}
@@ -1581,8 +1544,10 @@ export function InvestmentShell({
             }}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
           />
+          </div>
         )}
-        {snapshot.route === 'knowledge' && (
+        {(snapshot.route === 'knowledge' || retainedRoute === 'knowledge') && (
+          <div className={css.routeSurface} hidden={snapshot.route !== 'knowledge'}>
           <IndustryChainPage
             requestData={requestData}
             query={snapshot.chainQuery}
@@ -1590,24 +1555,27 @@ export function InvestmentShell({
             onAnalyze={prepareAssistantWithoutReturn}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
           />
+          </div>
         )}
       </main>
 
-      {snapshot.route === 'opportunity' && researchSurface.subject !== undefined && (
+      {(snapshot.route === 'opportunity' || retainedRoute === 'opportunity') && researchSurface.subject !== undefined && (
         <ResearchFloatingSurface
           mode={researchSurface.suspendedByAssistant || assistantMode !== 'closed'
             ? 'closed'
             : researchSurface.mode}
+          suspended={snapshot.route === 'stock-detail'}
           subject={researchSurface.subject}
           {...(researchSurface.dockedWidth === undefined ? {} : { dockedWidth: researchSurface.dockedWidth })}
           triggerRef={researchTriggerRef}
           backgroundRef={workbenchRef}
           scrollContainerRef={opportunityScrollRef}
           widthAnchorRef={opportunityResearchWidthAnchorRef}
-          interactionEnabled={!snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
-          escapeEnabled={!snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
-          modalResourcesEnabled={assistantMode === 'closed'}
-          restoreFocusOnExit={researchReturnTarget === undefined
+          interactionEnabled={snapshot.route === 'opportunity' && !snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
+          escapeEnabled={snapshot.route === 'opportunity' && !snapshot.historyOpen && !snapshot.reportsOpen && assistantMode === 'closed'}
+          modalResourcesEnabled={snapshot.route === 'opportunity' && assistantMode === 'closed'}
+          restoreFocusOnExit={snapshot.route === 'opportunity'
+            && researchReturnTarget === undefined
             && !snapshot.historyOpen
             && !snapshot.reportsOpen
             && assistantMode === 'closed'}
@@ -1624,12 +1592,6 @@ export function InvestmentShell({
               && (researchSurface.mode === 'docked' || researchSurface.mode === 'expanded')}
             onAnalyze={prepareAssistantFromResearch}
             onOpenFullDetail={(code) => {
-              updateResearchReturnTarget(undefined)
-              updateResearchSurface({
-                ...researchSurfaceRef.current,
-                mode: 'closed',
-                suspendedByAssistant: false,
-              })
               navigate('stock-detail', { stockCode: code })
             }}
           />
@@ -1669,27 +1631,6 @@ export function InvestmentShell({
       )}
       {snapshot.reportsOpen && (
         <ReportCenter requestData={requestData} onClose={closeReports} onAnalyze={prepareAssistantWithoutReturn} initialReportId={requestedReportId} />
-      )}
-      {conversationPrimary && materialsOpen && (
-        <div
-          className={`${css.drawerBackdrop} ${css.researchMaterialsBackdrop}`}
-          onMouseDown={(event) => { if (event.target === event.currentTarget) setMaterialsOpen(false) }}
-        >
-          <aside ref={materialsDrawerRef} className={css.researchMaterialsDrawer} role="dialog" aria-modal="true" aria-labelledby="research-materials-title">
-            <div className={css.drawerHead}>
-              <div><strong id="research-materials-title">投研资料</strong><span>持仓、自选、风险、事件与偏好</span></div>
-              <button ref={materialsCloseRef} type="button" aria-label="关闭投研资料" onClick={() => { setMaterialsOpen(false) }}>×</button>
-            </div>
-            <div className={css.researchMaterialsBody}>
-              <PortfolioPage
-                requestData={requestData}
-                onAnalyze={prepareAssistantWithoutReturn}
-                onViewStock={(code) => { setMaterialsOpen(false); navigate('stock-detail', { stockCode: code }) }}
-                trackTelemetry={trackTelemetry}
-              />
-            </div>
-          </aside>
-        </div>
       )}
     </>
   )
@@ -2231,9 +2172,26 @@ function StockDetailLoading({ code }: { code: string }) {
   )
 }
 
+const STOCK_RETURN_LABELS: Readonly<Record<NonNullable<InvestmentUiSnapshot['stockDetailReturnRoute']>, string>> = Object.freeze({
+  dashboard: '研究工作台',
+  analysis: '智能分析',
+  opportunity: '实时盯盘',
+  portfolio: '我的投研',
+  framework: '策略研究',
+  projects: '策略研究',
+  tasks: '自进化',
+  knowledge: '产业链',
+})
+
 function StockDetailPage({
-  requestData, code, onBack, onAnalyze,
-}: { requestData: RequestData; code: string; onBack: () => void; onAnalyze: (intent: AssistantIntent) => void }) {
+  requestData, code, backDestination, onBack, onAnalyze,
+}: {
+  requestData: RequestData
+  code: string
+  backDestination: NonNullable<InvestmentUiSnapshot['stockDetailReturnRoute']>
+  onBack: () => void
+  onAnalyze: (intent: AssistantIntent) => void
+}) {
   const [nonce, setNonce] = useState(0)
   const [ownershipNonce, setOwnershipNonce] = useState(0)
   const [detail, setDetail] = useState<unknown>()
@@ -2351,7 +2309,13 @@ function StockDetailPage({
   return (
     <div className={css.pageScroll}>
       <PageHeader title={loading ? `${code} · 个股详情` : `${name} · ${resolvedCode}`} description="实时行情、技术位置、资金与个股资讯的统一研究视图">
-        <button type="button" className={css.secondaryButton} onClick={onBack}>返回实时盯盘</button>
+        <button
+          type="button"
+          className={css.secondaryButton}
+          aria-label={`返回${STOCK_RETURN_LABELS[backDestination]}`}
+          title={`返回${STOCK_RETURN_LABELS[backDestination]}`}
+          onClick={onBack}
+        >返回</button>
         <button type="button" className={css.secondaryButton} onClick={() => { setNonce(value => value + 1) }}>刷新详情</button>
         {!loading && error === '' && (
           <button

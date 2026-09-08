@@ -12,6 +12,33 @@ function bodyOf(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
 }
 
 describe('investment data broker', () => {
+  it('maps the paged business event view to personalized cards', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ cards: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await requestInvestmentData({
+      operation: 'trading-core.personalized-cards',
+      input: {
+        limit: 10,
+        offset: 20,
+        bucket: 'all',
+        business_view: 'radar_opportunity',
+        match: true,
+        comment: false,
+      },
+    }, async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8000/personalized/cards?limit=10&offset=20&bucket=all&business_view=radar_opportunity&match=1&comment=0',
+      { method: 'GET' },
+    )
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('maps the market index overview to the fixed market-watch route', async () => {
     const release = vi.fn(async () => {})
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [{ name: '上证指数' }] }), {
