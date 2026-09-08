@@ -827,7 +827,7 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     @app.post("/personalized/feedback", response_model=dict)
     def personalized_feedback_post(req: PersonalizedFeedbackRequest):
-        """R 显式反馈（P→R 决策信号）：卡片/预警 有用/没用。
+        """R 显式反馈（P→R 决策信号）：卡片/预警 有用/没用/撤销。
 
         落行为库 action=feedback，供 R→U 研究兴趣归因与 R→V 效果归因。
         反馈不修改显式风险画像或预警严重度。

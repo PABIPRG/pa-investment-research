@@ -577,8 +577,8 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     body: (input) => {
       knownKeys(input, ['card_id', 'sentiment', 'meta'])
       const sentiment = stringValue(input, 'sentiment')
-      if (sentiment !== 'useful' && sentiment !== 'useless') {
-        throw new TypeError('investment data: sentiment must be useful or useless')
+      if (sentiment !== 'useful' && sentiment !== 'useless' && sentiment !== 'neutral') {
+        throw new TypeError('investment data: sentiment must be useful, useless, or neutral')
       }
       return {
         card_id: localIdentifier(input, 'card_id'),

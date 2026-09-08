@@ -475,13 +475,14 @@
 .dashboardReasons button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 .dashboardRiskNote { display: block; margin-top: 8px; color: var(--dsw-alias-state-warn-label); font-size: 0.8571rem; line-height: 1.5; }
 .dashboardEventControls { min-width: 0; padding-left: 16px; border-left: 1px solid var(--dsw-alias-border-l1); }
-.dashboardActionLabel { display: block; margin-bottom: 7px; color: var(--dsw-alias-label-caption); font-size: var(--investment-font-caption); font-weight: 650; }
-.dashboardEventActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.dashboardEventActions { display: flex; gap: 0; min-width: 0; }
 .dashboardEventActions button {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 34px;
-  padding: 0 9px;
+  padding: 0 7px;
   border: 1px solid color-mix(in srgb, var(--investment-primary) 34%, var(--dsw-alias-border-l1));
-  border-radius: 7px;
+  border-radius: 0;
   color: var(--investment-primary);
   background: var(--investment-selected-surface);
   font-size: 0.8571rem;
@@ -489,7 +490,9 @@
   cursor: pointer;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease;
 }
-.dashboardEventActions button:first-child { grid-column: 1 / -1; color: var(--dsw-alias-label-primary-foreground); border-color: var(--investment-primary); background: var(--investment-primary); }
+.dashboardEventActions button:not(:first-child) { margin-left: -1px; }
+.dashboardEventActions button:first-child { border-radius: 7px 0 0 7px; color: var(--dsw-alias-label-primary-foreground); border-color: var(--investment-primary); background: var(--investment-primary); }
+.dashboardEventActions button:last-child { border-radius: 0 7px 7px 0; }
 .dashboardEventActions button:hover:not(:disabled) { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--dsw-alias-interactive-bg-hover); }
 .dashboardEventActions button:first-child:hover:not(:disabled) { color: var(--dsw-alias-label-primary-foreground); background: var(--investment-primary-hover); }
 .dashboardEventActions button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
@@ -508,26 +511,16 @@
 .dashboardAlert button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 
 .preferenceFeedback { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
-.dashboardEventControls > .preferenceFeedback { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--dsw-alias-border-l1); }
-.dashboardEventControls > .preferenceFeedback > span, .dashboardEventControls > .preferenceFeedback > small { grid-column: 1 / -1; }
-.dashboardEventControls > .preferenceFeedback button { width: 100%; }
+.dashboardEventControls > .preferenceFeedback { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--dsw-alias-border-l1); }
+.dashboardEventControls > .preferenceFeedback button { display: inline-flex; flex: 1 1 0; align-items: center; justify-content: center; gap: 5px; min-width: 0; width: auto; border-radius: 7px; }
+.preferenceFeedbackIcon { display: inline-flex; flex: none; }
+.dashboardEventControls > .preferenceFeedback > small { flex-basis: 100%; margin-top: 6px; }
 
 @container (max-width: 620px) {
   .dashboardEvent { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .dashboardEventControls { padding: 12px 0 0; border-top: 1px solid var(--dsw-alias-border-l1); border-left: 0; }
-  .dashboardEventActions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .dashboardEventActions button:first-child { grid-column: auto; }
-  .dashboardEventControls > .preferenceFeedback { grid-template-columns: auto repeat(2, minmax(0, 1fr)); align-items: center; }
-  .dashboardEventControls > .preferenceFeedback > span { grid-column: auto; }
-  .dashboardEventControls > .preferenceFeedback > small { grid-column: 1 / -1; }
 }
 
-@container (max-width: 420px) {
-  .dashboardEventActions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dashboardEventActions button:first-child { grid-column: 1 / -1; }
-  .dashboardEventControls > .preferenceFeedback { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dashboardEventControls > .preferenceFeedback > span { grid-column: 1 / -1; }
-}
 .dashboardAlert > .preferenceFeedback { grid-column: 1 / -1; margin-top: 0; padding-left: 37px; }
 .preferenceFeedback button, .dashboardAlert .preferenceFeedback button { min-height: 30px; padding: 0 8px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); cursor: pointer; }
 .preferenceFeedback button[aria-pressed='true'], .dashboardAlert .preferenceFeedback button[aria-pressed='true'] { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--investment-selected-surface); font-weight: 700; }
@@ -1691,17 +1684,44 @@
 .analysisPipeline em { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; font-style: normal; }
 
 /* Combined strategy pool / shadow-verification workbench. */
-.strategyFilters { margin-top: 13px; }
+.strategyViewTabs, .strategyFilters { margin-block: 0; }
 .strategyFilters button span { margin-left: 4px; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .strategyCard { scroll-margin-top: 16px; }
-.strategyCardTitle { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 7px; min-width: 0; }
-.strategyCardTitle > span { grid-row: 1; padding: 3px 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 99px; font-size: 0.8571rem; font-weight: 750; line-height: 1.2; }
-.strategyCardTitle > span[data-direction='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
-.strategyCardTitle > span[data-direction='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
-.strategyCardTitle > strong { grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.strategyCardTitle > small { grid-column: 1 / -1; color: var(--dsw-alias-label-tertiary); }
-.strategyCardBadges { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.strategyCardTitle { display: grid; width: 100%; gap: 7px; min-width: 0; }
+.strategyCardHeadline { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.strategyCardHeadline > span { flex: none; padding: 3px 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 99px; font-size: 0.8571rem; font-weight: 750; line-height: 1.2; }
+.strategyCardHeadline > span[data-direction='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
+.strategyCardHeadline > span[data-direction='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
+.strategyCardHeadline > strong { min-width: 0; overflow: hidden; font-size: clamp(0.8571rem, 2vw, 1rem); text-overflow: ellipsis; white-space: nowrap; }
+.strategyCardMeta { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.strategyCardDescriptor { display: flex; flex: 1; align-items: center; gap: 7px; min-width: 0; }
+.strategyCardDescriptor small { flex: none; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; font-weight: 650; }
+.strategyCodeSummary { position: relative; flex: 1; min-width: 0; color: var(--dsw-alias-label-caption); font-size: 0.8571rem; font-variant-numeric: tabular-nums; outline: none; }
+.strategyCodeSummary > span:first-child { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.strategyCodeTooltip { position: absolute; z-index: 4; top: calc(100% + 6px); inset-inline-start: 0; width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px 10px; visibility: hidden; opacity: 0; pointer-events: none; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); box-shadow: var(--dsw-shadow-lv2); font-size: 0.8571rem; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.strategyCodeSummary:hover .strategyCodeTooltip, .strategyCodeSummary:focus .strategyCodeTooltip { visibility: visible; opacity: 1; }
+.strategyCodeSummary:focus-visible { border-radius: 4px; outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.strategyCardBadges { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: nowrap; }
 .strategyCardBadges > span:first-child { padding: 3px 7px; border: 1px solid var(--investment-selected-surface); border-radius: 99px; color: var(--investment-primary); background: var(--investment-interactive-hover); font-size: 0.8571rem; font-weight: 700; }
+.strategyCardSummary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, auto); gap: 12px; min-width: 0; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.strategyCardRules { display: grid; gap: 5px; min-width: 0; }
+.strategyRuleLine { position: relative; min-width: 0; border-radius: 4px; outline: none; }
+.strategyCardRules p { min-width: 0; margin: 0; overflow: hidden; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.strategyCardRules strong { color: var(--dsw-alias-label-primary); font-weight: 650; }
+.strategyRuleTooltip { position: absolute; z-index: 4; top: calc(100% + 6px); inset-inline-start: 0; width: 100%; max-width: 100%; box-sizing: border-box; padding: 8px 10px; visibility: hidden; opacity: 0; pointer-events: none; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); box-shadow: var(--dsw-shadow-lv2); font-size: 0.8571rem; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.strategyRuleLine:hover .strategyRuleTooltip, .strategyRuleLine:focus .strategyRuleTooltip { visibility: visible; opacity: 1; }
+.strategyRuleLine:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.strategyCardMetrics { display: grid; grid-template-columns: repeat(2, minmax(84px, 1fr)); gap: 12px; min-width: 0; margin: 0; }
+.strategyCardMetrics > div { min-width: 0; }
+.strategyCardMetrics dt { color: var(--dsw-alias-label-caption); font-size: 0.8571rem; line-height: 1.4; }
+.strategyCardMetrics dd { margin: 4px 0 0; color: var(--dsw-alias-label-primary); font-size: 0.9286rem; font-weight: 650; }
+.moduleToolbar.strategyActions { width: 100%; box-sizing: border-box; justify-content: stretch; gap: 0; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: thin; }
+.strategyActions > button { flex: 1 0 max-content; height: var(--investment-compact-control-height); min-width: max-content; padding-inline: 6px; border-radius: 0; font-size: 0.8571rem; }
+.strategyActions > button:not(:first-child) { margin-left: -1px; }
+.strategyActions > button:first-child { border-radius: 8px 0 0 8px; }
+.strategyActions > button:last-child { border-radius: 0 8px 8px 0; }
+.strategyActions > button:focus-visible { position: relative; z-index: 1; }
+.strategyShadowAction { color: var(--investment-primary); border-color: var(--investment-selected-surface); background: var(--dsw-alias-bg-base); }
 .strategyEvidenceTable { overflow: auto; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; }
 .strategyEvidenceTable table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 0.8571rem; }
 .strategyEvidenceTable th, .strategyEvidenceTable td { padding: 9px 10px; border-bottom: 1px solid var(--dsw-alias-border-l1); text-align: right; }
@@ -2201,6 +2221,9 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .importActions .primaryButton, .importActions .secondaryButton { flex: 1 1 auto; min-height: var(--investment-touch-target); height: var(--investment-touch-target); }
   .moduleGrid { grid-template-columns: 1fr; }
   .moduleCard { padding: 14px; }
+  .strategyCardSummary { grid-template-columns: 1fr; }
+  .strategyCardMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .strategyActions > button { min-height: var(--investment-touch-target); height: var(--investment-touch-target); padding-block: 0; }
   .evolutionOverviewGrid { grid-template-columns: 1fr; }
   .evolutionLead { align-items: flex-start; flex-direction: column; }
   .evolutionLead span { text-align: left; }

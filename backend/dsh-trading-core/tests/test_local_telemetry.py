@@ -141,13 +141,18 @@ class EventGovernanceTests(unittest.TestCase):
 
     def test_pause_stops_new_facts_without_breaking_calls(self):
         store = _store()
+        record_feedback(store, "card-existing", "useful")
         status = update_local_learning(store, False, now=_at("2026-08-27T00:00:00"))
         result = record_events(store, [_event("paused")])
         feedback = record_feedback(store, "card-1", "useful")
+        cleared = record_feedback(store, "card-existing", "neutral")
 
         self.assertFalse(status["enabled"])
         self.assertEqual(result["reason"], "paused")
         self.assertFalse(feedback["stored"])
+        self.assertTrue(cleared["stored"])
+        self.assertTrue(cleared["replaced"])
+        self.assertEqual(store.get("behavior", "default"), [])
         self.assertEqual(local_learning_status(store)["event_count"], 0)
 
     def test_feedback_correction_keeps_only_the_last_value(self):
@@ -166,6 +171,17 @@ class EventGovernanceTests(unittest.TestCase):
         rows = store.get("behavior", "default")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["sentiment"], "useless")
+
+    def test_neutral_feedback_clears_the_current_value(self):
+        store = _store()
+        record_feedback(store, "risk-1", "useful", now=_at("2026-08-26T00:00:00"))
+
+        result = record_feedback(store, "risk-1", "neutral", now=_at("2026-08-27T00:00:00"))
+
+        self.assertTrue(result["stored"])
+        self.assertTrue(result["replaced"])
+        self.assertEqual(result["sentiment"], "neutral")
+        self.assertEqual(store.get("behavior", "default"), [])
 
     def test_clear_is_scoped_to_learning_data(self):
         store = _store()

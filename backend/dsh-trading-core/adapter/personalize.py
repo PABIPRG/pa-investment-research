@@ -596,7 +596,7 @@ def record_interaction(store, card_id: str, action: str, ts: str | None = None,
 
 def record_feedback(store, card_id: str, sentiment: str, ts: str | None = None,
                     meta: dict | None = None) -> dict:
-    """R 显式反馈：同对象最后值覆盖，只驱动内容兴趣与效果归因。"""
+    """R 显式反馈：同对象最后值覆盖，neutral 撤销当前值。"""
     from .local_telemetry import record_feedback as record_local_feedback
 
     return record_local_feedback(store, card_id, sentiment, meta)
