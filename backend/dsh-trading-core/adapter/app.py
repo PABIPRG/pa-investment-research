@@ -798,21 +798,27 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     @app.get("/personalized/cards", response_model=dict)
     def personalized_cards(
-        limit: int = 30,
+        limit: int = Query(default=30, ge=1, le=100),
+        offset: int = Query(default=0, ge=0, le=100),
         bucket: str = "all",
+        business_view: Literal[
+            "all", "position_risk", "radar_opportunity", "neutral_event",
+        ] = "all",
         match: int = 0,
         comment: int = 0,
         strategy_id: Optional[str] = None,
     ):
         """D+P：个性化资讯卡片 feed（桶优先级 + relevance 排序）。
 
-        bucket=all|holdings|watchlist|strategy|fresh；match=1 仅命中关注；
+        bucket=all|holdings|watchlist|strategy|fresh；business_view 为工作台业务视角；
+        offset/limit 在最多 100 条的上游事件快照内分页；match=1 仅命中关注；
         comment=1 附加 LLM 一句话点评（可降级为 null）。
         """
         from . import personalize
 
         return personalize.build_cards(
-            limit=limit, bucket=bucket, match_only=bool(match),
+            limit=limit, offset=offset, bucket=bucket, business_view=business_view,
+            match_only=bool(match),
             strategy_id=strategy_id, comment=bool(comment),
         )
 

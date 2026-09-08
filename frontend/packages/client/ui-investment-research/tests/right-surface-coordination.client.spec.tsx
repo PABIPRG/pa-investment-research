@@ -840,7 +840,7 @@ describe('Shell 右侧表面协调', () => {
     expect(document.activeElement).toBe(nextTrigger)
   })
 
-  it('查看完整证券详情时关闭研究窗，返回实时盯盘后只重新打开研究而不循环导航', async () => {
+  it('查看完整证券详情时暂时隐藏研究窗，返回来源页后恢复原状态且不重复请求', async () => {
     const { requestData } = renderHarness()
     await waitForScan()
     fireEvent.click(screen.getByRole('button', { name: '打开贵州茅台研究' }))
@@ -849,14 +849,14 @@ describe('Shell 右侧表面协调', () => {
     })
 
     fireEvent.click(screen.getByRole('button', { name: '查看证券详情' }))
-    expect(screen.getByRole('button', { name: '返回实时盯盘' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '返回实时盯盘' }).textContent).toBe('返回')
     expect(screen.queryByRole('complementary', { name: '贵州茅台证券研究窗' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '返回实时盯盘' }))
     expect(await screen.findByRole('complementary', { name: '600519证券研究窗' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '实时盯盘' })).toBeTruthy()
     await waitFor(() => {
-      expect(operationCalls(requestData, 'market-watch.tech-signal')).toHaveLength(2)
+      expect(operationCalls(requestData, 'market-watch.tech-signal')).toHaveLength(1)
     })
   })
 

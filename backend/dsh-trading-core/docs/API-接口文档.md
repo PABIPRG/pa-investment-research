@@ -883,7 +883,9 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
 | Query | 默认 | 说明 |
 |---|---|---|
 | `limit` | `30` | 卡片数（1–100） |
+| `offset` | `0` | 分页偏移（0–100）；先筛选、排序，再分页 |
 | `bucket` | `all` | `all` / `holdings` / `watchlist` / `strategy` / `fresh` |
+| `business_view` | `all` | 工作台业务视角：`position_risk`（持仓风险）/ `radar_opportunity`（有方向性的研究线索）/ `neutral_event`（中性事件） |
 | `match` | `0` | `1` = 仅命中关注（排除 `fresh` 桶） |
 | `comment` | `0` | `1` = 附加 LLM 一句话点评（仅前几张命中卡；无 key/失败 → `null`） |
 | `strategy_id` | — | 只返回命中该策略的事件卡 |
@@ -893,9 +895,12 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
 {
   "as_of": "2026-08-24 15:57:29",
   "profile": "balanced", "profile_label": "稳健型",
-  "count": 8, "cards": [{
+  "count": 8, "total": 18,
+  "business_view_counts": { "position_risk": 3, "radar_opportunity": 11, "neutral_event": 4 },
+  "page_info": { "offset": 0, "limit": 8, "total": 18, "has_more": true, "next_offset": 8, "max_visible": 100 },
+  "cards": [{
     "card_id": "card-f87bec719", "event_id": "ev-…", "item_id": "sina-…",
-    "bucket": "strategy", "relevance_score": 85,
+    "bucket": "strategy", "business_view": "radar_opportunity", "relevance_score": 85,
     "type": "价格异动", "direction": "利空",
     "title": "港股芯片股集体下挫…", "summary": "…", "time": "2026-08-24 14:59:48",
     "source": "财联社", "url": "…",
@@ -915,6 +920,8 @@ market-watch 事件 → 资讯卡片（命中持仓/自选/策略 → 分桶）�
 ```
 
 - `card_id = "card-" + md5(event.id)[:10]`，跨刷新稳定，供 R 埋点回传。
+- 业务视角判定：中性/未知方向归入 `neutral_event`；持仓命中的利空归入 `position_risk`；其余利好或利空事件归入 `radar_opportunity`，表示需要进一步研究的方向性线索，并不等同于买入机会。
+- 分页以 market-watch 最多 100 条的有界事件快照为边界；`business_view`、`bucket`、`match` 和 `strategy_id` 均在切页前完成筛选。前端应使用 `page_info` 控制翻页，不应推断还能读取超过 `max_visible` 的数据。
 - 桶优先级：`holdings > watchlist > strategy > fresh`；`relevance` 组成：
   `BUCKET_BASE(70/60/50/20) + 新鲜度(15/10/5) + 方向(10/3) + 类型(5/3/0) + 关联策略盈利(5) + 近期点击(5)`。
 - **V→D 反馈归因**（R→V→D 闭环）：你反馈「有用」的个股 +6、有用行业（`impact_industries`/`industries`）

@@ -181,6 +181,12 @@ function compactMetric(value: unknown, suffix = ''): string {
   return numeric === undefined ? '—' : `${numeric.toFixed(2)}${suffix}`
 }
 
+function marketMetricTone(value: unknown): 'positive' | 'negative' | undefined {
+  const numeric = number(value)
+  if (numeric === undefined || numeric === 0) return undefined
+  return numeric > 0 ? 'positive' : 'negative'
+}
+
 function reportKindLabel(value: unknown): string {
   const kind = text(value, '')
   return {
@@ -1351,18 +1357,28 @@ export function StrategyResearchPage({
                     <StrategyRuleLine label="退出规则" value={rule.exit} />
                   </div>
                   <dl className={css.strategyCardMetrics}>
-                    <div><dt>样本外平均模拟收益</dt><dd>{compactMetric(outOfSample.avg_simulated_return_pct, '%')}</dd></div>
-                    <div><dt>样本外最大回撤</dt><dd>{compactMetric(outOfSamplePortfolio.portfolio_max_drawdown_pct, '%')}</dd></div>
+                    <div>
+                      <dt>样本外平均模拟收益</dt>
+                      <dd data-tone={marketMetricTone(outOfSample.avg_simulated_return_pct)}>{compactMetric(outOfSample.avg_simulated_return_pct, '%')}</dd>
+                    </div>
+                    <div>
+                      <dt>样本外最大回撤</dt>
+                      <dd data-tone={marketMetricTone(outOfSamplePortfolio.portfolio_max_drawdown_pct)}>{compactMetric(outOfSamplePortfolio.portfolio_max_drawdown_pct, '%')}</dd>
+                    </div>
+                    <div><dt>样本外胜率</dt><dd>{compactMetric(outOfSample.win_rate_pct, '%')}</dd></div>
+                    <div><dt>样本外交易数</dt><dd>{number(outOfSample.n_evaluated)?.toFixed(0) ?? '—'}</dd></div>
                   </dl>
                 </div>
                 {hasBacktest && text(backtest.reason, '') !== '' && (
                   <p className={css.contextHint}>回测结论：{text(backtest.reason)}</p>
                 )}
-                <div className={`${css.moduleToolbar} ${css.strategyActions}`} role="group" aria-label="策略操作">
-                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>查看详情</button>
-                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setDetailItem(item) }}>
-                    回测管理
-                  </button>
+                <div
+                  className={`${css.moduleToolbar} ${css.strategyActions}`}
+                  role="group"
+                  aria-label="策略操作"
+                  data-action-count={category === 'archived' ? '3' : '4'}
+                >
+                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>策略详情</button>
                   <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
                   <button type="button" className={`${css.secondaryButton} ${css.strategyShadowAction}`} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>进入影子验证</button>
                   {category !== 'archived' && (

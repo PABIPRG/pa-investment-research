@@ -37,6 +37,7 @@ BUCKET_BASE = {"holdings": 70, "watchlist": 60, "strategy": 50, "fresh": 20}
 _TYPE_BONUS = {"业绩": 5, "价格异动": 5, "评级": 5,
                "政策": 3, "产业": 3, "合作": 3, "公告": 3}
 _KNOWN_BUCKETS = tuple(BUCKET_ORDER)
+_KNOWN_BUSINESS_VIEWS = ("position_risk", "radar_opportunity", "neutral_event")
 # 大盘趋势类型：反映政策/宏观走势、未必命中具体标的的事件，match 模式下也允许进入主列表
 # （见 build_cards —— 只豁免这些 fresh，其余噪音 fresh 仍丢弃），前端以类型徽标区分。
 _MARKET_TREND_TYPES = frozenset({"政策", "宏观"})
@@ -359,6 +360,16 @@ def _classify(ev: dict, holdings: set, watchlist: set, actives: list[dict]):
     return bucket, mh, mw, strats
 
 
+def _business_view(ev: dict, matched_holdings: list[str]) -> str:
+    """把事件关系与方向组合成研究工作台的业务视角。"""
+    direction = str(ev.get("direction") or "中性")
+    if direction not in ("利好", "利空"):
+        return "neutral_event"
+    if direction == "利空" and matched_holdings:
+        return "position_risk"
+    return "radar_opportunity"
+
+
 def _event_age_hours(ev: dict) -> float:
     """事件距今小时数；time 空/异常按 99（无新鲜加成，不报错）。"""
     ts = str(ev.get("time") or "").strip()
@@ -481,9 +492,9 @@ def _attach_llm_comments(cards: list[dict], profile_key: str) -> None:
             _COMMENT_MEMO[cid] = (now, None)
 
 
-def build_cards(store=None, limit: int = 30, bucket: str = "all",
-                match_only: bool = False, strategy_id: str | None = None,
-                comment: bool = False) -> dict:
+def build_cards(store=None, limit: int = 30, offset: int = 0, bucket: str = "all",
+                business_view: str = "all", match_only: bool = False,
+                strategy_id: str | None = None, comment: bool = False) -> dict:
     """D+P：事件 → 资讯卡片 → 按桶 + relevance 排序 → 个性化卡片 feed。"""
     from .store import JsonStore
     from .strategies import fetch_events, _str2md5
@@ -513,8 +524,13 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
     except Exception:  # noqa: BLE001 — 归因信号失败不阻塞卡片流
         boosts = {}
 
-    # timeout=15 等 market-watch 懒抽取完成（实测冷缓存抽取 ~4.2s，4s 恰在边界上）
-    events = fetch_events(limit=max(int(limit) * 2, 60), timeout=15.0)
+    page_limit = max(1, min(int(limit), 100))
+    page_offset = max(0, min(int(offset), 100))
+    if business_view != "all" and business_view not in _KNOWN_BUSINESS_VIEWS:
+        raise ValueError("business_view 必须是 all、position_risk、radar_opportunity 或 neutral_event")
+    # 上游当前最多返回 100 条；每页都基于同一个完整窗口分类和计数，避免翻页后总数漂移。
+    fetch_limit = 100
+    events = fetch_events(limit=fetch_limit, timeout=15.0)
     cards: list[dict] = []
     for ev in events:
         bk, mh, mw, strats = _classify(ev, holdings, watchlist, actives)
@@ -548,7 +564,8 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
         cards.append({
             "card_id": card_id,
             "event_id": ev.get("id"), "item_id": ev.get("item_id"),
-            "bucket": bk, "relevance_score": rel["score"],
+            "bucket": bk, "business_view": _business_view(ev, mh),
+            "relevance_score": rel["score"],
             "type": ev.get("type"), "direction": ev.get("direction"),
             "title": ev.get("title"), "summary": ev.get("summary"),
             "time": ev.get("time"), "source": ev.get("source"), "url": ev.get("url"),
@@ -564,13 +581,21 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
             "event": ev,
         })
 
+    business_view_counts = {
+        key: sum(1 for card in cards if card["business_view"] == key)
+        for key in _KNOWN_BUSINESS_VIEWS
+    }
+    if business_view != "all":
+        cards = [card for card in cards if card["business_view"] == business_view]
+
     # P 排序：桶优先级优先（持仓>自选>策略>新鲜），桶内按 relevance desc
     cards.sort(key=lambda c: (BUCKET_ORDER[c["bucket"]], -c["relevance_score"]))
 
     if comment and cards:
         _attach_llm_comments(cards, profile_key)
 
-    limit = max(1, min(int(limit), 100))
+    total = len(cards)
+    page_cards = cards[page_offset:page_offset + page_limit]
     try:
         from .local_telemetry import preference_snapshot_id
 
@@ -584,7 +609,18 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
         "effective_aggression": eff,
         "preference_snapshot_id": snapshot_id,
         "behavior": beh,
-        "count": len(cards[:limit]), "cards": cards[:limit],
+        "count": len(page_cards),
+        "total": total,
+        "business_view_counts": business_view_counts,
+        "page_info": {
+            "offset": page_offset,
+            "limit": page_limit,
+            "total": total,
+            "has_more": page_offset + page_limit < total,
+            "next_offset": page_offset + page_limit if page_offset + page_limit < total else None,
+            "max_visible": 100,
+        },
+        "cards": page_cards,
     }
 
 

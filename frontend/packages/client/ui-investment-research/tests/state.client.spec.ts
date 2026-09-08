@@ -36,6 +36,7 @@ describe('InvestmentUiState', () => {
       selectedStrategyId: '',
       strategyResearchStage: 'form',
       evolutionReturnGroup: '',
+      stockDetailReturnRoute: undefined,
     })
 
     state.setDraft('analysisQuery', '600519')
@@ -61,11 +62,35 @@ describe('InvestmentUiState', () => {
       selectedStrategyId: 'strategy-1',
       strategyResearchStage: 'form',
       evolutionReturnGroup: '',
+      stockDetailReturnRoute: undefined,
     })
 
     unsubscribe()
     state.navigate('portfolio')
     expect(listener).toHaveBeenCalledTimes(7)
+  })
+
+  it('只记录进入个股详情前的一层来源，并在返回时保留来源页面上下文', () => {
+    const state = new InvestmentUiState()
+    state.navigate('projects', { strategyId: 'strategy-1' })
+    state.navigate('stock-detail', { stockCode: '600519' })
+
+    expect(state.getSnapshot()).toMatchObject({
+      route: 'stock-detail',
+      selectedStockCode: '600519',
+      selectedStrategyId: 'strategy-1',
+      stockDetailReturnRoute: 'projects',
+    })
+
+    state.navigate('stock-detail', { stockCode: '000001' })
+    expect(state.getSnapshot().stockDetailReturnRoute).toBe('projects')
+
+    state.navigate('projects')
+    expect(state.getSnapshot()).toMatchObject({
+      route: 'projects',
+      selectedStrategyId: 'strategy-1',
+      stockDetailReturnRoute: undefined,
+    })
   })
 
   it('makes history and reports mutually exclusive and skips duplicate publications', () => {
