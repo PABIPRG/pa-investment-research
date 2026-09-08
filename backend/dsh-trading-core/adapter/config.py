@@ -125,40 +125,40 @@ class Settings:
         self.evolve_overfit_gap_pct = float(os.getenv("EVOLVE_OVERFIT_GAP_PCT", "25.0"))  # IS胜率 − OOS胜率 ≥ 视为过拟合
         self.evolve_overfit_min_trades = int(os.getenv("EVOLVE_OVERFIT_MIN_TRADES", "4"))  # OOS 至少 N 笔才判 overfit
         # 自进化 v2 · 基因座开放（P2）：生态位族内换 kind + 跨同类事件池换标的。
-        # 默认关（EVOLVE_MIGRATION_ENABLED=false）→ 变异行为与 v1 完全一致（防测试/线上行为漂移）；
+        # 默认开；如需回 v1 的纯参数微扰（变异不换 kind），设 EVOLVE_MIGRATION_ENABLED=false。
         # 开启后从第 EVOLVE_MIGRATE_FROM_BRANCH 条变异分支起尝试迁移。
-        self.evolve_migration_enabled = os.getenv("EVOLVE_MIGRATION_ENABLED", "false").lower() == "true"
+        self.evolve_migration_enabled = os.getenv("EVOLVE_MIGRATION_ENABLED", "true").lower() == "true"
         self.evolve_migrate_from_branch = int(os.getenv("EVOLVE_MIGRATE_FROM_BRANCH", "1"))
         self.evolve_pool_max_new_symbols = int(os.getenv("EVOLVE_POOL_MAX_NEW_SYMBOLS", "3"))  # 跨池最多引入新标的数
-        # 自进化 v2 · 有性繁殖 + 归因引导有向变异（P3）。默认关 → 与 v1 完全一致。
+        # 自进化 v2 · 有性繁殖 + 归因引导有向变异（P3），默认开（关闭 crossover 设 EVOLVE_RECOMBINE_ENABLED=false）。
         # crossover：当同一裁决批里有 ≥EVOLVE_RECOMBINE_MIN_PARENTS 条升入 promote 的高 fitness 亲本，
         # 取 A 因子结构 × B 标的池重组成一条带双亲谱系子代（factor×symbols 重组，互补寻优）。
-        self.evolve_recombine_enabled = os.getenv("EVOLVE_RECOMBINE_ENABLED", "false").lower() == "true"
+        self.evolve_recombine_enabled = os.getenv("EVOLVE_RECOMBINE_ENABLED", "true").lower() == "true"
         self.evolve_recombine_min_parents = int(os.getenv("EVOLVE_RECOMBINE_MIN_PARENTS", "2"))
         # 归因引导有向变异：变异前用 per-symbol 证据（影子平仓/扩展证据）换掉最差的
         # EVOLVE_GUIDED_PRUNE_WORST 只拖累票，朝已证有效方向走而非盲摇骰子。
-        self.evolve_guided_prune_enabled = os.getenv("EVOLVE_GUIDED_PRUNE_ENABLED", "false").lower() == "true"
+        self.evolve_guided_prune_enabled = os.getenv("EVOLVE_GUIDED_PRUNE_ENABLED", "true").lower() == "true"
         self.evolve_guided_prune_worst = int(os.getenv("EVOLVE_GUIDED_PRUNE_WORST", "1"))
-        # 自进化 v2 · 种群治理（P4）。默认关 → 与 v1 完全一致。
+        # 自进化 v2 · 种群治理（P4），默认开；对应子项可单独设 false 关闭回到 v1。
         # 生态位+相关性去重：变异子代入池前，与同生态位 active 影子净值序列相关
         # ≥EVOLVE_CORRELATION_MAX 且不比在位的优 → 拒入（堵克隆膨胀）。
-        self.evolve_correlation_enabled = os.getenv("EVOLVE_CORRELATION_ENABLED", "false").lower() == "true"
+        self.evolve_correlation_enabled = os.getenv("EVOLVE_CORRELATION_ENABLED", "true").lower() == "true"
         self.evolve_correlation_max = float(os.getenv("EVOLVE_CORRELATION_MAX", "0.80"))
         # 停滞退役：active 连续 EVOLVE_STAGNANT_DAYS 天未刷新影子净值新高 → 平庸让位。
-        self.evolve_stagnant_enabled = os.getenv("EVOLVE_STAGNANT_ENABLED", "false").lower() == "true"
+        self.evolve_stagnant_enabled = os.getenv("EVOLVE_STAGNANT_ENABLED", "true").lower() == "true"
         self.evolve_stagnant_days = int(os.getenv("EVOLVE_STAGNANT_DAYS", "10"))
         # 基因存档与复活：退役时进 gene_archive（带存活期 regime 画像/fitness）；
         # 当 market/regime 切回其擅长档时从存档召回复测。
-        self.evolve_archive_enabled = os.getenv("EVOLVE_ARCHIVE_ENABLED", "false").lower() == "true"
+        self.evolve_archive_enabled = os.getenv("EVOLVE_ARCHIVE_ENABLED", "true").lower() == "true"
         self.evolve_revive_enabled = os.getenv("EVOLVE_REVIVE_ENABLED", "false").lower() == "true"
-        # 自进化 v2 · 运行时自适应·冬眠（P5）。默认关 → 影子不按 regime 过滤，与 v1 一致。
-        # 开启后：当日 market/regime 不在策略 gate.allow 内时，该策略走 skipped「冬眠」语义
-        # （不产生新信号、不落当日净值点），把「环境不配合」与「能力不行」分开，防误降/误汰。
-        self.evolve_hibernate_enabled = os.getenv("EVOLVE_HIBERNATE_ENABLED", "false").lower() == "true"
-        # 自进化 v2 · 进化反馈到上游·假设生成先验（P6）。默认关 → generate_hypotheses 的 LLM
-        # 系统提示不带先验，输出与 v1 完全一致。开启后：generate_hypotheses 会把「方向×因子族
-        # 的样本外过验统计」作为一段先验附在 _HYPOTHESIS_SYSTEM 里，让假设生成倾向与下游筛选协同。
-        self.prior_replay_enabled = os.getenv("PRIOR_REPLAY_ENABLED", "false").lower() == "true"
+        # 自进化 v2 · 运行时自适应·冬眠（P5）。默认开：当日 market/regime 不在策略 gate.allow
+        # 内时，该策略走 skipped「冬眠」语义（不产生新信号、不落当日净值点），把「环境不配合」
+        # 与「能力不行」分开，防误降/误汰。设 EVOLVE_HIBERNATE_ENABLED=false 即影子不按 regime 过滤、回到 v1。
+        self.evolve_hibernate_enabled = os.getenv("EVOLVE_HIBERNATE_ENABLED", "true").lower() == "true"
+        # 自进化 v2 · 进化反馈到上游·假设生成先验（P6）。默认开：generate_hypotheses 会把
+        # 「方向×因子族的样本外过验统计」作为一段先验附在 _HYPOTHESIS_SYSTEM 里，让假设生成
+        # 倾向与下游筛选协同。设 PRIOR_REPLAY_ENABLED=false 即系统提示不带先验、输出回到 v1。
+        self.prior_replay_enabled = os.getenv("PRIOR_REPLAY_ENABLED", "true").lower() == "true"
         self.evolve_prior_min_trials = int(os.getenv("EVOLVE_PRIOR_MIN_TRIALS", "3"))
         self.evolve_prior_max_lines = int(os.getenv("EVOLVE_PRIOR_MAX_LINES", "8"))
 

@@ -109,15 +109,21 @@ def _seed_promoting_strategy(store, sid="s-parent"):
 
 
 class DecisionMigrationWiringTest(unittest.TestCase):
-    def test_migration_off_produces_same_kind_children(self):
-        store = _store()
-        _seed_promoting_strategy(store)
-        plan = evolution.evolve(store, apply=False)
-        kids = [a for a in plan["actions"] if a["type"] == "mutate"]
-        self.assertTrue(kids)
-        for k in kids:
-            self.assertEqual(k["kind"], "rsi_reversal")  # 默认关 → 与 v1 同 kind
-            self.assertIsNone(k.get("attribution_note"))
+    def test_migration_off_override_keeps_v1_same_kind_children(self):
+        # 迁移默认开（v2）；显式关回后子代与 v1 一致（不换 kind、无归因 note）
+        saved = settings.evolve_migration_enabled
+        try:
+            settings.evolve_migration_enabled = False
+            store = _store()
+            _seed_promoting_strategy(store)
+            plan = evolution.evolve(store, apply=False)
+            kids = [a for a in plan["actions"] if a["type"] == "mutate"]
+            self.assertTrue(kids)
+            for k in kids:
+                self.assertEqual(k["kind"], "rsi_reversal")
+                self.assertIsNone(k.get("attribution_note"))
+        finally:
+            settings.evolve_migration_enabled = saved
 
     def test_migration_on_swaps_kind_to_same_family(self):
         saved = settings.evolve_migration_enabled

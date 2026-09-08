@@ -163,18 +163,23 @@ def _seed_days(store, navs_by_sid, *, start=date(2026, 8, 18), n=6):
 
 
 class DecisionRecombinationWiringTest(unittest.TestCase):
-    def test_crossover_off_by_default_no_dual_lineage_child(self):
-        store = _store()
-        _seed_active(store, "sA", kind="rsi_reversal", symbols=["600519", "000858"], direction="利空")
-        _seed_active(store, "sB", kind="momentum", symbols=["300750", "002594"], direction="利空")
-        navs = {"sA": [1.0, 1.01, 1.02, 1.04, 1.05, 1.06],
-                "sB": [1.0, 1.01, 1.03, 1.04, 1.05, 1.05]}
-        _seed_days(store, navs)
-        plan = evolution.evolve(store, apply=False)
-        kids = [a for a in plan["actions"] if a["type"] == "mutate"]
-        # 默认关 → 只有单亲变异子代，无带 parent_b 的重组子代
-        self.assertTrue(kids)
-        self.assertFalse([a for a in kids if a.get("parent_b")])
+    def test_crossover_off_override_no_dual_lineage_child(self):
+        # crossover 默认开（v2）；显式关回后只有单亲变异子代，无带 parent_b 的重组子代
+        saved = settings.evolve_recombine_enabled
+        try:
+            settings.evolve_recombine_enabled = False
+            store = _store()
+            _seed_active(store, "sA", kind="rsi_reversal", symbols=["600519", "000858"], direction="利空")
+            _seed_active(store, "sB", kind="momentum", symbols=["300750", "002594"], direction="利空")
+            navs = {"sA": [1.0, 1.01, 1.02, 1.04, 1.05, 1.06],
+                    "sB": [1.0, 1.01, 1.03, 1.04, 1.05, 1.05]}
+            _seed_days(store, navs)
+            plan = evolution.evolve(store, apply=False)
+            kids = [a for a in plan["actions"] if a["type"] == "mutate"]
+            self.assertTrue(kids)
+            self.assertFalse([a for a in kids if a.get("parent_b")])
+        finally:
+            settings.evolve_recombine_enabled = saved
 
     def test_crossover_on_produces_factorA_poolB_dual_lineage_child(self):
         saved = settings.evolve_recombine_enabled
