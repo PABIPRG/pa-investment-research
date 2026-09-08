@@ -851,6 +851,36 @@ def split_in_out(df, sig, oos_frac: float = 0.3):
     )
 
 
+# ---- 自进化 v2 · 扩展证据辅助（P0.4）----
+
+
+def _symbol_trade_stats(trades: list[dict]) -> dict:
+    """单个标的某侧（样本内/外）已平仓成交的胜负聚合（供归因/overfit）。"""
+    if not trades:
+        return {"trades": 0, "wins": 0, "win_rate_pct": None, "cum_ret_pct": None}
+    wins = sum(1 for t in trades if float(t.get("ret_pct") or 0) > 0)
+    cum = sum(float(t.get("ret_pct") or 0) for t in trades)
+    return {
+        "trades": len(trades),
+        "wins": wins,
+        "win_rate_pct": round(wins / len(trades) * 100, 1),
+        "cum_ret_pct": round(cum, 2),
+    }
+
+
+def _trim_curve(curve: dict, keep: int) -> dict:
+    """组合净值曲线保留最近 keep 个交易日（date/nav/daily_return 同步截尾）。"""
+    nav = curve.get("nav") or []
+    n = len(nav)
+    if n <= keep:
+        return curve
+    start = n - keep
+    return {
+        key: (curve[key][start:] if isinstance(curve.get(key), list) else curve.get(key))
+        for key in ("date", "nav", "daily_return")
+    }
+
+
 # ---- 假设生成（LLM + 规则降级）----
 
 
@@ -871,9 +901,13 @@ _HYPOTHESIS_SYSTEM = (
 )
 
 
-def generate_hypotheses(events: list[dict]) -> list[dict]:
+def generate_hypotheses(events: list[dict], priors_hint: str | None = None) -> list[dict]:
     """事件 → 假设列表。每条 {event_idx, symbols, direction, kind, params, rationale, holding_window_days}。
     LLM 失败/不可用 → 规则降级（利好 momentum / 利空 rsi_reversal）。
+
+    priors_hint：可选——P6 假设生成先验文本（由调用方在 PRIOR_REPLAY_ENABLED 下用
+    priors.build_hint(store) 生成后传入）。仅当 LLM 可用且提供了非空先验时，才把它附在
+    _HYPOTHESIS_SYSTEM 之后注入提示上下文；缺省 None / 空 / 关 LLM → 行为与 v1 完全一致。
 
     event_idx 语义：指向 `events` 全列表的下标（不是过滤后 usable 的下标）——这样
     create_candidates 里 `events[ev_idx]` 才能取到假设真正对应的事件。LLM 提示标签按
@@ -897,8 +931,15 @@ def generate_hypotheses(events: list[dict]) -> list[dict]:
                 f"summary={(e.get('summary') or '')[:80]}"
                 for pos, (_, e) in enumerate(usable)
             )
+            # P6：可选注入统计先验，让假设生成倾向与下游样本外筛选协同。
+            hint = (priors_hint or "").strip()
+            system = _HYPOTHESIS_SYSTEM + (
+                ("\n\n" + hint + "\n用法：上面是你历史回测积累的样本外先验，请在挑 kind/方向时参考："
+                 "标『优』的同族多考虑，标『慎』的同族谨慎并写清 rationale。仅作倾向，不违背规则 1/2/4。")
+                if hint else ""
+            )
             from . import llm
-            data = llm.chat_json(_HYPOTHESIS_SYSTEM, block, max_tokens=2500)
+            data = llm.chat_json(system, block, max_tokens=2500)
             hyps = []
             for h in (data or {}).get("hypotheses") or []:
                 try:
@@ -1017,8 +1058,21 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
         tickers = _strategy_tickers(ev, symbols)
         display_names = [ticker.get("name") or ticker["code"] for ticker in tickers]
         name = "、".join(display_names[:2]) + (f"等{len(display_names)}只" if len(display_names) > 2 else "")
+        # 自进化 v2 · P0.1：候选即带基因（regime_gate 默认全开，结构先落地）
+        try:
+            from . import genome
+            from .ledger import event_type_of as _etof
+
+            gene = genome.gene_for(
+                kind, params, symbols, direction,
+                event_type=_etof(ev),
+                meta={"source_event_id": str(ev.get("id") or "")},
+            )
+        except Exception:  # noqa: BLE001
+            gene = genome.gene_for(kind, params, symbols, direction)
         candidate = {
             "id": sid, "name": name, "kind": kind, "params": params,
+            "gene": gene,
             "symbols": symbols, "tickers": tickers, "direction": direction,
             "hypothesis": h.get("rationale") or ev.get("summary") or "",
             "source_event_id": ev.get("id", ""),
@@ -1042,6 +1096,16 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
         if not created:
             continue  # 去重
         ids.append(sid)
+        # 自进化 v2 · P0.2：把成功候选沉淀进事件账本（供符号迁移/先验统计）。
+        # 账本写入失败绝不影响候选入库。
+        try:
+            from . import ledger
+
+            ledger.record_candidate(
+                store, event=ev, direction=direction, symbol_codes=symbols
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("事件账本写入失败（忽略）: sid=%s", sid)
     return ids
 
 
@@ -1169,6 +1233,7 @@ class StrategyBacktestRunner:
         per_in: dict[str, tuple] = {}
         per_out: dict[str, tuple] = {}
         per_symbol: dict[str, dict] = {}
+        sym_win: dict[str, dict] = {}  # 自进化 v2 · P0.4 per_symbol 胜负归因
 
         def check_cancelled() -> None:
             cancel_event = params.get("_cancel_event")
@@ -1199,6 +1264,20 @@ class StrategyBacktestRunner:
                 per_symbol[sym] = {"trades_in": len(trades_in), "trades_out": len(trades_out),
                                    "last_in_ret": round(trades_in[-1]["ret_pct"], 2) if trades_in else None,
                                    "last_out_ret": round(trades_out[-1]["ret_pct"], 2) if trades_out else None}
+                _in_stats = _symbol_trade_stats(trades_in)
+                _out_stats = _symbol_trade_stats(trades_out)
+                sym_win[sym] = {
+                    "in_winrate_pct": _in_stats["win_rate_pct"],
+                    "in_trades": _in_stats["trades"],
+                    "in_cum_ret_pct": _in_stats["cum_ret_pct"],
+                    "out_winrate_pct": _out_stats["win_rate_pct"],
+                    "out_trades": _out_stats["trades"],
+                    "out_cum_ret_pct": _out_stats["cum_ret_pct"],
+                    "oos_ok": bool(
+                        _out_stats["trades"] >= 1
+                        and (_out_stats["win_rate_pct"] is not None and _out_stats["win_rate_pct"] >= 50)
+                    ),
+                }
             except Exception as exc:  # noqa: BLE001 — 单 symbol 失败不整任务 failed
                 symbol_errors[sym] = f"{type(exc).__name__}: {exc}"
                 per_symbol[sym] = {"error": symbol_errors[sym]}
@@ -1209,22 +1288,40 @@ class StrategyBacktestRunner:
         n = max(len(symbols), 1)
         capital_per = capital / n
 
-        def _agg(rows: list[dict], per: dict, label: str) -> dict:
+        def _agg(rows: list[dict], per: dict, label: str) -> tuple[dict, dict]:
             from .backtest_engine import compute_summary
 
+            curve = portfolio_equity_curve(per, capital_per)
             summary = compute_summary(
                 rows, engine_version="strategy-v1", eval_window_days=20,
                 n_decisions_total=len(rows), n_candidates_evaluated=len(rows),
             )
-            summary["portfolio"] = curve_stats(portfolio_equity_curve(per, capital_per))
-            return summary
+            summary["portfolio"] = curve_stats(curve)
+            return summary, curve
 
         progress_cb("📈 聚合样本内/样本外指标 + 组合净值…")
         check_cancelled()
-        in_summary = _agg(all_in, per_in, "in")
-        out_summary = _agg(all_out, per_out, "out")
+        in_summary, in_curve = _agg(all_in, per_in, "in")
+        out_summary, out_curve = _agg(all_out, per_out, "out")
 
         verification_status, passed, reason = _verification_outcome(out_summary, min_oos)
+
+        # 自进化 v2 · P0.4：扩展证据（per_symbol 归因总是存；每日净值曲线受开关+保留窗口约束）
+        extended_backtest = {
+            "engine_version": "strategy-v1",
+            "per_symbol": sym_win,
+            "symbol_errors": dict(symbol_errors),
+            "oos_ok_ratio_pct": (
+                round(100.0 * sum(1 for s in sym_win.values() if s.get("oos_ok")) / len(sym_win), 1)
+                if sym_win else None
+            ),
+        }
+        if settings.evolve_persist_curve:
+            keep = max(2, int(settings.evolve_curve_keep_days))
+            extended_backtest["equity_curve"] = {
+                "in": _trim_curve(in_curve, keep),
+                "out": _trim_curve(out_curve, keep),
+            }
 
         backtest = {
             "in_sample": in_summary,
@@ -1235,6 +1332,7 @@ class StrategyBacktestRunner:
             "ran_at": _now(),
             "per_symbol": per_symbol,
             "symbol_errors": symbol_errors,
+            "extended_backtest": extended_backtest,
         }
         check_cancelled()
         completed = bt.complete_task(

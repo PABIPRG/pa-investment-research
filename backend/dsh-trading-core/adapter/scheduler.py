@@ -195,7 +195,15 @@ def _run_event_generation(store: JsonStore) -> dict:
     events = fetch_events(limit=settings.event_generation_limit, timeout=20.0)
     if not events:
         return {"n_events": 0, "candidates": [], "note": "事件源暂无事件"}
-    hypotheses = generate_hypotheses(events)
+    # P6：PRIOR_REPLAY_ENABLED 时把历史样本外先验注入假设生成，让上游倾向与下游筛选协同。
+    priors_hint = ""
+    if settings.prior_replay_enabled:
+        try:
+            from .priors import build_hint  # lazy
+            priors_hint = build_hint(store) or ""
+        except Exception as exc:  # noqa: BLE001 — 先验失败不拖垮假设生成（fail-open）
+            logger.warning("先验刷新失败，本批不带先验: %s", exc)
+    hypotheses = generate_hypotheses(events, priors_hint=priors_hint or None)
     ids = create_candidates(events, hypotheses)
     return {"n_events": len(events), "n_hypotheses": len(hypotheses), "candidates": ids}
 
@@ -237,6 +245,36 @@ def _run_closed_loop_once(store: JsonStore, today: str) -> None:
     run_at = datetime.now(ZoneInfo(_TIMEZONE)).isoformat(timespec="seconds")
     logger.info("🔁 自进化闭环（%s）…", today)
     lines: list[str] = []
+    # Step -1：每日刷新主基准收盘 + 最小 regime 判定（P0.3/P0.5 接线，默认非致命）。
+    # regime_gate 在 P5 前默认不 gate，本步先落库供看板/存档/后续门控。
+    if settings.regime_enabled:
+        try:
+            from . import regime
+            rr = regime.refresh_and_classify(store)
+            lines.append(
+                f"市场环境：{rr.get('date')} regime={rr.get('regime')} "
+                f"(conf {rr.get('confidence_pct')}%)"
+                if rr.get("regime")
+                else f"市场环境：{rr.get('regime')}（{rr.get('samples')} 样本，待累积）"
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("市场 regime 刷新失败（非致命）: %s", exc)
+            lines.append(f"市场环境：刷新失败 {exc}")
+    # Step -0：存档复活（P5，默认关）：regime 切回某存档基因擅长档 → 复活为 candidate，
+    # 交由下方 Step C 落首测 pending（进化版「经验保留」，非致命失败不影响闭环）。
+    if settings.evolve_revive_enabled:
+        try:
+            from . import gene_archive as _arch
+            from . import regime as _regime
+
+            cur = _regime.latest_regime(store)
+            cur_r = (cur or {}).get("regime") if isinstance(cur, dict) else None
+            revived = _arch.reactivate_archived(store, cur_r)
+            if revived:
+                lines.append(f"存档复活：regime={cur_r} 切回 → 复活 {len(revived)} 个存档基因待回测")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("存档复活探测失败（非致命）: %s", exc)
+            lines.append(f"存档复活：失败 {exc}")
     # Step 0：拉事件 → 生成新策略候选（并入闭环，EVENT_GENERATION_ENABLED 控制）
     try:
         if settings.event_generation_enabled:

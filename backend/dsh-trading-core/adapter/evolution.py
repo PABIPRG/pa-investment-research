@@ -505,6 +505,211 @@ def _mutate_symbols(symbols, branch: int) -> list[str]:
     return syms[: min(2, len(syms))]
 
 
+def _family_migrate(kind: str, branch: int) -> tuple[str | None, dict | None, str]:
+    """生态位族内迁移（P2）：把打法换到同族另一 kind（带该 kind 的变异默认参数）。
+
+    无同族备选 → 返回 (None, None, "")，调用方退化为参数微扰。branch 决定选族内第几个备选，
+    保证同一母体同 branch 产出确定（child_id 稳定、幂等）。
+    """
+    from . import genome
+
+    alts = genome.family_alternatives(kind)
+    if not alts:
+        return None, None, ""
+    alt = alts[branch % len(alts)]
+    params = _mutate_params(alt, None, branch)
+    note = f"生态位内换打法 {kind}→{alt}（{genome.family_of(kind)} 族备选）"
+    return alt, params, note
+
+
+def _pool_migrated_symbols(store: JsonStore, rec: dict, parent_symbols, branch: int) -> list[str] | None:
+    """跨同类事件池换/扩标的（P2 泛化验证）：从 gene.scope.pool_ref 定位的同类事件历史候选池取票。
+
+    母体无 gene.scope.pool_ref、或账本无同类历史候选 → 返回 None，调用方保留 v1 截短逻辑。
+    返回 保留的母体至多 2 票 + 池内（排除母体已持）新增票，总量上限 EVOLVE_POOL_MAX_NEW_SYMBOLS。
+    """
+    from . import genome
+    from .ledger import event_type_of
+
+    scope = genome.pool_scope(rec)
+    event_type = scope.get("event_type")
+    direction = scope.get("direction")
+    if not event_type:
+        return None
+    parent = [str(s) for s in (parent_symbols or []) if str(s)]
+    keep = list(parent[: min(2, len(parent))])
+    try:
+        from .ledger import symbol_pool
+        pool = symbol_pool(
+            store, event_type=event_type, direction=direction,
+            max_symbols=int(settings.evolve_pool_max_new_symbols),
+            exclude=parent,
+        )
+    except Exception:  # noqa: BLE001 — 账本异常不改写变异（回退 v1 截短）
+        return None
+    if not pool:
+        return None
+    combined = list(dict.fromkeys(keep + [str(s) for s in pool]))
+    return combined[: max(len(keep), len(combined))]
+
+
+# ---- 自进化 v2 · P3/P4 治理接线（默认关，不影响 v1 判定）--------------------
+
+
+def _series_by_sid_map(store: JsonStore) -> dict[str, dict[str, float]]:
+    """每 active 策略影子净值序列 → {sid: {date: nav}}，供停滞/相关性判据。"""
+    return {
+        sid: {p["date"]: p["nav"] for p in pts}
+        for sid, pts in _per_strategy_series(_shadow_series(store)[0]).items()
+    }
+
+
+def _clone_crowded(
+    store: JsonStore,
+    rec: dict,
+    sid: str,
+    nav_series: dict[str, dict[str, float]] | None,
+) -> bool:
+    """P4 生态位相关性去重：本 promote 的生态位是否已被「更优的高相关同族」占据。
+
+    该策略(nav 现值) ≤ 同生态位且相关系数 ≥ EVOLVE_CORRELATION_MAX 的某在位 active
+    → 视为克隆让位（不产新变异，防克隆膨胀）。样本不足/无同族更优 → False。
+    """
+    if not nav_series:
+        return False
+    from . import governance as _gov, genome as _gm  # noqa: PLC0415
+
+    mine = nav_series.get(sid)
+    if not mine:
+        return False
+    my_vals = [float(v) for v in mine.values()]
+    if not my_vals:
+        return False
+    my_last = my_vals[-1]
+    my_scope = _gm.pool_scope(rec)
+    my_key = _gov.niche_key(
+        rec.get("kind"),
+        event_type=(my_scope or {}).get("event_type"),
+        direction=rec.get("direction"),
+    )
+    for other_sid, rec2 in (store.all("strategies") or {}).items():
+        if not isinstance(rec2, dict) or str(other_sid) == str(sid):
+            continue
+        if rec2.get("status") != "active":
+            continue
+        if str(rec2.get("mutated_from") or "") == str(sid):
+            continue  # 不与自己的子代/后代比
+        o_scope = _gm.pool_scope(rec2)
+        if _gov.niche_key(
+            rec2.get("kind"),
+            event_type=(o_scope or {}).get("event_type"),
+            direction=rec2.get("direction"),
+        ) != my_key:
+            continue
+        theirs = nav_series.get(other_sid)
+        if not theirs:
+            continue
+        common = sorted(set(mine) & set(theirs))
+        if len(common) < 2:
+            continue
+        corr = _gov.shadow_correlation(dict(mine), dict(theirs))
+        if corr is None:
+            continue
+        o_last = float(list(theirs.values())[-1])
+        if _gov.clone_blocked(
+            corr, getattr(settings, "evolve_correlation_max", 0.8),
+            candidate_better=(my_last > o_last),
+        ):
+            return True
+    return False
+
+
+def _emit_crossover(
+    actions: list[dict],
+    rec_a: dict,
+    rec_b: dict,
+    child_id: str,
+) -> dict | None:
+    """把亲本 A(因子结构) × B(标的池) 重组成一条带双亲谱系的子代 action。"""
+    from . import recombine as _rc  # noqa: PLC0415
+
+    try:
+        child = _rc.crossover(
+            rec_a.get("kind"), rec_a.get("params") or {}, rec_b.get("symbols"),
+            rec_a.get("direction"),
+            parent_a=str(rec_a.get("id") or rec_a.get("sid")),
+            parent_b=str(rec_b.get("id") or rec_b.get("sid")),
+        )
+    except Exception:  # noqa: BLE001 — 重组异常退化为不产出，不改写判定
+        return None
+    if not child:
+        return None
+    action = {
+        "type": "mutate",
+        "parent": str(rec_a.get("id") or rec_a.get("sid")),
+        "parent_b": str(rec_b.get("id") or rec_b.get("sid")),
+        "sid": child_id,
+        "kind": child["kind"],
+        "direction": child["direction"],
+        "symbols": child["symbols"],
+        "params": child["params"],
+        "name": f"重组·{(child.get('parent_a') or '')[:8]}×{(child.get('parent_b') or '')[:8]}",
+        "attribution_note": (
+            f"有性繁殖重组：{child['kind']} 因子（亲本A {child['parent_a']}）× "
+            f"标的池（亲本B {child['parent_b']}，{len(child['symbols'])} 票）"
+        ),
+        "reason": (
+            f"两条 upgrade 亲本 {child['parent_a']}×{child['parent_b']} 交叉重组 "
+            f"（factor×symbols）→ candidate 回流策略池待回测验证"
+        ),
+    }
+    actions.append(action)
+    return action
+
+
+def _maybe_crossover(
+    store: JsonStore,
+    actions: list[dict],
+    strats: dict,
+) -> None:
+    """P3 有性繁殖：本批 ≥N 条 promote 亲本时，取两条同向亲本产出 1 条重组子代。
+
+    默认 EVOLVE_RECOMBINE_ENABLED=false → 无动作；开启也只是在 promote 的变异子代
+    之外**追加**一条带双亲谱系的子代，不动既有 mutate 分支（防行为漂移）。
+    """
+    promos = [a for a in actions if a["type"] == "promote"]
+    need = max(2, int(getattr(settings, "evolve_recombine_min_parents", 2)))
+    if len(promos) < need:
+        return
+    cands = []
+    for a in promos:
+        rec = strats.get(a["sid"]) or {}
+        if not isinstance(rec, dict) or not rec.get("kind") or not rec.get("symbols"):
+            continue
+        cands.append(rec)
+    if len(cands) < need:
+        return
+    used: set[str] = set()
+    for i, rec_a in enumerate(cands):
+        if str(rec_a.get("id") or rec_a.get("sid")) in used:
+            continue
+        for rec_b in cands[i + 1:]:
+            if str(rec_b.get("id") or rec_b.get("sid")) in used:
+                continue
+            # 只交叉同向（利好/利空）亲本；方向不一或都空 → 跳过该对
+            da, db = rec_a.get("direction"), rec_b.get("direction")
+            if da and db and da != db:
+                continue
+            aid = str(rec_a.get("id") or rec_a.get("sid"))
+            bid = str(rec_b.get("id") or rec_b.get("sid"))
+            used.update((aid, bid))
+            child_id = _child_id(
+                aid, rec_a.get("kind"), {**(rec_a.get("params") or {}), "_x": bid}, 7
+            )
+            _emit_crossover(actions, rec_a, rec_b, child_id)
+            return
+
+
 def _child_id(parent: str, kind: str, params: dict, branch: int) -> str:
     key = f"{parent}:{kind}:{hashlib.md5(str(params).encode()).hexdigest()}:{branch}"
     return "strat-" + _str2md5(key)
@@ -601,6 +806,17 @@ def _per_strategy_decisions(
     )
     now = time.time()
     cooldown = settings.evolve_mutate_cooldown_days * 86400
+    # P3/P4：停滞退役 / 相关性去重判据按需预取每策略影子净值序列（默认关 → None 不预取）
+    _nav_series = _series_by_sid_map(store) if (
+        bool(getattr(settings, "evolve_stagnant_enabled", False))
+        or bool(getattr(settings, "evolve_correlation_enabled", False))
+    ) else None
+    # P5：冬眠分流按需取当日 regime（默认关 → None 不预取，老行为不变）
+    _cur_regime = None
+    if bool(getattr(settings, "evolve_hibernate_enabled", False)):
+        from . import regime as _rg  # noqa: PLC0415
+        _rr = _rg.latest_regime(store)
+        _cur_regime = (_rr or {}).get("regime") if isinstance(_rr, dict) else None
     per_strategy: list[dict] = []
     for s in attr["strategies"]:
         sid = s["strategy_id"]
@@ -629,8 +845,70 @@ def _per_strategy_decisions(
             # 策略现状只展示已激活运行的策略：非 active（候选/变体/退役/拒绝）
             # 曾跑过影子留下的历史证据不进判定列表，避免看板堆满「不参与当前判定」。
             continue
-        # 1) 淘汰（净值跌破淘汰线）
-        if nav is not None and nav <= settings.evolve_retire_nav and ev.get("state") != "retired":
+        # P5 冬眠分流（默认关）：当日市场 regime 不在该策略 gate.allow → 记 冬眠 并整段跳过
+        # 升/降/汰判定（environment 不配合 ≠ 能力不行）。默认 gene.allow=全 regime → 不触发。
+        if (
+            _cur_regime
+            and bool(getattr(settings, "evolve_hibernate_enabled", False))
+        ):
+            from . import genome as _gm  # noqa: PLC0415
+
+            allow = ((_gm.read_gene(rec) or {}).get("regime_gate") or {}).get("allow") or []
+            if _cur_regime not in allow:
+                entry.update(
+                    decision="hold", behavior="冬眠",
+                    reason=(
+                        f"市场 regime={_cur_regime} 不在该策略适配区，暂停触发；"
+                        f"环境不配合不计能力，不因这段做升/降/汰"
+                    ),
+                )
+                per_strategy.append(entry)
+                continue
+        # 自进化 v2 · P1：多维适应度画像（判「本事 vs 行情」）。
+        # 默认 EVOLVE_FITNESS_MODE=log 只记档不改动作 → 三线即 v1；relative/excess 才改写生效线。
+        # overfit 只在 extended_backtest 存在（P0.4 起）时判，老记录缺省 → 不介入。
+        from . import fitness as _fit  # noqa: PLC0415
+
+        fitness_mode = str(getattr(settings, "evolve_fitness_mode", "log") or "log").lower()
+        bt_rec = rec.get("backtest")
+        extended = bt_rec.get("extended_backtest") if isinstance(bt_rec, dict) else None
+        cohort = [
+            r["nav"] for r in attr["strategies"]
+            if isinstance(r, dict) and r.get("nav") is not None
+        ]
+        eff = _fit.effective_lines(
+            nav=nav, peer_navs=cohort, mode=fitness_mode,
+            min_peers=settings.evolve_relative_min_peers,
+            promote_nav=settings.evolve_promote_nav,
+            demote_nav=settings.evolve_demote_nav,
+            retire_nav=settings.evolve_retire_nav,
+            promote_percentile=settings.evolve_promote_percentile,
+            retire_percentile=settings.evolve_retire_percentile,
+        )
+        overfit = _fit.overfit_of(
+            extended, gap_pct=settings.evolve_overfit_gap_pct,
+            min_trades=settings.evolve_overfit_min_trades,
+        )
+        entry["fitness"] = _fit.compute_profile(
+            nav=nav, peer_navs=cohort, mode=fitness_mode,
+            min_peers=settings.evolve_relative_min_peers,
+            promote_nav=settings.evolve_promote_nav,
+            demote_nav=settings.evolve_demote_nav,
+            retire_nav=settings.evolve_retire_nav,
+            promote_percentile=settings.evolve_promote_percentile,
+            retire_percentile=settings.evolve_retire_percentile,
+            extended=extended,
+            overfit_gap_pct=settings.evolve_overfit_gap_pct,
+            overfit_min_trades=settings.evolve_overfit_min_trades,
+        )
+        # 生效线：relative/excess 档被分组改写（±inf 仅用于比较，不进落库的 fitness 快照）
+        _retire_line, _demote_line, _promote_line = (
+            eff["retire_nav"], eff["demote_nav"], eff["promote_nav"]
+        )
+        if overfit.get("flag"):
+            _promote_line = float("inf")  # 过拟合铁则：任何 mode 都不许只凭 IS 升级
+        # 1) 淘汰（净值跌破淘汰线；relative/excess 高位组被 -∞ 豁免，护抗跌 alpha）
+        if nav is not None and nav <= _retire_line and ev.get("state") != "retired":
             reason = f"影子净值 {nav:.4f} ≤ 淘汰线 {settings.evolve_retire_nav}"
             entry.update(decision="retire", behavior="淘汰", reason=reason)
             actions.append(
@@ -640,6 +918,7 @@ def _per_strategy_decisions(
                     "from": ev.get("state") or "active",
                     "to": "retired",
                     "reason": reason,
+                    "fitness": entry["fitness"],
                 }
             )
             per_strategy.append(entry)
@@ -663,13 +942,47 @@ def _per_strategy_decisions(
                     "from": ev.get("state") or "active",
                     "to": "retired",
                     "reason": reason,
+                    "fitness": entry["fitness"],
                 }
             )
             per_strategy.append(entry)
             continue
+        # 2.5) 停滞退役（P4，门控默认关）：active 连续 N 天未刷新影子净值新高 → 平庸让位。
+        #      只针对还在正常活跃跑影子的（非 watch/retired），且不与绝对线/胜率淘汰重复。
+        if (
+            _nav_series is not None
+            and bool(getattr(settings, "evolve_stagnant_enabled", False))
+            and ev.get("state", "active") == "active"
+            and rec.get("status") == "active"
+        ):
+            own = _nav_series.get(sid) or {}
+            if own and len(own) > int(getattr(settings, "evolve_stagnant_days", 10)):
+                from . import governance as _gov  # noqa: PLC0415
+
+                if _gov.stagnant(
+                    own, stale_days=int(getattr(settings, "evolve_stagnant_days", 10))
+                ):
+                    reason = (
+                        f"连续 {settings.evolve_stagnant_days} 天未刷新影子净值新高"
+                        f"（现 {nav:.4f}），长期平庸让位"
+                    )
+                    entry.update(decision="retire", behavior="淘汰·停滞", reason=reason)
+                    actions.append(
+                        {
+                            "type": "retire",
+                            "sid": sid,
+                            "from": ev.get("state") or "active",
+                            "to": "retired",
+                            "reason": reason,
+                            "stagnant": True,
+                            "fitness": entry["fitness"],
+                        }
+                    )
+                    per_strategy.append(entry)
+                    continue
         # 3) 降级观察（state 缺省视为 active：人工/事件生成经回测激活的策略没有 evolve.state，
         #    若按 == "active" 判定会永远跳过降级，只在 0.90 才被淘汰，漏掉 0.95 观察线）
-        if nav is not None and nav <= settings.evolve_demote_nav and ev.get("state", "active") == "active":
+        if nav is not None and nav <= _demote_line and ev.get("state", "active") == "active":
             reason = (
                 f"影子净值 {nav:.4f} ≤ 观察线 {settings.evolve_demote_nav}，"
                 f"降级为观察（停止推荐、继续跑影子）"
@@ -682,12 +995,13 @@ def _per_strategy_decisions(
                     "from": "active",
                     "to": "watch",
                     "reason": reason,
+                    "fitness": entry["fitness"],
                 }
             )
             per_strategy.append(entry)
             continue
-        # 4) 升级 + 变异回流
-        if nav is not None and nav >= settings.evolve_promote_nav and tier < 2:
+        # 4) 升级 + 变异回流（relative/excess 非高位被 +∞ 挡：过线但跟风不升；overfit 亦挡）
+        if nav is not None and nav >= _promote_line and not overfit.get("flag") and tier < 2:
             reason = f"影子净值 {nav:.4f} ≥ 升级线 {settings.evolve_promote_nav}"
             entry.update(decision="promote", behavior="升级", reason=reason)
             actions.append(
@@ -697,6 +1011,7 @@ def _per_strategy_decisions(
                     "from": f"tier{tier}",
                     "to": "tier2",
                     "reason": reason,
+                    "fitness": entry["fitness"],
                 }
             )
             oos = ((rec.get("backtest") or {}).get("out_of_sample") or {})
@@ -708,13 +1023,59 @@ def _per_strategy_decisions(
                 oos_ok = True
             last_m = ev.get("mutated_at")
             cooled = (not last_m) or (now - (_parse_ts(last_m) or now) > cooldown)
-            if oos_ok and cooled:
+            # P4 生态位相关性去重（默认关）：同生态位已被「更优高相关」active 占据 → 不再产克隆变异。
+            _crowded = bool(getattr(settings, "evolve_correlation_enabled", False)) and bool(
+                _clone_crowded(store, rec, sid, _nav_series)
+            )
+            if oos_ok and cooled and not _crowded:
                 kind = rec.get("kind")
+                migration_on = bool(getattr(settings, "evolve_migration_enabled", False))
+                from_branch = int(getattr(settings, "evolve_migrate_from_branch", 1))
                 for b in range(settings.evolve_mutate_branches):
                     if kind not in _MUTABLE_KINDS:
                         break
-                    params = _mutate_params(kind, rec.get("params"), b)
-                    nsid = _child_id(sid, kind, params, b)
+                    # P2 基因座开放：从第 from_branch 条分支起，尝试生态位族内换 kind / 跨同类事件池换标的。
+                    # 默认 EVOLVE_MIGRATION_ENABLED=false → 分支产物与 v1 完全一致。
+                    child_kind, child_params, a_note = kind, None, ""
+                    migrated_family = False
+                    if migration_on and b >= from_branch:
+                        alt_kind, alt_params, fam_note = _family_migrate(kind, b)
+                        if alt_kind:
+                            child_kind, child_params, a_note = alt_kind, alt_params, fam_note
+                            migrated_family = True
+                    params = child_params if migrated_family else _mutate_params(
+                        child_kind, rec.get("params"), b
+                    )
+                    symbols = _mutate_symbols(rec.get("symbols"), b)
+                    if migration_on and b >= from_branch:
+                        pool_syms = _pool_migrated_symbols(store, rec, rec.get("symbols"), b)
+                        if pool_syms:
+                            symbols = pool_syms
+                            a_note = ((a_note + "；") if a_note else "") + (
+                                f"跨同类事件池换标的（历史候选 {len(symbols)} 票）"
+                            )
+                    # P3 归因引导有向变异（默认关）：用母体 per-symbol 样本外证据换掉最差的
+                    # 拖累票，朝已证有效方向微调，而非盲摇骰子。只裁「证据里确实差」的票。
+                    if (
+                        bool(getattr(settings, "evolve_guided_prune_enabled", False))
+                        and isinstance(extended, dict)
+                        and isinstance(extended.get("per_symbol"), dict)
+                        and extended["per_symbol"]
+                    ):
+                        from . import recombine as _rc  # noqa: PLC0415
+
+                        _scores = _rc.evidence_scores(extended.get("per_symbol") or {})
+                        if _scores:
+                            _before = list(symbols)
+                            symbols = _rc.prune_losers(
+                                symbols, _scores,
+                                drop_worst=int(getattr(settings, "evolve_guided_prune_worst", 1)),
+                            )
+                            if len(symbols) < len(_before):
+                                a_note = ((a_note + "；") if a_note else "") + (
+                                    f"归因剪枝换掉拖累票 {len(_before) - len(symbols)} 只"
+                                )
+                    nsid = _child_id(sid, child_kind, params, b)
                     if nsid in strats:
                         continue  # 已回流过，不重复
                     actions.append(
@@ -722,14 +1083,16 @@ def _per_strategy_decisions(
                             "type": "mutate",
                             "parent": sid,
                             "sid": nsid,
-                            "kind": kind,
+                            "kind": child_kind,
                             "direction": rec.get("direction"),
-                            "symbols": _mutate_symbols(rec.get("symbols"), b),
+                            "symbols": symbols,
                             "params": params,
                             "name": f"变体·{sid[:8]}·b{b + 1}",
+                            "attribution_note": a_note or None,
                             "reason": (
-                                f"由升级策略 {sid} 变异（{kind} 参数 {params}）→ "
+                                f"由升级策略 {sid} 变异（{child_kind} 参数 {params}）→ "
                                 f"candidate 回流策略池待回测验证"
+                                + (f"；{a_note}" if a_note else "")
                             ),
                         }
                     )
@@ -751,14 +1114,50 @@ def _per_strategy_decisions(
                 reason=f"影子净值 {nav:.4f} ≤ 观察线 {settings.evolve_demote_nav}，已在 watch 观察",
             )
         else:
-            entry.update(
-                behavior="正常运行",
-                reason=(
-                    f"影子净值 {nav:.4f} 处于 {settings.evolve_demote_nav}~"
-                    f"{settings.evolve_promote_nav} 带内，无升降级动作"
-                ),
-            )
+            # P1：v1 绝对线想说升级/淘汰，但多维适应度（overfit/同批分位）把它压回 hold → 给可读原因
+            _f = entry.get("fitness") or {}
+            _abs_v = (_f.get("absolute") or {}).get("verdict")
+            _fin = _f.get("decision")
+            _pct = _f.get("percentile")
+            if _abs_v in ("promote",) and _fin == "hold":
+                if overfit.get("flag"):
+                    entry.update(
+                        behavior="过拟合不升",
+                        reason=(
+                            f"样本内胜率虚高（IS−OOS ≥ {settings.evolve_overfit_gap_pct:.0f}pp），"
+                            f"仅样本内好看，不升级"
+                        ),
+                    )
+                elif _pct is not None:
+                    entry.update(
+                        behavior="跟风不升",
+                        reason=(
+                            f"绝对净值过线但同批分位 {_pct}% 未达 "
+                            f"{settings.evolve_promote_percentile:.0f}%，判为跟随行情而非真本事，不升级"
+                        ),
+                    )
+                else:
+                    entry.update(behavior="正常运行", reason="绝对线达标，暂无进一步动作")
+            elif _abs_v in ("retire", "demote") and _fin == "hold" and _pct is not None:
+                entry.update(
+                    behavior="抗跌豁免",
+                    reason=(
+                        f"净值跌破 v1 观察/淘汰线但同批分位 {_pct}%（高位抗跌），"
+                        f"判为行情拖累而非能力问题，暂不降级/淘汰"
+                    ),
+                )
+            else:
+                entry.update(
+                    behavior="正常运行",
+                    reason=(
+                        f"影子净值 {nav:.4f} 处于 {settings.evolve_demote_nav}~"
+                        f"{settings.evolve_promote_nav} 带内，无升降级动作"
+                    ),
+                )
         per_strategy.append(entry)
+    # P3 有性繁殖（默认关）：本批 ≥2 条 promote 亲本时追加 1 条带双亲谱系的重组子代。
+    if bool(getattr(settings, "evolve_recombine_enabled", False)):
+        _maybe_crossover(store, actions, strats)
     return per_strategy, actions
 
 
@@ -868,10 +1267,21 @@ def _apply_action(store: JsonStore, a: dict) -> None:
                 ev.update({"state": "retired", "updated_at": ts, "note": a["reason"]})
                 rec["status"] = "retired"
                 rec["retire_reason"] = a["reason"]
+            # 自进化 v2 · P1：动作附带的多维适应度快照（JSON 安全、附加，缺省不写）
+            if isinstance(a.get("fitness"), dict):
+                ev["fitness"] = a["fitness"]
             rec["evolve"] = ev
             return rec
 
         store.mutate("strategies", sid, apply_transition)
+        # 自进化 v2 · P4 基因存档：淘汰(active→retired)时把基因进存档（带 fitness/归因），
+        # 供 regime 切回擅长档时由 revival_candidates 召回。默认关 → 与 v1 一致。
+        if a["type"] == "retire" and bool(getattr(settings, "evolve_archive_enabled", False)):
+            from . import gene_archive as _arch  # noqa: PLC0415
+            _arch.archive_record(
+                store, store.get("strategies", sid) or {},
+                reason=a.get("reason") or "retire",
+            )
     elif a["type"] == "mutate":
         generation = 1
 
@@ -885,6 +1295,22 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             return parent
 
         store.mutate("strategies", a["parent"], mark_parent)
+        try:
+            from . import genome
+
+            meta: dict = {}
+            if a.get("attribution_note"):
+                meta["attribution_note"] = a["attribution_note"]
+            # P3 有性繁殖：子代若带双亲谱系，把 parentA(=a.parent)/parentB 写进基因 meta
+            if a.get("parent") and a.get("parent_b"):
+                meta["parent_a"] = a["parent"]
+                meta["parent_b"] = a["parent_b"]
+            child_gene = genome.gene_for(
+                a["kind"], a["params"], a["symbols"], a["direction"],
+                meta=meta or None,
+            )
+        except Exception:  # noqa: BLE001 — 基因回退：变体仍可按 v1 判定
+            child_gene = None
         rec = {
             "id": a["sid"],
             "name": a["name"],
@@ -892,6 +1318,7 @@ def _apply_action(store: JsonStore, a: dict) -> None:
             "direction": a["direction"],
             "symbols": a["symbols"],
             "params": a["params"],
+            "gene": child_gene,
             "status": "candidate",
             "verification_status": "insufficient",
             "source": "evolution",
