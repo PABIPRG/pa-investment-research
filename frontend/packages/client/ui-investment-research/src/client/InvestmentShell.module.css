@@ -1736,7 +1736,22 @@
 .evolutionLead strong, .evolutionLead span { display: block; }
 .evolutionLead strong { flex: none; font-size: 0.9286rem; }
 .evolutionLead span { color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-secondary); line-height: 1.5; text-align: right; }
-.evolutionLineageOverview .lineageTree:not(:empty) { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.evolutionLineageOverview .lineageTree:not(:empty) { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.evolutionLineageOverview .lineageBranch { min-width: 0; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
+.evolutionLineageOverview .lineageBranch[data-depth]:not([data-depth='0']) { position: relative; overflow: visible; border: 0; border-radius: 0; background: transparent; }
+.evolutionLineageOverview .lineageNode { min-width: 0; }
+.evolutionLineageOverview .lineageLabel { display: grid; gap: 9px; width: 100%; padding: 11px 12px; border-radius: 9px; background: var(--dsw-alias-bg-base); }
+.evolutionLineageOverview .lineageChildren { position: relative; display: grid; gap: 8px; margin: 0 12px 12px 23px; padding-inline-start: 16px; border-inline-start: 2px solid var(--dsw-alias-border-l2); }
+.evolutionLineageOverview .lineageChildren > .lineageBranch::before { position: absolute; top: 22px; inset-inline-start: -16px; width: 16px; border-top: 2px solid var(--dsw-alias-border-l2); content: ''; }
+.lineageNodeMeta { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.lineageNodeMeta > span { padding: 3px 7px; border-radius: 99px; color: var(--investment-primary); background: var(--investment-interactive-hover); font-size: var(--investment-font-caption); font-weight: 700; }
+.lineageNodeMeta > small { overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); text-overflow: ellipsis; white-space: nowrap; }
+.evolutionStrategyIdentity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.evolutionStrategySubject { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-primary); text-overflow: ellipsis; white-space: nowrap; }
+.evolutionStrategyKind { flex: none; padding: 3px 7px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 99px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); font-size: var(--investment-font-caption); font-weight: 700; line-height: 1.2; white-space: nowrap; }
+.evolutionStrategyKind[data-direction='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
+.evolutionStrategyKind[data-direction='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
+.evolutionDashboard .strategyEntry .dataRow > div > strong.evolutionStrategyIdentity { display: flex; }
 .evolutionOverviewGrid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 16px; align-items: stretch; min-width: 0; }
 .evolutionRuntimeCard, .evolutionAttributionCard { height: 100%; box-sizing: border-box; }
 .evolutionRuntimeMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 0 0; }

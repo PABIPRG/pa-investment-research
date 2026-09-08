@@ -6,7 +6,7 @@ import {
   formatEvolutionTimestamp,
 } from './evolution-types.ts'
 import { useSecurityNames } from './security-names.ts'
-import { strategyEvolutionLabel, strategyTickers } from './strategy-display.ts'
+import { strategyDirectionLabel, strategyEvolutionLabel, strategyTickers } from './strategy-display.ts'
 import css from './InvestmentShell.module.css'
 
 // 变异是来源标记（source/mutated_from）而非独立分组：策略按真实状态落桶。mutated 保留为防御性兜底。
@@ -43,21 +43,60 @@ interface LineageNodeProps {
   readonly children: ReadonlyMap<string, readonly string[]>
   readonly onOpenStrategy: EvolutionDashboardProps['onOpenStrategy']
   readonly returnGroup: EvolutionLifecycleGroup
-  readonly labelFor: (entry: Record<string, unknown>) => string
+  readonly identityFor: (entry: Record<string, unknown>) => StrategyIdentity
+  readonly depth?: number
 }
 
-function LineageNode({ sid, entries, children, onOpenStrategy, returnGroup, labelFor }: LineageNodeProps) {
+interface StrategyIdentity {
+  readonly direction: string
+  readonly kind: string
+  readonly label: string
+  readonly subject: string
+}
+
+function EvolutionStrategyIdentity({ identity }: { readonly identity: StrategyIdentity }) {
+  return <>
+    <span className={css.evolutionStrategySubject}>{identity.subject}</span>
+    <span
+      className={css.evolutionStrategyKind}
+      data-direction={identity.direction || undefined}
+    >
+      {identity.kind}{identity.direction === '' ? '' : ` · ${identity.direction}`}
+    </span>
+  </>
+}
+
+function LineageNode({
+  sid,
+  entries,
+  children,
+  onOpenStrategy,
+  returnGroup,
+  identityFor,
+  depth = 0,
+}: LineageNodeProps) {
   const entry = entries.get(sid)
   if (entry === undefined) return null
+  const identity = identityFor(entry)
+  const childIds = children.get(sid) ?? []
+  const relation = depth === 0 ? (childIds.length > 0 ? '母策略' : '独立策略') : '衍生策略'
+  const lifecycleLabel = GROUP_LABELS[text(entry.lifecycle_group, '')] ?? text(entry.lifecycle_group, '')
   return (
-    <div className={css.lineageNode}>
-      <button type="button" className={css.lineageLabel} onClick={() => { onOpenStrategy(sid, returnGroup) }}>
-        <strong>{labelFor(entry)}</strong>
-        <span>{GROUP_LABELS[text(entry.lifecycle_group, '')] ?? text(entry.lifecycle_group, '')}</span>
-      </button>
-      {(children.get(sid) ?? []).length > 0 && (
-        <div className={css.lineageChildren}>
-          {(children.get(sid) ?? []).map(child => (
+    <div
+      className={css.lineageBranch}
+      role="listitem"
+      aria-label={`${identity.subject}，${relation}，${depth === 0 ? '根策略' : '子策略'}`}
+      data-depth={depth}
+    >
+      <div className={css.lineageNode}>
+        <button type="button" className={css.lineageLabel} onClick={() => { onOpenStrategy(sid, returnGroup) }}>
+          <span className={css.lineageNodeMeta}><span>{relation}</span><small>{lifecycleLabel}</small></span>
+          <strong className={css.evolutionStrategyIdentity}><EvolutionStrategyIdentity identity={identity} /></strong>
+        </button>
+      </div>
+      {childIds.length > 0 && (
+        <div className={css.lineageChildren} role="list" aria-label={`${identity.subject}的衍生策略`}>
+          {childIds.map(child => (
             <LineageNode
               key={child}
               sid={child}
@@ -65,7 +104,8 @@ function LineageNode({ sid, entries, children, onOpenStrategy, returnGroup, labe
               children={children}
               onOpenStrategy={onOpenStrategy}
               returnGroup={returnGroup}
-              labelFor={labelFor}
+              identityFor={identityFor}
+              depth={depth + 1}
             />
           ))}
         </div>
@@ -141,11 +181,18 @@ export function EvolutionDashboard({
     ...GROUPS.flatMap(group => records(lifecycle[group])),
   ].flatMap(entry => strategyTickers(entry).map(ticker => ticker.code)))]
   const securityNames = useSecurityNames(requestData, strategyCodes)
-  const strategyLabel = useCallback((entry: Record<string, unknown>): string => {
+  const strategyIdentity = useCallback((entry: Record<string, unknown>): StrategyIdentity => {
     const sid = strategyId(entry)
-    return strategyEvolutionLabel({ ...strategyById.get(sid), ...entry }, securityNames)
+    const merged = { ...strategyById.get(sid), ...entry }
+    const label = strategyEvolutionLabel(merged, securityNames)
+    const separatorIndex = label.lastIndexOf(' · ')
+    return {
+      direction: strategyDirectionLabel(merged.direction),
+      kind: separatorIndex < 0 ? label : label.slice(separatorIndex + 3),
+      label,
+      subject: separatorIndex < 0 ? label : label.slice(0, separatorIndex),
+    }
   }, [securityNames, strategyById])
-
   const lineage = useMemo(() => {
     const entries = new Map<string, Record<string, unknown>>()
     for (const group of GROUPS) {
@@ -197,31 +244,6 @@ export function EvolutionDashboard({
       {strategyFactsUnavailable && <div className={css.noticeCard} role="status">策略验证、来源和任务字段暂不可用；闭环状态与影子证据仍可查看。</div>}
       {loading && status === undefined && <div className={css.loadingSkeleton} aria-label="正在读取进化状态"><span /><span /><span /></div>}
 
-      <section className={`${css.moduleCard} ${css.evolutionLineageOverview}`} aria-label="演化关系">
-        <div className={css.sectionHeading}>
-          <div>
-            <strong>策略演化链路</strong>
-            <small>优先展示自动进化产生的策略衍生及其母链</small>
-          </div>
-          <span>{mutationEntries.length > 0 ? `${mutationEntries.length} 个变体` : '尚无变体'}</span>
-        </div>
-        {mutationEntries.length === 0
-          ? <div className={css.evolutionLead} data-state="empty"><strong>尚未发生自动进化</strong><span>当影子数据和诊断证据达标后，这里会展示母策略与衍生策略的关系。</span></div>
-          : <div className={css.evolutionLead} data-state="evolved"><strong>已记录 {mutationEntries.length} 个衍生变体</strong><span>仅展示当前正常运行的策略及其母链，点击节点可进入诊断。</span></div>}
-        <div className={css.lineageTree}>{lineage.roots.map(sid => (
-          <LineageNode
-            key={sid}
-            sid={sid}
-            entries={lineage.entries}
-            children={lineage.children}
-            onOpenStrategy={onOpenStrategy}
-            returnGroup={openGroup}
-            labelFor={strategyLabel}
-          />
-        ))}</div>
-        {lineage.roots.length === 0 && mutationEntries.length > 0 && !loading && <div className={css.emptyPanel}>已有变体记录，但当前没有处于正常运行状态的演化链路。</div>}
-      </section>
-
       <section className={css.evolutionOverviewGrid} aria-label="运行概览">
         <article className={`${css.moduleCard} ${css.evolutionRuntimeCard}`} role="region" aria-label="运行状态摘要">
           <div className={css.sectionHeading}><strong>闭环运行状态</strong><span>{closedLoopEnabled ? `每日 ${closedLoopTime}` : '未启用'}</span></div>
@@ -242,43 +264,110 @@ export function EvolutionDashboard({
         </article>
       </section>
 
+      <section className={css.moduleGrid} aria-label="历史进化动作">
+        <article className={css.moduleCard}>
+          <div className={css.sectionHeading}>
+            <div><strong>历史进化动作</strong><small>按自动闭环执行轮次保留可追溯记录</small></div>
+            <span>{recentApplied.length} 条</span>
+          </div>
+          <div className={css.dataList}>
+            {recentApplied.flatMap((round, roundIndex) => records(round.actions).map((action, actionIndex) => {
+              const sid = strategyId(action)
+              const label = `${text(round.applied_at, '')} · 自动应用 ${number(round.count)?.toFixed(0) ?? '0'} 项动作`
+              return <button type="button" className={css.dataRow} key={`${roundIndex}-${actionIndex}`} aria-label={label} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{label}</strong><small>{text(action.reason, '')}</small></div><span>{DECISION_LABELS[text(action.type, '')] ?? text(action.type, '')}</span></button>
+            }))}
+            {recentApplied.length === 0 && !loading && <div className={css.emptyPanel}>尚未有自动进化记录。</div>}
+          </div>
+        </article>
+      </section>
+
+      <section className={`${css.moduleCard} ${css.evolutionLineageOverview}`} aria-label="演化关系">
+        <div className={css.sectionHeading}>
+          <div>
+            <strong>策略演化链路</strong>
+            <small>并列展示当前运行策略，衍生策略通过母链连接</small>
+          </div>
+          <span>{mutationEntries.length > 0 ? `${mutationEntries.length} 个变体` : '尚无变体'}</span>
+        </div>
+        {mutationEntries.length === 0
+          ? <div className={css.evolutionLead} data-state="empty"><strong>尚未发生自动进化</strong><span>当影子数据和诊断证据达标后，这里会展示母策略与衍生策略的关系。</span></div>
+          : <div className={css.evolutionLead} data-state="evolved"><strong>已记录 {mutationEntries.length} 个衍生变体</strong><span>并列策略互不从属；母子节点由连线和关系标签标明，点击可进入诊断。</span></div>}
+        <div className={css.lineageTree} role="list" aria-label="并列策略演化关系">{lineage.roots.map(sid => (
+          <LineageNode
+            key={sid}
+            sid={sid}
+            entries={lineage.entries}
+            children={lineage.children}
+            onOpenStrategy={onOpenStrategy}
+            returnGroup={openGroup}
+            identityFor={strategyIdentity}
+          />
+        ))}</div>
+        {lineage.roots.length === 0 && mutationEntries.length > 0 && !loading && (
+          <div className={css.emptyPanel}>已有变体记录，但当前没有处于正常运行状态的演化链路。</div>
+        )}
+      </section>
+
       <section className={`${css.moduleCard} ${css.evolutionDistribution}`} aria-label="策略状态分布">
         <div className={css.sectionHeading}>
           <div><strong>策略状态分布</strong><small>选择状态查看对应策略，明细区限高滚动</small></div>
           <span>{perStrategy.length} 项当前判定</span>
         </div>
-          <dl className={css.evolutionStatusSummary} data-testid="evolution-status-summary">
-            <div><dt>正常运行</dt><dd>{number(statusSummary.normal)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>观察中</dt><dd>{number(statusSummary.watch)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>已升级</dt><dd>{number(statusSummary.promote)?.toFixed(0) ?? '—'}</dd></div>
-            <div><dt>已淘汰</dt><dd>{number(statusSummary.retire)?.toFixed(0) ?? '—'}</dd></div>
-          </dl>
-          <div className={css.lifecycleNav} aria-label="生命周期分组">
-            {GROUPS.map(group => (
-              <button
-                type="button"
-                key={group}
-                data-active={openGroup === group || undefined}
-                aria-expanded={openGroup === group}
-                onClick={() => { setOpenGroup(openGroup === group ? '' : group) }}
-              >
-                <span>{GROUP_LABELS[group]}</span><strong>{number(counts[group])?.toFixed(0) ?? '0'}</strong>
-              </button>
-            ))}
-          </div>
-          {openGroup !== '' && <div className={`${css.lifecycleList} ${css.evolutionLifecycleList}`} role="region" aria-label={`${GROUP_LABELS[openGroup]}策略列表`} tabIndex={0}>
+        <dl className={css.evolutionStatusSummary} data-testid="evolution-status-summary">
+          <div><dt>正常运行</dt><dd>{number(statusSummary.normal)?.toFixed(0) ?? '—'}</dd></div>
+          <div><dt>观察中</dt><dd>{number(statusSummary.watch)?.toFixed(0) ?? '—'}</dd></div>
+          <div><dt>已升级</dt><dd>{number(statusSummary.promote)?.toFixed(0) ?? '—'}</dd></div>
+          <div><dt>已淘汰</dt><dd>{number(statusSummary.retire)?.toFixed(0) ?? '—'}</dd></div>
+        </dl>
+        <div className={css.lifecycleNav} aria-label="生命周期分组">
+          {GROUPS.map(group => (
+            <button
+              type="button"
+              key={group}
+              data-active={openGroup === group || undefined}
+              aria-expanded={openGroup === group}
+              onClick={() => { setOpenGroup(openGroup === group ? '' : group) }}
+            >
+              <span>{GROUP_LABELS[group]}</span><strong>{number(counts[group])?.toFixed(0) ?? '0'}</strong>
+            </button>
+          ))}
+        </div>
+        {openGroup !== '' && (
+          <div
+            className={`${css.lifecycleList} ${css.evolutionLifecycleList}`}
+            role="region"
+            aria-label={`${GROUP_LABELS[openGroup]}策略列表`}
+            tabIndex={0}
+          >
             {lifecycleEntries.map((entry, index) => {
               const sid = strategyId(entry)
               const isVariant = text(entry.source, '') === 'evolution' || text(entry.mutated_from, '') !== ''
-              return <button type="button" className={css.dataRow} key={`${sid}-${index}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{strategyLabel(entry)}</strong></div><span>{GROUP_LABELS[openGroup]}{isVariant ? ' · 变异' : ''}</span></button>
+              const identity = strategyIdentity(entry)
+              return <button
+                type="button"
+                className={css.dataRow}
+                key={`${sid}-${index}`}
+                onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}
+              >
+                <div>
+                  <strong className={css.evolutionStrategyIdentity}>
+                    <EvolutionStrategyIdentity identity={identity} />
+                  </strong>
+                </div>
+                <span>{GROUP_LABELS[openGroup]}{isVariant ? ' · 变异' : ''}</span>
+              </button>
             })}
             {lifecycleEntries.length === 0 && <div className={css.emptyPanel}>该类目暂无策略。</div>}
-          </div>}
+          </div>
+        )}
       </section>
 
       <section className={css.moduleGrid} aria-label="策略现状与诊断">
         <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><div><strong>策略现状与诊断</strong><small>诊断承接回测与影子验证证据，点击策略进入完整诊断</small></div><span>{perStrategy.length} 项</span></div>
+          <div className={css.sectionHeading}>
+            <div><strong>策略现状与诊断</strong><small>诊断承接回测与影子验证证据，点击策略进入完整诊断</small></div>
+            <span>{perStrategy.length} 项</span>
+          </div>
           <div className={css.dataList}>
             {perStrategy.map((entry, index) => {
               const sid = strategyId(entry)
@@ -291,10 +380,16 @@ export function EvolutionDashboard({
               const mergedFacts = { ...lifecycleState?.entry, ...strategyFacts, ...entry }
               const mutationSource = text(mergedFacts.mutated_from, text(mutationEntry?.mutated_from, text(asRecord(mergedFacts.evolve).mutated_from, '')))
               const labels = evolutionSemanticLabels(mergedFacts, lifecycleState?.status ?? '')
-              const displayLabel = strategyLabel(mergedFacts)
+              const identity = strategyIdentity(mergedFacts)
+              const displayLabel = identity.label
               return <div className={css.strategyEntry} key={`${sid}-${index}`}>
                 <button type="button" className={css.dataRow} aria-label={`${displayLabel} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}>
-                  <div><strong>{displayLabel}</strong><small>{reason}</small></div>
+                  <div>
+                    <strong className={css.evolutionStrategyIdentity}>
+                      <EvolutionStrategyIdentity identity={identity} />
+                    </strong>
+                    <small>{reason}</small>
+                  </div>
                   <span className={css.evolutionStatusStack}>
                     <strong>{labels.participation}</strong>
                     <small>{labels.confidence}</small>
@@ -325,19 +420,6 @@ export function EvolutionDashboard({
         </article>
       </section>
 
-      <section className={css.moduleGrid} aria-label="历史进化动作">
-        <article className={css.moduleCard}>
-          <div className={css.sectionHeading}><div><strong>历史进化动作</strong><small>按自动闭环执行轮次保留可追溯记录</small></div><span>{recentApplied.length} 条</span></div>
-          <div className={css.dataList}>
-            {recentApplied.flatMap((round, roundIndex) => records(round.actions).map((action, actionIndex) => {
-              const sid = strategyId(action)
-              const label = `${text(round.applied_at, '')} · 自动应用 ${number(round.count)?.toFixed(0) ?? '0'} 项动作`
-              return <button type="button" className={css.dataRow} key={`${roundIndex}-${actionIndex}`} aria-label={label} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{label}</strong><small>{text(action.reason, '')}</small></div><span>{DECISION_LABELS[text(action.type, '')] ?? text(action.type, '')}</span></button>
-            }))}
-            {recentApplied.length === 0 && !loading && <div className={css.emptyPanel}>尚未有自动进化记录。</div>}
-          </div>
-        </article>
-      </section>
     </div>
   )
 }
