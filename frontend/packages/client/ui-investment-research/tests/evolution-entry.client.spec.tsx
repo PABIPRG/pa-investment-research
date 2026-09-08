@@ -15,7 +15,7 @@ import {
 afterEach(cleanup)
 
 describe('自进化全局只读看板', () => {
-  it('首屏先展示演化关系和紧凑运行摘要，明细列表后置', async () => {
+  it('首屏先展示运行概览，历史动作紧随其后，其余模块保持业务顺序', async () => {
     const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
       if (operation === 'trading-core.evolution-status') return {
         closed_loop_enabled: false,
@@ -30,17 +30,57 @@ describe('自进化全局只读看板', () => {
 
     render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={() => {}} initialLifecycleGroup="candidate" />)
 
-    const overview = await screen.findByRole('region', { name: '演化关系' })
-    const runtime = screen.getByRole('region', { name: '运行状态摘要' })
+    const runtime = await screen.findByRole('region', { name: '运行状态摘要' })
+    const attribution = screen.getByRole('article', { name: '整体影子归因' })
+    const history = screen.getByRole('region', { name: '历史进化动作' })
+    const lineage = screen.getByRole('region', { name: '演化关系' })
     const distribution = screen.getByRole('region', { name: '策略状态分布' })
     const diagnostics = screen.getByRole('region', { name: '策略现状与诊断' })
-    const history = screen.getByRole('region', { name: '历史进化动作' })
-    expect(overview.compareDocumentPosition(runtime) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(runtime.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(runtime.parentElement).toBe(attribution.parentElement)
+    expect(runtime.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(history.compareDocumentPosition(lineage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(lineage.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(distribution.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(diagnostics.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(within(overview).getByText('尚未发生自动进化')).toBeTruthy()
+    expect(within(lineage).getByText('尚未发生自动进化')).toBeTruthy()
     expect(screen.getByRole('region', { name: '候选策略列表' }).className).toContain('evolutionLifecycleList')
+  })
+
+  it('并列呈现根策略，用文字和层级标明母子关系，并按涨跌方向着色', async () => {
+    const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
+      if (operation === 'trading-core.evolution-status') return {
+        lifecycle: {
+          active: [
+            { strategy_id: 'strat-child', name: '子代策略', mutated_from: 'strat-parent' },
+            { strategy_id: 'strat-peer', name: '并列策略' },
+          ],
+          retired: [{ strategy_id: 'strat-parent', name: '源策略' }],
+          mutated: [{ strategy_id: 'strat-child', name: '子代策略', mutated_from: 'strat-parent' }],
+        },
+        per_strategy: [
+          { strategy_id: 'strat-child', reason: '证据达标' },
+          { strategy_id: 'strat-peer', reason: '持续运行' },
+        ],
+        recent_applied: [],
+      }
+      if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
+      if (operation === 'trading-core.strategies') return { items: [
+        { id: 'strat-parent', name: '源策略', kind: 'rsi_reversal', direction: '利空' },
+        { id: 'strat-child', name: '子代策略', kind: 'momentum', direction: '利好' },
+        { id: 'strat-peer', name: '并列策略', kind: 'volume_breakout', direction: '利好' },
+      ] }
+      throw new Error(`unexpected operation ${operation}`)
+    })
+
+    render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={() => {}} />)
+
+    const peerList = await screen.findByRole('list', { name: '并列策略演化关系' })
+    expect(within(peerList).getAllByRole('listitem', { name: /根策略/u })).toHaveLength(2)
+    const parent = within(peerList).getByRole('listitem', { name: /源策略.*母策略/u })
+    expect(within(parent).getByRole('list', { name: '源策略的衍生策略' })).toBeTruthy()
+    expect(within(parent).getByText('子代策略')).toBeTruthy()
+    expect(screen.getAllByText('动量跟随 · 利好')[0]?.dataset.direction).toBe('利好')
+    expect(screen.getAllByText('超跌反弹 · 利空')[0]?.dataset.direction).toBe('利空')
+    expect(screen.getAllByText('放量突破 · 利好')[0]?.dataset.direction).toBe('利好')
   })
 
   it('原样消费后端四桶、完整运行时间和五维策略语义', async () => {

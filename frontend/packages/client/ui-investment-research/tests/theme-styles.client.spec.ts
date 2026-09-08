@@ -111,6 +111,15 @@ describe('投研工作台主题样式', () => {
     expect(styles).toMatch(/\.evolutionDashboard \.strategyEntry \+ \.strategyEntry\s*\{[^}]*border-top:\s*1px solid var\(--dsw-alias-border-l2\);/s)
   })
 
+  it('自进化策略方向遵循涨红跌绿并使用语义色', () => {
+    expect(styles).toMatch(
+      /\.evolutionStrategyKind\[data-direction='利好'\]\s*\{[^}]*color:\s*var\(--dsw-alias-state-error-primary\);/s,
+    )
+    expect(styles).toMatch(
+      /\.evolutionStrategyKind\[data-direction='利空'\]\s*\{[^}]*color:\s*var\(--dsw-alias-state-success-primary\);/s,
+    )
+  })
+
   it('持仓弹窗使用清晰的内容底色、表格层级和危险操作语义', () => {
     expect(styles).toMatch(/\.detailDialogBody\s*\{[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
     expect(styles).toMatch(/\.workbenchOverviewTableWrap\s*\{[^}]*border:\s*1px solid var\(--dsw-alias-border-l2\);[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
