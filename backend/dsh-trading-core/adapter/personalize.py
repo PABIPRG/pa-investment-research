@@ -37,6 +37,9 @@ BUCKET_BASE = {"holdings": 70, "watchlist": 60, "strategy": 50, "fresh": 20}
 _TYPE_BONUS = {"业绩": 5, "价格异动": 5, "评级": 5,
                "政策": 3, "产业": 3, "合作": 3, "公告": 3}
 _KNOWN_BUCKETS = tuple(BUCKET_ORDER)
+# 大盘趋势类型：反映政策/宏观走势、未必命中具体标的的事件，match 模式下也允许进入主列表
+# （见 build_cards —— 只豁免这些 fresh，其余噪音 fresh 仍丢弃），前端以类型徽标区分。
+_MARKET_TREND_TYPES = frozenset({"政策", "宏观"})
 
 # LLM 点评记忆（30min），失败缓存 None 避免反复打 LLM
 _COMMENT_MEMO: dict[str, tuple[float, str | None]] = {}
@@ -517,7 +520,9 @@ def build_cards(store=None, limit: int = 30, bucket: str = "all",
         bk, mh, mw, strats = _classify(ev, holdings, watchlist, actives)
         if bucket != "all" and bk != bucket:
             continue
-        if match_only and bk == "fresh":
+        # match 模式只保留命中卡；例外：fresh 中的大盘趋势类型（政策/宏观）也进入主列表，
+        # 让首页在命中持仓/自选/策略之外仍能反映大盘趋势，其余 fresh 噪音仍丢弃。
+        if match_only and bk == "fresh" and str(ev.get("type") or "") not in _MARKET_TREND_TYPES:
             continue
         if strategy_id and not any(str(s.get("id")) == strategy_id for s in strats):
             continue
