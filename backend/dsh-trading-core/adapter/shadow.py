@@ -130,6 +130,35 @@ def _merge_closed_trades(fresh: list[dict], current: object) -> list[dict]:
     return merged[:200]
 
 
+def _regime_hibernation(
+    strategies: list[dict],
+    store: JsonStore,
+    trade_date: str,
+) -> tuple[list[dict], set[str]]:
+    """P5 冬眠门控（纯过滤，默认关 → 原样返回）：把「当日 regime 不在 gate.allow」的策略
+    从本次触发里剔除并记录为冬眠。regime unknown/无 regime/门控关 → 全放行（conservative）。
+    返回 (保留列表, 冬眠 sid 集合)。"""
+    if not getattr(settings, "evolve_hibernate_enabled", False) or not strategies:
+        return list(strategies), set()
+    from . import genome as _gm  # noqa: PLC0415
+    from . import regime as _rg  # noqa: PLC0415
+
+    cur = _rg.latest_regime(store, as_of_date=trade_date)
+    regime = (cur or {}).get("regime") if isinstance(cur, dict) else None
+    # regime unknown/无 regime → 无法门控，保守全放行（regime_allowed 的 miss_mode=on_default）
+    if not regime or regime == "unknown":
+        return list(strategies), set()
+    kept: list[dict] = []
+    hibernated: set[str] = set()
+    for s in strategies:
+        allow = ((_gm.read_gene(s) or {}).get("regime_gate") or {}).get("allow") or []
+        if regime in allow:
+            kept.append(s)
+        else:
+            hibernated.add(str(s.get("id")))
+    return kept, hibernated
+
+
 class ShadowRunner:
     """影子策略验证 runner：只做多 active 策略的记账，无 LLM。"""
 
@@ -254,12 +283,22 @@ class ShadowRunner:
         requested_ids = list((row or {}).get("strategy_ids") or [])
         strategies = []
         skipped_ids = []
+        hibernated_ids: set[str] = set()
         for sid in requested_ids:
             strategy = self.store.get("strategies", sid)
             if isinstance(strategy, dict) and strategy.get("status") in ("active", "watch"):
                 strategies.append(strategy)
             else:
                 skipped_ids.append(sid)
+
+        # 自进化 v2 · P5 运行时冬眠门控（默认关）：把当日 regime 不在 gate.allow 的策略
+        # 从本次触发剔除（走 skipped「冬眠」语义，不产新信号、不落当日净值点）。
+        strategies, hibernated_ids = _regime_hibernation(
+            strategies, self.store, trade_date,
+        )
+        for hid in hibernated_ids:
+            if hid not in skipped_ids:
+                skipped_ids.append(hid)
 
         meta = dict(self.store.get("shadows", "meta") or {})
         initial_meta_keys = set(meta)
@@ -274,7 +313,11 @@ class ShadowRunner:
                 task_id=task_id,
                 strategy_id=sid,
                 status="skipped",
-                reason="无 active 策略（active/watch 参与状态；需先完成首次回测）",
+                reason=(
+                    "冬眠：当日市场 regime 不在该策略适配区，暂停触发（环境不配合不计能力）"
+                    if sid in hibernated_ids
+                    else "无 active 策略（active/watch 参与状态；需先完成首次回测）"
+                ),
                 snapshot=None,
                 trade_date=trade_date,
             )
