@@ -691,8 +691,10 @@ describe('InvestmentBackendManager', () => {
       executableExists: async () => true,
       sleep: async () => {},
       dataTransferEnvironment: {
-        DSH_DATA_TRANSFER_TOKEN: 'host-only-token',
-        DSH_DATA_TRANSFER_COORDINATOR_DIR: join(current.home, 'transactions'),
+        'trading-core': {
+          DSH_DATA_TRANSFER_TOKEN: 'host-only-token',
+          DSH_DATA_TRANSFER_COORDINATOR_DIR: join(current.home, 'transactions'),
+        },
       },
     })
     manager.register(definition)

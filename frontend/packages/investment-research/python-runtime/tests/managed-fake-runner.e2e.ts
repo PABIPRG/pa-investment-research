@@ -157,28 +157,37 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
 
     expect(specs).toHaveLength(3)
     const byModule = new Map(specs.map(spec => [spec.argv[3], spec]))
+    const dataTransferToken = byModule.get('adapter.app:app')?.env?.DSH_DATA_TRANSFER_TOKEN
+    expect(dataTransferToken).toEqual(expect.any(String))
     expect(byModule.get('adapter.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'trading-visible',
       DEEPSEEK_API_KEY: CANARY,
       OPENAI_API_KEY: CANARY,
+      DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
+      DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
     })
     expect(byModule.get('market_watch.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'market-visible',
       MW_LLM_ENABLED: 'true',
       DEEPSEEK_API_KEY: CANARY,
+      DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
+      DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
     })
     expect(byModule.get('industry_chain.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'industry-visible',
     })
     expect(specs.flatMap(spec => spec.argv)).not.toContain(CANARY)
+    expect(specs.flatMap(spec => spec.argv)).not.toContain(dataTransferToken)
 
     for (const id of ['trading-core', 'market-watch', 'industry-chain'] as const) {
       await expect(access(ownedBackendStatePath(home, id))).resolves.toBeUndefined()
       const log = await readFile(backendLogPaths(home, id).active, 'utf8')
       expect(log).toContain('fake uvicorn ready')
       expect(log).not.toContain(CANARY)
+      expect(log).not.toContain(dataTransferToken)
     }
     expect(JSON.stringify(runtime.readiness())).not.toContain(CANARY)
+    expect(JSON.stringify(runtime.readiness())).not.toContain(dataTransferToken)
 
     await Promise.all(leases.map(lease => lease.release()))
     for (const definition of [trading, market, industry]) {

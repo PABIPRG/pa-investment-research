@@ -118,8 +118,14 @@ export class InvestmentPythonRuntime extends Service {
       resolveCredential: ctx.credentials.resolve.bind(ctx.credentials),
       describeCredential: ctx.credentials.describe.bind(ctx.credentials),
       dataTransferEnvironment: {
-        DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
-        DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
+        'trading-core': {
+          DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
+          DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
+        },
+        'market-watch': {
+          DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
+          DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
+        },
       },
     })
     this.backups = new BackupService({
