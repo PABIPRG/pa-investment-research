@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from adapter.data_transfer import (
+    TransferValidationError,
     TransferRevisionConflict,
     commit_import,
     export_snapshot,
@@ -36,7 +37,7 @@ class DataTransferTests(unittest.TestCase):
 
         snapshot = export_snapshot(self.store, ["holdings"])
 
-        self.assertEqual(snapshot["schemaVersion"], 1)
+        self.assertEqual(snapshot["schemaVersion"], 2)
         self.assertEqual(snapshot["backend"], "trading-core")
         self.assertEqual(set(snapshot["categories"]), {"holdings"})
         self.assertEqual(
@@ -45,6 +46,113 @@ class DataTransferTests(unittest.TestCase):
         )
         self.assertNotIn("preferences", str(snapshot))
         self.assertNotIn("evolution_previews", str(snapshot))
+
+    def test_strategy_export_keeps_only_portable_evolution_history_and_knowledge(self):
+        self.store.set("strategies", "alpha", {"id": "alpha", "status": "active"})
+        self.store.set("evolution_previews", "pending-token", {
+            "preview_token": "pending-token",
+            "preview_status": "pending",
+            "state_version": "private-state",
+            "_expires_at_epoch": 123,
+            "actions": [],
+        })
+        self.store.set("evolution_previews", "applied-token", {
+            "preview_token": "applied-token",
+            "preview_status": "applied",
+            "state_version": "private-state",
+            "expires_at": "2026-09-09 12:00:00",
+            "_expires_at_epoch": 123,
+            "applied_at": "2026-09-09 10:00:00",
+            "actions": [{"type": "promote", "sid": "alpha", "reason": "证据达标"}],
+        })
+        self.store.set("evolution_previews", "_closed_loop_runtime", {
+            "recent_run_at": "2026-09-09T15:35:00+08:00",
+            "status": "completed",
+            "action_count": 1,
+        })
+        self.store.set("gene_archive", "retired-alpha", {"sid": "retired-alpha"})
+        self.store.set("events_ledger", "政策|利好", {"pool_id": "政策|利好"})
+
+        snapshot = export_snapshot(self.store, ["strategies"])
+        collections = snapshot["categories"]["strategies"]["collections"]
+
+        self.assertEqual(snapshot["schemaVersion"], 2)
+        self.assertEqual(collections["gene_archive"], {"retired-alpha": {"sid": "retired-alpha"}})
+        self.assertEqual(collections["events_ledger"], {"政策|利好": {"pool_id": "政策|利好"}})
+        audit = collections["evolution_previews"]
+        self.assertIn("_closed_loop_runtime", audit)
+        applied = [value for key, value in audit.items() if key != "_closed_loop_runtime"]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["preview_status"], "applied")
+        self.assertNotIn("preview_token", applied[0])
+        self.assertNotIn("state_version", applied[0])
+        self.assertNotIn("expires_at", applied[0])
+        self.assertNotIn("pending-token", str(snapshot))
+
+    def test_schema_v1_snapshot_remains_importable(self):
+        snapshot = {
+            "schemaVersion": 1,
+            "backend": "trading-core",
+            "categories": {
+                "holdings": {"collections": {"holdings": {"default": [
+                    {"ticker": "600519", "quantity": 100, "cost_price": 1500}
+                ]}}},
+            },
+        }
+
+        preview = preview_import(self.store, snapshot)
+
+        self.assertEqual(preview["categories"]["holdings"]["added"], 1)
+
+    def test_import_rejects_malformed_history_start_override(self):
+        snapshot = export_snapshot(self.store, ["holdings"])
+        snapshot["categories"]["holdings"]["collections"]["holdings"]["history_start_override"] = {
+            "effective_date": "not-a-date",
+            "original_effective_date": "2026-09-07",
+            "source": "untrusted",
+            "corrected_at": "yesterday",
+        }
+
+        with self.assertRaisesRegex(TransferValidationError, "历史起点校正"):
+            preview_import(self.store, snapshot)
+
+    def test_import_restores_history_override_and_evolution_timeline(self):
+        source = JsonStore(Path(self.temporary.name) / "source")
+        source.set("holdings", "default", [{"ticker": "600519", "quantity": 100, "cost_price": 1500}])
+        source.set("holdings", "history_start_override", {
+            "effective_date": "2026-08-15",
+            "original_effective_date": "2026-09-07",
+            "source": "user_corrected",
+            "corrected_at": "2026-09-09T10:00:00+08:00",
+        })
+        source.set("evolution_previews", "applied-token", {
+            "preview_token": "applied-token",
+            "preview_status": "applied",
+            "applied_at": "2026-09-09 10:00:00",
+            "actions": [{"type": "promote", "sid": "alpha", "reason": "证据达标"}],
+        })
+        snapshot = export_snapshot(source, ["holdings", "strategies"])
+        preview = preview_import(self.store, snapshot)
+
+        prepare_import(
+            self.store,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            snapshot,
+            preview["currentRevision"],
+            {"holdings": "use_import", "strategies": "keep_both"},
+        )
+        commit_import(self.store, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        finalize_import(self.store, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+
+        self.assertEqual(
+            self.store.get("holdings", "history_start_override")["effective_date"],
+            "2026-08-15",
+        )
+        applied = [
+            row for row in self.store.all("evolution_previews").values()
+            if isinstance(row, dict) and row.get("preview_status") == "applied"
+        ]
+        self.assertEqual(len(applied), 1)
 
     def test_preview_counts_new_and_conflicting_holdings_without_writing(self):
         local = {"ticker": "600519", "quantity": 100, "cost_price": 1500}
@@ -73,7 +181,22 @@ class DataTransferTests(unittest.TestCase):
     def test_default_import_keeps_local_holding_quantities_and_merges_watchlist(self):
         local = {"ticker": "600519", "quantity": 100, "cost_price": 1500}
         self.store.set("holdings", "default", [local])
+        local_snapshot = {
+            "snapshot_id": "1" * 32,
+            "effective_at": "2026-09-01T09:00:00+08:00",
+            "source": "manual",
+            "positions": [local],
+            "previous_snapshot_id": None,
+        }
+        self.store.set("holdings", "snapshots", [local_snapshot])
         self.store.set("watchlist", "default", ["600519"])
+        incoming_snapshot = {
+            "snapshot_id": "2" * 32,
+            "effective_at": "2026-09-02T09:00:00+08:00",
+            "source": "manual",
+            "positions": [{"ticker": "000001", "quantity": 50, "cost_price": 10}],
+            "previous_snapshot_id": "1" * 32,
+        }
         snapshot = {
             "schemaVersion": 1,
             "backend": "trading-core",
@@ -81,7 +204,7 @@ class DataTransferTests(unittest.TestCase):
                 "holdings": {"collections": {"holdings": {"default": [
                     {"ticker": "600519", "quantity": 120, "cost_price": 1490},
                     {"ticker": "000001", "quantity": 50, "cost_price": 10},
-                ]}}},
+                ], "snapshots": [local_snapshot, incoming_snapshot]}}},
                 "watchlist": {"collections": {"watchlist": {"default": ["600519", "000001"]}}},
             },
         }
@@ -97,6 +220,101 @@ class DataTransferTests(unittest.TestCase):
             {"ticker": "000001", "quantity": 50, "cost_price": 10},
         ])
         self.assertEqual(self.store.get("watchlist", "default"), ["600519", "000001"])
+        snapshots = self.store.get("holdings", "snapshots")
+        self.assertEqual(
+            [item["snapshot_id"] for item in snapshots[:2]],
+            ["1" * 32, "2" * 32],
+        )
+        self.assertEqual(snapshots[-1]["source"], "bulk_import")
+        self.assertEqual(snapshots[-1]["positions"], self.store.get("holdings", "default"))
+        self.assertEqual(snapshots[-1]["previous_snapshot_id"], "2" * 32)
+
+    def test_use_import_replaces_a_conflicting_snapshot_without_dropping_history(self):
+        local_snapshot = {
+            "snapshot_id": "1" * 32,
+            "effective_at": "2026-09-01T09:00:00+08:00",
+            "source": "manual",
+            "positions": [{"ticker": "600519", "quantity": 100, "cost_price": 1500}],
+            "previous_snapshot_id": None,
+        }
+        imported_snapshot = {
+            **local_snapshot,
+            "source": "bulk_import",
+            "positions": [{"ticker": "600519", "quantity": 120, "cost_price": 1490}],
+        }
+        self.store.set("holdings", "default", local_snapshot["positions"])
+        self.store.set("holdings", "snapshots", [local_snapshot])
+        snapshot = {
+            "schemaVersion": 1,
+            "backend": "trading-core",
+            "categories": {"holdings": {"collections": {"holdings": {
+                "default": imported_snapshot["positions"],
+                "snapshots": [imported_snapshot],
+            }}}},
+        }
+        preview = preview_import(self.store, snapshot)
+
+        prepare_import(
+            self.store,
+            "99999999-9999-4999-8999-999999999999",
+            snapshot,
+            preview["currentRevision"],
+            {"holdings": "use_import"},
+        )
+        commit_import(self.store, "99999999-9999-4999-8999-999999999999")
+        finalize_import(self.store, "99999999-9999-4999-8999-999999999999")
+
+        self.assertEqual(
+            self.store.get("holdings", "snapshots"), [imported_snapshot]
+        )
+
+    def test_default_import_does_not_apply_source_history_override_to_local_timeline(self):
+        local_snapshot = {
+            "snapshot_id": "1" * 32,
+            "effective_at": "2026-01-02T09:00:00+08:00",
+            "source": "manual",
+            "positions": [{"ticker": "600519", "quantity": 100, "cost_price": 1500}],
+            "previous_snapshot_id": None,
+        }
+        imported_snapshot = {
+            "snapshot_id": "2" * 32,
+            "effective_at": "2026-09-01T09:00:00+08:00",
+            "source": "manual",
+            "positions": [{"ticker": "000001", "quantity": 50, "cost_price": 10}],
+            "previous_snapshot_id": None,
+        }
+        self.store.set("holdings", "default", local_snapshot["positions"])
+        self.store.set("holdings", "snapshots", [local_snapshot])
+        snapshot = {
+            "schemaVersion": 2,
+            "backend": "trading-core",
+            "categories": {"holdings": {"collections": {"holdings": {
+                "default": imported_snapshot["positions"],
+                "snapshots": [imported_snapshot],
+                "history_start_override": {
+                    "effective_date": "2026-08-01",
+                    "original_effective_date": "2026-09-01",
+                    "source": "user_corrected",
+                    "corrected_at": "2026-09-02T09:00:00+08:00",
+                },
+            }}}},
+        }
+        preview = preview_import(self.store, snapshot)
+
+        prepare_import(
+            self.store,
+            "88888888-8888-4888-8888-888888888888",
+            snapshot,
+            preview["currentRevision"],
+        )
+        commit_import(self.store, "88888888-8888-4888-8888-888888888888")
+        finalize_import(self.store, "88888888-8888-4888-8888-888888888888")
+
+        self.assertIsNone(self.store.get("holdings", "history_start_override"))
+        self.assertEqual(
+            self.store.get("holdings", "snapshots")[0]["effective_at"],
+            "2026-01-02T09:00:00+08:00",
+        )
 
     def test_strategy_keep_both_remaps_strategy_and_shadow_references(self):
         self.store.set("strategies", "alpha", {"id": "alpha", "name": "本地策略"})

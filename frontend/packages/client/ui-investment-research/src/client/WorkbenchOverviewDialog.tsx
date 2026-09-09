@@ -7,7 +7,6 @@ import css from './InvestmentShell.module.css'
 export type WorkbenchDetailKind =
   | 'holdings'
   | 'cost'
-  | 'market-value'
   | 'risk-profile'
   | 'risk-center'
 
@@ -25,6 +24,8 @@ export interface WorkbenchHoldingInput {
   readonly cost_price: number
 }
 
+export type WorkbenchHoldingSaveSource = 'manual' | 'bulk_import'
+
 interface WorkbenchOverviewDialogProps {
   readonly kind: WorkbenchDetailKind
   readonly positions: readonly WorkbenchPositionDetail[]
@@ -35,11 +36,10 @@ interface WorkbenchOverviewDialogProps {
   readonly alertsDegraded: boolean | undefined
   readonly alertsDegradedReason: string | undefined
   readonly holdingsState: WorkbenchResourceStatus
-  readonly quotesState: WorkbenchResourceStatus
   readonly riskState: WorkbenchResourceStatus
   readonly alertsState: WorkbenchResourceStatus
   readonly onOpenAlert: (item: Record<string, unknown>) => void
-  readonly onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[]) => Promise<void>
+  readonly onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
   readonly onClose: () => void
 }
 
@@ -52,7 +52,6 @@ export interface WorkbenchResourceStatus {
 const DIALOG_COPY: Readonly<Record<WorkbenchDetailKind, { title: string; description: string }>> = Object.freeze({
   holdings: { title: '持仓明细', description: '在当前工作台查看并维护研究持仓，保存后联动刷新风险与行情。' },
   cost: { title: '持仓成本明细', description: '按持仓数量 × 成本价汇总，不代表当前市场价值。' },
-  'market-value': { title: '总资产现价明细', description: '按持仓数量 × 最新返回价格汇总，不含现金。' },
   'risk-profile': { title: '风险画像详情', description: '基于当前持仓与组合风险预算返回的画像结果。' },
   'risk-center': { title: '组合风险中心', description: '集中查看风险预算、预算突破与全部预警。' },
 })
@@ -87,7 +86,7 @@ function PositionTable({
   positions, kind, saving, pendingDelete, onEdit, onRequestDelete, onConfirmDelete, onCancelDelete,
 }: {
   positions: readonly WorkbenchPositionDetail[]
-  kind: 'holdings' | 'cost' | 'market-value'
+  kind: 'holdings' | 'cost'
   saving?: boolean
   pendingDelete?: string
   onEdit?: (item: WorkbenchPositionDetail) => void
@@ -105,21 +104,20 @@ function PositionTable({
           <tr>
             <th scope="col">标的</th>
             <th scope="col">持仓数量</th>
-            {kind !== 'market-value' && <th scope="col">成本价</th>}
-            {kind === 'market-value' && <th scope="col">最新价</th>}
-            {kind !== 'holdings' && <th scope="col">{kind === 'cost' ? '成本金额' : '当前市值'}</th>}
+            <th scope="col">成本价</th>
+            {kind === 'cost' && <th scope="col">成本金额</th>}
             {kind === 'holdings' && onEdit !== undefined && <th scope="col">操作</th>}
           </tr>
         </thead>
         <tbody>
           {positions.map((item, index) => {
-            const price = kind === 'cost' ? item.costPrice : item.currentPrice
+            const price = item.costPrice
             return (
               <tr key={`${item.code}-${index}`}>
                 <th scope="row"><strong>{item.name}</strong><small>{item.code}</small></th>
                 <td><span className={css.workbenchMobileLabel}>持仓数量</span>{quantity(item.quantity)}</td>
-                <td><span className={css.workbenchMobileLabel}>{kind === 'market-value' ? '最新价' : '成本价'}</span>{amount(kind === 'market-value' ? item.currentPrice : item.costPrice)}</td>
-                {kind !== 'holdings' && <td><span className={css.workbenchMobileLabel}>{kind === 'cost' ? '成本金额' : '当前市值'}</span>{amount(positionAmount(item, price))}</td>}
+                <td><span className={css.workbenchMobileLabel}>成本价</span>{amount(item.costPrice)}</td>
+                {kind === 'cost' && <td><span className={css.workbenchMobileLabel}>成本金额</span>{amount(positionAmount(item, price))}</td>}
                 {kind === 'holdings' && onEdit !== undefined && (
                   <td className={css.workbenchHoldingActions}>
                     <span className={css.workbenchMobileLabel}>操作</span>
@@ -309,7 +307,7 @@ function HoldingsEditor({
   positions, onSaveHoldings, onSavingChange,
 }: {
   positions: readonly WorkbenchPositionDetail[]
-  onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[]) => Promise<void>
+  onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
   onSavingChange: (saving: boolean) => void
 }) {
   const [flow, setFlow] = useState<'view' | 'import'>('view')
@@ -379,7 +377,7 @@ function HoldingsEditor({
     const next = current.map(item => item.ticker === editDraft.originalCode ? holding : item)
     setSaving(true); onSavingChange(true); setViewError(''); setNotice('')
     try {
-      await onSaveHoldings(next)
+      await onSaveHoldings(next, 'manual')
       setSavedSnapshot(next)
       focusRequestRef.current = 'view'
       setEditDraft(undefined)
@@ -401,7 +399,7 @@ function HoldingsEditor({
     setSaving(true); onSavingChange(true); setSingleError(''); setNotice('')
     try {
       const next = [...current, holding]
-      await onSaveHoldings(next)
+      await onSaveHoldings(next, 'manual')
       setSavedSnapshot(next)
       setSingleDraft(EMPTY_HOLDING_DRAFT)
       returnToView()
@@ -419,7 +417,7 @@ function HoldingsEditor({
     setSaving(true); onSavingChange(true); setViewError(''); setNotice('')
     try {
       const next = current.filter(item => item.ticker !== code)
-      await onSaveHoldings(next)
+      await onSaveHoldings(next, 'manual')
       setSavedSnapshot(next)
       focusRequestRef.current = 'view'
       setPendingDelete('')
@@ -435,7 +433,7 @@ function HoldingsEditor({
     if (saving || holdings.length === 0) return
     setSaving(true); onSavingChange(true); setImportError(''); setNotice('')
     try {
-      await onSaveHoldings(holdings)
+      await onSaveHoldings(holdings, 'bulk_import')
       setSavedSnapshot(holdings)
       setImportSource('')
       returnToView()
@@ -523,27 +521,16 @@ function HoldingsEditor({
   )
 }
 
-function PositionDetail({
-  kind, positions,
-}: {
-  kind: 'holdings' | 'cost' | 'market-value'
-  positions: readonly WorkbenchPositionDetail[]
-}) {
-  const total = kind === 'holdings'
-    ? undefined
-    : summedAmount(positions, item => kind === 'cost' ? item.costPrice : item.currentPrice)
+function CostDetail({ positions }: { positions: readonly WorkbenchPositionDetail[] }) {
+  const total = summedAmount(positions, item => item.costPrice)
   return (
     <>
       <dl className={css.workbenchOverviewMetricGrid}>
         <div><dt>持仓标的</dt><dd>{positions.length} 项</dd></div>
-        {kind === 'cost' && <div><dt>成本金额合计</dt><dd>{total === undefined ? '—' : compactMoney(total)}</dd></div>}
-        {kind === 'market-value' && <div><dt>当前市值合计</dt><dd>{total === undefined ? '—' : compactMoney(total)}</dd></div>}
+        <div><dt>成本金额合计</dt><dd>{total === undefined ? '—' : compactMoney(total)}</dd></div>
       </dl>
-      <PositionTable positions={positions} kind={kind} />
-      {kind === 'market-value' && positions.some(item => item.currentPrice === undefined) && (
-        <p className={css.workbenchOverviewFootnote}>部分标的缺少最新价，因此合计显示为“—”；这不代表资产为零。</p>
-      )}
-      {kind === 'cost' && positions.some(item => item.quantity === undefined || item.costPrice === undefined) && (
+      <PositionTable positions={positions} kind="cost" />
+      {positions.some(item => item.quantity === undefined || item.costPrice === undefined) && (
         <p className={css.workbenchOverviewFootnote}>部分持仓缺少数量或成本价，因此合计显示为“—”；缺失值不按零计算。</p>
       )}
     </>
@@ -715,7 +702,7 @@ function RiskCenterDetail({
 
 export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
-  holdingsState, quotesState, riskState, alertsState, onOpenAlert, onSaveHoldings, onClose,
+  holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onClose,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
@@ -730,17 +717,14 @@ export function WorkbenchOverviewDialog({
       closeDisabled={holdingSaving}
       actions={<button type="button" className={css.secondaryButton} disabled={holdingSaving} onClick={close}>关闭</button>}
     >
-      {kind === 'holdings' || kind === 'cost' || kind === 'market-value'
+      {kind === 'holdings' || kind === 'cost'
         ? holdingsState.loaded
-          ? kind === 'market-value' && positions.length > 0 && !quotesState.loaded
-            ? resourceMessage(quotesState, '实时行情')
-            : <>
-                {retainedResourceWarning(holdingsState, '持仓')}
-                {kind === 'market-value' && retainedResourceWarning(quotesState, '实时行情')}
-                {kind === 'holdings'
-                  ? <HoldingsEditor positions={positions} onSaveHoldings={onSaveHoldings} onSavingChange={setHoldingSaving} />
-                  : <PositionDetail kind={kind} positions={positions} />}
-              </>
+          ? <>
+              {retainedResourceWarning(holdingsState, '持仓')}
+              {kind === 'holdings'
+                ? <HoldingsEditor positions={positions} onSaveHoldings={onSaveHoldings} onSavingChange={setHoldingSaving} />
+                : <CostDetail positions={positions} />}
+            </>
           : resourceMessage(holdingsState, '持仓详情')
         : kind === 'risk-profile'
           ? riskState.loaded
@@ -754,7 +738,6 @@ export function WorkbenchOverviewDialog({
               alertsDegraded={alertsDegraded}
               alertsDegradedReason={alertsDegradedReason}
               holdingsState={holdingsState}
-              quotesState={quotesState}
               riskState={riskState}
               alertsState={alertsState}
               onOpenAlert={onOpenAlert}

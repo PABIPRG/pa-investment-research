@@ -147,8 +147,8 @@ export interface InvestmentBackendManagerOptions {
   readonly executableExists?: (path: string) => Promise<boolean>
   readonly sleep?: (ms: number) => Promise<void>
   readonly now?: () => number
-  /** Host-owned secrets and recovery paths reserved for the data-transfer control plane. */
-  readonly dataTransferEnvironment?: Readonly<Record<string, string>>
+  /** Host-owned secrets and recovery paths reserved for each backend's data-transfer control plane. */
+  readonly dataTransferEnvironment?: Readonly<Partial<Record<InvestmentBackendId, Readonly<Record<string, string>>>>>
 }
 
 function sameDefinition(left: PythonBackendDefinition, right: PythonBackendDefinition): boolean {
@@ -276,7 +276,7 @@ export class InvestmentBackendManager {
   private readonly describeCredential: CredentialDescriber | undefined
   private readonly resolveLogPaths: LogPathResolver
   private readonly normalizeEnvironmentKey: EnvironmentKeyNormalizer
-  private readonly dataTransferEnvironment: Readonly<Record<string, string>> | undefined
+  private readonly dataTransferEnvironment: Readonly<Partial<Record<InvestmentBackendId, Readonly<Record<string, string>>>>> | undefined
   private readonly readinessTracker = new InvestmentReadinessTracker()
   private readonly credentialGenerations = new Map<CredentialRef, number>()
   private readonly startupCredentialGenerations = new WeakMap<ActiveEntry, readonly CredentialGenerationCapture[]>()
@@ -695,6 +695,7 @@ export class InvestmentBackendManager {
     const resolvedCredentials = await this.resolveCredentialEnv(definition, signal)
     signal.throwIfAborted()
     const credentialEnv = resolvedCredentials.environment
+    const dataTransferEnvironment = this.dataTransferEnvironment?.[definition.id]
     const bundledEnv = paths.source === 'bundled'
       ? {
         PYTHONPATH: paths.sitePackages,
@@ -705,12 +706,12 @@ export class InvestmentBackendManager {
     const spawnEnv = definition.managedEnv === undefined
       && credentialEnv === undefined
       && bundledEnv === undefined
-      && this.dataTransferEnvironment === undefined
+      && dataTransferEnvironment === undefined
       ? undefined
-      : { ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...this.dataTransferEnvironment }
+      : { ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...dataTransferEnvironment }
     const redactors = {
-      stdout: new CredentialOutputRedactor({ ...credentialEnv, ...this.dataTransferEnvironment }),
-      stderr: new CredentialOutputRedactor({ ...credentialEnv, ...this.dataTransferEnvironment }),
+      stdout: new CredentialOutputRedactor({ ...credentialEnv, ...dataTransferEnvironment }),
+      stderr: new CredentialOutputRedactor({ ...credentialEnv, ...dataTransferEnvironment }),
     }
     let handle: SubprocessHandle
     try {

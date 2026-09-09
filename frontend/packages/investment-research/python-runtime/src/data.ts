@@ -524,10 +524,11 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     method: 'POST',
     path: () => '/holdings/save',
     body: (input) => {
-      knownKeys(input, ['holdings'])
+      knownKeys(input, ['holdings', 'source'])
       const holdings = input.holdings
       if (!Array.isArray(holdings)) throw new TypeError('investment data: holdings must be an array')
-      return { holdings }
+      const source = oneOf(input, 'source', ['manual', 'bulk_import', 'api'])
+      return { holdings, ...(source === undefined ? {} : { source }) }
     },
   },
   'trading-core.holdings-analyze': {
@@ -551,6 +552,30 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
         use_saved: optionalBoolean(input, 'use_saved') ?? true,
         ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
       }
+    },
+  },
+  'trading-core.portfolio-performance': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['start_date', 'end_date'])
+      return query('/portfolio/performance', {
+        start_date: optionalDate(input, 'start_date'),
+        end_date: optionalDate(input, 'end_date'),
+      })
+    },
+  },
+  'trading-core.portfolio-history-start': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/portfolio/history-start',
+    body: (input) => {
+      knownKeys(input, ['effective_date'])
+      const effectiveDate = input.effective_date
+      if (effectiveDate !== null && optionalDate(input, 'effective_date') === undefined) {
+        throw new TypeError('investment data: effective_date must be YYYY-MM-DD or null')
+      }
+      return { effective_date: effectiveDate === null ? null : optionalDate(input, 'effective_date') }
     },
   },
   'trading-core.risk-portfolio': noInput('/risk/portfolio', 'trading-core'),

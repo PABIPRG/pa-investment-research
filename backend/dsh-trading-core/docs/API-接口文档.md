@@ -82,6 +82,8 @@
 | 3 | POST | `/holdings/analyze` | 启动**持仓风险分析** | 任务式 |
 | 4 | POST | `/holdings/save` | 保存/整体替换持仓 | 轻量 |
 | 5 | GET | `/holdings` | 读取持仓列表（供盯盘/事件命中预警） | 轻量 |
+| 5a | GET | `/portfolio/performance` | 按持仓快照与前复权收盘价计算组合收益 | 轻量 |
+| 5b | POST | `/portfolio/history-start` | 校正或恢复组合历史起点 | 轻量 |
 | 6 | GET | `/watchlist` | 读取自选列表 | 轻量 |
 | 7 | POST | `/watchlist` | 整体替换自选列表 | 轻量 |
 | 8 | GET | `/risk_profile` | 读取风险偏好 | 轻量 |
@@ -521,10 +523,78 @@ POST /shadow/run
 
 ```jsonc
 POST /holdings/save
-{ "holdings": [{"ticker": "600519", "quantity": 200, "cost_price": 1480}] }
+{ "holdings": [{"ticker": "600519", "quantity": 200, "cost_price": 1480}], "source": "manual" }
 // 200
-{ "saved": 1 }
+{ "saved": 1, "snapshot_id": "32位十六进制标识", "effective_at": "2026-09-09T09:00:00+08:00" }
 ```
+
+`source` 可选值为 `manual`、`bulk_import`、`api`，默认 `api`。保存会在同一个原子写入中替换当前持仓并在内容变化时追加快照；重复保存完全相同的持仓不会重复记账。保存空列表会在已有历史时记录退出快照。
+
+### 4.3a GET /portfolio/performance —— 组合盈亏与收益表现
+
+```http
+GET /portfolio/performance?start_date=2026-08-11&end_date=2026-09-09
+```
+
+`start_date`、`end_date` 都是可选的 `YYYY-MM-DD`。未传开始日期时从第一条可用持仓快照计算，未传结束日期时使用服务本地日期；未来结束日期、非法日期或开始晚于结束返回 `422`。历史行情源失败返回 `503`。
+
+```jsonc
+{
+  "available_since": "2026-08-01",
+  "history_start_origin": "system_record",
+  "history_start_original": "2026-08-01",
+  "history_start_corrected_at": null,
+  "start_date": "2026-08-11",
+  "end_date": "2026-09-09",
+  "as_of": "2026-09-09",
+  "price_basis": "forward_adjusted_close",
+  "quality": "estimated",
+  "limitations": ["金额加权收益率根据持仓变更日市场价值推算，不含现金、分红和费用。"],
+  "summary": {
+    "start_value": 140000.0,
+    "end_value": 145000.0,
+    "net_flow": 0.0,
+    "profit_loss": 5000.0,
+    "current_cost": 150000.0,
+    "current_profit_loss": -5000.0,
+    "cost_return": -0.033333
+  },
+  "returns": {
+    "twr": {"value": 0.035714, "annualized": false, "quality": "estimated", "reason": null},
+    "xirr": {"value": 0.3688, "annualized": true, "quality": "estimated", "reason": null}
+  },
+  "series": [{"date": "2026-09-09", "value": 145000.0, "profit_loss": 5000.0}],
+  "contributions": [{"ticker": "600519", "start_value": 140000.0, "end_value": 145000.0, "net_flow": 0.0, "profit_loss": 5000.0, "cost_price": 1500.0, "end_price": 1450.0, "price_return": -0.033333}],
+  "cash_flows": [{"date": "2026-08-11", "amount": -140000.0, "kind": "opening_value"}],
+  "missing_tickers": [],
+  "coverage_ratio": 1.0
+}
+```
+
+- `profit_loss = end_value - start_value - net_flow`；`current_profit_loss` 和 `cost_return` 是期末持仓相对当前成本的快照口径。
+- `contributions[].cost_price/end_price/price_return` 均以所选区间的期末持仓和期末行情为准；历史截止日查询不会混入今天的实时行情。收益查询只请求区间起点有效持仓及区间内变更涉及的标的，已在区间前清仓的标的不影响覆盖率。
+- `twr` 为非年化时间加权收益率，用持仓变化日的同日估值剔除外部资金流；`xirr` 为按估算现金流计算的年化金额加权收益率。
+- `quality` 为 `estimated`、`partial` 或 `unavailable`。缺失行情、历史或现金流时返回 `null` 并在 `limitations`、`missing_tickers` 和各收益口径的 `reason` 中解释，不用零值代替。
+
+### 4.3b POST /portfolio/history-start —— 校正组合历史起点
+
+```jsonc
+POST /portfolio/history-start
+{ "effective_date": "2026-07-15" }
+// 200
+{
+  "effective_date": "2026-07-15",
+  "history_start_origin": "user_corrected",
+  "history_start_override": {
+    "effective_date": "2026-07-15",
+    "original_effective_date": "2026-08-01",
+    "source": "user_corrected",
+    "corrected_at": "2026-09-09T10:00:00+08:00"
+  }
+}
+```
+
+传 `{"effective_date": null}` 恢复系统记录的首份快照日期。校正信息单独保存在 `holdings.history_start_override`，不会改写不可变持仓快照；人工选择早于首份系统快照的日期时，收益计算会按首份持仓结构估算该段历史。校正信息和全部持仓快照会随 `.pabackup` 的“持仓”分类导出与恢复；默认合并到已有本地历史时保留本地校正语义，只有目标没有本地快照或选择“使用导入数据”时才采用来源设备的校正值。
 
 ### 4.4 GET /watchlist —— 读取自选列表
 

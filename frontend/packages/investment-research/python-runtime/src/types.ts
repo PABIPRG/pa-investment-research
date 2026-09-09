@@ -117,6 +117,8 @@ export type InvestmentDataOperation =
   | 'trading-core.holdings'
   | 'trading-core.holdings-save'
   | 'trading-core.holdings-analyze'
+  | 'trading-core.portfolio-performance'
+  | 'trading-core.portfolio-history-start'
   | 'trading-core.risk-portfolio'
   | 'trading-core.risk-alerts'
   | 'trading-core.personalized-cards'

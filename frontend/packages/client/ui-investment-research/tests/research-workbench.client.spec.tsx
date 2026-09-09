@@ -97,7 +97,41 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
       items: [{ code: '600519', name: '贵州茅台', price: 1450, pct_change: 1.2 }],
     }
   }
+  if (operation === 'trading-core.portfolio-performance') {
+    return {
+      available_since: '2026-08-01', start_date: '2026-08-01', end_date: '2026-09-09',
+      history_start_origin: 'system_record', history_start_original: '2026-08-01',
+      history_start_corrected_at: null,
+      as_of: '2026-09-09', price_basis: 'forward_adjusted_close', quality: 'estimated',
+      limitations: ['金额加权收益率根据持仓变更日市场价值推算，不含现金、分红和费用。'],
+      summary: {
+        start_value: 140000, end_value: 145000, net_flow: 0, profit_loss: 5000,
+        current_cost: 150000, current_profit_loss: -5000, cost_return: -0.033333,
+      },
+      returns: {
+        twr: { value: 0.035714, annualized: false, quality: 'estimated', reason: null },
+        xirr: { value: 0.3688, annualized: true, quality: 'estimated', reason: null },
+      },
+      series: [
+        { date: '2026-08-01', value: 140000, profit_loss: 0 },
+        { date: '2026-09-09', value: 145000, profit_loss: 5000 },
+      ],
+      contributions: [{
+        ticker: '600519', start_value: 140000, end_value: 145000, net_flow: 0, profit_loss: 5000,
+        current_cost: 150000, current_profit_loss: -5000, cost_return: -0.033333,
+        cost_price: 1500, end_price: 1450, price_return: -0.033333,
+      }],
+      cash_flows: [
+        { date: '2026-08-01', amount: -140000, kind: 'opening_value' },
+        { date: '2026-09-09', amount: 145000, kind: 'ending_value' },
+      ],
+      missing_tickers: [], coverage_ratio: 1,
+    }
+  }
   if (operation === 'trading-core.personalized-feedback') return { ok: true, stored: true }
+  if (operation === 'trading-core.portfolio-history-start') {
+    return { effective_date: '2026-07-15', history_start_origin: 'user_corrected' }
+  }
   return {}
 }
 
@@ -164,7 +198,7 @@ describe('研究工作台', () => {
     expect(view.getByText('持仓成本金额')).toBeTruthy()
     expect(view.getByText('总资产现价')).toBeTruthy()
     expect(view.getByText('数量 × 成本价 →')).toBeTruthy()
-    expect(view.getByText('数量 × 实时价，不含现金 →')).toBeTruthy()
+    expect(view.getByText('盈亏 -¥5,000 · 成本收益率 -3.33% →')).toBeTruthy()
     expect(view.getByText('¥15.0 万')).toBeTruthy()
     expect(view.getByText('¥14.5 万')).toBeTruthy()
     expect(view.getByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeTruthy()
@@ -492,14 +526,13 @@ describe('研究工作台', () => {
     expect(view.queryByText('¥0')).toBeNull()
   })
 
-  it('投研概览四张卡片在当前页打开对应详情，不再跳转或移动锚点', async () => {
+  it('投研概览的独立卡片在当前页打开对应详情，不再跳转或移动锚点', async () => {
     const view = renderWorkbench()
     await view.findByText('白酒板块经营数据改善')
 
     const cases = [
       { trigger: /持仓数量/, dialog: '持仓明细', content: '100 股' },
       { trigger: /持仓成本金额/, dialog: '持仓成本明细', content: '¥15.0 万' },
-      { trigger: /总资产现价/, dialog: '总资产现价明细', content: '¥14.5 万' },
       { trigger: /风险画像/, dialog: '风险画像详情', content: '风险数据时间' },
     ] as const
 
@@ -512,6 +545,251 @@ describe('研究工作台', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: `关闭${item.dialog}` }))
       await waitFor(() => { expect(document.activeElement).toBe(trigger) })
     }
+  })
+
+  it('总资产卡整合当前市值和盈亏，并打开唯一的组合表现详情', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+    const trigger = view.getByRole('button', { name: /总资产现价/ })
+
+    expect(trigger.textContent).toContain('¥14.5 万')
+    expect(trigger.textContent).toContain('-¥5,000')
+    expect(trigger.textContent).toContain('成本收益率 -3.33%')
+    expect(view.queryByText('盈亏情况')).toBeNull()
+    expect(view.requestData.mock.calls.some(([request]) => request.operation === 'trading-core.portfolio-performance')).toBe(false)
+
+    fireEvent.click(trigger)
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    expect(view.queryByRole('dialog', { name: '总资产现价明细' })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: '持仓以来' }).getAttribute('aria-pressed')).toBe('true')
+    expect((within(dialog).getByRole('radio', { name: /时间加权收益率/ }) as HTMLInputElement).checked).toBe(true)
+    expect(within(dialog).getByText('+3.57%')).toBeTruthy()
+    expect(within(dialog).getByText('历史记录始于 2026-08-01')).toBeTruthy()
+    expect(within(dialog).getByRole('img', { name: /组合收益曲线/ })).toBeTruthy()
+    const contributionTable = within(dialog).getByRole('table', { name: '标的区间盈亏贡献明细' })
+    const contributionRow = within(contributionTable).getByRole('row', { name: /贵州茅台600519/ })
+    expect(within(contributionTable).getByRole('columnheader', { name: '期末成本价' })).toBeTruthy()
+    expect(within(contributionTable).getByRole('columnheader', { name: '期末价' })).toBeTruthy()
+    expect(within(contributionTable).getByRole('columnheader', { name: '较成本' })).toBeTruthy()
+    expect(within(contributionTable).getByRole('columnheader', { name: '区间盈亏' })).toBeTruthy()
+    expect(contributionRow.textContent).toContain('¥1500.00')
+    expect(contributionRow.textContent).toContain('¥1450.00')
+    expect(contributionRow.textContent).toContain('-3.33%')
+    expect(contributionRow.textContent).toContain('+¥5,000')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭盈亏详情' }))
+    await waitFor(() => { expect(document.activeElement).toBe(trigger) })
+  })
+
+  it('盈亏详情切换自然日区间、算法和自定义日期时只发必要请求', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(new Date('2026-09-09T08:00:00+08:00'))
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    await waitFor(() => {
+      expect(view.requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')).toHaveLength(1)
+    })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '30日' }))
+    await waitFor(() => {
+      const calls = view.requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')
+      expect(calls.at(-1)?.[0].input).toEqual({ start_date: '2026-08-11', end_date: '2026-09-09' })
+    })
+    const beforeMethod = view.requestData.mock.calls.length
+    fireEvent.click(within(dialog).getByRole('radio', { name: /金额加权收益率/ }))
+    expect(within(dialog).getByText('+36.88%')).toBeTruthy()
+    expect(view.requestData).toHaveBeenCalledTimes(beforeMethod)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '自定义' }))
+    fireEvent.change(within(dialog).getByLabelText('开始日期'), { target: { value: '2026-09-09' } })
+    fireEvent.change(within(dialog).getByLabelText('结束日期'), { target: { value: '2026-09-01' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '应用日期' }))
+    expect(within(dialog).getByRole('alert').textContent).toContain('开始日期不能晚于结束日期')
+    expect(view.requestData).toHaveBeenCalledTimes(beforeMethod)
+  })
+
+  it('历史区间贡献使用所选截止日价格，并明确标示部分行情覆盖', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation !== 'trading-core.portfolio-performance') return completeResponse(request.operation)
+      const response = completeResponse(request.operation) as Record<string, unknown>
+      return {
+        ...response,
+        end_date: '2026-08-31',
+        quality: 'partial',
+        coverage_ratio: 0.5,
+        contributions: [{
+          ticker: '600519', start_value: 120000, end_value: 132000, net_flow: 0, profit_loss: 12000,
+          current_cost: 120000, current_profit_loss: 12000, cost_return: 0.1,
+          cost_price: 1200, end_price: 1320, price_return: 0.1,
+        }],
+      }
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const contributionTable = await within(dialog).findByRole('table', { name: '标的区间盈亏贡献明细' })
+    const contributionRow = within(contributionTable).getByRole('row', { name: /贵州茅台600519/ })
+
+    expect(within(contributionTable).getByRole('columnheader', { name: '期末成本价' })).toBeTruthy()
+    expect(within(contributionTable).getByRole('columnheader', { name: '期末价' })).toBeTruthy()
+    expect(contributionRow.textContent).toContain('¥1200.00')
+    expect(contributionRow.textContent).toContain('¥1320.00')
+    expect(contributionRow.textContent).toContain('+10.00%')
+    expect(within(dialog).getByText('部分数据')).toBeTruthy()
+    expect(within(dialog).getByText('50%')).toBeTruthy()
+  })
+
+  it('切换收益区间时保留上一份结果并允许继续选择区间', async () => {
+    let performanceCalls = 0
+    let releaseRange: (() => void) | undefined
+    const rangeGate = new Promise<void>((resolve) => { releaseRange = resolve })
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation !== 'trading-core.portfolio-performance') return completeResponse(request.operation)
+      performanceCalls += 1
+      if (performanceCalls > 1) await rangeGate
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    expect(await within(dialog).findByText('+3.57%')).toBeTruthy()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '30日' }))
+
+    expect(within(dialog).getByText('+3.57%')).toBeTruthy()
+    expect(within(dialog).getByRole('status').textContent).toContain('更新中')
+    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: '15日' }).disabled).toBe(false)
+
+    releaseRange?.()
+    await waitFor(() => { expect(performanceCalls).toBe(2) })
+  })
+
+  it('允许审计式校正历史起点并重新加载持仓以来表现', async () => {
+    let corrected = false
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.portfolio-history-start') {
+        corrected = request.input?.effective_date === '2026-07-15'
+        return { effective_date: '2026-07-15', history_start_origin: 'user_corrected' }
+      }
+      if (request.operation === 'trading-core.portfolio-performance' && corrected) {
+        return {
+          ...(completeResponse(request.operation) as Record<string, unknown>),
+          available_since: '2026-07-15',
+          history_start_origin: 'user_corrected',
+          history_start_original: '2026-08-01',
+          history_start_corrected_at: '2026-09-09T10:00:00+08:00',
+        }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '校正历史起点' }))
+    fireEvent.change(within(dialog).getByLabelText('首次持仓日期'), { target: { value: '2026-07-15' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存校正' }))
+
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.portfolio-history-start',
+        input: { effective_date: '2026-07-15' },
+      })
+      expect(within(dialog).getByText(/人工校正/)).toBeTruthy()
+    })
+  })
+
+  it('收益控件与加载或曲线内容使用独立间距容器', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const controls = within(dialog).getByRole('group', { name: '收益时间区间' }).parentElement
+    const content = await within(dialog).findByRole('region', { name: '组合收益内容' })
+
+    expect(controls?.nextElementSibling).toBe(content)
+    expect(content.className).toContain(css.performanceContent)
+    expect(within(content).getByRole('img', { name: /组合收益曲线/ })).toBeTruthy()
+  })
+
+  it('历史估值点不足时不伪造零收益，并以实时行情展示当前成本盈亏', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [
+          { ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 },
+          { ticker: '159795', name: '智能汽车ETF汇添富', quantity: 100, cost_price: 0.86 },
+        ] }
+      }
+      if (request.operation === 'market-watch.quotes-batch') {
+        return {
+          as_of: '2026-09-09 10:00:00', trade_date: '2026-09-09', items: [
+            { code: '600519', name: '贵州茅台', price: 1450, pct_change: 1.2 },
+            { code: '159795', name: '智能汽车ETF汇添富', price: 0.856, pct_change: -0.4 },
+          ],
+        }
+      }
+      if (request.operation !== 'trading-core.portfolio-performance') return completeResponse(request.operation)
+      return {
+        available_since: '2026-09-09', start_date: '2026-09-09', end_date: '2026-09-09',
+        as_of: '2026-09-08', price_basis: 'forward_adjusted_close', quality: 'estimated',
+        limitations: ['旧持仓没有原始录入日期，历史从本次迁移快照开始。', '有效估值点不足，时间加权收益率不可计算。'],
+        summary: {
+          start_value: 145000, end_value: 145000, net_flow: 0, profit_loss: null,
+          current_cost: 150000, current_profit_loss: -6000, cost_return: -0.04,
+        },
+        returns: {
+          twr: { value: null, annualized: false, quality: 'unavailable', reason: '有效估值点不足。' },
+          xirr: { value: null, annualized: true, quality: 'unavailable', reason: '现金流不足。' },
+        },
+        series: [{ date: '2026-09-09', value: 145000, profit_loss: null }],
+        contributions: [{
+          ticker: '600519', start_value: 145000, end_value: 145000, net_flow: 0, profit_loss: null,
+          current_cost: 150000, current_profit_loss: -6000, cost_return: -0.04,
+        }, {
+          ticker: '159795', start_value: 86, end_value: 85.6, net_flow: 0, profit_loss: null,
+          current_cost: 86, current_profit_loss: -0.4, cost_return: -0.004651,
+        }],
+        cash_flows: [], missing_tickers: [], coverage_ratio: 1,
+      }
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+
+    expect(await within(dialog).findByText('当前区间至少需要两个估值日，无法计算时间加权收益率。')).toBeTruthy()
+    const metricGrid = dialog.querySelector(`.${css.performanceMetricGrid}`)
+    expect(metricGrid).not.toBeNull()
+    expect(within(metricGrid as HTMLElement).getByText('区间盈亏').nextElementSibling?.textContent).toBe('—')
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: /成本收益率/ }))
+    expect(within(metricGrid as HTMLElement).getByText('-3.33%')).toBeTruthy()
+    expect(within(dialog).getByText('当前持仓盈亏').nextElementSibling?.textContent).toBe('-¥5,000')
+    expect(within(dialog).getByText('当前持仓成本').nextElementSibling?.textContent).toBe('¥15.0 万')
+    expect(within(dialog).getByText('当前持仓市值').nextElementSibling?.textContent).toBe('¥14.5 万')
+    expect(within(dialog).getByText('-¥0.40')).toBeTruthy()
+  })
+
+  it('盈亏详情为空或刷新失败时保留解释和重试入口', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.portfolio-performance') throw new Error('历史行情暂不可用，请稍后重试')
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('历史行情暂不可用，请稍后重试')
+    fireEvent.click(within(dialog).getByRole('button', { name: '重试' }))
+    await waitFor(() => {
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance').length).toBeGreaterThan(1)
+    })
   })
 
   it('持仓明细默认只负责查看，点击导入后再选择单条或批量并保留草稿', async () => {
@@ -584,6 +862,7 @@ describe('研究工作台', () => {
             { ticker: '600519', quantity: 100, cost_price: 1500 },
             { ticker: '000001', quantity: 200, cost_price: 12.5 },
           ],
+          source: 'manual',
         },
       })
     })
@@ -636,7 +915,7 @@ describe('研究工作台', () => {
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
         operation: 'trading-core.holdings-save',
-        input: { holdings: [{ ticker: '000001', quantity: 200, cost_price: 12.5 }] },
+        input: { holdings: [{ ticker: '000001', quantity: 200, cost_price: 12.5 }], source: 'manual' },
       })
     })
     releaseRefresh?.()
@@ -671,7 +950,7 @@ describe('研究工作台', () => {
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
         operation: 'trading-core.holdings-save',
-        input: { holdings: [{ ticker: '600519', quantity: 120, cost_price: 1490 }] },
+        input: { holdings: [{ ticker: '600519', quantity: 120, cost_price: 1490 }], source: 'manual' },
       })
     })
     await waitFor(() => {
@@ -690,7 +969,7 @@ describe('研究工作台', () => {
     fireEvent.click(confirmDeleteButton)
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({
-        operation: 'trading-core.holdings-save', input: { holdings: [] },
+        operation: 'trading-core.holdings-save', input: { holdings: [], source: 'manual' },
       })
     })
     await waitFor(() => {
@@ -802,6 +1081,7 @@ describe('研究工作台', () => {
             { ticker: '000001', quantity: 200, cost_price: 12.5 },
             { ticker: '000858', quantity: 300, cost_price: 135 },
           ],
+          source: 'bulk_import',
         },
       })
     })

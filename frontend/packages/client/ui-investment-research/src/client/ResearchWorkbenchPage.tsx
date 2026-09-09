@@ -11,9 +11,15 @@ import {
 import {
   WorkbenchOverviewDialog,
 } from './WorkbenchOverviewDialog.tsx'
+import {
+  PortfolioPerformanceDialog,
+} from './PortfolioPerformanceDialog.tsx'
+import type {
+  PerformanceMethod, PerformancePeriod,
+} from './PortfolioPerformanceDialog.tsx'
 import { KycProfilePanel } from './KycProfilePanel.tsx'
 import type {
-  WorkbenchDetailKind, WorkbenchHoldingInput, WorkbenchPositionDetail,
+  WorkbenchDetailKind, WorkbenchHoldingInput, WorkbenchHoldingSaveSource, WorkbenchPositionDetail,
 } from './WorkbenchOverviewDialog.tsx'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
 import { useSecurityNames } from './security-names.ts'
@@ -50,17 +56,26 @@ function useWorkbenchResource(requestData: RequestData) {
 
   const run = useCallback((
     request: InvestmentDataRequest,
-    options?: { readonly trailing?: boolean; readonly fresh?: boolean },
+    options?: {
+      readonly trailing?: boolean
+      readonly fresh?: boolean
+      readonly retainPrevious?: boolean
+    },
   ): void => {
     const key = JSON.stringify(request)
     const current = ++generation.current
-    setState(previous => ({
-      phase: previous.loaded && settledKey.current === key ? 'refreshing' : 'loading',
-      loaded: previous.loaded && settledKey.current === key,
-      value: previous.loaded && settledKey.current === key ? previous.value : undefined,
-      error: '',
-      request,
-    }))
+    setState(previous => {
+      const retain = previous.loaded && (
+        settledKey.current === key || options?.retainPrevious === true
+      )
+      return {
+        phase: retain ? 'refreshing' : 'loading',
+        loaded: retain,
+        value: retain ? previous.value : undefined,
+        error: '',
+        request,
+      }
+    })
     let flight = options?.fresh === true ? undefined : flights.current.get(key)
     if (flight === undefined || options?.trailing === true) {
       const previous = flight
@@ -110,6 +125,50 @@ function costAmount(positions: readonly Record<string, unknown>[]): number {
   return positions.reduce((sum, item) => (
     sum + (number(item.quantity) ?? 0) * (number(item.cost_price) ?? 0)
   ), 0)
+}
+
+function completeCostAmount(positions: readonly Record<string, unknown>[]): number | undefined {
+  if (positions.length === 0) return undefined
+  let sum = 0
+  for (const item of positions) {
+    const quantity = number(item.quantity)
+    const costPrice = number(item.cost_price)
+    if (quantity === undefined || costPrice === undefined) return undefined
+    sum += quantity * costPrice
+  }
+  return sum
+}
+
+function signedCompactMoney(value: number | undefined): string {
+  if (value === undefined) return '—'
+  const normalized = Object.is(value, -0) ? 0 : value
+  if (normalized === 0) return compactMoney(0)
+  return `${normalized > 0 ? '+' : '-'}${compactMoney(Math.abs(normalized))}`
+}
+
+function signedReturn(value: number | undefined): string {
+  if (value === undefined) return '—'
+  const normalized = Object.is(value, -0) ? 0 : value
+  return `${normalized > 0 ? '+' : ''}${(normalized * 100).toFixed(2)}%`
+}
+
+function localDate(value: Date): string {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function performanceRange(period: PerformancePeriod): { start_date: string; end_date: string } | undefined {
+  if (period === 'since_inception' || period === 'custom') return undefined
+  const end = new Date()
+  const start = new Date(end)
+  if (period === '7d') start.setDate(start.getDate() - 6)
+  if (period === '15d') start.setDate(start.getDate() - 14)
+  if (period === '30d') start.setDate(start.getDate() - 29)
+  if (period === '6m') start.setMonth(start.getMonth() - 6)
+  if (period === '1y') start.setFullYear(start.getFullYear() - 1)
+  return { start_date: localDate(start), end_date: localDate(end) }
 }
 
 const BUCKET_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -369,6 +428,7 @@ export function ResearchWorkbenchPage({
   const cards = useWorkbenchResource(requestData)
   const matches = useWorkbenchResource(requestData)
   const quotes = useWorkbenchResource(requestData)
+  const performance = useWorkbenchResource(requestData)
   const alive = useRef(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [eventView, setEventView] = useState<EventView>('all')
@@ -384,6 +444,13 @@ export function ResearchWorkbenchPage({
   const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
   const [riskDetailOrigin, setRiskDetailOrigin] = useState<'panel' | 'overview'>('panel')
   const [selectedOverview, setSelectedOverview] = useState<WorkbenchDetailKind>()
+  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const [performancePeriod, setPerformancePeriod] = useState<PerformancePeriod>('since_inception')
+  const [performanceMethod, setPerformanceMethod] = useState<PerformanceMethod>('twr')
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
+  const [appliedCustom, setAppliedCustom] = useState<{ start_date: string; end_date: string }>()
+  const [customError, setCustomError] = useState('')
   const [brief, setBrief] = useState<{
     phase: 'idle' | 'running' | 'background' | 'done' | 'error'
     message: string
@@ -431,6 +498,11 @@ export function ResearchWorkbenchPage({
     }
     return sum
   })()
+  const totalCost = completeCostAmount(positions)
+  const currentProfit = totalCurrent === undefined || totalCost === undefined ? undefined : totalCurrent - totalCost
+  const currentCostReturn = currentProfit === undefined || totalCost === undefined || totalCost === 0
+    ? undefined
+    : currentProfit / totalCost
   const riskValue = asRecord(risk.state.value)
   const riskSummary = asRecord(riskValue.summary)
   const alertValue = asRecord(alerts.state.value)
@@ -484,6 +556,19 @@ export function ResearchWorkbenchPage({
     text(item.source, '') !== 'profile' && text(item.severity, '低') !== '低'
   ))
   const allBusy = [holdings, risk, alerts, kyc, cards, matches].some(resource => resource.busy)
+
+  const selectedPerformanceRange = useMemo(
+    () => performancePeriod === 'custom' ? appliedCustom : performanceRange(performancePeriod),
+    [appliedCustom, performancePeriod],
+  )
+
+  useEffect(() => {
+    if (!performanceOpen || (performancePeriod === 'custom' && selectedPerformanceRange === undefined)) return
+    performance.run({
+      operation: 'trading-core.portfolio-performance',
+      ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
+    }, { retainPrevious: true })
+  }, [performance.run, performanceOpen, performancePeriod, selectedPerformanceRange])
 
   useEffect(() => {
     if (!cards.state.loaded || cards.state.error !== '') return
@@ -553,10 +638,12 @@ export function ResearchWorkbenchPage({
     setRefreshVersion(value => value + 1)
   }, [])
 
-  const saveHoldings = useCallback(async (next: readonly WorkbenchHoldingInput[]): Promise<void> => {
+  const saveHoldings = useCallback(async (
+    next: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource,
+  ): Promise<void> => {
     await requestData({
       operation: 'trading-core.holdings-save',
-      input: { holdings: next.map(item => ({ ...item })) },
+      input: { holdings: next.map(item => ({ ...item })), source },
     })
     if (alive.current) refreshDashboard()
   }, [refreshDashboard, requestData])
@@ -634,7 +721,7 @@ export function ResearchWorkbenchPage({
       <section className={css.dashboardSummary} aria-label="投研概览">
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('holdings') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('cost') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价 →</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('market-value') }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small>数量 × 实时价，不含现金 →</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setPerformanceOpen(true) }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small data-tone={currentProfit === undefined || currentProfit === 0 ? undefined : currentProfit > 0 ? 'positive' : 'negative'}>盈亏 {holdings.state.loaded && quotes.state.loaded ? signedCompactMoney(currentProfit) : '—'} · 成本收益率 {holdings.state.loaded && quotes.state.loaded ? signedReturn(currentCostReturn) : '—'} →</small></button>
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
       </section>
 
@@ -973,7 +1060,6 @@ export function ResearchWorkbenchPage({
           alertsDegraded={alertValue.degraded === true}
           alertsDegradedReason={text(alertValue.degraded_reason, '')}
           holdingsState={{ loaded: holdings.state.loaded, busy: holdings.busy, error: holdings.state.error }}
-          quotesState={{ loaded: quotes.state.loaded, busy: quotes.busy, error: quotes.state.error }}
           riskState={{ loaded: risk.state.loaded, busy: risk.busy, error: risk.state.error }}
           alertsState={{ loaded: alerts.state.loaded, busy: alerts.busy, error: alerts.state.error }}
           onOpenAlert={(item) => {
@@ -987,6 +1073,62 @@ export function ResearchWorkbenchPage({
           }}
           onSaveHoldings={saveHoldings}
           onClose={() => { setSelectedOverview(undefined) }}
+        />
+      )}
+      {performanceOpen && (
+        <PortfolioPerformanceDialog
+          value={performance.state.value}
+          loaded={performance.state.loaded}
+          busy={performance.busy}
+          error={performance.state.error}
+          positions={overviewPositions}
+          period={performancePeriod}
+          method={performanceMethod}
+          customStart={customStart}
+          customEnd={customEnd}
+          customError={customError}
+          onPeriodChange={(period) => {
+            setCustomError('')
+            if (period === 'custom') {
+              const current = localDate(new Date())
+              setCustomStart(value => value || text(asRecord(performance.state.value).available_since, current))
+              setCustomEnd(value => value || current)
+              setAppliedCustom(undefined)
+            }
+            setPerformancePeriod(period)
+          }}
+          onMethodChange={setPerformanceMethod}
+          onCustomStartChange={(value) => { setCustomStart(value); setCustomError('') }}
+          onCustomEndChange={(value) => { setCustomEnd(value); setCustomError('') }}
+          onApplyCustom={() => {
+            if (customStart === '' || customEnd === '') {
+              setCustomError('请选择完整的开始日期和结束日期')
+              return
+            }
+            if (customStart > customEnd) {
+              setCustomError('开始日期不能晚于结束日期')
+              return
+            }
+            setCustomError('')
+            setAppliedCustom({ start_date: customStart, end_date: customEnd })
+          }}
+          onHistoryStartSave={async (effectiveDate) => {
+            await requestData({
+              operation: 'trading-core.portfolio-history-start',
+              input: { effective_date: effectiveDate },
+            })
+            performance.run({
+              operation: 'trading-core.portfolio-performance',
+              ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
+            }, { fresh: true })
+          }}
+          onRetry={() => {
+            performance.run({
+              operation: 'trading-core.portfolio-performance',
+              ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
+            }, { fresh: true })
+          }}
+          onClose={() => { setPerformanceOpen(false) }}
         />
       )}
       {selectedRisk !== undefined && (
