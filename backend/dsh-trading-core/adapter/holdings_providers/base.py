@@ -50,7 +50,11 @@ def get_provider() -> HoldingsProvider:
         from .qmt import QMTProvider
 
         return QMTProvider()
+    if name == "easytrader":
+        from .easytrader import EasyTraderProvider
+
+        return EasyTraderProvider()
     raise ValueError(
         f"未知 HOLDINGS_PROVIDER: {settings.holdings_provider}"
-        f"（可选: manual/joinquant/qmt）"
+        f"（可选: manual/easytrader/qmt/joinquant）"
     )
