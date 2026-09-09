@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import re
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -16,7 +17,22 @@ from .store import JsonStore, JsonStoreTransferBusyError
 from .schemas import HoldingItem
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSIONS = {1, SCHEMA_VERSION}
+LEGACY_CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
+    "strategies": (
+        "strategies",
+        "strategy_backtests",
+        "shadows",
+        "shadow_equity",
+        "shadow_tasks",
+        "shadow_task_results",
+    ),
+    "holdings": ("holdings",),
+    "watchlist": ("watchlist",),
+    "research": ("backtests", "decisions", "reports", "briefs", "research_chat_contexts"),
+    "preferences": ("preferences", "behavior"),
+}
 CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
     "strategies": (
         "strategies",
@@ -25,6 +41,9 @@ CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
         "shadow_equity",
         "shadow_tasks",
         "shadow_task_results",
+        "evolution_previews",
+        "gene_archive",
+        "events_ledger",
     ),
     "holdings": ("holdings",),
     "watchlist": ("watchlist",),
@@ -81,6 +100,28 @@ def _portable_document(collection: str, document: dict) -> dict:
             if not isinstance(value, dict)
             or value.get("status") not in {"pending", "running", "queued"}
         }
+    if collection == "evolution_previews":
+        portable: dict[str, Any] = {}
+        runtime = document.get("_closed_loop_runtime")
+        if isinstance(runtime, dict):
+            portable["_closed_loop_runtime"] = {
+                key: _clone(value)
+                for key, value in runtime.items()
+                if key in {"recent_run_at", "status", "action_count"}
+            }
+        for value in document.values():
+            if not isinstance(value, dict) or value.get("preview_status") != "applied":
+                continue
+            audit = {
+                key: _clone(item)
+                for key, item in value.items()
+                if not key.startswith("_")
+                and key not in {"preview_token", "state_version", "expires_at", "valid"}
+            }
+            encoded = json.dumps(audit, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            key = f"audit-{hashlib.blake2s(encoded.encode('utf-8'), digest_size=16).hexdigest()}"
+            portable[key] = audit
+        return portable
     return _clone(document)
 
 
@@ -128,7 +169,8 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
         raise TransferValidationError("领域快照必须是对象")
     if snapshot.get("backend") != "trading-core":
         raise TransferValidationError("领域快照不属于 trading-core")
-    if snapshot.get("schemaVersion") != SCHEMA_VERSION:
+    schema_version = snapshot.get("schemaVersion")
+    if schema_version not in SUPPORTED_SCHEMA_VERSIONS:
         raise TransferValidationError("不支持的 trading-core 快照版本")
     raw_categories = snapshot.get("categories")
     if not isinstance(raw_categories, dict) or not raw_categories:
@@ -140,7 +182,10 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
         if not isinstance(payload, dict) or not isinstance(payload.get("collections"), dict):
             raise TransferValidationError(f"{category} 分类缺少 collections")
         collections = payload["collections"]
-        expected = set(CATEGORY_COLLECTIONS[category])
+        collection_contract = (
+            LEGACY_CATEGORY_COLLECTIONS if schema_version == 1 else CATEGORY_COLLECTIONS
+        )
+        expected = set(collection_contract[category])
         unknown = set(collections) - expected
         if unknown:
             raise TransferValidationError(f"{category} 包含未授权集合: {', '.join(sorted(unknown))}")
@@ -148,6 +193,19 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
             if not isinstance(document, dict):
                 raise TransferValidationError(f"集合 {name} 必须是对象")
         result[category] = {name: _clone(document) for name, document in collections.items()}
+    evolution_audit = result.get("strategies", {}).get("evolution_previews", {})
+    for key, record in evolution_audit.items():
+        if key == "_closed_loop_runtime":
+            if not isinstance(record, dict) or set(record) - {"recent_run_at", "status", "action_count"}:
+                raise TransferValidationError("自进化运行摘要格式无效")
+            continue
+        if (
+            re.fullmatch(r"audit-[0-9a-f]{32}", key) is None
+            or not isinstance(record, dict)
+            or record.get("preview_status") != "applied"
+            or any(field.startswith("_") or field in {"preview_token", "state_version", "expires_at", "valid"} for field in record)
+        ):
+            raise TransferValidationError("自进化审计记录格式无效")
     holdings = result.get("holdings", {}).get("holdings", {})
     if holdings:
         rows = holdings.get("default", [])
@@ -160,6 +218,24 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
         tickers = [row["ticker"] for row in validated]
         if len(tickers) != len(set(tickers)):
             raise TransferValidationError("持仓包含重复证券代码")
+        override = holdings.get("history_start_override")
+        if override is not None:
+            required = {
+                "effective_date",
+                "original_effective_date",
+                "source",
+                "corrected_at",
+            }
+            if not isinstance(override, dict) or set(override) != required:
+                raise TransferValidationError("持仓历史起点校正格式无效")
+            try:
+                date.fromisoformat(str(override["effective_date"]))
+                date.fromisoformat(str(override["original_effective_date"]))
+                corrected = datetime.fromisoformat(str(override["corrected_at"]))
+            except (TypeError, ValueError) as exc:
+                raise TransferValidationError("持仓历史起点校正格式无效") from exc
+            if override.get("source") != "user_corrected" or corrected.tzinfo is None:
+                raise TransferValidationError("持仓历史起点校正格式无效")
     watchlist = result.get("watchlist", {}).get("watchlist", {})
     if watchlist:
         rows = watchlist.get("default", [])
@@ -303,6 +379,105 @@ def _merge_holdings(local: dict, incoming: dict, rule: str) -> dict:
         elif by_ticker[ticker] != item and rule == "use_import":
             by_ticker[ticker] = _clone(item)
     result["default"] = [by_ticker[ticker] for ticker in order]
+    local_snapshots = [
+        _clone(item)
+        for item in (result.get("snapshots") or [])
+        if isinstance(item, dict) and isinstance(item.get("snapshot_id"), str)
+    ]
+    imported_snapshots = [
+        _clone(item)
+        for item in (incoming.get("snapshots") or [])
+        if isinstance(item, dict) and isinstance(item.get("snapshot_id"), str)
+    ]
+    by_snapshot_id = {item["snapshot_id"]: item for item in local_snapshots}
+    remapped_ids: dict[str, str] = {}
+    occupied = set(by_snapshot_id)
+    prepared: list[dict] = []
+    for item in imported_snapshots:
+        snapshot_id = item["snapshot_id"]
+        existing = by_snapshot_id.get(snapshot_id)
+        if existing is not None and existing != item and rule in {"keep_both", "merge"}:
+            canonical = json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            candidate = hashlib.blake2s(canonical.encode("utf-8"), digest_size=16).hexdigest()
+            salt = 2
+            while candidate in occupied:
+                candidate = hashlib.blake2s(
+                    f"{canonical}:{salt}".encode("utf-8"), digest_size=16
+                ).hexdigest()
+                salt += 1
+            remapped_ids[snapshot_id] = candidate
+            item["snapshot_id"] = candidate
+            occupied.add(candidate)
+        prepared.append(item)
+    for item in prepared:
+        previous = item.get("previous_snapshot_id")
+        if isinstance(previous, str) and previous in remapped_ids:
+            item["previous_snapshot_id"] = remapped_ids[previous]
+        snapshot_id = item["snapshot_id"]
+        existing = by_snapshot_id.get(snapshot_id)
+        if existing is None or existing == item or rule == "use_import":
+            by_snapshot_id[snapshot_id] = item
+        elif rule in {"keep_both", "merge"}:
+            by_snapshot_id[snapshot_id] = item
+    merged_snapshots = sorted(
+        by_snapshot_id.values(),
+        key=lambda item: (str(item.get("effective_at", "")), item["snapshot_id"]),
+    )
+    current_positions = [
+        _clone(item) for item in result["default"] if isinstance(item, dict)
+    ]
+    comparable_current_positions = sorted(
+        current_positions,
+        key=lambda item: str(item.get("ticker", "")),
+    )
+    latest_positions = sorted(
+        [
+            _clone(item)
+            for item in ((merged_snapshots[-1].get("positions") or []) if merged_snapshots else [])
+            if isinstance(item, dict)
+        ],
+        key=lambda item: str(item.get("ticker", "")),
+    )
+    if rule != "use_import" and comparable_current_positions != latest_positions:
+        effective_at = datetime.now().astimezone()
+        if merged_snapshots:
+            try:
+                latest_at = datetime.fromisoformat(str(merged_snapshots[-1].get("effective_at", "")))
+                if latest_at.tzinfo is None:
+                    latest_at = latest_at.astimezone()
+                if latest_at >= effective_at:
+                    effective_at = latest_at + timedelta(seconds=1)
+            except (TypeError, ValueError):
+                pass
+        timestamp = effective_at.isoformat(timespec="seconds")
+        encoded = json.dumps(
+            {"effective_at": timestamp, "positions": current_positions},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        merged_snapshots.append({
+            "snapshot_id": hashlib.blake2s(encoded.encode("utf-8"), digest_size=16).hexdigest(),
+            "effective_at": timestamp,
+            "source": "bulk_import",
+            "positions": current_positions,
+            "previous_snapshot_id": (
+                merged_snapshots[-1]["snapshot_id"] if merged_snapshots else None
+            ),
+        })
+    result["snapshots"] = merged_snapshots
+    imported_override = incoming.get("history_start_override")
+    if rule == "use_import":
+        if isinstance(imported_override, dict):
+            result["history_start_override"] = _clone(imported_override)
+        else:
+            result.pop("history_start_override", None)
+    elif (
+        not local_snapshots
+        and "history_start_override" not in result
+        and isinstance(imported_override, dict)
+    ):
+        result["history_start_override"] = _clone(imported_override)
     return result
 
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pydantic 模型：请求 / 状态 / 进度事件（API 契约，对应集成方案 §3.1/§3.3）"""
 
+from datetime import date
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -52,6 +53,24 @@ class HoldingsRequest(BaseModel):
     )
     risk_profile: Optional[Literal["conservative", "balanced", "aggressive"]] = Field(
         default=None, description="风险偏好: conservative/balanced/aggressive；缺省用已保存偏好"
+    )
+
+
+class HoldingsSaveRequest(BaseModel):
+    """POST /holdings/save 请求体。"""
+
+    holdings: list[HoldingItem] = Field(description="整体替换的持仓列表")
+    source: Literal["manual", "bulk_import", "api"] = Field(
+        default="api", description="持仓变更来源"
+    )
+
+
+class PortfolioHistoryStartRequest(BaseModel):
+    """POST /portfolio/history-start 请求体。"""
+
+    effective_date: Optional[date] = Field(
+        default=None,
+        description="人工校正的首次持仓日期；null 表示恢复系统记录日期",
     )
 
 

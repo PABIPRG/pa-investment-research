@@ -41,7 +41,7 @@ describe('策略研究产品事实与确认流程', () => {
     const view = renderStrategyPage(requestData)
     expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
     const card = (await screen.findByText('旧策略')).closest('article')
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测' }))
     expect(await screen.findByText(/历史未留存：该策略仅保留最近一次回测证据/)).toBeTruthy()
   })
 
@@ -136,8 +136,8 @@ describe('策略研究产品事实与确认流程', () => {
       onAnalyze={() => {}}
     />)
     const card = (await screen.findByText('任务化策略')).closest('article')
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '策略详情' }))
-    const dialog = await screen.findByRole('dialog', { name: '任务化策略' })
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测' }))
+    const dialog = await screen.findByRole('dialog', { name: '回测 · 任务化策略' })
     expect(within(dialog).getByRole('list', { name: '回测任务历史' })).toBeTruthy()
     expect(within(dialog).getAllByText('首次自动').length).toBeGreaterThan(0)
     const taskList = within(dialog).getByRole('list', { name: '回测任务历史' })
@@ -211,10 +211,11 @@ describe('策略研究产品事实与确认流程', () => {
     renderStrategyPage(requestData, onSelectStrategy)
     const card = (await screen.findByText('详情浏览策略')).closest('article')
     expect(card).not.toBeNull()
-    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '策略' }))
 
     const dialog = await screen.findByRole('dialog', { name: '详情浏览策略' })
     expect(onSelectStrategy).not.toHaveBeenCalled()
+    expect(within(dialog).queryByTestId('backtest-management')).toBeNull()
 
     fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
     fireEvent.click(within(card as HTMLElement).getByRole('button', { name: 'AI 评审' }))
@@ -321,9 +322,9 @@ describe('策略研究产品事实与确认流程', () => {
 
     const actions = candidate.getByRole('group', { name: '策略操作' })
     expect(within(actions).getAllByRole('button').map(button => button.textContent)).toEqual([
-      '策略详情', 'AI 评审', '进入影子验证', '归档',
+      '策略', '回测', 'AI 评审', '影子验证', '归档',
     ])
-    const shadowButton = within(actions).getByRole('button', { name: '进入影子验证' })
+    const shadowButton = within(actions).getByRole('button', { name: '影子验证' })
     expect(shadowButton.classList.contains(css.secondaryButton!)).toBe(true)
     expect(shadowButton.classList.contains(css.primaryButton!)).toBe(false)
   })
@@ -375,7 +376,7 @@ describe('策略研究产品事实与确认流程', () => {
     renderStrategyPage(requestData)
     const maCard = (await screen.findByText('均线参数缺失')).closest('article')
     expect(maCard).not.toBeNull()
-    fireEvent.click(within(maCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(maCard as HTMLElement).getByRole('button', { name: '策略' }))
 
     let dialog = await screen.findByRole('dialog', { name: '均线参数缺失' })
     expect(within(dialog).getByText('快线 未返回')).toBeTruthy()
@@ -387,7 +388,7 @@ describe('策略研究产品事实与确认流程', () => {
 
     const rsiCard = screen.getByText('RSI 参数缺失').closest('article')
     expect(rsiCard).not.toBeNull()
-    fireEvent.click(within(rsiCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(rsiCard as HTMLElement).getByRole('button', { name: '策略' }))
     dialog = await screen.findByRole('dialog', { name: 'RSI 参数缺失' })
     expect(dialog.textContent).toContain('RSI 周期 未返回')
     expect(dialog.textContent).toContain('超卖阈值 未返回')
@@ -399,7 +400,7 @@ describe('策略研究产品事实与确认流程', () => {
 
     const momentumCard = screen.getByText('动量参数缺失').closest('article')
     expect(momentumCard).not.toBeNull()
-    fireEvent.click(within(momentumCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(momentumCard as HTMLElement).getByRole('button', { name: '策略' }))
     dialog = await screen.findByRole('dialog', { name: '动量参数缺失' })
     expect(dialog.textContent).toContain('动量窗口 未返回')
     expect(dialog.textContent).not.toContain('10 个交易日前')
@@ -407,7 +408,7 @@ describe('策略研究产品事实与确认流程', () => {
 
     const unknownCard = screen.getByText('未知事件策略').closest('article')
     expect(unknownCard).not.toBeNull()
-    fireEvent.click(within(unknownCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(unknownCard as HTMLElement).getByRole('button', { name: '策略' }))
     dialog = await screen.findByRole('dialog', { name: '未知事件策略' })
     expect(dialog.textContent).toContain('暂不支持解释的策略类型“event”')
     expect(dialog.textContent).toContain('策略参数 已返回，但因类型未知未作解释')
@@ -432,7 +433,7 @@ describe('策略研究产品事实与确认流程', () => {
     renderStrategyPage(requestData)
     const breakoutCard = (await screen.findByText('通道突破候选')).closest('article')
     expect(breakoutCard).not.toBeNull()
-    fireEvent.click(within(breakoutCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(breakoutCard as HTMLElement).getByRole('button', { name: '策略' }))
     let dialog = await screen.findByRole('dialog', { name: '通道突破候选' })
     expect(dialog.textContent).toContain('收盘价突破前 20 日最高价后，按下一交易日开盘价进入纸面持仓。')
     expect(dialog.textContent).toContain('收盘价跌破前 20 日最低价后，按下一交易日开盘价退出。')
@@ -442,7 +443,7 @@ describe('策略研究产品事实与确认流程', () => {
 
     const bollingerCard = screen.getByText('布林超跌候选').closest('article')
     expect(bollingerCard).not.toBeNull()
-    fireEvent.click(within(bollingerCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(bollingerCard as HTMLElement).getByRole('button', { name: '策略' }))
     dialog = await screen.findByRole('dialog', { name: '布林超跌候选' })
     expect(dialog.textContent).toContain('收盘价跌破 20 日布林带下轨（中轨 − 2 倍标准差）后')
     expect(dialog.textContent).toContain('收盘价回升至 20 日中轨上方后')
@@ -452,7 +453,7 @@ describe('策略研究产品事实与确认流程', () => {
 
     const volumeCard = screen.getByText('放量突破候选').closest('article')
     expect(volumeCard).not.toBeNull()
-    fireEvent.click(within(volumeCard as HTMLElement).getByRole('button', { name: '策略详情' }))
+    fireEvent.click(within(volumeCard as HTMLElement).getByRole('button', { name: '策略' }))
     dialog = await screen.findByRole('dialog', { name: '放量突破候选' })
     expect(dialog.textContent).toContain('收盘价突破前 20 日最高价，且成交量达到前 20 日均量 1.5 倍以上后')
     expect(dialog.textContent).toContain('收盘价跌破前 20 日最低价后')
@@ -575,11 +576,11 @@ describe('策略研究产品事实与确认流程', () => {
     const runInputs = () => requestData.mock.calls
       .filter(([request]) => request.operation === 'trading-core.strategy-run')
       .map(([request]) => request.input)
-    // 通过策略详情进入回测管理，再打开新建回测任务向导
+    // 通过卡片上的独立回测入口打开管理弹窗，再进入新建任务向导
     const openWizard = async () => {
-      fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '策略详情' }))
-      await screen.findByRole('dialog', { name: '可回测策略' })
-      fireEvent.click(within(screen.getByRole('dialog', { name: '可回测策略' })).getByRole('button', { name: '新建回测任务' }))
+      fireEvent.click(within(card as HTMLElement).getByRole('button', { name: '回测' }))
+      await screen.findByRole('dialog', { name: '回测 · 可回测策略' })
+      fireEvent.click(within(screen.getByRole('dialog', { name: '回测 · 可回测策略' })).getByRole('button', { name: '新建回测任务' }))
       await screen.findByRole('dialog', { name: '新建回测任务' })
     }
     const awaitWizardClosed = () => waitFor(() => {
@@ -595,7 +596,7 @@ describe('策略研究产品事实与确认流程', () => {
     await awaitWizardClosed()
 
     // 再次新建，切到 3 年再回测
-    fireEvent.click(within(screen.getByRole('dialog', { name: '可回测策略' })).getByRole('button', { name: '新建回测任务' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '回测 · 可回测策略' })).getByRole('button', { name: '新建回测任务' }))
     const wizard = await screen.findByRole('dialog', { name: '新建回测任务' })
     fireEvent.change(within(wizard).getByLabelText('回测时间窗口'), { target: { value: '3' } })
     fireEvent.click(within(wizard).getByRole('button', { name: '开始回测' }))

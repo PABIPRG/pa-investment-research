@@ -10,14 +10,17 @@ API：
 
 import json
 import logging
+import math
 import os
+import socket
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Path as ApiPath, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import kyc as kyc_mod
 from .analyzer import TaskManager
@@ -25,6 +28,15 @@ from .backtest_engine import compute_summary
 from .decision_recorder import load_evaluated_results
 from .data_transfer import recover_incomplete_transactions, register_data_transfer_routes
 from .report_store import ReportStore, ReportValidationError
+from .portfolio_performance import (
+    PortfolioPriceError,
+    ensure_legacy_seed,
+    list_portfolio_snapshots,
+    portfolio_performance,
+    record_holdings_snapshot,
+    set_history_start_override,
+)
+from .portfolio_price_cache import PortfolioPriceHistoryCache
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .schemas import (
@@ -32,6 +44,7 @@ from .schemas import (
     BacktestRunRequest,
     BriefRequest,
     HoldingsRequest,
+    HoldingsSaveRequest,
     HypothesizeRequest,
     KycAdjustRequest,
     KycParseRequest,
@@ -41,6 +54,7 @@ from .schemas import (
     LocalLearningSettingsRequest,
     PersonalizedFeedbackRequest,
     PersonalizedInteractionRequest,
+    PortfolioHistoryStartRequest,
     EvolutionRunRequest,
     RiskProfileRequest,
     ResearchChatContextSaveRequest,
@@ -73,6 +87,150 @@ _REPORT_SECTION_TITLES = {
     "strategy": "策略样本外回测",
     "shadow": "影子验证证据",
 }
+
+_ETF_CODE_PREFIXES = ("15", "16", "18", "50", "51", "52", "56", "58")
+
+
+def _is_exchange_traded_fund(ticker: str) -> bool:
+    return len(ticker) == 6 and ticker.isdigit() and ticker.startswith(_ETF_CODE_PREFIXES)
+
+
+def _load_sina_prices(ticker: str, start_date: str, end_date: str) -> list[dict]:
+    """东财不可用时读取新浪日线；仅返回请求区间内的有效收盘价。"""
+    import requests
+
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    calendar_days = max(0, (end - start).days)
+    response = requests.get(
+        "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData",
+        params={
+            "symbol": ("sh" if ticker.startswith(("5", "6", "9")) else "sz") + ticker,
+            "scale": "240",
+            "ma": "no",
+            "datalen": str(min(1023, max(60, calendar_days + 20))),
+        },
+        timeout=8,
+    )
+    response.raise_for_status()
+    rows: list[dict] = []
+    for item in response.json() or []:
+        try:
+            trade_date = date.fromisoformat(str(item.get("day", ""))[:10])
+            close = float(item["close"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start <= trade_date <= end and close > 0 and math.isfinite(close):
+            rows.append({"date": trade_date.isoformat(), "close": close})
+    return rows
+
+
+def _load_etf_prices(ticker: str, start_date: str, end_date: str) -> list[dict]:
+    """用 AkShare 的东财 ETF 前复权接口补齐 baostock 的 ETF 覆盖空洞。"""
+    import akshare as ak
+
+    for attempt in range(2):
+        try:
+            frame = ak.fund_etf_hist_em(
+                symbol=ticker,
+                period="daily",
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+                adjust="qfq",
+            )
+            break
+        except Exception:
+            if attempt:
+                logger.warning("AkShare/东财 ETF 日线 %s 重试失败，降级到新浪", ticker)
+                return _load_sina_prices(ticker, start_date, end_date)
+            logger.warning("AkShare/东财 ETF 日线 %s 瞬时失败，重试一次", ticker)
+    rows: list[dict] = []
+    for _, row in frame.iterrows():
+        try:
+            close = float(row["收盘"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        trade_date = str(row.get("日期", ""))[:10]
+        if trade_date and close > 0 and math.isfinite(close):
+            rows.append({"date": trade_date, "close": close})
+    return rows
+
+
+def _load_stock_prices(ticker: str, start_date: str, end_date: str) -> list[dict]:
+    """用 AkShare 的东财 A 股前复权接口补齐 baostock 的瞬时故障。"""
+    import akshare as ak
+
+    for attempt in range(2):
+        try:
+            frame = ak.stock_zh_a_hist(
+                symbol=ticker,
+                period="daily",
+                start_date=start_date.replace("-", ""),
+                end_date=end_date.replace("-", ""),
+                adjust="qfq",
+            )
+            break
+        except Exception:
+            if attempt:
+                logger.warning("AkShare/东财 A 股日线 %s 重试失败，降级到新浪", ticker)
+                return _load_sina_prices(ticker, start_date, end_date)
+            logger.warning("AkShare/东财 A 股日线 %s 瞬时失败，重试一次", ticker)
+    rows: list[dict] = []
+    for _, row in frame.iterrows():
+        try:
+            close = float(row["收盘"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        trade_date = str(row.get("日期", ""))[:10]
+        if trade_date and close > 0 and math.isfinite(close):
+            rows.append({"date": trade_date, "close": close})
+    return rows
+
+
+def _baostock_reachable(timeout_seconds: float = 1.5) -> bool:
+    """先用短超时探测 baostock，避免其客户端在 TCP 连接阶段长时间阻塞。"""
+    from baostock.common import contants as constants
+
+    try:
+        with socket.create_connection(
+            (constants.BAOSTOCK_SERVER_IP, constants.BAOSTOCK_SERVER_PORT),
+            timeout=timeout_seconds,
+        ):
+            return True
+    except OSError:
+        return False
+
+
+def load_portfolio_prices(ticker: str, start_date: str, end_date: str) -> list[dict]:
+    """以 baostock 为主源，失败或无覆盖时降级到东财和新浪日线。"""
+    from .holdings_runner import _a_share_code, _bs_hist
+
+    is_etf = _is_exchange_traded_fund(ticker)
+    if not _baostock_reachable():
+        logger.warning(
+            "baostock %s日线 %s 连接探测超时，降级到 AkShare/东财",
+            "ETF " if is_etf else "A 股 ",
+            ticker,
+        )
+    else:
+        try:
+            rows = _bs_hist(_a_share_code(ticker), start_date, end_date)
+        except Exception:
+            logger.warning(
+                "baostock %s日线 %s 失败，降级到 AkShare/东财",
+                "ETF " if is_etf else "A 股 ",
+                ticker,
+            )
+        else:
+            if rows:
+                return rows
+            logger.info(
+                "baostock %s日线 %s 返回空，降级到 AkShare/东财",
+                "ETF " if is_etf else "A 股 ",
+                ticker,
+            )
+    loader = _load_etf_prices if is_etf else _load_stock_prices
+    return loader(ticker, start_date, end_date)
 
 
 def _report_list_projection(report: dict) -> dict:
@@ -201,6 +359,7 @@ async def lifespan(app: FastAPI):
 
 def create_app(report_store: ReportStore | None = None) -> FastAPI:
     manager = TaskManager(registry=_build_registry(), report_store=report_store)
+    portfolio_price_cache = PortfolioPriceHistoryCache(load_portfolio_prices)
 
     app = FastAPI(title="TradingAgents Adapter", version="0.1.0", lifespan=lifespan)
     app.state.manager = manager
@@ -273,16 +432,21 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         return {"task_id": task_id}
 
     @app.post("/holdings/save", response_model=dict)
-    async def holdings_save(req: HoldingsRequest):
+    async def holdings_save(req: HoldingsSaveRequest):
         """保存持仓到本地 store（ManualProvider 数据源）。"""
         store = JsonStore()
-        if req.holdings is not None:
-            store.set(
-                "holdings", "default",
-                [h.model_dump() for h in req.holdings],
-            )
-        # 只回显插件声明过的 saved 字段（set_holdings schema additionalProperties:false）
-        return {"saved": len(req.holdings or [])}
+        snapshot = record_holdings_snapshot(
+            store,
+            [holding.model_dump() for holding in req.holdings],
+            req.source,
+        )
+        result = {"saved": len(req.holdings)}
+        if snapshot is not None:
+            result.update({
+                "snapshot_id": snapshot["snapshot_id"],
+                "effective_at": snapshot["effective_at"],
+            })
+        return result
 
     @app.get("/holdings", response_model=dict)
     async def holdings_get():
@@ -298,6 +462,60 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             for h in (store.get("holdings", "default", []) or [])
         ]
         return {"items": items}
+
+    @app.get("/portfolio/performance", response_model=dict)
+    async def portfolio_performance_get(
+        start_date: Optional[str] = Query(default=None),
+        end_date: Optional[str] = Query(default=None),
+    ):
+        """按持仓快照与前复权行情返回组合区间收益表现。"""
+        try:
+            parsed_start = date.fromisoformat(start_date) if start_date else None
+            parsed_end = date.fromisoformat(end_date) if end_date else date.today()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="日期必须使用 YYYY-MM-DD 格式") from exc
+        if parsed_end > date.today():
+            raise HTTPException(status_code=422, detail="结束日期不能晚于今天")
+        if parsed_start is not None and parsed_start > parsed_end:
+            raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+        try:
+            def calculate() -> dict:
+                store = JsonStore()
+                ensure_legacy_seed(store)
+                return portfolio_performance(
+                    store, parsed_start, parsed_end, portfolio_price_cache.load
+                )
+
+            return await run_in_threadpool(
+                calculate
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except PortfolioPriceError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"历史行情暂不可用，请稍后重试：{exc}",
+            ) from exc
+
+    @app.post("/portfolio/history-start", response_model=dict)
+    async def portfolio_history_start(req: PortfolioHistoryStartRequest):
+        """校正或恢复组合历史起点，不改写原始持仓快照。"""
+        store = JsonStore()
+        try:
+            override = set_history_start_override(store, req.effective_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        snapshots = list_portfolio_snapshots(store)
+        original = str(snapshots[0].get("effective_at") or "")[:10] if snapshots else None
+        return {
+            "history_start_override": override,
+            "effective_date": (
+                override["effective_date"]
+                if override is not None
+                else original
+            ),
+            "history_start_origin": "user_corrected" if override is not None else "system_record",
+        }
 
     @app.get("/watchlist", response_model=dict)
     async def watchlist_get():

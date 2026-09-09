@@ -589,23 +589,12 @@ function HypothesisPreviewDialog({
 }
 
 function StrategyDetailDialog({
-  item, tasks, busy, tasksBusy, onClose, onAnalyze, onShadow, onRefreshTasks, onCreateTask,
-  onCancelTask, onRetryTask, onOpenTaskReport,
-  reportReady,
+  item, onClose, onAnalyze, onShadow,
 }: {
   item: Record<string, unknown>
-  tasks: readonly Record<string, unknown>[]
-  busy: boolean
-  tasksBusy: boolean
   onClose: () => void
   onAnalyze: () => void
   onShadow: () => void
-  onRefreshTasks: () => void
-  onCreateTask: () => void
-  onCancelTask: (taskId: string) => void
-  onRetryTask: (taskId: string) => void
-  onOpenTaskReport: (reportId: string) => void
-  reportReady: boolean
 }) {
   const id = text(item.id, '未返回')
   const status = text(item.status, '')
@@ -630,8 +619,6 @@ function StrategyDetailDialog({
     ['年化 Sharpe', metric(inSample.sharpe_annualized), metric(outOfSample.sharpe_annualized)],
     ['最大回撤', metric(inSample.max_drawdown_pct, '%'), metric(outOfSample.max_drawdown_pct, '%')],
   ] as const
-  const latestTask = tasks[0]
-  const manageDisabled = busy || category === 'archived'
   return (
     <DetailDialog
       title={text(item.name, id)}
@@ -652,12 +639,6 @@ function StrategyDetailDialog({
         {text(item.direction, '') !== '' && <span>{text(item.direction)}</span>}
         {symbols.map(symbol => <span key={symbol}>{symbol}</span>)}
       </div>
-      {reportReady && (
-        <div className={css.detailReportReady} role="status">
-          <span>本次回测报告已归档。</span>
-          <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport('') }}>查看本次投研报告</button>
-        </div>
-      )}
       <dl className={css.detailMetaGrid}>
         <div><dt>策略标识</dt><dd>{id}</dd></div>
         <div><dt>验证分类</dt><dd>{STRATEGY_CATEGORY_LABELS[category]}</dd></div>
@@ -690,9 +671,60 @@ function StrategyDetailDialog({
         </div>
         {symbolErrors.length > 0 && <p className={css.detailFootnote}>行情获取异常标的：{symbolErrors.join('、')}</p>}
       </section>
+      <section className={css.detailSection} data-testid="strategy-sources">
+        <h3>数据来源与准入说明</h3>
+        <ul className={css.detailList}>
+          <li>策略名称、假设、规则类型和标的来自后端策略库。</li>
+          <li>来源事件：{sourceEventId === '' ? '暂未返回稳定事件标识' : sourceEventId}{sourceEventSummary === '' ? '' : ` · ${sourceEventSummary}`}</li>
+          <li>指标来自策略回测引擎返回的 in_sample / out_of_sample 结果，页面不补算或伪造。</li>
+          <li>当前运行请求的准入线为样本外交易不少于 4 笔、胜率不低于 50%、平均模拟收益大于 0；最终以 thresholds_pass 与 reason 为准。</li>
+          <li>信号只使用当时及之前的数据，统一按“当日信号 → 下一交易日开盘”模拟成交；序列末仍持仓时按最后收盘价退出。</li>
+          <li>影子验证只使用纸面账户，不会发出真实交易指令。</li>
+        </ul>
+      </section>
+    </DetailDialog>
+  )
+}
+
+function BacktestManagementDialog({
+  item, tasks, busy, tasksBusy, onClose, onRefreshTasks, onCreateTask,
+  onCancelTask, onRetryTask, onOpenTaskReport, reportReady,
+}: {
+  item: Record<string, unknown>
+  tasks: readonly Record<string, unknown>[]
+  busy: boolean
+  tasksBusy: boolean
+  onClose: () => void
+  onRefreshTasks: () => void
+  onCreateTask: () => void
+  onCancelTask: (taskId: string) => void
+  onRetryTask: (taskId: string) => void
+  onOpenTaskReport: (reportId: string) => void
+  reportReady: boolean
+}) {
+  const id = text(item.id, '未返回')
+  const category = strategyCategory(item)
+  const backtest = asRecord(item.backtest)
+  const latestTask = tasks[0]
+  const manageDisabled = busy || category === 'archived'
+  return (
+    <DetailDialog
+      title={`回测 · ${text(item.name, id)}`}
+      description="查看历史任务、刷新状态或新建一条独立回测任务。"
+      eyebrow="回测管理"
+      wide
+      onClose={onClose}
+      actions={<button type="button" className={css.secondaryButton} onClick={onClose}>关闭</button>}
+    >
+      {reportReady && (
+        <div className={css.detailReportReady} role="status">
+          <span>本次回测报告已归档。</span>
+          <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport('') }}>查看本次投研报告</button>
+        </div>
+      )}
       <section className={`${css.detailSection} ${css.backtestManagement}`} data-testid="backtest-management" aria-label="回测管理">
         <div className={css.sectionHeading}>
-          <div><h3>回测管理</h3><p>任务彼此独立，最新完成结果会同步到上方验证结论。</p></div>
+          <div><h3>任务概览</h3><p>任务彼此独立，最新完成结果会同步到策略详情中的验证结论。</p></div>
           <span>{tasks.length} 条任务</span>
         </div>
         <p className={css.detailFootnote}>
@@ -723,53 +755,42 @@ function StrategyDetailDialog({
         {tasks.length > 0 ? (
           <div className={css.backtestTaskList} role="list" aria-label="回测任务历史">
             {tasks.map((task) => {
-                  const taskIdText = text(task.task_id, '')
-                  const summary = asRecord(task.summary)
-                  const failed = text(task.status, '') === 'failed'
-                  const taskStatus = text(task.status, '')
-                  const reportId = text(task.report_id, '')
-                  const trades = number(summary.oos_trades)
-                  const verdict = failed ? '—' : `${backtestVerdictLabel(task)}${trades === undefined ? '' : ` · 样本外${trades}笔`}`
-                  return (
-                    <article key={taskIdText} className={css.backtestTaskCard} role="listitem" aria-label={`${backtestSourceLabel(task.source)} · ${taskStatusLabel(task.status)}`}>
-                      <div className={css.backtestTaskHead}>
-                        <div><strong>{backtestWindowLabel(task)}</strong><small>{backtestSourceLabel(task.source)} · 创建于 {reportTimeLabel(task.created_at)}</small></div>
-                        <span className={css.statusBadge} data-status={taskStatus}>{taskStatusLabel(task.status)}</span>
-                      </div>
-                      <dl className={css.backtestTaskFacts}>
-                        <div><dt>开始 / 完成</dt><dd>{reportTimeLabel(task.started_at)} → {reportTimeLabel(task.completed_at)}</dd></div>
-                        <div><dt>验证结果</dt><dd>{verdict}</dd></div>
-                        {failed && <div><dt>失败原因</dt><dd>{text(task.failure_reason, '后端未返回失败原因')}</dd></div>}
-                      </dl>
-                      <div className={css.moduleToolbar}>
-                        {(taskStatus === 'pending' || taskStatus === 'running') && (
-                          <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onCancelTask(taskIdText) }}>取消任务</button>
-                        )}
-                        {(taskStatus === 'completed' || taskStatus === 'failed' || taskStatus === 'cancelled') && (
-                          <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onRetryTask(taskIdText) }}>重新运行</button>
-                        )}
-                        {reportId !== '' && (
-                          <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport(reportId) }}>查看报告</button>
-                        )}
-                      </div>
-                    </article>
-                  )
-                })}
+              const taskIdText = text(task.task_id, '')
+              const summary = asRecord(task.summary)
+              const failed = text(task.status, '') === 'failed'
+              const taskStatus = text(task.status, '')
+              const reportId = text(task.report_id, '')
+              const trades = number(summary.oos_trades)
+              const verdict = failed ? '—' : `${backtestVerdictLabel(task)}${trades === undefined ? '' : ` · 样本外${trades}笔`}`
+              return (
+                <article key={taskIdText} className={css.backtestTaskCard} role="listitem" aria-label={`${backtestSourceLabel(task.source)} · ${taskStatusLabel(task.status)}`}>
+                  <div className={css.backtestTaskHead}>
+                    <div><strong>{backtestWindowLabel(task)}</strong><small>{backtestSourceLabel(task.source)} · 创建于 {reportTimeLabel(task.created_at)}</small></div>
+                    <span className={css.statusBadge} data-status={taskStatus}>{taskStatusLabel(task.status)}</span>
+                  </div>
+                  <dl className={css.backtestTaskFacts}>
+                    <div><dt>开始 / 完成</dt><dd>{reportTimeLabel(task.started_at)} → {reportTimeLabel(task.completed_at)}</dd></div>
+                    <div><dt>验证结果</dt><dd>{verdict}</dd></div>
+                    {failed && <div><dt>失败原因</dt><dd>{text(task.failure_reason, '后端未返回失败原因')}</dd></div>}
+                  </dl>
+                  <div className={css.moduleToolbar}>
+                    {(taskStatus === 'pending' || taskStatus === 'running') && (
+                      <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onCancelTask(taskIdText) }}>取消任务</button>
+                    )}
+                    {(taskStatus === 'completed' || taskStatus === 'failed' || taskStatus === 'cancelled') && (
+                      <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onRetryTask(taskIdText) }}>重新运行</button>
+                    )}
+                    {reportId !== '' && (
+                      <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport(reportId) }}>查看报告</button>
+                    )}
+                  </div>
+                </article>
+              )
+            })}
           </div>
         ) : (
           <p className={css.detailFootnote}>暂无回测任务历史。</p>
         )}
-      </section>
-      <section className={css.detailSection} data-testid="strategy-sources">
-        <h3>数据来源与准入说明</h3>
-        <ul className={css.detailList}>
-          <li>策略名称、假设、规则类型和标的来自后端策略库。</li>
-          <li>来源事件：{sourceEventId === '' ? '暂未返回稳定事件标识' : sourceEventId}{sourceEventSummary === '' ? '' : ` · ${sourceEventSummary}`}</li>
-          <li>指标来自策略回测引擎返回的 in_sample / out_of_sample 结果，页面不补算或伪造。</li>
-          <li>当前运行请求的准入线为样本外交易不少于 4 笔、胜率不低于 50%、平均模拟收益大于 0；最终以 thresholds_pass 与 reason 为准。</li>
-          <li>信号只使用当时及之前的数据，统一按“当日信号 → 下一交易日开盘”模拟成交；序列末仍持仓时按最后收盘价退出。</li>
-          <li>影子验证只使用纸面账户，不会发出真实交易指令。</li>
-        </ul>
       </section>
     </DetailDialog>
   )
@@ -967,6 +988,7 @@ export function StrategyResearchPage({
   const [filter, setFilter] = useState<StrategyFilter>('all')
   const [lifecycleHelpOpen, setLifecycleHelpOpen] = useState(false)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
+  const [backtestItem, setBacktestItem] = useState<Record<string, unknown>>()
   const [newTaskItem, setNewTaskItem] = useState<Record<string, unknown>>()
   const [archiveItem, setArchiveItem] = useState<Record<string, unknown>>()
   const [hypothesisPreview, setHypothesisPreview] = useState<StrategyHypothesisPreview>()
@@ -977,13 +999,13 @@ export function StrategyResearchPage({
     strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
   }, [strategies.run])
   useEffect(load, [load])
-  const detailId = text(detailItem?.id, '')
+  const backtestId = text(backtestItem?.id, '')
   const refreshBacktestTasks = useCallback((): void => {
-    if (detailId === '') return
-    backtestTasks.run({ operation: 'trading-core.strategy-backtests', input: { strategy_id: detailId, limit: 50 } })
-  }, [detailId, backtestTasks.run])
+    if (backtestId === '') return
+    backtestTasks.run({ operation: 'trading-core.strategy-backtests', input: { strategy_id: backtestId, limit: 50 } })
+  }, [backtestId, backtestTasks.run])
   const updateBacktestTask = async (action: 'cancel' | 'retry', taskIdValue: string): Promise<void> => {
-    if (detailId === '' || taskIdValue === '' || busyAction !== '' || busyActionRef.current !== '') return
+    if (backtestId === '' || taskIdValue === '' || busyAction !== '' || busyActionRef.current !== '') return
     const actionKey = `backtest-task:${taskIdValue}`
     busyActionRef.current = actionKey
     setBusyAction(actionKey)
@@ -992,7 +1014,7 @@ export function StrategyResearchPage({
         operation: action === 'cancel'
           ? 'trading-core.strategy-backtest-cancel'
           : 'trading-core.strategy-backtest-retry',
-        input: { strategy_id: detailId, task_id: taskIdValue },
+        input: { strategy_id: backtestId, task_id: taskIdValue },
       })
       if (!alive.current) return
       setNotice(action === 'cancel' ? '回测任务已取消。' : '已创建新的重跑任务。')
@@ -1006,11 +1028,13 @@ export function StrategyResearchPage({
     }
   }
   useEffect(() => {
-    if (detailId !== '') refreshBacktestTasks()
-  }, [detailId, refreshBacktestTasks])
+    if (backtestId !== '') refreshBacktestTasks()
+  }, [backtestId, refreshBacktestTasks])
   const backtestTaskList = records(asRecord(backtestTasks.state.value).tasks)
   const items = records(asRecord(strategies.state.value).items)
+  const detailId = text(detailItem?.id, '')
   const currentDetailItem = items.find(item => text(item.id, '') === detailId) ?? detailItem
+  const currentBacktestItem = items.find(item => text(item.id, '') === backtestId) ?? backtestItem
   const unresolvedSymbolKey = [...new Set(items.flatMap(item => (
     strategyTickers(item).filter(ticker => ticker.name === '').map(ticker => ticker.code)
   )))].sort().join('|')
@@ -1156,6 +1180,7 @@ export function StrategyResearchPage({
       if (!alive.current) return
       setArchiveItem(undefined)
       if (text(detailItem?.id, '') === strategyId) setDetailItem(undefined)
+      if (text(backtestItem?.id, '') === strategyId) setBacktestItem(undefined)
       setNotice('策略已归档，历史证据仍可在“已归档”中查看。')
       load()
     } catch (reason) {
@@ -1214,7 +1239,7 @@ export function StrategyResearchPage({
           onClick={() => { setLifecycleHelpOpen(true) }}
         >了解策略生命周期</button>
         {view === 'pool' && <>
-          <span className={css.backtestWindow} title="回测入口已并入策略详情：可自选预设窗口或自定义起止日期">回测入口：策略详情 → 回测管理</span>
+          <span className={css.backtestWindow} title="从策略卡片直接打开回测管理，可自选预设窗口或自定义起止日期">回测入口：策略卡片 → 回测</span>
           <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
           <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
             {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件新建策略'}
@@ -1296,7 +1321,7 @@ export function StrategyResearchPage({
       {view === 'pool' ? <>
         <div className={css.contextHint}>AI 评审会自动读取当前策略上下文；页面只保存策略标识，不会复制或覆盖策略内容。</div>
         {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
-        {reportReady && currentDetailItem === undefined && (
+        {reportReady && currentDetailItem === undefined && currentBacktestItem === undefined && (
           <div className={css.moduleToolbar}>
             <button type="button" className={css.secondaryButton} onClick={() => { onOpenReports() }}>查看本次投研报告</button>
           </div>
@@ -1376,11 +1401,12 @@ export function StrategyResearchPage({
                   className={`${css.moduleToolbar} ${css.strategyActions}`}
                   role="group"
                   aria-label="策略操作"
-                  data-action-count={category === 'archived' ? '3' : '4'}
+                  data-action-count={category === 'archived' ? '4' : '5'}
                 >
-                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>策略详情</button>
+                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>策略</button>
+                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setBacktestItem(item) }}>回测</button>
                   <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
-                  <button type="button" className={`${css.secondaryButton} ${css.strategyShadowAction}`} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>进入影子验证</button>
+                  <button type="button" className={`${css.secondaryButton} ${css.strategyShadowAction}`} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>影子验证</button>
                   {category !== 'archived' && (
                     <button type="button" className={css.dangerButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setArchiveItem(item) }}>
                       {busyAction === `archive:${id}` ? '归档中…' : '归档'}
@@ -1407,16 +1433,7 @@ export function StrategyResearchPage({
       {currentDetailItem !== undefined && (
         <StrategyDetailDialog
           item={currentDetailItem}
-          tasks={backtestTaskList}
-          busy={busyAction === `backtest:${text(currentDetailItem.id, '')}` || busyAction.startsWith('backtest-task:')}
-          tasksBusy={backtestTasks.state.phase === 'loading' && backtestTasks.state.value === undefined}
           onClose={() => { setDetailItem(undefined) }}
-          onRefreshTasks={() => { refreshBacktestTasks() }}
-          onCreateTask={() => { setNewTaskItem(currentDetailItem) }}
-          onCancelTask={(taskIdValue) => { void updateBacktestTask('cancel', taskIdValue) }}
-          onRetryTask={(taskIdValue) => { void updateBacktestTask('retry', taskIdValue) }}
-          onOpenTaskReport={(reportId) => { onOpenReports(reportId) }}
-          reportReady={reportReady}
           onAnalyze={() => {
             const id = text(currentDetailItem.id, '')
             setDetailItem(undefined)
@@ -1427,6 +1444,21 @@ export function StrategyResearchPage({
             setDetailItem(undefined)
             if (id !== '') { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }
           }}
+        />
+      )}
+      {currentBacktestItem !== undefined && (
+        <BacktestManagementDialog
+          item={currentBacktestItem}
+          tasks={backtestTaskList}
+          busy={busyAction === `backtest:${text(currentBacktestItem.id, '')}` || busyAction.startsWith('backtest-task:')}
+          tasksBusy={backtestTasks.state.phase === 'loading' && backtestTasks.state.value === undefined}
+          onClose={() => { setBacktestItem(undefined) }}
+          onRefreshTasks={() => { refreshBacktestTasks() }}
+          onCreateTask={() => { setNewTaskItem(currentBacktestItem) }}
+          onCancelTask={(taskIdValue) => { void updateBacktestTask('cancel', taskIdValue) }}
+          onRetryTask={(taskIdValue) => { void updateBacktestTask('retry', taskIdValue) }}
+          onOpenTaskReport={(reportId) => { onOpenReports(reportId) }}
+          reportReady={reportReady}
         />
       )}
       {newTaskItem !== undefined && (

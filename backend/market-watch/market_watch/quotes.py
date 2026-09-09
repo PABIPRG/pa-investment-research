@@ -294,8 +294,9 @@ def _sina_hq(codes: list[str]) -> dict[str, dict]:
         f = payload.rstrip('";').split(",")
         if len(f) < 10:
             continue
-        price = _num(f[3])
+        current = _num(f[3])
         prev = _num(f[2])
+        price = current if current is not None and current > 0 else prev
         amount = _num(f[9])
         out[code] = {
             "code": code,
@@ -487,14 +488,19 @@ def _fetch_spot_map() -> dict[str, dict]:
             raise
 
 
+def _usable_quote(row: dict | None) -> bool:
+    price = _num(row.get("price")) if isinstance(row, dict) else None
+    return price is not None and price > 0
+
+
 def _quote_map(codes: list[str]) -> dict[str, dict]:
     """批量取价（东财 ulist 为主，漏掉的码逐批用新浪补位）。
     不做全量 `or` 降级：ulist 成功但缺个别码时（新股/代码差异/基金）仍用新浪补齐，
     避免个别持仓永远 '—'。两源皆缺的码返回时由 _stale_fill 决定是否兜底旧价。"""
-    m = _ulist(codes)
+    m = {code: row for code, row in _ulist(codes).items() if _usable_quote(row)}
     missing = [c for c in codes if c not in m]
     if missing:
-        m.update(_sina_hq(missing))
+        m.update({code: row for code, row in _sina_hq(missing).items() if _usable_quote(row)})
     return m
 
 
@@ -504,9 +510,10 @@ def _stale_fill(codes: list[str], m: dict[str, dict]) -> dict[str, dict]:
     now = time.time()
     for c in codes:
         row = m.get(c)
-        if row is not None:
+        if _usable_quote(row):
             _last_good[c] = (now, row)
         else:
+            m.pop(c, None)
             hit = _last_good.get(c)
             if hit and (now - hit[0]) <= settings.quote_stale_ttl:
                 m[c] = hit[1]

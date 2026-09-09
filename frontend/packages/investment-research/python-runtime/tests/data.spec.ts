@@ -730,6 +730,66 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledTimes(11)
   })
 
+  it('maps the bounded portfolio performance range and holding save source', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ quality: 'estimated' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = async () => ({ baseUrl: 'http://127.0.0.1:8000', release })
+
+    await requestInvestmentData({
+      operation: 'trading-core.portfolio-performance',
+      input: { start_date: '2026-08-01', end_date: '2026-09-09' },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.holdings-save',
+      input: {
+        holdings: [{ ticker: '600519', quantity: 100, cost_price: 1500 }],
+        source: 'bulk_import',
+      },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.portfolio-history-start',
+      input: { effective_date: '2026-07-15' },
+    }, acquire)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      'http://127.0.0.1:8000/portfolio/performance?start_date=2026-08-01&end_date=2026-09-09',
+      { method: 'GET' },
+    )
+    expect(bodyOf(fetchMock, 1)).toEqual({
+      holdings: [{ ticker: '600519', quantity: 100, cost_price: 1500 }],
+      source: 'bulk_import',
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(3,
+      'http://127.0.0.1:8000/portfolio/history-start',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(bodyOf(fetchMock, 2)).toEqual({ effective_date: '2026-07-15' })
+    expect(release).toHaveBeenCalledTimes(3)
+  })
+
+  it('rejects unsafe portfolio performance and holding source inputs before acquiring', async () => {
+    const acquire = vi.fn()
+
+    await expect(requestInvestmentData({
+      operation: 'trading-core.portfolio-performance',
+      input: { start_date: '2026/08/01' },
+    }, acquire)).rejects.toThrow('start_date must be YYYY-MM-DD')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.portfolio-performance',
+      input: { url: 'https://example.com' },
+    }, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.holdings-save',
+      input: { holdings: [], source: 'broker' },
+    }, acquire)).rejects.toThrow('unsupported source')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.portfolio-history-start',
+      input: { effective_date: '2026/08/01' },
+    }, acquire)).rejects.toThrow('effective_date must be YYYY-MM-DD')
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
   it('rejects unsafe workflow parameters before acquiring trading-core', async () => {
     const acquire = vi.fn()
     await expect(requestInvestmentData({
