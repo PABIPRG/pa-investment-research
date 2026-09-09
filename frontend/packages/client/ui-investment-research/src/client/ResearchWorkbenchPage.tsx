@@ -848,7 +848,7 @@ export function ResearchWorkbenchPage({
                           const resolvedName = securityNames[code]?.trim() ?? ''
                           const name = resolvedName !== '' ? resolvedName : ticker?.name.trim() ?? ''
                           return (
-                            <button key={reason} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
+                            <button className={css.securityPillButton} key={reason} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
                               命中持仓：{name === '' || name === code ? code : name}<small>{code}</small>
                             </button>
                           )

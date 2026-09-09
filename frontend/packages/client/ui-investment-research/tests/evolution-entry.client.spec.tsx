@@ -131,7 +131,7 @@ describe('自进化全局只读看板', () => {
     expect(screen.getByText('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
     expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
     expect(screen.getByText('样本外证据达标')).toBeTruthy()
-    const facts = screen.getByLabelText(/升级策略.*五维状态/)
+    const facts = screen.getByRole('group', { name: /升级策略.*运行状态/ })
     expect(within(facts).getAllByRole('term')).toHaveLength(5)
     expect(within(facts).getAllByRole('definition')).toHaveLength(5)
     expect(within(facts).getByText('参与状态')).toBeTruthy()
@@ -212,34 +212,60 @@ describe('自进化全局只读看板', () => {
   it('策略现状、链路和历史动作都进入对应策略诊断', async () => {
     const onOpenStrategy = vi.fn()
     const onOpenStock = vi.fn()
-    const requestData = vi.fn(async ({ operation }: InvestmentDataRequest) => {
+    const requestData = vi.fn(async ({ operation, input }: InvestmentDataRequest) => {
       if (operation === 'trading-core.evolution-status') return {
         closed_loop_enabled: true,
         lifecycle: {
           // 变异是来源标记：母策略按真实状态（retired）落桶，子策略 active 并沿 mutated_from 上溯母链
-          active: [{ strategy_id: 'strat-child', name: '子策略', mutated_from: 'strat-parent' }],
+          active: [
+            { strategy_id: 'strat-child', name: '子策略', mutated_from: 'strat-parent' },
+            { strategy_id: 'strat-loss', name: '回撤策略' },
+          ],
           retired: [{ strategy_id: 'strat-parent', name: '母策略' }],
         },
-        per_strategy: [{ strategy_id: 'strat-child', name: '子策略', decision: 'promote', reason: '证据达标', nav: 1.12, closed_win_rate_pct: 64, symbols: ['600519'] }],
+        per_strategy: [
+          { strategy_id: 'strat-child', name: '子策略', decision: 'promote', reason: '证据达标', nav: 1.12, closed_win_rate_pct: 64, symbols: ['600519'] },
+          { strategy_id: 'strat-loss', name: '回撤策略', decision: 'none', reason: '风险扩大', nav: 0.96 },
+        ],
         recent_applied: [{ applied_at: '2026-09-01', count: 1, actions: [{ sid: 'strat-child', type: 'promote', reason: '升级' }] }],
-        counts: { active: 1, retired: 1 },
+        counts: { active: 2, retired: 1 },
       }
       if (operation === 'trading-core.evolution-attribution') return {
         overall: {},
-        strategies: [{ strategy_id: 'strat-child', return_pct: 12, max_drawdown_pct: 3, closed_trades: 8 }],
+        strategies: [
+          { strategy_id: 'strat-child', return_pct: 12, max_drawdown_pct: 3, closed_trades: 8 },
+          { strategy_id: 'strat-loss', return_pct: -3.75, max_drawdown_pct: 6.14, closed_trades: 2 },
+        ],
+      }
+      if (operation === 'trading-core.strategies') return { items: [] }
+      if (operation === 'market-watch.security-search' && input?.query === '600519') {
+        return { items: [{ code: '600519', name: '贵州茅台' }] }
       }
       throw new Error(`unexpected operation ${operation}`)
     })
 
     render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={onOpenStrategy} onOpenStock={onOpenStock} initialLifecycleGroup="active" />)
     await screen.findByText('策略演化链路')
+    const strategyRow = screen.getByRole('button', { name: /子策略.*证据达标/ })
+    const highlightedReturn = within(strategyRow).getByText('+12.00%')
+    expect(highlightedReturn.dataset.tone).toBe('positive')
+    const lossRow = screen.getByRole('button', { name: /回撤策略.*风险扩大/ })
+    expect(within(lossRow).getByText('-3.75%').dataset.tone).toBe('negative')
     expect(screen.getByText('12.00%')).toBeTruthy()
     expect(screen.getByText('3.00%')).toBeTruthy()
     expect(screen.getByText('8')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '600519' }))
+    const statusGroup = screen.getByRole('group', { name: /子策略.*运行状态/ })
+    const performanceGroup = screen.getByRole('group', { name: /子策略.*影子表现/ })
+    expect(within(statusGroup).getAllByRole('term')).toHaveLength(5)
+    expect(within(performanceGroup).getAllByRole('term')).toHaveLength(5)
+    const symbolGroup = await screen.findByRole('group', { name: /子策略.*关联标的/ })
+    const stockButton = await within(symbolGroup).findByRole('button', { name: '查看贵州茅台 · 600519个股详情' })
+    expect(within(stockButton).getByText('贵州茅台')).toBeTruthy()
+    expect(within(stockButton).getByText('600519').tagName).toBe('SMALL')
+    fireEvent.click(stockButton)
     expect(onOpenStock).toHaveBeenCalledWith('600519')
 
-    fireEvent.click(await screen.findByRole('button', { name: /子策略.*证据达标/ }))
+    fireEvent.click(strategyRow)
     expect(onOpenStrategy).toHaveBeenLastCalledWith('strat-child', 'active')
 
     fireEvent.click(screen.getByRole('button', { name: /母策略/ }))

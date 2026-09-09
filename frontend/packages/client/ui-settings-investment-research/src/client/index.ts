@@ -116,6 +116,7 @@ export function apply(ctx: ClientContext): void {
     backupReset: input => runtime.backupReset(input),
     pickBackupDirectory: () => ctx.workspaces.pickDirectory(),
     openBackupDirectory: path => ctx.workspaces.openPath(path),
+    reloadPage: () => window.location.reload(),
     loadProjectModels: () => loadProjectModels(connection.api),
     saveProjectModel: (selection, revision) => saveProjectModel(connection.api, selection, revision),
   })

@@ -888,6 +888,7 @@ export function InvestmentShell({
   const opportunityScrollRef = useRef<HTMLDivElement>(null)
   const opportunityResearchWidthAnchorRef = useRef<HTMLDivElement>(null)
   const workbenchRef = useRef<HTMLElement>(null)
+  const suppressResearchOnStockDetailReturnRef = useRef(false)
   const previousNavigationModuleRef = useRef(navigationModule(snapshot.route, snapshot.stockDetailReturnRoute))
   const navigationEpochRef = useRef(0)
   const previousAssistantModeRef = useRef<AssistantDisplayMode>('closed')
@@ -1506,7 +1507,10 @@ export function InvestmentShell({
             code={snapshot.selectedStockCode}
             backDestination={stockDetailReturnRoute}
             onBack={() => {
-              if (stockDetailReturnRoute === 'opportunity') setModuleDraft('watchQuery', snapshot.selectedStockCode)
+              if (stockDetailReturnRoute === 'opportunity' && !suppressResearchOnStockDetailReturnRef.current) {
+                setModuleDraft('watchQuery', snapshot.selectedStockCode)
+              }
+              suppressResearchOnStockDetailReturnRef.current = false
               navigate(stockDetailReturnRoute)
             }}
             onAnalyze={prepareAssistantWithoutReturn}
@@ -1592,6 +1596,8 @@ export function InvestmentShell({
               && (researchSurface.mode === 'docked' || researchSurface.mode === 'expanded')}
             onAnalyze={prepareAssistantFromResearch}
             onOpenFullDetail={(code) => {
+              suppressResearchOnStockDetailReturnRef.current = true
+              updateResearchSurface(INITIAL_RESEARCH_SURFACE)
               navigate('stock-detail', { stockCode: code })
             }}
           />
