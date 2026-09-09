@@ -114,6 +114,7 @@ function mount(
     backupPreviewStored?: (filename: string) => Promise<BackupPreview>
     backupReset?: InvestmentReadinessSectionInjected['backupReset']
     pickBackupDirectory?: () => Promise<string | null>
+    reloadPage?: () => void
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
@@ -150,6 +151,7 @@ function mount(
     backupReset: vi.fn(overrides.backupReset ?? (async (input: { categories: BackupCategory[] }) => ({ status: 'reset' as const, categories: input.categories }))),
     pickBackupDirectory: vi.fn(overrides.pickBackupDirectory ?? (async () => null)),
     openBackupDirectory: vi.fn(async () => {}),
+    reloadPage: vi.fn(overrides.reloadPage),
   }
   const unusedHook = (() => { throw new Error('unused standing hook') }) as never
   const view = render(<InvestmentReadinessSection
@@ -312,6 +314,7 @@ describe('InvestmentReadinessSection', () => {
       expect(backup.backupImport).toHaveBeenCalledWith({
         previewId: 'preview-1', rules: { holdings: 'use_import' }, backupBefore: false,
       })
+      expect(backup.reloadPage).toHaveBeenCalledOnce()
     })
   })
 

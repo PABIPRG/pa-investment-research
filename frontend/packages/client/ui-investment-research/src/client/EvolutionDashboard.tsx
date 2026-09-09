@@ -37,6 +37,19 @@ function metric(value: unknown, suffix = ''): string {
   return resolved === undefined ? '—' : `${resolved.toFixed(2)}${suffix}`
 }
 
+function signedPercentage(value: unknown): string {
+  const resolved = number(value)
+  if (resolved === undefined) return '—'
+  const normalized = Math.abs(resolved) < 0.005 ? 0 : resolved
+  return `${normalized > 0 ? '+' : ''}${normalized.toFixed(2)}%`
+}
+
+function performanceTone(value: unknown): 'positive' | 'negative' | undefined {
+  const resolved = number(value)
+  if (resolved === undefined || resolved === 0) return undefined
+  return resolved > 0 ? 'positive' : 'negative'
+}
+
 interface LineageNodeProps {
   readonly sid: string
   readonly entries: ReadonlyMap<string, Record<string, unknown>>
@@ -382,6 +395,7 @@ export function EvolutionDashboard({
               const labels = evolutionSemanticLabels(mergedFacts, lifecycleState?.status ?? '')
               const identity = strategyIdentity(mergedFacts)
               const displayLabel = identity.label
+              const cumulativeReturn = signedPercentage(strategyAttribution.return_pct)
               return <div className={css.strategyEntry} key={`${sid}-${index}`}>
                 <button type="button" className={css.dataRow} aria-label={`${displayLabel} · ${reason}`} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}>
                   <div>
@@ -391,27 +405,58 @@ export function EvolutionDashboard({
                     <small>{reason}</small>
                   </div>
                   <span className={css.evolutionStatusStack}>
-                    <strong>{labels.participation}</strong>
-                    <small>{labels.confidence}</small>
+                    <strong
+                      className={css.evolutionStrategyReturn}
+                      data-tone={performanceTone(strategyAttribution.return_pct)}
+                      aria-label={`累计收益 ${cumulativeReturn}`}
+                    >{cumulativeReturn}</strong>
+                    <small>{labels.participation} · {labels.confidence}</small>
                   </span>
                 </button>
                 <div className={css.strategyDetail}>
                   {mutationSource !== '' && <span className={css.evolutionMutationSource}>变异来源：{mutationSource}</span>}
-                  <dl className={css.evolutionFacts} aria-label={`${displayLabel}五维状态`}>
-                    <div><dt>参与状态</dt><dd>{labels.participation}</dd></div>
-                    <div><dt>验证结果</dt><dd>{labels.verification}</dd></div>
-                    <div><dt>置信等级</dt><dd>{labels.confidence}</dd></div>
-                    <div><dt>来源</dt><dd>{labels.source}</dd></div>
-                    <div><dt>任务状态</dt><dd>{labels.task}</dd></div>
-                  </dl>
-                  <dl className={css.strategyDetailGrid}>
-                    <div><dt>影子净值</dt><dd>{metric(entry.nav)}</dd></div>
-                    <div><dt>累计收益</dt><dd>{metric(strategyAttribution.return_pct, '%')}</dd></div>
-                    <div><dt>最大回撤</dt><dd>{metric(strategyAttribution.max_drawdown_pct, '%')}</dd></div>
-                    <div><dt>成交数</dt><dd>{number(strategyAttribution.closed_trades)?.toFixed(0) ?? number(entry.closed_trades)?.toFixed(0) ?? '—'}</dd></div>
-                    <div><dt>平仓胜率</dt><dd>{metric(strategyAttribution.closed_win_rate_pct ?? entry.closed_win_rate_pct, '%')}</dd></div>
-                  </dl>
-                  <div className={css.strategyDetailSymbols}>{symbols.map(code => <button type="button" className={css.strategySymbolChip} key={code} onClick={() => { onOpenStock(code) }}>{code}</button>)}</div>
+                  <div className={css.evolutionStrategyDetailSummary}>
+                    <div className={css.evolutionMetricGroup} role="group" aria-label={`${displayLabel}运行状态`}>
+                      <strong className={css.evolutionMetricGroupTitle}>运行状态</strong>
+                      <dl className={css.evolutionMetricGrid}>
+                        <div><dt>参与状态</dt><dd>{labels.participation}</dd></div>
+                        <div><dt>验证结果</dt><dd>{labels.verification}</dd></div>
+                        <div><dt>置信等级</dt><dd>{labels.confidence}</dd></div>
+                        <div><dt>来源</dt><dd>{labels.source}</dd></div>
+                        <div><dt>任务状态</dt><dd>{labels.task}</dd></div>
+                      </dl>
+                    </div>
+                    <div className={css.evolutionMetricGroup} role="group" aria-label={`${displayLabel}影子表现`}>
+                      <strong className={css.evolutionMetricGroupTitle}>影子表现</strong>
+                      <dl className={css.evolutionMetricGrid}>
+                        <div><dt>影子净值</dt><dd>{metric(entry.nav)}</dd></div>
+                        <div><dt>累计收益</dt><dd>{metric(strategyAttribution.return_pct, '%')}</dd></div>
+                        <div><dt>最大回撤</dt><dd>{metric(strategyAttribution.max_drawdown_pct, '%')}</dd></div>
+                        <div><dt>成交数</dt><dd>{number(strategyAttribution.closed_trades)?.toFixed(0) ?? number(entry.closed_trades)?.toFixed(0) ?? '—'}</dd></div>
+                        <div><dt>平仓胜率</dt><dd>{metric(strategyAttribution.closed_win_rate_pct ?? entry.closed_win_rate_pct, '%')}</dd></div>
+                      </dl>
+                    </div>
+                  </div>
+                  {symbols.length > 0 && (
+                    <div className={css.evolutionStrategySymbols} role="group" aria-label={`${displayLabel}关联标的`}>
+                      <span className={css.evolutionStrategySymbolsLabel}>关联标的 · {symbols.length} 只</span>
+                      <div className={css.evolutionStrategySymbolGrid}>
+                        {symbols.map(code => {
+                          const resolvedName = securityNames[code]?.trim()
+                          const name = resolvedName === undefined || resolvedName === '' || resolvedName === code
+                            ? '名称待补充'
+                            : resolvedName
+                          return <button
+                            type="button"
+                            className={css.securityPillButton}
+                            key={code}
+                            aria-label={`查看${name} · ${code}个股详情`}
+                            onClick={() => { onOpenStock(code) }}
+                          >{name}<small>{code}</small></button>
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             })}

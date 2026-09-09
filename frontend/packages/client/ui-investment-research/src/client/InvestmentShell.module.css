@@ -475,15 +475,15 @@
 .dashboardEvent h3 { margin: 0; font-size: 0.9286rem; line-height: 1.5; }
 .dashboardEventBody > p { margin: 5px 0 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.65; }
 .dashboardReasons { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-.dashboardReasons span, .dashboardReasons button { padding: 4px 8px; border-radius: 99px; font: inherit; font-size: var(--investment-font-caption); }
+.dashboardReasons span, .securityPillButton { padding: 4px 8px; border-radius: 99px; font: inherit; font-size: var(--investment-font-caption); }
 .dashboardReasons span { border: 0; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2); }
 .dashboardReasons span[data-direction='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .dashboardReasons span[data-direction='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
-.dashboardReasons button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid color-mix(in srgb, var(--investment-primary) 38%, transparent); color: var(--investment-primary); background: var(--investment-selected-surface); cursor: pointer; }
-.dashboardReasons button::after { content: '›'; font-size: 1rem; line-height: 1; }
-.dashboardReasons button small { color: var(--dsw-alias-label-caption); font: 0.7143rem ui-monospace, monospace; }
-.dashboardReasons button:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
-.dashboardReasons button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.securityPillButton { display: inline-flex; max-width: 100%; align-items: center; gap: 6px; border: 1px solid color-mix(in srgb, var(--investment-primary) 38%, transparent); color: var(--investment-primary); background: var(--investment-selected-surface); cursor: pointer; white-space: nowrap; }
+.securityPillButton::after { content: '›'; font-size: 1rem; line-height: 1; }
+.securityPillButton small { color: var(--dsw-alias-label-caption); font: 0.7143rem ui-monospace, monospace; }
+.securityPillButton:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.securityPillButton:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 .dashboardRiskNote { display: block; margin-top: 8px; color: var(--dsw-alias-state-warn-label); font-size: 0.8571rem; line-height: 1.5; }
 .dashboardEventControls { display: flex; min-width: 0; padding-left: 16px; align-self: stretch; align-items: center; justify-content: space-between; gap: 8px; border-left: 1px solid var(--dsw-alias-border-l1); }
 .dashboardEventActions { display: flex; gap: 0; min-width: 0; }
@@ -587,13 +587,32 @@
 .evolutionStatusSummary dt { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .evolutionStatusSummary dd { margin: 4px 0 0; font-weight: 750; }
 .evolutionStatusStack { display: grid; justify-items: end; gap: 2px; }
-.evolutionStatusStack strong { color: var(--dsw-alias-label-primary); font-size: 0.8571rem; }
+.evolutionStatusStack strong { color: var(--dsw-alias-label-primary); }
 .evolutionStatusStack small { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; }
+.evolutionStrategyReturn { min-width: 5.5rem; font-size: 1.2857rem; font-variant-numeric: tabular-nums; font-weight: 750; line-height: 1.2; text-align: end; }
+.evolutionStrategyReturn[data-tone='positive'] { color: var(--dsw-alias-state-error-primary); }
+.evolutionStrategyReturn[data-tone='negative'] { color: var(--dsw-alias-state-success-primary); }
 .evolutionFacts { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
 .evolutionFacts > div { min-width: 0; padding: 8px 10px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
 .evolutionFacts dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); line-height: 1.4; }
 .evolutionFacts dd { margin: 3px 0 0; color: var(--dsw-alias-label-primary); font-size: var(--investment-font-secondary); font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
 .evolutionMutationSource { display: inline-flex; margin-bottom: 9px; padding: 3px 7px; border-radius: 999px; color: var(--investment-primary); background: var(--investment-selected-surface); font-size: 0.7857rem; }
+.evolutionStrategyDetailSummary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.evolutionMetricGroup { min-width: 0; padding: 9px 10px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; background: var(--dsw-alias-bg-base); }
+.evolutionMetricGroupTitle { display: block; margin-bottom: 7px; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-caption); line-height: 1.4; }
+.evolutionMetricGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); margin: 0; }
+.evolutionMetricGrid > div { min-width: 0; padding: 0 8px; border-left: 1px solid var(--dsw-alias-border-l1); }
+.evolutionMetricGrid > div:first-child { padding-left: 0; border-left: 0; }
+.evolutionMetricGrid > div:last-child { padding-right: 0; }
+.evolutionMetricGrid dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); line-height: 1.35; white-space: nowrap; }
+.evolutionMetricGrid dd { margin: 3px 0 0; color: var(--dsw-alias-label-primary); font-size: var(--investment-font-secondary); font-variant-numeric: tabular-nums; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.evolutionStrategySymbols { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.evolutionStrategySymbolsLabel { min-width: 76px; padding-top: 5px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); line-height: 1.4; white-space: nowrap; }
+.evolutionStrategySymbolGrid { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px; }
+
+@container (max-width: 900px) {
+  .evolutionStrategyDetailSummary { grid-template-columns: minmax(0, 1fr); }
+}
 
 .dashboardError { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border: 1px solid var(--dsw-alias-state-error-secondary); border-radius: 9px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .dashboardError[data-retained='true'] { color: var(--dsw-alias-state-warn-label); border-color: var(--dsw-alias-state-warn-secondary); background: var(--dsw-alias-state-warn-tertiary); }
@@ -2372,6 +2391,10 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .importActions .primaryButton, .importActions .secondaryButton { flex: 1 1 auto; min-height: var(--investment-touch-target); height: var(--investment-touch-target); }
   .moduleGrid { grid-template-columns: 1fr; }
   .moduleCard { padding: 14px; }
+  .evolutionMetricGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; }
+  .evolutionMetricGrid > div:nth-child(4) { padding-left: 0; border-left: 0; }
+  .evolutionStrategySymbols { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .evolutionStrategySymbolsLabel { padding-top: 0; }
   .strategyCardSummary { grid-template-columns: 1fr; }
   .strategyCardMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .moduleToolbar.strategyActions { grid-template-columns: minmax(0, .85fr) minmax(0, .85fr) minmax(0, 1.1fr) minmax(0, 1.15fr) minmax(0, .8fr); }

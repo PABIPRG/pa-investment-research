@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-`investment-research` Profile 的投研设置页面。页面顶部的**数据与备份**区块会如实说明：已发送的对话与附件会自动保存在运行本应用的设备上。点击**导出当前对话**会调用现有 `ctx.sessionLogDownload.download(currentSessionId)` 控制器。导出归档仅包含当前对话、关联子对话与附件，不是全部本机数据的备份；本页面也不提供导入或恢复流程。组件只观察控制器的共享状态以呈现禁用和下载中反馈，结果仍由现有会话 Header action 的唯一共享弹窗呈现。
+`investment-research` Profile 的投研设置页面。页面顶部的**数据与备份**区块管理可迁移的 `.pabackup` 归档，支持按投研数据域选择内容、预览增量导入、逐域配置冲突规则，并可在导入前创建安全备份。Host 确认数据应用成功后，页面会自动刷新，使所有已挂载的产品界面从权威来源重新读取导入数据；导入失败时保留确认弹窗与用户选择。**导出当前对话**仍是独立操作，它调用现有 `ctx.sessionLogDownload.download(currentSessionId)` 控制器，产物只包含所选对话树及其引用附件。
 
 浏览器插件在 `settings.section` 注册本地化的 `investment-research` 条目，同时只投影 `ctx.investmentResearchRuntimeClient` 提供的不含机密快照，展示每个 backend 的所有权、健康状态、已声明工具数、凭据状态、能力等级以及 Host 提供的 Runtime 日志提示。用户界面不会暴露内部持久化实现细节。
 

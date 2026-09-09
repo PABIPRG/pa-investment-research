@@ -66,6 +66,7 @@ describe('ui-settings-investment-research apply', () => {
       downloadSession: (sessionId: SessionId) => Promise<void>
       requestRestart: () => Promise<unknown>
       refresh: () => Promise<void>
+      reloadPage: () => void
     })({})
     expect(face.hooks.investmentReadiness).toBe(before.facade)
     expect(face.hooks.sessionLogDownload).toBe(before.sessionLogDownload.store)
@@ -77,6 +78,7 @@ describe('ui-settings-investment-research apply', () => {
     expect(before.sessionLogDownload.download).toHaveBeenCalledWith(sessionId)
     expect(before.facade.requestRestart).toHaveBeenCalledOnce()
     expect(before.facade.refresh).toHaveBeenCalledOnce()
+    expect(face.reloadPage).toBeTypeOf('function')
 
     const after = await bench()
     await after.ctx.plugin({ inject: [...inject], apply }).await()

@@ -44,6 +44,7 @@ export interface DataBackupSectionProps {
   }>
   pickBackupDirectory(): Promise<string | null>
   openBackupDirectory(path: string): Promise<void>
+  reloadPage(): void
 }
 
 type DialogState = 'create' | 'import' | 'reset' | 'delete' | null
@@ -304,11 +305,10 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     if (!preview) return
     run(async () => {
       await props.backupImport({ previewId: preview.id, rules, backupBefore })
-      await refresh()
-      window.dispatchEvent(new CustomEvent('dsh:investment-data-changed', { detail: { reason: 'import' } }))
       setDialog(null)
       setPreview(undefined)
       setFeedback(props.t('backupImportSucceeded'))
+      props.reloadPage()
     })
   }
 
