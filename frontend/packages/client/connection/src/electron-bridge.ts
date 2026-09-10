@@ -20,6 +20,8 @@ export type ElectronStreamEvent =
 /** Narrow API exposed by the sandboxed preload script. */
 export interface ElectronRendererBridge {
   readonly version: 1
+  /** Operating system reported by the sandboxed Electron preload. */
+  readonly platform: 'darwin' | 'win32' | 'linux'
   /**
    * Start one downlink and deliver its lifecycle through `listener`.
    * @param kind - Host stream to subscribe to.
@@ -29,6 +31,12 @@ export interface ElectronRendererBridge {
   openStream(kind: ElectronStreamKind, id: string, listener: (event: ElectronStreamEvent) => void): void
   /** @param id - renderer-minted subscription identity. */
   closeStream(id: string): void
+  /** Temporarily suspend application shortcuts while the Settings editor records a key. */
+  setShortcutCapture(active: boolean): void
+  /** Register one renderer listener for application shortcut actions. */
+  watchShortcutActions(id: string, listener: (action: string) => void): void
+  /** Remove one renderer shortcut-action listener. */
+  unwatchShortcutActions(id: string): void
 }
 
 /** Main-world slot installed by the Electron preload. */

@@ -12,8 +12,12 @@ import {
 
 const STREAMS_ONLY: ElectronRendererBridge = {
   version: 1,
+  platform: 'darwin',
   openStream: () => {},
   closeStream: () => {},
+  setShortcutCapture: () => {},
+  watchShortcutActions: () => {},
+  unwatchShortcutActions: () => {},
 }
 
 describe('Electron renderer bridge', () => {
@@ -24,7 +28,7 @@ describe('Electron renderer bridge', () => {
 
   it('recognizes only the fixed preload surface', () => {
     const holder = globalThis as { __DSH_ELECTRON__?: unknown }
-    holder.__DSH_ELECTRON__ = { version: 1, openStream() {} }
+    holder.__DSH_ELECTRON__ = { version: 1, platform: 'darwin', openStream() {} }
     expect(electronBridge()).toBeUndefined()
     holder.__DSH_ELECTRON__ = STREAMS_ONLY
     expect(electronBridge()).toBe(STREAMS_ONLY)
@@ -48,12 +52,16 @@ describe('Electron renderer bridge', () => {
     const closeStream = vi.fn()
     const bridge: ElectronRendererBridge = {
       version: 1,
+      platform: 'linux',
       openStream(kind, id, next) {
         expect(kind).toBe('host')
         streamId = id
         listener = next
       },
       closeStream,
+      setShortcutCapture: () => {},
+      watchShortcutActions: () => {},
+      unwatchShortcutActions: () => {},
     }
     const client = new ElectronApiClient(bridge)
     const opened = vi.fn()

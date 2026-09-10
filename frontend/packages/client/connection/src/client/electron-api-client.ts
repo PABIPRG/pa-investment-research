@@ -33,8 +33,12 @@ export function electronBridge(): ElectronRendererBridge | undefined {
   if (typeof candidate !== 'object' || candidate === null) return undefined
   const value = candidate as Partial<ElectronRendererBridge>
   return value.version === 1
+    && (value.platform === 'darwin' || value.platform === 'win32' || value.platform === 'linux')
     && typeof value.openStream === 'function'
     && typeof value.closeStream === 'function'
+    && typeof value.setShortcutCapture === 'function'
+    && typeof value.watchShortcutActions === 'function'
+    && typeof value.unwatchShortcutActions === 'function'
     ? value as ElectronRendererBridge
     : undefined
 }

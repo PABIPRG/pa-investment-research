@@ -10,6 +10,8 @@ import {
   STREAM_CLOSE_CHANNEL,
   STREAM_EVENT_CHANNEL,
   STREAM_OPEN_CHANNEL,
+  SHORTCUT_ACTION_CHANNEL,
+  SHORTCUT_CAPTURE_CHANNEL,
 } from './ipc.ts'
 
 interface StreamEnvelope {
@@ -18,6 +20,7 @@ interface StreamEnvelope {
 }
 
 const streamListeners = new Map<string, (event: ElectronStreamEvent) => void>()
+const shortcutListeners = new Map<string, (action: string) => void>()
 
 ipcRenderer.on(STREAM_EVENT_CHANNEL, (_event, value: unknown) => {
   if (!isStreamEnvelope(value)) return
@@ -27,8 +30,14 @@ ipcRenderer.on(STREAM_EVENT_CHANNEL, (_event, value: unknown) => {
   if (value.event.type === 'end') streamListeners.delete(value.id)
 })
 
+ipcRenderer.on(SHORTCUT_ACTION_CHANNEL, (_event, value: unknown) => {
+  if (typeof value !== 'string') return
+  for (const listener of shortcutListeners.values()) listener(value)
+})
+
 const bridge: ElectronRendererBridge = {
   version: 1,
+  platform: desktopPlatform(process.platform),
   openStream(kind: ElectronStreamKind, id: string, listener: (event: ElectronStreamEvent) => void): void {
     if (streamListeners.has(id)) throw new Error(`dsh-electron preload: duplicate stream id ${JSON.stringify(id)}`)
     streamListeners.set(id, listener)
@@ -38,9 +47,24 @@ const bridge: ElectronRendererBridge = {
     streamListeners.delete(id)
     ipcRenderer.send(STREAM_CLOSE_CHANNEL, id)
   },
+  setShortcutCapture(active: boolean): void {
+    ipcRenderer.send(SHORTCUT_CAPTURE_CHANNEL, active)
+  },
+  watchShortcutActions(id: string, listener: (action: string) => void): void {
+    if (shortcutListeners.has(id)) throw new Error(`dsh-electron preload: duplicate shortcut listener ${JSON.stringify(id)}`)
+    shortcutListeners.set(id, listener)
+  },
+  unwatchShortcutActions(id: string): void {
+    shortcutListeners.delete(id)
+  },
 }
 
 contextBridge.exposeInMainWorld('__DSH_ELECTRON__', bridge)
+
+function desktopPlatform(platform: NodeJS.Platform): 'darwin' | 'win32' | 'linux' {
+  if (platform === 'darwin' || platform === 'win32') return platform
+  return 'linux'
+}
 
 function isStreamEnvelope(value: unknown): value is StreamEnvelope {
   if (typeof value !== 'object' || value === null) return false

@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createProcessShutdown } from '../../cli/src/process-shutdown.ts'
-import { STREAM_CLOSE_CHANNEL, STREAM_OPEN_CHANNEL } from '../src/ipc.ts'
+import { SHORTCUT_CAPTURE_CHANNEL, STREAM_CLOSE_CHANNEL, STREAM_OPEN_CHANNEL } from '../src/ipc.ts'
 
 const originalArgv = [...process.argv]
 const WINDOWS_ARGV = [
@@ -58,6 +58,7 @@ async function start(): Promise<RestartHarness> {
   const contents = {
     isDestroyed: () => false,
     mainFrame: {},
+    off: vi.fn(),
     on: vi.fn(),
     send: vi.fn(),
     session: { setPermissionRequestHandler: vi.fn() },
@@ -65,10 +66,13 @@ async function start(): Promise<RestartHarness> {
   }
   const window = {
     focus: vi.fn(),
+    isFullScreen: () => false,
     isMinimized: () => false,
     loadURL: vi.fn(async () => {}),
     once: vi.fn(),
+    minimize: vi.fn(),
     restore: vi.fn(),
+    setFullScreen: vi.fn(),
     show: vi.fn(),
     webContents: contents,
   }
@@ -105,7 +109,9 @@ async function start(): Promise<RestartHarness> {
   }, forceExit, vi.fn(), 60_000)
   const shutdownCall = vi.fn((code: number) => shutdown.shutdown(code))
   const runProfile = vi.fn(async (options: { restart?: () => void }) => ({
-    ctx: { get: () => connection },
+    ctx: {
+      get: (name: string) => name === 'connection' ? connection : undefined,
+    },
     shutdown: { shutdown: shutdownCall },
     ...{ restart: options.restart },
   }))
@@ -202,6 +208,7 @@ describe('Electron restart', () => {
     await vi.waitFor(() => {
       expect(harness.events).toEqual([
         'stream-open',
+        `ipc-listener-removed:${SHORTCUT_CAPTURE_CHANNEL}`,
         `ipc-listener-removed:${STREAM_OPEN_CHANNEL}`,
         `ipc-listener-removed:${STREAM_CLOSE_CHANNEL}`,
         'stream-aborted-and-drained',

@@ -14,6 +14,7 @@
     { "path": "../../packages/boot/app-boot" },
     { "path": "../../packages/client/connection/tsconfig.host.json" },
     { "path": "../../packages/client/modules" },
+    { "path": "../../packages/client/ui-desktop-shortcuts/tsconfig.host.json" },
     { "path": "../../packages/host/apiproxy" },
     { "path": "../../packages/bundle/investment-runtime" },
     { "path": "../../packages/bundle/investment-stock-analysis" },

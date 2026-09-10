@@ -49,6 +49,7 @@ class FakeWebSocket extends EventTarget {
 
 afterEach(() => {
   delete (globalThis as Win).location
+  delete (globalThis as { __DSH_ELECTRON__?: unknown }).__DSH_ELECTRON__
   sockets.length = 0
   if (originalWebSocket === undefined) delete (globalThis as WebSocketGlobal).WebSocket
   else globalThis.WebSocket = originalWebSocket
@@ -63,6 +64,22 @@ async function mount(): Promise<ConnectionHandle> {
 }
 
 describe('connection client apply', () => {
+  it('projects trusted Electron shortcut capabilities onto the connection service', async () => {
+    const bridge = {
+      version: 1 as const,
+      platform: 'darwin' as const,
+      openStream: vi.fn(),
+      closeStream: vi.fn(),
+      setShortcutCapture: vi.fn(),
+      watchShortcutActions: vi.fn(),
+      unwatchShortcutActions: vi.fn(),
+    }
+    ;(globalThis as { __DSH_ELECTRON__?: unknown }).__DSH_ELECTRON__ = bridge
+    const handle = await mount()
+    expect(handle.desktop).toMatchObject({ platform: 'darwin' })
+    expect(handle.desktop?.setShortcutCapture).toBe(bridge.setShortcutCapture)
+  })
+
   it('mounts ctx.connection with the real client when no ?fixture switch is present', async () => {
     ;(globalThis as Win).location = { hostname: 'localhost', search: '' }
     const handle = await mount()

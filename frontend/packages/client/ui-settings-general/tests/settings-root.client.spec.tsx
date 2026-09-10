@@ -34,7 +34,14 @@ function mount({
     { id: 'welcome', order: -100 },
     { id: 'credential', order: 0 },
   ],
-}: { wide?: boolean; onboardingActive?: boolean; rows?: Row[]; steps?: Step[] } = {}) {
+  openRequest = { revision: 0, sectionId: undefined },
+}: {
+  wide?: boolean
+  onboardingActive?: boolean
+  rows?: Row[]
+  steps?: Step[]
+  openRequest?: { revision: number; sectionId: string | undefined }
+} = {}) {
   // Mutable row source standing in for the bound useSections hook; bump()
   // plays a ledger change through the same observable contract.
   let current = rows
@@ -73,6 +80,7 @@ function mount({
     useWorkspaces: unusedHook,
     wide,
     useOnboardingSteps: select => select(steps),
+    useOpenRequests: select => select(openRequest),
     useSections: (select) => {
       const [, force] = useState(0)
       useEffect(() => {
@@ -99,6 +107,13 @@ function openPanel() {
 }
 
 describe('SettingsRoot trigger', () => {
+  it('opens the requested section through the programmatic navigation source', () => {
+    mount({ openRequest: { revision: 1, sectionId: 'models' } })
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Models' }).getAttribute('aria-current')).toBe('true')
+    expect(screen.getByTestId('section-models')).toBeTruthy()
+  })
+
   it('renders the trigger seat content as the accessible name (no aria-label of its own)', () => {
     const { renderSlot } = mount()
     const trigger = screen.getByRole('button', { name: 'Settings' })
@@ -177,6 +192,15 @@ describe('SettingsPanel close paths', () => {
     mount()
     openPanel()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close' }))
+  })
+
+  it('restores focus to the opener after the dialog closes', async () => {
+    mount()
+    const trigger = screen.getByRole('button', { name: 'Settings' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await vi.waitFor(() => { expect(document.activeElement).toBe(trigger) })
   })
 })
 

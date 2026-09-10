@@ -1,7 +1,7 @@
 /**
  * Settings domain base plugin, browser half. Provides `ctx.settingsScope`, the
  * settings-namespace Host transport every preference row binds its durable
- * section through, and owns the canonical slot-type contract for the settings
+ * section through, provides programmatic panel navigation, and owns the canonical slot-type contract for the settings
  * surface. It depends on no `ui-*` presentation package, so any feature that
  * owns a preference can reach it: the settings SHELL — the `sidebar.settings`
  * occupant, its navigation, and the chrome — lives in ui-settings-general,
@@ -9,6 +9,7 @@
  * through ui-layout and ui-theme. Export discipline: packages/client/AGENTS.md.
  */
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import { SettingsUiRuntime } from './navigation.ts'
 import { SettingsScopeBinder } from './settings-scope.ts'
 
 export type {
@@ -16,6 +17,14 @@ export type {
   SettingsPluginsTabOwnerProps, SettingsSectionOwnerProps, SettingsTriggerOwnerProps,
 } from './contract/slots.ts'
 export { SettingsScopeController, SettingsScopeBinder } from './settings-scope.ts'
+export { SettingsUiRuntime } from './navigation.ts'
+export type { SettingsOpenRequest } from './navigation.ts'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    settingsUi: SettingsUiRuntime
+  }
+}
 
 /**
  * Required services: none. The transport is resolved per caller through
@@ -32,4 +41,5 @@ export const inject = []
  */
 export function apply(ctx: ClientContext): void {
   new SettingsScopeBinder(ctx)
+  new SettingsUiRuntime(ctx)
 }
