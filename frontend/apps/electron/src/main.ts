@@ -12,6 +12,7 @@ import type {
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
 import { appIdentity } from './app-identity.ts'
 import { resolveElectronProfile } from './args.ts'
+import { bindDesktopShortcuts } from './desktop-shortcuts.ts'
 import { ElectronConnectionService } from './index.ts'
 import { APP_INDEX_URL, APP_SCHEME, createAppProtocolHandler } from './protocol.ts'
 import {
@@ -187,7 +188,14 @@ async function runApplication(): Promise<void> {
         webSecurity: true,
       },
     })
-    ipc = bindIpc(window.webContents, connection)
+    const streamIpc = bindIpc(window.webContents, connection)
+    const desktopShortcuts = bindDesktopShortcuts(window, ipcMain, ctx)
+    ipc = {
+      async dispose(): Promise<void> {
+        desktopShortcuts.dispose()
+        await streamIpc.dispose()
+      },
+    }
     hardenNavigation(window)
     window.once('ready-to-show', () => { window.show() })
     await window.loadURL(APP_INDEX_URL)

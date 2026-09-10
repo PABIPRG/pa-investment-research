@@ -12,6 +12,7 @@ import { WebApiClient } from './web-api-client.ts'
 import { createWebConnectionRpc } from './rpc.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
+import type { ElectronRendererBridge } from '../electron-bridge.ts'
 
 // ---- Contract re-exports (browser-safe apiproxy channels + core types) ----
 export type {
@@ -63,6 +64,11 @@ export interface ConnectionHandle {
   readonly api: IApiClient
   /** Whether the current page authority is loopback; non-browser contexts default to true. */
   readonly isLoopback: boolean
+  /** Trusted preload capabilities when this Client runs in the desktop shell. */
+  readonly desktop?: Pick<
+    ElectronRendererBridge,
+    'platform' | 'setShortcutCapture' | 'watchShortcutActions' | 'unwatchShortcutActions'
+  >
   /** Generation-scoped Host facts, including native path-open capability. */
   readonly hostDescription: HostDescriptionSource
   /** Generic logical RPC channels over the same Connection transport. */
@@ -106,6 +112,7 @@ export function apply(ctx: Context): void {
   const handle: ConnectionHandle = {
     api,
     isLoopback: electron !== undefined || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    ...(electron === undefined ? {} : { desktop: electron }),
     hostDescription: {
       getSnapshot: () => description,
       subscribe: (listener) => {

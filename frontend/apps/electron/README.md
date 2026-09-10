@@ -19,6 +19,17 @@ pnpm dsh electron --profile investment-research
 
 The investment Web and Electron surfaces share one application-instance lease under `$DSH_HOME/investment-research/`. When Electron finds a live Web owner, it names that surface and asks whether to stop it before continuing. Confirmation sends an authenticated loopback request to the owner, waits for its normal profile teardown (including managed Python children), and only then claims the lease. Cancellation leaves the existing surface untouched. A stale lease whose owner process no longer exists is recovered automatically; an unverified live process is never killed by port or persisted PID alone.
 
+## Keyboard shortcuts
+
+Application shortcuts work only while the Electron window is focused. macOS
+uses `Command+,` for Settings, `Control+Command+F` for full screen, and
+`Command+M` for minimize. Windows and Linux use `Ctrl+,` for Settings and
+`F11` for full screen; their minimize behavior remains owned by the operating
+system. Open Settings → Shortcuts to record a replacement, reset one action,
+or restore every default for the current operating system. Saved overrides are
+isolated by operating system, and conflicting or OS-reserved combinations are
+refused before persistence.
+
 ## Investment backend deployment
 
 The shipped business rows default to `managed`: stock analysis uses `http://127.0.0.1:8000`, market watch uses `http://127.0.0.1:8100`, and source launches discover their projects in this repository. A packaged or relocated deployment sets each row's absolute `backendProjectDir`; an independently supervised endpoint uses `backendMode: external` plus `backendBaseUrl`, which verifies identity but never starts or stops the process. These fields belong in `$DSH_HOME/profiles/investment-research/cordis.patch.yml`; remember that a row patch replaces its complete `config`.
@@ -51,8 +62,8 @@ pnpm run make:electron
 - The ESM main module schedules application startup without top-level-awaiting `app.whenReady()`, allowing Electron's readiness event to run after initial module evaluation. Registering the `dsh` scheme as standard, secure, and Fetch-capable happens during that module evaluation, because Electron accepts the privilege list only before readiness.
 - The profile installation anchor resolves bare plugins from the healed profile dependency directory. App boot uses public Node resolution when Electron does not expose Node's internal module loader.
 - `src/protocol.ts` routes one `dsh://app` request in a fixed order: Host paths, the index document with the client boot graph injected, a client plugin bundle, then a renderer asset. It imports no Electron module, so the main process passes `net.fetch` in as the file reader. A path resolving outside the renderer directory is refused.
-- Because the renderer has a real origin, everything addressable by URL — unary RPC, uploads, and the session-log ZIP download — uses the ordinary Web client code. Preload exposes only the two event-stream methods. The renderer has context isolation and Chromium sandboxing enabled, with Node integration disabled.
-- The main process validates every IPC stream request and accepts messages only from the window's main frame. Navigation stays on the renderer document; HTTP(S) links open externally.
+- Because the renderer has a real origin, everything addressable by URL — unary RPC, uploads, and the session-log ZIP download — uses the ordinary Web client code. Preload exposes event-stream methods plus the narrow desktop-shortcut platform, capture, and action-notification surface. The renderer has context isolation and Chromium sandboxing enabled, with Node integration disabled.
+- The main process validates every IPC stream or shortcut-capture request and accepts messages only from the window's main frame. Navigation stays on the renderer document; HTTP(S) links open externally.
 
 Client-plugin HMR and live profile-patch watching are not active in the desktop application because Electron does not expose the Node loader internals required by Cordis HMR. Rebuild and restart Electron after changing a client bundle; restart it after changing either `cordis.patch.yml` layer.
 

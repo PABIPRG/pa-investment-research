@@ -113,18 +113,24 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, openSection, onCl
  * @returns the settings shell element tree.
  */
 export function SettingsRoot(props: SettingsRootComponentProps) {
-  const { wide, useSections, useOnboardingSteps, useSessions, renderSlot } = props
+  const { wide, useSections, useOnboardingSteps, useOpenRequests, useSessions, renderSlot } = props
   const [open, setOpen] = useState(false)
   const [activeId, setActiveId] = useState<string | undefined>(undefined)
   const [completedOnboarding, setCompletedOnboarding] = useState<ReadonlySet<string>>(() => new Set())
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const rememberFocus = useCallback(() => {
+    if (!open && document.activeElement instanceof HTMLElement) returnFocus.current = document.activeElement
+  }, [open])
   const close = useCallback(() => {
     setOpen(false)
     setActiveId(undefined)
+    queueMicrotask(() => { returnFocus.current?.focus() })
   }, [])
   const openSection = useCallback((id: string) => {
+    rememberFocus()
     setActiveId(id)
     setOpen(true)
-  }, [])
+  }, [rememberFocus])
 
   // The ledger tick keeps the nav rows fresh: registrants re-register with
   // freshly localized text on locale change, and the trigger/header/close
@@ -134,6 +140,15 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
     ? rows.filter(row => row.id !== 'agent-presets')
     : rows
   const onboardingSteps = useOnboardingSteps(s => s)
+  const openRequest = useOpenRequests(request => request)
+  const handledOpenRevision = useRef(0)
+  useEffect(() => {
+    if (openRequest.revision <= handledOpenRevision.current) return
+    handledOpenRevision.current = openRequest.revision
+    rememberFocus()
+    setActiveId(openRequest.sectionId)
+    setOpen(true)
+  }, [openRequest, rememberFocus])
   const onboardingActive = useSessions(state =>
     state.phase === 'ready'
     && (state.current === undefined || state.byId[state.current]?.blank === true))
@@ -160,7 +175,7 @@ export function SettingsRoot(props: SettingsRootComponentProps) {
         className={clsx(css.trigger, !wide && css.rail)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => { setOpen(true) }}
+        onClick={() => { rememberFocus(); setOpen(true) }}
       >
         {renderSlot('settings.trigger', { wide })}
       </button>

@@ -32,5 +32,7 @@
       - '@deepseek-ai/dsh-client-connection'
 
 - insert:
+    - id: ui-desktop-shortcuts
+      name: '@deepseek-ai/dsh-client-ui-desktop-shortcuts'
     - id: electron-connection
       name: '@deepseek-ai/dsh-electron'

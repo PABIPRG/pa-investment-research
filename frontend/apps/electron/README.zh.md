@@ -19,6 +19,14 @@ pnpm dsh electron --profile investment-research
 
 投研 Web 与 Electron 共用 `$DSH_HOME/investment-research/` 下的一份应用实例租约。Electron 发现仍在运行的 Web 所有者时，会明确显示当前端并询问是否先停止它；用户确认后，启动器通过带身份令牌的本机回环请求通知旧实例，等待其正常释放 profile（包括托管的 Python 子进程），随后才接管租约。取消操作不会影响旧实例。所有者进程已不存在的陈旧租约会自动恢复；无法验证归属的存活进程不会仅凭端口或持久化 PID 被终止。
 
+## 键盘快捷键
+
+应用快捷键只在 Electron 窗口处于前台时生效。macOS 使用 `Command+,` 打开设置、
+`Control+Command+F` 切换全屏、`Command+M` 最小化；Windows 和 Linux 使用
+`Ctrl+,` 打开设置、`F11` 切换全屏，最小化继续由操作系统管理。在“设置 → 快捷键”中
+可以录制替代组合、恢复单项默认值，或恢复当前操作系统的全部默认值。持久化覆盖按操作系统
+隔离；发生动作冲突或使用系统保留组合时，会在写入前拒绝。
+
 ## 投研 backend 部署
 
 随附业务行默认使用 `managed`：股票分析使用 `http://127.0.0.1:8000`，盘中盯盘使用 `http://127.0.0.1:8100`，源码启动会在本仓库中发现其项目。打包或移动后的部署应为每一行设置绝对 `backendProjectDir`；独立监管的 endpoint 使用 `backendMode: external` 与 `backendBaseUrl`，此模式验证身份，但绝不启动或停止进程。这些字段写入 `$DSH_HOME/profiles/investment-research/cordis.patch.yml`；请注意，配置行 patch 会替换其完整 `config`。
@@ -51,8 +59,8 @@ pnpm run make:electron
 - ESM main 模块会调度应用启动，但不会在顶层等待 `app.whenReady()`，使 Electron readiness 事件可以在初始模块求值后运行。把 `dsh` scheme 注册为 standard、secure 且支持 Fetch 也发生在该模块求值期间，因为 Electron 只在就绪之前接受特权列表。
 - profile 安装锚点从已修复的 profile 依赖目录解析裸插件。Electron 不暴露 Node 内部模块 loader 时，app boot 会使用公开的 Node 解析机制。
 - `src/protocol.ts` 按固定顺序路由一个 `dsh://app` 请求：Host 路径、注入了客户端 boot graph 的 index 文档、客户端插件包、渲染资源。它不 import 任何 Electron 模块，因此由主进程传入 `net.fetch` 作为文件读取方。解析到渲染目录之外的路径会被拒绝。
-- 由于 renderer 拥有真实 origin，一切按 URL 寻址的能力——一元 RPC、上传以及会话日志 ZIP 下载——都使用普通的 Web 客户端代码。Preload 只暴露两个事件流方法。renderer 启用 context isolation 与 Chromium sandbox，并禁用 Node integration。
-- 主进程验证每个 IPC 流请求，并且只接受窗口主 frame 发来的消息。导航被限制在 renderer 文档内；HTTP(S) 链接会在外部打开。
+- 由于 renderer 拥有真实 origin，一切按 URL 寻址的能力——一元 RPC、上传以及会话日志 ZIP 下载——都使用普通的 Web 客户端代码。Preload 暴露事件流方法，以及范围严格受限的桌面快捷键平台、录制状态与动作通知能力。renderer 启用 context isolation 与 Chromium sandbox，并禁用 Node integration。
+- 主进程验证每个 IPC 流或快捷键录制请求，并且只接受窗口主 frame 发来的消息。导航被限制在 renderer 文档内；HTTP(S) 链接会在外部打开。
 
 Electron 不暴露 Cordis HMR 所需的 Node loader 内部机制，因此桌面应用不启用客户端插件 HMR，也不会实时监视 profile patch。修改客户端 bundle 后需重新构建并重启 Electron；修改任一 `cordis.patch.yml` 层后需重启。
 
