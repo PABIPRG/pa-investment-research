@@ -249,7 +249,7 @@ export function PortfolioPerformanceDialog({
                 : '日期会随投研备份迁移；校正不会改写原始快照。'}</small>
               <button
                 type="button"
-                className={css.textButton}
+                className={css.secondaryButton}
                 disabled={historySaving}
                 onClick={() => {
                   setHistoryDraft(availableSince)
@@ -265,7 +265,7 @@ export function PortfolioPerformanceDialog({
               }}>
                 <label>首次持仓日期<input type="date" value={historyDraft} disabled={historySaving} onChange={event => { setHistoryDraft(event.currentTarget.value); setHistoryError('') }} /></label>
                 <div>
-                  {historyStartOrigin === 'user_corrected' && <button type="button" className={css.textButton} disabled={historySaving} onClick={() => { void saveHistoryStart(null) }}>恢复系统记录</button>}
+                  {historyStartOrigin === 'user_corrected' && <button type="button" className={css.secondaryButton} disabled={historySaving} onClick={() => { void saveHistoryStart(null) }}>恢复系统记录</button>}
                   <button type="button" className={css.secondaryButton} disabled={historySaving} onClick={() => { setHistoryEditorOpen(false); setHistoryError('') }}>取消</button>
                   <button type="submit" className={css.primaryButton} disabled={historySaving || historyDraft === ''}>{historySaving ? '正在保存…' : '保存校正'}</button>
                 </div>
