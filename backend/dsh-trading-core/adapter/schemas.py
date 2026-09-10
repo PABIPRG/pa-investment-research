@@ -65,6 +65,34 @@ class HoldingsSaveRequest(BaseModel):
     )
 
 
+class HoldingsDetectRequest(BaseModel):
+    """POST /holdings/source/detect 请求体。"""
+
+    force: bool = Field(default=False, description="忽略缓存强制重新扫描本机客户端")
+
+
+class HoldingsUserConfigRequest(BaseModel):
+    """PUT /holdings/user-config 请求体：更新用户可写的 backend.env 条目。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    entries: dict[str, str] = Field(
+        min_length=1,
+        description="要写入 backend.env 的键值对；key 必须是合法的环境变量名",
+    )
+
+    @field_validator("entries")
+    @classmethod
+    def validate_env_keys(cls, value: dict[str, str]) -> dict[str, str]:
+        import re
+
+        pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        for key in value:
+            if not pattern.match(key):
+                raise ValueError(f"不合法的环境变量名: {key}")
+        return value
+
+
 class PortfolioHistoryStartRequest(BaseModel):
     """POST /portfolio/history-start 请求体。"""
 

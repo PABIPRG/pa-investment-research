@@ -33,47 +33,16 @@
 from __future__ import annotations
 
 import logging
-import re
+import sys
 
 from ..config import settings
 from ..schemas import HoldingItem
+from ._ths_fields import extract as _extract
+from ._ths_fields import normalize_ticker as _normalize_ticker
 from .base import HoldingsProvider, ProviderUnavailable
 from .broker_profiles import GENERIC_THS, BrokerProfile, resolve_profile
 
 log = logging.getLogger(__name__)
-
-# easytrader position 返回的 dict 字段名 → HoldingItem 字段
-# 同花顺/通达信内核字段名在此取并集，运行时按实际返回适配
-_FIELD_MAP: dict[str, list[str]] = {
-    "ticker": ["证券代码", "stock_code"],
-    "quantity": ["股票余额", "持仓数量", "volume"],
-    # THS 同花顺持仓页成本列实际叫「参考成本价」，通达信/各券商版本有叫「成本价」的
-    "cost_price": ["成本价", "参考成本价", "avg_price"],
-}
-
-
-def _extract(pos: dict, target: str) -> float | str | None:
-    """从 easytrader position dict 中按候选字段名提取值。"""
-    candidates = _FIELD_MAP.get(target, [target])
-    for key in candidates:
-        val = pos.get(key)
-        if val is not None:
-            return val
-    return None
-
-
-def _normalize_ticker(raw: str | None) -> str | None:
-    """将证券代码规范化为6位纯数字（HoldingItem 要求 pattern ^\\d{6}$）。
-
-    easytrader 可能返回 '000001' 或 '000001.SZ' 等格式。
-    """
-    if not raw:
-        return None
-    # 取前6位数字
-    digits = re.sub(r"\D", "", str(raw))
-    if len(digits) >= 6:
-        return digits[:6]
-    return None
 
 
 class EasyTraderProvider(HoldingsProvider):
@@ -128,11 +97,14 @@ class EasyTraderProvider(HoldingsProvider):
         """数据源是否可用。
 
         需同时满足：
+          0. 运行在 Windows 上（pywinauto 只操控 Win32 控件）
           1. easytrader 已安装
           2. 券商档案解析成功（EASYTRADER_BROKER 合法或内核类型合法）
           3. 客户端路径已配置
           4. 客户端进程正在运行（best-effort 检测）
         """
+        if sys.platform != "win32":
+            return False
         if not self._imported:
             return False
         if self.profile is None:
@@ -154,6 +126,12 @@ class EasyTraderProvider(HoldingsProvider):
             ProviderUnavailable: easytrader 未安装 / 客户端未运行 / 连接失败
         """
         label = self.profile.label if self.profile else "券商客户端"
+        if sys.platform != "win32":
+            raise ProviderUnavailable(
+                "easytrader 依赖 pywinauto 操控 Win32 控件，仅支持 Windows。"
+                "macOS 请改用 HOLDINGS_PROVIDER=mac_ths（同花顺 Mac 版 + AppleScript）；"
+                "其他平台请用「导入持仓」手动维护。"
+            )
         if not self._imported:
             raise ProviderUnavailable(
                 "easytrader 未安装：pip install easytrader pywinauto。"

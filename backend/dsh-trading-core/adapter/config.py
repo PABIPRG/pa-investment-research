@@ -25,10 +25,18 @@ def _investment_state_root() -> Path | None:
     return root.resolve()
 
 
+# 用户可写配置（打包版下位于 ~/.dsh/investment-research/trading-core/user-config/backend.env）。
+# override=False → shell 环境变量 / ROOT/.env 仍然优先；此处只补缺。
+# 源码模式下 DSH_INVESTMENT_STATE_DIR 未设，不走此路径，开发者继续用 .env。
+_user_state_root = _investment_state_root()
+if _user_state_root is not None:
+    load_dotenv(_user_state_root / "user-config" / "backend.env", override=False)
+
+
 class Settings:
     def __init__(self) -> None:
         self.root = ROOT
-        self.state_root = _investment_state_root()
+        self.state_root = _user_state_root
         if self.state_root is None:
             self.data_dir = self.root / "data"
             self.cache_dir = self.root / "tradingagents" / "dataflows" / "data_cache"
@@ -47,6 +55,9 @@ class Settings:
         self.easytrader_broker = os.getenv("EASYTRADER_BROKER", "")  # 券商档案 id（broker_profiles.py），优先于 client_type
         self.easytrader_client_type = os.getenv("EASYTRADER_CLIENT_TYPE", "thstrader")  # thstrader | tdxtrader
         self.easytrader_client_path = os.getenv("EASYTRADER_CLIENT_PATH", "")
+        # macOS：AppleScript 读同花顺 Mac 版持仓（见 holdings_providers/mac_ths.py）
+        self.mac_ths_app_name = os.getenv("MAC_THS_APP_NAME", "")      # 空=默认「同花顺」
+        self.mac_ths_timeout = float(os.getenv("MAC_THS_TIMEOUT", "60"))
         # QMT SDK 接入（迅投 miniQMT/xtquant，需券商开通，10万门槛）
         self.qmt_account_id = os.getenv("QMT_ACCOUNT_ID", "")
         self.qmt_session_id = int(os.getenv("QMT_SESSION_ID", "888888"))

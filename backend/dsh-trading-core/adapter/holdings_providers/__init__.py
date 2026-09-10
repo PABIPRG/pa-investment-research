@@ -15,6 +15,7 @@
 from .base import HoldingsProvider, ProviderUnavailable, get_provider
 from .easytrader import EasyTraderProvider
 from .joinquant import JoinQuantProvider
+from .mac_ths import MacThsProvider
 from .manual import ManualProvider
 from .qmt import QMTProvider
 
@@ -23,6 +24,7 @@ __all__ = [
     "ProviderUnavailable",
     "ManualProvider",
     "EasyTraderProvider",
+    "MacThsProvider",
     "JoinQuantProvider",
     "QMTProvider",
     "get_provider",

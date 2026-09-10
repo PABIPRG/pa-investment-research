@@ -426,6 +426,13 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
     executableName: appIdentity.executableName,
+    // macOS 上读取券商持仓要跨应用控制同花顺 Mac 版。TCC 要求发起方在
+    // Info.plist 里声明用途，否则第一个 Apple Event 就会直接终止进程；
+    // 文案会原样出现在系统的自动化授权弹窗里。
+    extendInfo: {
+      NSAppleEventsUsageDescription:
+        '「投研智能体」需要控制同花顺，以读取你账户中的真实持仓。数据只在本机使用，不会上传。',
+    },
     icon: appIdentity.iconPath,
     afterCopy: [((buildPath, _electronVersion, _platform, _arch, callback) => {
       const destination = join(dirname(buildPath), basename(input.sidecarDir))

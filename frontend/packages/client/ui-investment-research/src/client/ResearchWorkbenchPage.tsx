@@ -648,6 +648,20 @@ export function ResearchWorkbenchPage({
     if (alive.current) refreshDashboard()
   }, [refreshDashboard, requestData])
 
+  const syncHoldings = useCallback(async (): Promise<readonly WorkbenchHoldingInput[]> => {
+    const value = asRecord(await requestData({ operation: 'trading-core.holdings-sync' }))
+    if (alive.current) refreshDashboard()
+    const items: WorkbenchHoldingInput[] = []
+    for (const row of records(value.items)) {
+      const ticker = text(row.ticker, '')
+      const quantity = number(row.quantity)
+      const costPrice = number(row.cost_price)
+      if (ticker === '' || quantity === undefined || costPrice === undefined) continue
+      items.push({ ticker, quantity, cost_price: costPrice })
+    }
+    return items
+  }, [refreshDashboard, requestData])
+
   const startBrief = async (): Promise<void> => {
     if (brief.phase === 'running') return
     const isActive = (): boolean => alive.current
@@ -1072,6 +1086,8 @@ export function ResearchWorkbenchPage({
             })
           }}
           onSaveHoldings={saveHoldings}
+          onSyncHoldings={syncHoldings}
+          requestData={requestData}
           onClose={() => { setSelectedOverview(undefined) }}
         />
       )}

@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { asRecord, compactMoney, money, number, records, text } from './data.ts'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
+import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog, riskSource, riskSuggestions } from './DetailDialogs.tsx'
 import { parseHoldingsImport } from './holdings-import.ts'
+import { useRequestResource } from './InvestmentShell.tsx'
 import css from './InvestmentShell.module.css'
+
+type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
 export type WorkbenchDetailKind =
   | 'holdings'
@@ -40,6 +44,8 @@ interface WorkbenchOverviewDialogProps {
   readonly alertsState: WorkbenchResourceStatus
   readonly onOpenAlert: (item: Record<string, unknown>) => void
   readonly onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
+  readonly onSyncHoldings: () => Promise<readonly WorkbenchHoldingInput[]>
+  readonly requestData: RequestData
   readonly onClose: () => void
 }
 
@@ -303,14 +309,176 @@ function HoldingsBulkImport({
   )
 }
 
-function HoldingsEditor({
-  positions, onSaveHoldings, onSavingChange,
+/**
+ * Reads real holdings from the broker client configured in the backend `.env`
+ * (easytrader / QMT) and replaces the saved portfolio with them. Only detection
+ * and sync are surfaced here: choosing or persisting a broker remains a backend
+ * configuration concern documented in docs/券商接入方案.md.
+ */
+function HoldingsSyncPanel({
+  requestData, onSync, onBack, onSavingChange,
 }: {
-  positions: readonly WorkbenchPositionDetail[]
-  onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
+  requestData: RequestData
+  onSync: () => Promise<readonly WorkbenchHoldingInput[]>
+  onBack: () => void
   onSavingChange: (saving: boolean) => void
 }) {
-  const [flow, setFlow] = useState<'view' | 'import'>('view')
+  const source = useRequestResource(requestData)
+  const detected = useRequestResource(requestData)
+  const backButtonRef = useRef<HTMLButtonElement>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<readonly WorkbenchHoldingInput[]>()
+
+  const reload = useCallback((): void => {
+    source.run({ operation: 'trading-core.holdings-source' })
+    detected.run({ operation: 'trading-core.holdings-detect' })
+  }, [detected.run, source.run])
+  useEffect(() => { reload() }, [reload])
+  useEffect(() => { backButtonRef.current?.focus() }, [])
+
+  const sourceRecord = asRecord(source.state.value)
+  const available = sourceRecord.available === true
+  const sourceReason = text(sourceRecord.reason, '')
+  const clients = records(asRecord(detected.state.value).clients)
+  // 空态引导由后端按平台给出：Windows 讲 xiadan.exe / EASYTRADER_CLIENT_PATH，
+  // macOS 讲装同花顺 Mac 版与辅助功能授权。前端不再写死其中一种。
+  const detectHint = text(asRecord(detected.state.value).hint, '')
+  const detecting = source.busy || detected.busy
+  const canSync = available && !syncing && result === undefined
+
+  const sync = async (): Promise<void> => {
+    if (!canSync) return
+    setSyncing(true); onSavingChange(true); setError('')
+    try {
+      setResult(await onSync())
+    } catch (reason) {
+      setError(productErrorText(reason))
+      reload()
+    } finally {
+      setSyncing(false); onSavingChange(false)
+    }
+  }
+
+  return (
+    <section aria-label="从券商同步持仓">
+      <div className={css.workbenchImportHeader}>
+        <div><strong>从券商同步持仓</strong><span>读取本机券商客户端里的真实持仓</span></div>
+        <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={syncing} onClick={onBack}>返回持仓明细</button>
+      </div>
+      <div className={css.workbenchImportGuide}>
+        <strong>同步会整体替换当前持仓</strong>
+        <span>读取券商客户端中的真实持仓覆盖本地已保存的持仓，并重新计算组合风险。请先启动并登录券商客户端，并让其窗口停留在“持仓”页。</span>
+      </div>
+      <div className={css.sourceFacts}>
+        <div><span>数据源</span><strong>{source.state.loaded ? text(sourceRecord.label, '当前数据源') : '检测中…'}</strong></div>
+        <div>
+          <span>状态</span>
+          <span
+            className={css.statusBadge}
+            data-status={available ? 'success' : source.state.loaded ? 'failed' : 'pending'}
+          >{source.state.loaded ? (available ? '可用' : '不可用') : '检测中'}</span>
+        </div>
+        <button type="button" className={css.secondaryButton} disabled={detecting} onClick={reload}>
+          {detecting ? '检测中…' : '重新检测'}
+        </button>
+      </div>
+      {source.state.error !== '' && (
+        <div className={css.workbenchImportErrors} role="alert"><strong>数据源状态读取失败</strong><span>{source.state.error}</span></div>
+      )}
+      {source.state.error === '' && source.state.loaded && !available && (
+        <div className={css.workbenchImportErrors} role="status">
+          <strong>当前数据源不可用，暂时无法同步</strong>
+          {sourceReason !== '' && <span>{sourceReason}</span>}
+          <span>数据源由后端配置文件决定，可用 holdings_cli.py detect 自动生成，详见 backend/dsh-trading-core/docs/券商接入方案.md。</span>
+        </div>
+      )}
+      {source.state.error === '' && source.state.loaded && available && sourceRecord.provider === 'manual' && (
+        <p className={css.workbenchImportHint}>当前为手动输入模式。可在设置 → 持仓数据源中切换为自动同步。</p>
+      )}
+      {error !== '' && (
+        <div className={css.workbenchImportErrors} role="alert"><strong>同步失败</strong><span>{error}</span></div>
+      )}
+      <div className={css.workbenchImportPreview}>
+        <div><strong>本机券商客户端</strong><span>{detected.state.loaded ? `${clients.length} 个` : '检测中'}</span></div>
+        {detected.state.error !== '' && <p>{detected.state.error}</p>}
+        {!detected.state.loaded && detected.state.error === '' && <p>正在扫描本机已安装的券商客户端，首次扫描可能需要十几秒。</p>}
+        {detected.state.loaded && clients.length === 0 && (
+          <p>
+            {detectHint !== ''
+              ? detectHint
+              : '未在本机发现券商客户端。可参考 backend/dsh-trading-core/docs/券商接入方案.md 配置数据源。'}
+          </p>
+        )}
+        {detected.state.loaded && clients.length > 0 && (
+          <div className={css.workbenchImportTableWrap}>
+            <table>
+              <thead><tr><th>券商</th><th>客户端路径</th><th>状态</th></tr></thead>
+              <tbody>
+                {clients.slice(0, 20).map((client, index) => (
+                  <tr key={`${text(client.broker_id, '')}-${index}`}>
+                    <td>{text(client.label, '未识别券商')}</td>
+                    <td className={css.clientMeta}>{text(client.exe_path, '—')}</td>
+                    <td>
+                      <span className={css.statusBadge} data-status={client.running === true ? 'success' : 'pending'}>
+                        {client.running === true ? '运行中' : '未运行'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {result !== undefined && (
+        <div className={css.workbenchImportPreview}>
+          <div><strong>已同步持仓</strong><span>{result.length} 条</span></div>
+          <div className={css.workbenchImportTableWrap}>
+            <table>
+              <thead><tr><th>股票代码</th><th>数量</th><th>成本价</th></tr></thead>
+              <tbody>
+                {result.slice(0, 20).map(item => (
+                  <tr key={item.ticker}>
+                    <td>{item.ticker}</td>
+                    <td>{item.quantity.toLocaleString('zh-CN')}</td>
+                    <td>{money(item.cost_price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {result.length > 20 && <p>仅预览前 20 条，全部 {result.length} 条已保存。</p>}
+        </div>
+      )}
+      <div className={css.workbenchImportCommit}>
+        <div aria-label="同步范围">
+          {result === undefined
+            ? <span>读取真实持仓并整体替换当前持仓</span>
+            : <strong>已同步 {result.length} 条持仓</strong>}
+        </div>
+        {result === undefined
+          ? (
+            <button type="button" className={css.primaryButton} aria-busy={syncing} disabled={!canSync} onClick={() => { void sync() }}>
+              {syncing ? '正在读取券商持仓…' : '同步并替换持仓'}
+            </button>
+          )
+          : <button type="button" className={css.primaryButton} onClick={onBack}>完成</button>}
+      </div>
+    </section>
+  )
+}
+
+function HoldingsEditor({
+  positions, requestData, onSaveHoldings, onSyncHoldings, onSavingChange,
+}: {
+  positions: readonly WorkbenchPositionDetail[]
+  requestData: RequestData
+  onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
+  onSyncHoldings: () => Promise<readonly WorkbenchHoldingInput[]>
+  onSavingChange: (saving: boolean) => void
+}) {
+  const [flow, setFlow] = useState<'view' | 'import' | 'sync'>('view')
   const [importMode, setImportMode] = useState<'single' | 'batch'>('single')
   const [editDraft, setEditDraft] = useState<HoldingEditorDraft>()
   const [singleDraft, setSingleDraft] = useState<HoldingEditorDraft>(EMPTY_HOLDING_DRAFT)
@@ -324,7 +492,7 @@ function HoldingsEditor({
   const [savedSnapshot, setSavedSnapshot] = useState<readonly WorkbenchHoldingInput[]>()
   const importButtonRef = useRef<HTMLButtonElement>(null)
   const singleTabRef = useRef<HTMLButtonElement>(null)
-  const focusRequestRef = useRef<'view' | 'import'>()
+  const focusRequestRef = useRef<'view' | 'import' | 'sync'>()
 
   const effectivePositions = useMemo<readonly WorkbenchPositionDetail[]>(() => {
     if (savedSnapshot === undefined) return positions
@@ -348,7 +516,9 @@ function HoldingsEditor({
 
   useEffect(() => {
     if (saving || focusRequestRef.current !== flow) return
-    if (flow === 'import') singleTabRef.current?.focus(); else importButtonRef.current?.focus()
+    // sync 面板在自己的挂载副作用里接管焦点（父级工具栏按钮此时已卸载）
+    if (flow === 'import') singleTabRef.current?.focus()
+    else if (flow !== 'sync') importButtonRef.current?.focus()
     focusRequestRef.current = undefined
   }, [flow, saving])
 
@@ -356,7 +526,17 @@ function HoldingsEditor({
     focusRequestRef.current = 'import'
     setPendingDelete(''); setViewError(''); setNotice(''); setImportMode('single'); setFlow('import')
   }
+  const beginSync = (): void => {
+    focusRequestRef.current = 'sync'
+    setPendingDelete(''); setViewError(''); setNotice(''); setFlow('sync')
+  }
   const returnToView = (): void => { focusRequestRef.current = 'view'; setFlow('view') }
+  const applySyncedHoldings = async (): Promise<readonly WorkbenchHoldingInput[]> => {
+    const items = await onSyncHoldings()
+    setSavedSnapshot(items)
+    setNotice(`已同步 ${items.length} 条持仓，工作台数据正在刷新。`)
+    return items
+  }
   const beginEdit = (item: WorkbenchPositionDetail): void => {
     setPendingDelete(''); setViewError(''); setNotice('')
     setEditDraft({
@@ -452,7 +632,10 @@ function HoldingsEditor({
         <section aria-label="已保存持仓">
           <div className={css.workbenchHoldingToolbar}>
             <div><strong>持仓标的</strong><span>{effectivePositions.length} 项</span></div>
-            <button ref={importButtonRef} type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
+            <div className={css.workbenchHoldingToolbarActions}>
+              <button type="button" className={css.secondaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginSync}>从券商同步持仓</button>
+              <button ref={importButtonRef} type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
+            </div>
           </div>
           {viewError !== '' && <div className={css.inlineError} role="alert">{viewError}</div>}
           {editDraft !== undefined && (
@@ -477,6 +660,13 @@ function HoldingsEditor({
             onCancelDelete={() => { setPendingDelete('') }}
           />
         </section>
+      ) : flow === 'sync' ? (
+        <HoldingsSyncPanel
+          requestData={requestData}
+          onSync={applySyncedHoldings}
+          onBack={returnToView}
+          onSavingChange={(value) => { setSaving(value); onSavingChange(value) }}
+        />
       ) : (
         <section aria-label="导入持仓">
           <div className={css.workbenchImportHeader}>
@@ -634,7 +824,7 @@ function RiskProfileDetail({ risk, riskAsOf }: { risk: Record<string, unknown>; 
 
 function RiskCenterDetail({
   risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason, riskState, alertsState, onOpenAlert,
-}: Omit<WorkbenchOverviewDialogProps, 'kind' | 'positions' | 'onClose' | 'onSaveHoldings'>) {
+}: Omit<WorkbenchOverviewDialogProps, 'kind' | 'positions' | 'onClose' | 'onSaveHoldings' | 'onSyncHoldings' | 'requestData'>) {
   const summary = asRecord(risk.summary)
   const breaches = records(risk.breaches)
   const equalWeight = number(summary.equal_weight)
@@ -702,7 +892,7 @@ function RiskCenterDetail({
 
 export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
-  holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onClose,
+  holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onSyncHoldings, requestData, onClose,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
@@ -722,7 +912,13 @@ export function WorkbenchOverviewDialog({
           ? <>
               {retainedResourceWarning(holdingsState, '持仓')}
               {kind === 'holdings'
-                ? <HoldingsEditor positions={positions} onSaveHoldings={onSaveHoldings} onSavingChange={setHoldingSaving} />
+                ? <HoldingsEditor
+                    positions={positions}
+                    requestData={requestData}
+                    onSaveHoldings={onSaveHoldings}
+                    onSyncHoldings={onSyncHoldings}
+                    onSavingChange={setHoldingSaving}
+                  />
                 : <CostDetail positions={positions} />}
             </>
           : resourceMessage(holdingsState, '持仓详情')

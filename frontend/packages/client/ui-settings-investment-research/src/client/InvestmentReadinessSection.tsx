@@ -4,9 +4,11 @@ import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   HostObservable, InjectFace, PropsLocale, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DataBackupSection, type DataBackupSectionProps } from './DataBackupSection.tsx'
+import { HoldingsProviderSection } from './HoldingsProviderSection.tsx'
 import type {
   createInvestmentReadinessStore,
   InvestmentReadinessSnapshot,
@@ -37,6 +39,8 @@ export interface InvestmentReadinessSectionInjected extends Omit<
   loadProjectModels: () => Promise<ProjectModelSettings>
   /** Persist the project-wide default Agent model. */
   saveProjectModel: (selection: ProjectModelSelection, expectedRevision: number) => Promise<ProjectModelSettings>
+  /** Execute an allow-listed investment backend operation. */
+  requestData: (request: InvestmentDataRequest) => Promise<InvestmentJsonValue>
 }
 
 export interface ProjectModelSelection {
@@ -234,6 +238,13 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
   return (
     <section className={css.section}>
       <DataBackupSection {...props} currentSession={currentSession} useSessionLogDownload={props.useSessionLogDownload} />
+
+      <HoldingsProviderSection
+        t={props.t}
+        requestData={props.requestData}
+        requestRestart={props.requestRestart}
+        restartPending={restart.status === 'pending'}
+      />
 
       <section className={css.modelRouting} aria-labelledby="investment-project-model-title">
         <div className={css.modelRoutingHeading}>

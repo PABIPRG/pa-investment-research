@@ -1,0 +1,115 @@
+.provider {
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.provider h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.provider > p {
+  margin: 4px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.selectRow {
+  display: grid;
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 12px;
+  margin-top: 14px;
+}
+
+.selectRow > span {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.selectRow select {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  font: inherit;
+  font-size: 13px;
+}
+
+.selectRow select:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 2px;
+}
+
+.selectRow small {
+  grid-column: 2;
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.restartBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.restartButton {
+  box-sizing: border-box;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 17px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.restartButton:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.restartButton:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.restartButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.error {
+  margin-top: 8px;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+@media (max-width: 720px) {
+  .selectRow {
+    grid-template-columns: 1fr;
+  }
+
+  .selectRow small {
+    grid-column: 1;
+  }
+}

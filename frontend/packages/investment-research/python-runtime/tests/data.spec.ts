@@ -768,6 +768,33 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledTimes(3)
   })
 
+  it('maps broker source detection and sync to fixed trading-core routes', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ available: false }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = async () => ({ baseUrl: 'http://127.0.0.1:8000', release })
+
+    await requestInvestmentData({ operation: 'trading-core.holdings-source' }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.holdings-detect' }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.holdings-detect', input: { force: true } }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.holdings-sync' }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.holdings-user-config' }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.holdings-user-config-update', input: { entries: { HOLDINGS_PROVIDER: 'mac_ths' } } }, acquire)
+
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ['http://127.0.0.1:8000/holdings/source', 'GET'],
+      ['http://127.0.0.1:8000/holdings/source/detect', 'POST'],
+      ['http://127.0.0.1:8000/holdings/source/detect', 'POST'],
+      ['http://127.0.0.1:8000/holdings/sync', 'POST'],
+      ['http://127.0.0.1:8000/holdings/user-config', 'GET'],
+      ['http://127.0.0.1:8000/holdings/user-config', 'PUT'],
+    ])
+    expect(bodyOf(fetchMock, 1)).toEqual({})
+    expect(bodyOf(fetchMock, 2)).toEqual({ force: true })
+    expect(bodyOf(fetchMock, 5)).toEqual({ entries: { HOLDINGS_PROVIDER: 'mac_ths' } })
+    expect(release).toHaveBeenCalledTimes(6)
+  })
+
   it('rejects unsafe portfolio performance and holding source inputs before acquiring', async () => {
     const acquire = vi.fn()
 
@@ -787,6 +814,18 @@ describe('investment data broker', () => {
       operation: 'trading-core.portfolio-history-start',
       input: { effective_date: '2026/08/01' },
     }, acquire)).rejects.toThrow('effective_date must be YYYY-MM-DD')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.holdings-detect',
+      input: { force: 'yes' },
+    }, acquire)).rejects.toThrow('force must be a boolean')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.holdings-sync',
+      input: { provider: 'qmt' },
+    }, acquire)).rejects.toThrow('unknown input key')
+    await expect(requestInvestmentData({
+      operation: 'trading-core.holdings-user-config-update',
+      input: { entries: { '123BAD': 'value' } },
+    }, acquire)).rejects.toThrow('invalid environment variable name')
     expect(acquire).not.toHaveBeenCalled()
   })
 

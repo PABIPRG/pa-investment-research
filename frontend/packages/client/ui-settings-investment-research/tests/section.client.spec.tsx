@@ -168,6 +168,7 @@ function mount(
     refresh={refresh}
     loadProjectModels={loadProjectModels}
     saveProjectModel={saveProjectModel}
+    requestData={vi.fn(async () => ({ backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' } }))}
     {...backup}
     t={key => dictionary[key as InvestmentReadinessKey]}
   />)
