@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { asRecord, compactMoney, money, number, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
+import { PortfolioPerformanceChart } from './PortfolioPerformanceChart.tsx'
 import type { WorkbenchPositionDetail } from './WorkbenchOverviewDialog.tsx'
 import css from './InvestmentShell.module.css'
 
@@ -73,19 +74,6 @@ function qualityLabel(value: unknown): string {
   return '待确认'
 }
 
-function chartPoints(series: readonly Record<string, unknown>[]): string {
-  const values = series.map(item => number(item.value)).filter((value): value is number => value !== undefined)
-  if (values.length < 2) return ''
-  const minimum = Math.min(...values)
-  const maximum = Math.max(...values)
-  const range = maximum - minimum || 1
-  return values.map((value, index) => {
-    const x = 18 + (684 * index) / (values.length - 1)
-    const y = 196 - ((value - minimum) / range) * 168
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
-}
-
 function resolvedReturn(value: Record<string, unknown>, method: PerformanceMethod): number | undefined {
   const summary = asRecord(value.summary)
   const returns = asRecord(value.returns)
@@ -147,7 +135,7 @@ export function PortfolioPerformanceDialog({
   const endingValueLabel = isCostMethod ? '当前持仓市值' : '期末总资产'
   const nameByCode = new Map(positions.map(item => [item.code, item.name]))
   const positionByCode = new Map(positions.map(item => [item.code, item]))
-  const points = chartPoints(series)
+  const chartPointCount = series.reduce((count, item) => number(item.value) === undefined ? count : count + 1, 0)
   const availableSince = text(value.available_since, '')
   const historyStartOrigin = text(value.history_start_origin, 'system_record')
   const historyStartOriginal = text(value.history_start_original, '')
@@ -292,14 +280,13 @@ export function PortfolioPerformanceDialog({
               <div><h3 id="portfolio-performance-chart-title">组合收益曲线</h3><p>按估值日展示不含现金的持仓总市值。</p></div>
               {busy && <span role="status">更新中…</span>}
             </div>
-            {points === '' ? (
+            {chartPointCount < 2 ? (
               <div className={css.performanceChartEmpty}>当前区间的有效估值点不足，暂不能绘制曲线。</div>
             ) : (
-              <svg className={css.performanceChart} viewBox="0 0 720 220" role="img" aria-label={`组合收益曲线，${text(value.start_date, '起始日未知')}至${text(value.end_date, '结束日未知')}，${profitLossLabel}${signedMoney(profitLoss)}`}>
-                <line x1="18" y1="196" x2="702" y2="196" />
-                <line x1="18" y1="28" x2="18" y2="196" />
-                <polyline points={points} />
-              </svg>
+              <PortfolioPerformanceChart
+                series={series}
+                ariaLabel={`组合收益曲线，${text(value.start_date, '起始日未知')}至${text(value.end_date, '结束日未知')}，${profitLossLabel}${signedMoney(profitLoss)}`}
+              />
             )}
             {series.length > 0 && (
               <details className={css.performanceValuationDetails}>
