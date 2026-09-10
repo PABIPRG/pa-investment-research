@@ -242,8 +242,6 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
       <HoldingsProviderSection
         t={props.t}
         requestData={props.requestData}
-        requestRestart={props.requestRestart}
-        restartPending={restart.status === 'pending'}
       />
 
       <section className={css.modelRouting} aria-labelledby="investment-project-model-title">

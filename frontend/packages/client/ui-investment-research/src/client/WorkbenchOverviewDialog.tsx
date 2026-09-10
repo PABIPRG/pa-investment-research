@@ -8,6 +8,37 @@ import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
+interface HoldingsProviderOption {
+  readonly value: string
+  readonly label: string
+  readonly platforms: ReadonlySet<string>
+}
+
+const HOLDINGS_PROVIDER_OPTIONS: readonly HoldingsProviderOption[] = [
+  { value: 'manual', label: '手动输入', platforms: new Set(['darwin', 'win32', 'linux']) },
+  { value: 'easytrader', label: '同花顺（Windows）', platforms: new Set(['win32']) },
+  { value: 'mac_ths', label: '同花顺（macOS）', platforms: new Set(['darwin']) },
+  { value: 'qmt', label: 'QMT 迅投', platforms: new Set(['win32']) },
+]
+
+function holdingsProviderPlatform(): string {
+  return navigator.platform.startsWith('Mac') ? 'darwin'
+    : navigator.platform.startsWith('Win') ? 'win32'
+    : 'linux'
+}
+
+function holdingsProviderLabel(value: string): string {
+  return HOLDINGS_PROVIDER_OPTIONS.find(option => option.value === value)?.label ?? '未知数据源'
+}
+
+function holdingsProviderOptions(current: string): readonly HoldingsProviderOption[] {
+  const platform = holdingsProviderPlatform()
+  const options = HOLDINGS_PROVIDER_OPTIONS.filter(option => option.value === current || option.platforms.has(platform))
+  return HOLDINGS_PROVIDER_OPTIONS.some(option => option.value === current)
+    ? options
+    : [{ value: current, label: '未知数据源', platforms: new Set<string>() }, ...options]
+}
+
 export type WorkbenchDetailKind =
   | 'holdings'
   | 'cost'
@@ -310,10 +341,8 @@ function HoldingsBulkImport({
 }
 
 /**
- * Reads real holdings from the broker client configured in the backend `.env`
- * (easytrader / QMT) and replaces the saved portfolio with them. Only detection
- * and sync are surfaced here: choosing or persisting a broker remains a backend
- * configuration concern documented in docs/券商接入方案.md.
+ * Chooses a persisted holdings provider, reads real holdings from its broker
+ * client, and replaces the saved portfolio with them after explicit confirmation.
  */
 function HoldingsSyncPanel({
   requestData, onSync, onBack, onSavingChange,
@@ -324,28 +353,57 @@ function HoldingsSyncPanel({
   onSavingChange: (saving: boolean) => void
 }) {
   const source = useRequestResource(requestData)
+  const config = useRequestResource(requestData)
   const detected = useRequestResource(requestData)
   const backButtonRef = useRef<HTMLButtonElement>(null)
   const [syncing, setSyncing] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const [selectedProvider, setSelectedProvider] = useState('')
+  const [providerNotice, setProviderNotice] = useState('')
+  const [providerError, setProviderError] = useState('')
   const [error, setError] = useState('')
   const [result, setResult] = useState<readonly WorkbenchHoldingInput[]>()
 
   const reload = useCallback((): void => {
     source.run({ operation: 'trading-core.holdings-source' })
+    config.run({ operation: 'trading-core.holdings-user-config' })
     detected.run({ operation: 'trading-core.holdings-detect' })
-  }, [detected.run, source.run])
+  }, [config.run, detected.run, source.run])
   useEffect(() => { reload() }, [reload])
   useEffect(() => { backButtonRef.current?.focus() }, [])
 
   const sourceRecord = asRecord(source.state.value)
-  const available = sourceRecord.available === true
+  const configRecord = asRecord(config.state.value)
+  const configuredProvider = text(asRecord(configRecord.effective).HOLDINGS_PROVIDER, '')
+  const provider = selectedProvider || configuredProvider || text(sourceRecord.provider, 'manual')
+  const providerOptions = holdingsProviderOptions(provider)
+  const available = source.state.loaded && !source.busy && sourceRecord.available === true
   const sourceReason = text(sourceRecord.reason, '')
   const clients = records(asRecord(detected.state.value).clients)
   // 空态引导由后端按平台给出：Windows 讲 xiadan.exe / EASYTRADER_CLIENT_PATH，
   // macOS 讲装同花顺 Mac 版与辅助功能授权。前端不再写死其中一种。
   const detectHint = text(asRecord(detected.state.value).hint, '')
-  const detecting = source.busy || detected.busy
-  const canSync = available && !syncing && result === undefined
+  const detecting = source.busy || config.busy || detected.busy
+  const canSync = available && provider !== 'manual' && !switching && !syncing && result === undefined
+
+  const selectProvider = async (value: string): Promise<void> => {
+    if (switching || value === provider) return
+    setSwitching(true); onSavingChange(true); setProviderError(''); setProviderNotice(''); setError(''); setResult(undefined)
+    try {
+      await requestData({
+        operation: 'trading-core.holdings-user-config-update',
+        input: { entries: { HOLDINGS_PROVIDER: value } },
+      })
+      setSelectedProvider(value)
+      setProviderNotice(`已切换为${holdingsProviderLabel(value)}，当前窗口已生效。`)
+      source.run({ operation: 'trading-core.holdings-source' })
+      config.run({ operation: 'trading-core.holdings-user-config' })
+    } catch (reason) {
+      setProviderError(productErrorText(reason))
+    } finally {
+      setSwitching(false); onSavingChange(false)
+    }
+  }
 
   const sync = async (): Promise<void> => {
     if (!canSync) return
@@ -364,73 +422,90 @@ function HoldingsSyncPanel({
     <section aria-label="从券商同步持仓">
       <div className={css.workbenchImportHeader}>
         <div><strong>从券商同步持仓</strong><span>读取本机券商客户端里的真实持仓</span></div>
-        <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={syncing} onClick={onBack}>返回持仓明细</button>
+        <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={syncing || switching} onClick={onBack}>返回持仓明细</button>
       </div>
       <div className={css.workbenchImportGuide}>
         <strong>同步会整体替换当前持仓</strong>
         <span>读取券商客户端中的真实持仓覆盖本地已保存的持仓，并重新计算组合风险。请先启动并登录券商客户端，并让其窗口停留在“持仓”页。</span>
       </div>
       <div className={css.sourceFacts}>
-        <div><span>数据源</span><strong>{source.state.loaded ? text(sourceRecord.label, '当前数据源') : '检测中…'}</strong></div>
+        <label className={css.sourceSelect}>
+          <span>数据源</span>
+          <select
+            aria-label="持仓数据源"
+            aria-busy={switching}
+            value={provider}
+            disabled={!source.state.loaded || !config.state.loaded || switching || syncing}
+            onChange={(event) => { void selectProvider(event.target.value) }}
+          >
+            {providerOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
         <div>
           <span>状态</span>
           <span
             className={css.statusBadge}
-            data-status={available ? 'success' : source.state.loaded ? 'failed' : 'pending'}
-          >{source.state.loaded ? (available ? '可用' : '不可用') : '检测中'}</span>
+            data-status={source.busy ? 'pending' : available ? 'success' : source.state.loaded ? 'failed' : 'pending'}
+          >{source.busy ? '检测中' : source.state.loaded ? (available ? '可用' : '不可用') : '检测中'}</span>
         </div>
         <button type="button" className={css.secondaryButton} disabled={detecting} onClick={reload}>
           {detecting ? '检测中…' : '重新检测'}
         </button>
       </div>
+      {providerNotice !== '' && <p className={css.workbenchProviderNotice} role="status">{providerNotice}</p>}
+      {providerError !== '' && (
+        <div className={css.workbenchImportErrors} role="alert"><strong>数据源切换失败</strong><span>{providerError}</span></div>
+      )}
       {source.state.error !== '' && (
         <div className={css.workbenchImportErrors} role="alert"><strong>数据源状态读取失败</strong><span>{source.state.error}</span></div>
       )}
-      {source.state.error === '' && source.state.loaded && !available && (
+      {source.state.error === '' && source.state.loaded && !source.busy && !available && (
         <div className={css.workbenchImportErrors} role="status">
           <strong>当前数据源不可用，暂时无法同步</strong>
           {sourceReason !== '' && <span>{sourceReason}</span>}
-          <span>数据源由后端配置文件决定，可用 holdings_cli.py detect 自动生成，详见 backend/dsh-trading-core/docs/券商接入方案.md。</span>
+          <span>可直接在上方切换数据源；选择券商模式前，请先启动并登录对应客户端。</span>
         </div>
       )}
-      {source.state.error === '' && source.state.loaded && available && sourceRecord.provider === 'manual' && (
-        <p className={css.workbenchImportHint}>当前为手动输入模式。可在设置 → 持仓数据源中切换为自动同步。</p>
+      {source.state.error === '' && source.state.loaded && !source.busy && provider === 'manual' && (
+        <p className={css.workbenchImportHint}>当前为手动输入模式；如需读取券商持仓，可直接在上方切换数据源。</p>
       )}
       {error !== '' && (
         <div className={css.workbenchImportErrors} role="alert"><strong>同步失败</strong><span>{error}</span></div>
       )}
-      <div className={css.workbenchImportPreview}>
-        <div><strong>本机券商客户端</strong><span>{detected.state.loaded ? `${clients.length} 个` : '检测中'}</span></div>
-        {detected.state.error !== '' && <p>{detected.state.error}</p>}
-        {!detected.state.loaded && detected.state.error === '' && <p>正在扫描本机已安装的券商客户端，首次扫描可能需要十几秒。</p>}
-        {detected.state.loaded && clients.length === 0 && (
-          <p>
-            {detectHint !== ''
-              ? detectHint
-              : '未在本机发现券商客户端。可参考 backend/dsh-trading-core/docs/券商接入方案.md 配置数据源。'}
-          </p>
-        )}
-        {detected.state.loaded && clients.length > 0 && (
-          <div className={css.workbenchImportTableWrap}>
-            <table>
-              <thead><tr><th>券商</th><th>客户端路径</th><th>状态</th></tr></thead>
-              <tbody>
-                {clients.slice(0, 20).map((client, index) => (
-                  <tr key={`${text(client.broker_id, '')}-${index}`}>
-                    <td>{text(client.label, '未识别券商')}</td>
-                    <td className={css.clientMeta}>{text(client.exe_path, '—')}</td>
-                    <td>
-                      <span className={css.statusBadge} data-status={client.running === true ? 'success' : 'pending'}>
-                        {client.running === true ? '运行中' : '未运行'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {provider !== 'manual' && (
+        <div className={css.workbenchImportPreview}>
+          <div><strong>本机券商客户端</strong><span>{detected.state.loaded ? `${clients.length} 个` : '检测中'}</span></div>
+          {detected.state.error !== '' && <p>{detected.state.error}</p>}
+          {!detected.state.loaded && detected.state.error === '' && <p>正在扫描本机已安装的券商客户端，首次扫描可能需要十几秒。</p>}
+          {detected.state.loaded && clients.length === 0 && (
+            <p>
+              {detectHint !== ''
+                ? detectHint
+                : '未在本机发现券商客户端。可参考 backend/dsh-trading-core/docs/券商接入方案.md 配置数据源。'}
+            </p>
+          )}
+          {detected.state.loaded && clients.length > 0 && (
+            <div className={css.workbenchImportTableWrap}>
+              <table>
+                <thead><tr><th>券商</th><th>客户端路径</th><th>状态</th></tr></thead>
+                <tbody>
+                  {clients.slice(0, 20).map((client, index) => (
+                    <tr key={`${text(client.broker_id, '')}-${index}`}>
+                      <td>{text(client.label, '未识别券商')}</td>
+                      <td className={css.clientMeta}>{text(client.exe_path, '—')}</td>
+                      <td>
+                        <span className={css.statusBadge} data-status={client.running === true ? 'success' : 'pending'}>
+                          {client.running === true ? '运行中' : '未运行'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
       {result !== undefined && (
         <div className={css.workbenchImportPreview}>
           <div><strong>已同步持仓</strong><span>{result.length} 条</span></div>
@@ -454,7 +529,7 @@ function HoldingsSyncPanel({
       <div className={css.workbenchImportCommit}>
         <div aria-label="同步范围">
           {result === undefined
-            ? <span>读取真实持仓并整体替换当前持仓</span>
+            ? <span>{provider === 'manual' ? '手动模式不读取券商持仓' : '读取真实持仓并整体替换当前持仓'}</span>
             : <strong>已同步 {result.length} 条持仓</strong>}
         </div>
         {result === undefined

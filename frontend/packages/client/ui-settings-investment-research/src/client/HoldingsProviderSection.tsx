@@ -9,8 +9,6 @@ type RequestData = (request: InvestmentDataRequest) => Promise<InvestmentJsonVal
 export interface HoldingsProviderSectionProps {
   t: (key: InvestmentReadinessKey) => string
   requestData: RequestData
-  requestRestart: () => Promise<{ status: 'accepted' } | { status: 'unavailable'; reason: string }>
-  restartPending: boolean
 }
 
 /** Provider option with a platform gate. */
@@ -27,17 +25,19 @@ const OPTIONS: readonly ProviderOption[] = [
   { value: 'qmt', labelKey: 'providerQmt', platforms: new Set(['win32']) },
 ]
 
-const PLATFORM = navigator.platform.startsWith('Mac') ? 'darwin'
-  : navigator.platform.startsWith('Win') ? 'win32'
-  : 'linux'
+function currentPlatform(): string {
+  return navigator.platform.startsWith('Mac') ? 'darwin'
+    : navigator.platform.startsWith('Win') ? 'win32'
+    : 'linux'
+}
 
 /** Settings section for choosing the holdings data-source provider. */
 export function HoldingsProviderSection(props: HoldingsProviderSectionProps): ReactNode {
-  const { t, requestData, requestRestart, restartPending } = props
+  const { t, requestData } = props
   const [effective, setEffective] = useState<string | undefined>()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [needsRestart, setNeedsRestart] = useState(false)
+  const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -61,19 +61,25 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
     return () => { alive = false }
   }, [requestData, t])
 
-  const availableOptions = OPTIONS.filter(option => option.platforms.has(PLATFORM))
+  const availableOptions = OPTIONS.filter(option => option.value === effective || option.platforms.has(currentPlatform()))
+  const effectiveIsKnown = OPTIONS.some(option => option.value === effective)
+  const optionLabel = (value: string): string => {
+    const option = OPTIONS.find(candidate => candidate.value === value)
+    return option === undefined ? t('providerUnknown') : t(option.labelKey)
+  }
 
   const onChange = (value: string): void => {
     if (saving || value === effective) return
     setSaving(true)
     setError('')
+    setNotice('')
     void requestData({
       operation: 'trading-core.holdings-user-config-update',
       input: { entries: { HOLDINGS_PROVIDER: value } },
     }).then(
       () => {
         setEffective(value)
-        setNeedsRestart(true)
+        setNotice(t('providerSaved').replace('{provider}', optionLabel(value)))
         setSaving(false)
       },
       () => {
@@ -81,11 +87,6 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
         setSaving(false)
       },
     )
-  }
-
-  const restart = (): void => {
-    if (restartPending) return
-    void requestRestart()
   }
 
   return (
@@ -102,25 +103,16 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
           onChange={(event) => { onChange(event.target.value) }}
         >
           {loading && <option value="">{t('providerLoading')}</option>}
+          {!loading && effective !== undefined && !effectiveIsKnown && (
+            <option value={effective}>{t('providerUnknown')}</option>
+          )}
           {availableOptions.map(option => (
             <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
           ))}
         </select>
         <small>{t('providerHint')}</small>
       </label>
-      {needsRestart && (
-        <div className={css.restartBanner} role="status">
-          <span>{t('providerRestartHint')}</span>
-          <button
-            type="button"
-            className={css.restartButton}
-            disabled={restartPending}
-            onClick={restart}
-          >
-            {t('restart')}
-          </button>
-        </div>
-      )}
+      {notice !== '' && <p className={css.success} role="status">{notice}</p>}
       {error !== '' && <p className={css.error} role="alert">{error}</p>}
     </section>
   )

@@ -49,11 +49,11 @@ macOS 出于安全考虑，默认禁止应用控制其他应用的界面。读�
 
 ## 二、配置持仓数据源
 
-投研智能体需要知道你要用 macOS 通道读持仓。配置方式取决于你如何启动应用。
+在“设置 → 持仓数据源”或持仓弹窗的“从券商同步持仓”面板中选择“同花顺（macOS）”。切换会立即用于当前窗口并保存到用户配置，后续启动会继续使用同一数据源。
 
 ### 开发版（从源码运行）
 
-在 `backend/dsh-trading-core/` 目录下创建或编辑 `.env` 文件，加入：
+源码调试也可以在 `backend/dsh-trading-core/` 目录下创建或编辑 `.env` 文件：
 
 ```env
 HOLDINGS_PROVIDER=mac_ths
@@ -76,21 +76,7 @@ cd backend/dsh-trading-core
 
 ### 打包版（.app）
 
-macOS 双击启动 .app 时不继承终端的环境变量，而打包后的 sidecar 不含 `.env` 文件，因此 `HOLDINGS_PROVIDER` 会落到默认值 `manual`。你需要从终端启动以传入环境变量：
-
-```bash
-HOLDINGS_PROVIDER=mac_ths /Applications/投研智能体.app/Contents/MacOS/投研智能体
-```
-
-为了方便，可以在 `~/.zshrc` 或 `~/.bash_profile` 里加一个 alias：
-
-```bash
-alias 投研='HOLDINGS_PROVIDER=mac_ths /Applications/投研智能体.app/Contents/MacOS/投研智能体'
-```
-
-之后终端输入 `投研` 即可启动。
-
-> 后续版本计划增加应用内配置入口，届时不再需要从终端启动。
+直接双击启动应用，然后通过应用内的数据源选择器切换即可，不需要从终端传入 `HOLDINGS_PROVIDER`。应用把选择保存到投研状态目录下的 `user-config/backend.env`，并在每次启动时优先于项目 `.env` 加载；终端显式传入的环境变量仍保持最高优先级。
 
 ---
 
@@ -167,7 +153,7 @@ alias 投研='HOLDINGS_PROVIDER=mac_ths /Applications/投研智能体.app/Conten
 
 - **GUI 自动化天然脆性**：同花顺版本更新可能导致控件路径失效，与 Windows 侧 easytrader 同源风险
 - **AppleScript 正文尚未在真机验证**：开发环境为 Windows，控件路径需在装有同花顺 Mac 版且已登录券商账号的机器上人工验证
-- **打包版需从终端启动**：`HOLDINGS_PROVIDER` 目前只能从环境变量传入，后续版本将增加应用内配置
+- **显式环境变量优先**：从终端传入 `HOLDINGS_PROVIDER` 时，该值会在下次启动时优先于应用内保存值；普通用户直接使用应用内切换即可
 - **macOS 不做磁盘扫描**：检测只认同花顺 Mac 版这一个客户端，不会递归搜索磁盘
 
 ### 相关文件
