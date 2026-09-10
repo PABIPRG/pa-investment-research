@@ -551,7 +551,7 @@
 
 @container (max-width: 900px) {
   .dashboardEvent { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .dashboardEventBody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'title meta' 'subject description'; align-items: start; gap: 8px 20px; }
+  .dashboardEventBody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'title subject' 'meta description'; align-items: start; gap: 8px 20px; }
   .dashboardEventBody > h3 { grid-area: title; }
   .dashboardEventMeta { grid-area: meta; margin-top: 0; }
   .dashboardReasons { grid-area: subject; margin-top: 0; }
