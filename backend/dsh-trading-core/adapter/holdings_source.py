@@ -34,16 +34,27 @@ from .store import JsonStore
 _DETECT_TTL_SECONDS = 600.0
 _DETECT_CACHE: tuple[float, list[dict]] | None = None
 
+_PROVIDER_LABELS = {
+    "manual": "手动输入",
+    "easytrader": "同花顺（Windows）",
+    "mac_ths": "同花顺（macOS）",
+    "qmt": "QMT 迅投",
+    "joinquant": "聚宽（不提供真实持仓）",
+}
+
 
 class EmptyHoldingsError(Exception):
     """数据源可用但读回 0 条持仓——拒绝覆盖本地已有持仓。"""
 
 
 def _provider_label(provider) -> str:
-    """尽量取券商的展示名（easytrader 有 profile.label），否则退回 name。"""
+    """优先返回券商展示名，否则把 provider 码映射为产品名称。"""
     profile = getattr(provider, "profile", None)
     label = getattr(profile, "label", None)
-    return str(label) if label else str(getattr(provider, "name", "未知数据源"))
+    if label:
+        return str(label)
+    name = str(getattr(provider, "name", "")).strip().lower()
+    return _PROVIDER_LABELS.get(name, "未知数据源")
 
 
 # 需要「操控本机券商客户端」的数据源，平台耦合，必须过闸门
@@ -86,9 +97,10 @@ def platform_gate(provider_name: str) -> str | None:
 
 def provider_snapshot() -> dict:
     """当前持仓数据源的配置快照（不扫盘、不抛错）。"""
+    provider_name = settings.holdings_provider.strip().lower()
     snapshot: dict = {
-        "provider": settings.holdings_provider,
-        "label": settings.holdings_provider,
+        "provider": provider_name,
+        "label": _PROVIDER_LABELS.get(provider_name, "未知数据源"),
         "available": False,
         "reason": None,
         "broker": getattr(settings, "easytrader_broker", "") or "",

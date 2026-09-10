@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""适配器配置：统一从项目根 .env 加载。
+"""适配器配置：统一加载环境变量、用户配置与项目 .env。
 
-优先级（从高到低）：shell 显式传入的环境变量 > .env 文件值 > 代码默认值。
+优先级（从高到低）：shell 显式传入的环境变量 > 用户 backend.env > 项目 .env > 代码默认值。
   * start_all(.bat|.sh) 传 fake/engine 时会把 ADAPTER_RUNNER 注入子进程环境，
-    必须让它优先于 .env 文件里的同名字段，所以 load_dotenv 用 override=False。
+    必须让它优先于配置文件里的同名字段，所以 load_dotenv 用 override=False。
 """
 
 import os
@@ -12,7 +12,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent  # TradingAgents-CN/
-load_dotenv(ROOT / ".env", override=False)
 
 
 def _investment_state_root() -> Path | None:
@@ -25,12 +24,22 @@ def _investment_state_root() -> Path | None:
     return root.resolve()
 
 
-# 用户可写配置（打包版下位于 ~/.dsh/investment-research/trading-core/user-config/backend.env）。
-# override=False → shell 环境变量 / ROOT/.env 仍然优先；此处只补缺。
-# 源码模式下 DSH_INVESTMENT_STATE_DIR 未设，不走此路径，开发者继续用 .env。
+def _environment_files(state_root: Path | None) -> tuple[Path, Path]:
+    """按从高到低的文件优先级返回用户配置和项目配置。"""
+    user_config_dir = state_root / "user-config" if state_root is not None else ROOT / "config"
+    return user_config_dir / "backend.env", ROOT / ".env"
+
+
+def _load_environment(state_root: Path | None) -> None:
+    """加载配置文件，同时保留进程环境和文件之间的优先级。"""
+    for environment_file in _environment_files(state_root):
+        load_dotenv(environment_file, override=False)
+
+
+# 用户可写配置在打包版位于状态目录，在源码模式位于项目 config/backend.env。
+# 先加载用户配置再加载项目 .env，配合 override=False 保持 shell > 用户 > 项目。
 _user_state_root = _investment_state_root()
-if _user_state_root is not None:
-    load_dotenv(_user_state_root / "user-config" / "backend.env", override=False)
+_load_environment(_user_state_root)
 
 
 class Settings:

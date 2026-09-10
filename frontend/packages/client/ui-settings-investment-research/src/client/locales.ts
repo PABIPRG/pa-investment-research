@@ -145,9 +145,9 @@ export const zh = {
   checkAnalyze: '确认后运行 analyze_stock（会使用 DeepSeek）',
   checkMarket: '运行 scan_movers 或 daily_brief',
   providerTitle: '持仓数据源',
-  providerIntro: '选择从券商客户端自动读取持仓的数据源。更改后需重启投研应用才能生效。',
+  providerIntro: '选择读取持仓的方式。切换后会立即用于当前窗口和后续启动。',
   providerLabel: '数据源',
-  providerHint: '自动同步模式会在应用启动时读取券商客户端持仓；手动模式需在持仓页手动输入。',
+  providerHint: '券商模式可在持仓弹窗中同步客户端持仓；手动模式需自行录入或导入。',
   providerManual: '手动输入',
   providerEasytrader: '同花顺（Windows）',
   providerMacThs: '同花顺（macOS）',
@@ -155,7 +155,8 @@ export const zh = {
   providerLoading: '正在读取…',
   providerLoadFailed: '持仓数据源信息读取失败，请检查投研后端后重试。',
   providerSaveFailed: '持仓数据源保存失败，请重试。',
-  providerRestartHint: '数据源已更改，需要重启投研应用才能生效。',
+  providerSaved: '已切换为{provider}，当前窗口已生效。',
+  providerUnknown: '未知数据源',
 } satisfies Record<string, string>
 
 /** Investment readiness locale key union. */
@@ -308,9 +309,9 @@ export const en: { [Key in InvestmentReadinessKey]: string } = {
   checkAnalyze: 'After confirming, run analyze_stock (uses DeepSeek)',
   checkMarket: 'Run scan_movers or daily_brief',
   providerTitle: 'Holdings data source',
-  providerIntro: 'Choose a broker client to read holdings from automatically. Changes take effect after restarting the investment app.',
+  providerIntro: 'Choose how holdings are read. Changes apply to this window immediately and persist for future launches.',
   providerLabel: 'Data source',
-  providerHint: 'Auto-sync mode reads broker holdings on app startup; manual mode requires entry on the holdings page.',
+  providerHint: 'Broker modes can sync client holdings from the holdings dialog; manual mode uses direct entry or import.',
   providerManual: 'Manual entry',
   providerEasytrader: 'THS (Windows)',
   providerMacThs: 'THS (macOS)',
@@ -318,5 +319,6 @@ export const en: { [Key in InvestmentReadinessKey]: string } = {
   providerLoading: 'Loading…',
   providerLoadFailed: 'Holdings data source could not be loaded. Check the investment backends and try again.',
   providerSaveFailed: 'The holdings data source could not be saved. Try again.',
-  providerRestartHint: 'Data source changed. Restart the investment app for the change to take effect.',
+  providerSaved: 'Switched to {provider}. It is active in this window.',
+  providerUnknown: 'Unknown data source',
 }

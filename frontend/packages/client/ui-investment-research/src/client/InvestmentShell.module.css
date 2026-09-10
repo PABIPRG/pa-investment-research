@@ -855,6 +855,10 @@
 .sourceFacts > div > span:first-child { color: var(--dsw-alias-label-tertiary); }
 .sourceFacts strong { color: var(--dsw-alias-label-primary); font-weight: 650; }
 .sourceFacts .secondaryButton { margin-left: auto; height: 30px; }
+.sourceSelect { display: flex; min-width: min(260px, 100%); align-items: center; gap: 8px; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.sourceSelect select { min-width: 180px; height: 32px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; }
+.sourceSelect select:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.sourceSelect select:disabled { color: var(--dsw-alias-label-dimmed); background: var(--dsw-alias-bg-layer-2); cursor: wait; }
 .clientMeta { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; overflow-wrap: anywhere; }
 .fileButton { display: inline-flex; align-items: center; gap: 7px; min-height: var(--investment-control-height); margin-top: 14px; padding: 0 12px; border: 1px solid var(--investment-line); border-radius: 8px; color: var(--investment-primary); background: var(--dsw-alias-bg-base); font-size: 0.8571rem; font-weight: 650; cursor: pointer; transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease; }
 .fileButton:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
@@ -1305,6 +1309,7 @@
 .workbenchImportGuide { display: grid; gap: 5px; padding: 11px 12px; border-radius: 9px; color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); font-size: 0.8571rem; line-height: 1.5; }
 .workbenchImportGuide span { color: var(--dsw-alias-label-secondary); }
 .workbenchImportHint { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.workbenchProviderNotice { margin: 0; padding: 10px 12px; border-radius: 8px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: 0.8571rem; line-height: 1.5; }
 .workbenchImportDropzone { display: grid; justify-items: center; gap: 5px; min-height: 92px; box-sizing: border-box; padding: 18px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 10px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); text-align: center; cursor: pointer; transition: border-color 140ms ease, color 140ms ease, background 140ms ease; }
 .workbenchImportDropzone strong { color: var(--dsw-alias-label-primary); }
 .workbenchImportDropzone span { font-size: 0.8571rem; }
@@ -2383,6 +2388,8 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .workbenchHoldingToolbar { align-items: stretch; }
   .workbenchImportHeader { align-items: stretch; flex-direction: column; }
   .workbenchImportHeader > button { width: 100%; min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
+  .sourceSelect { flex: 1 1 100%; justify-content: space-between; }
+  .sourceSelect select { flex: 1; min-width: 0; }
   .workbenchHoldingModeTabs { display: grid; width: 100%; }
   .workbenchHoldingForm { grid-template-columns: 1fr; }
   .workbenchHoldingForm > div { justify-content: flex-end; }

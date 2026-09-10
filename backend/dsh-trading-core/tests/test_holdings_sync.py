@@ -53,6 +53,7 @@ class ProviderSnapshotTests(unittest.TestCase):
             snapshot = holdings_source.provider_snapshot()
 
         self.assertEqual(snapshot["provider"], "manual")
+        self.assertEqual(snapshot["label"], "手动输入")
         self.assertTrue(snapshot["available"])
         self.assertIsNone(snapshot["reason"])
 

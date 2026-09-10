@@ -521,7 +521,8 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     @app.put("/holdings/user-config", response_model=dict)
     async def holdings_user_config_put(req: HoldingsUserConfigRequest):
-        """更新用户可写的后端配置（backend.env）；更改需重启后端才生效。"""
+        """更新用户配置；持仓数据源立即生效，其他键仍在重启后生效。"""
+        import os
         import dotenv
         from .config import settings
 
@@ -531,10 +532,18 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         for key, value in req.entries.items():
             dotenv.set_key(str(env_path), key, value, encoding="utf-8")
             written[key] = value
+        if "HOLDINGS_PROVIDER" in written:
+            provider = written["HOLDINGS_PROVIDER"].strip().lower()
+            settings.holdings_provider = provider
+            os.environ["HOLDINGS_PROVIDER"] = provider
+        restart_required = any(key != "HOLDINGS_PROVIDER" for key in written)
         return {
             "written": written,
-            "restart_required": True,
-            "note": "更改需要重启投研后端才能生效。",
+            "effective": {
+                "HOLDINGS_PROVIDER": settings.holdings_provider,
+            },
+            "restart_required": restart_required,
+            "note": "持仓数据源已在当前窗口生效。" if not restart_required else "其他配置将在重启投研后端后生效。",
         }
 
     @app.get("/portfolio/performance", response_model=dict)

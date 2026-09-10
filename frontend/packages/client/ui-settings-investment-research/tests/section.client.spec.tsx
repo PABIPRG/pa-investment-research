@@ -115,6 +115,7 @@ function mount(
     backupReset?: InvestmentReadinessSectionInjected['backupReset']
     pickBackupDirectory?: () => Promise<string | null>
     reloadPage?: () => void
+    requestData?: InvestmentReadinessSectionInjected['requestData']
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
@@ -168,7 +169,9 @@ function mount(
     refresh={refresh}
     loadProjectModels={loadProjectModels}
     saveProjectModel={saveProjectModel}
-    requestData={vi.fn(async () => ({ backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' } }))}
+    requestData={vi.fn(overrides.requestData ?? (async () => ({
+      backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' },
+    })))}
     {...backup}
     t={key => dictionary[key as InvestmentReadinessKey]}
   />)
@@ -225,6 +228,39 @@ describe('InvestmentReadinessSection', () => {
     await waitFor(() => {
       expect(saveProjectModel).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-5' }, 3)
     })
+  })
+
+  it('applies a holdings provider immediately without asking for an app restart', async () => {
+    const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+    try {
+      let provider = 'manual'
+      const requestData = vi.fn<InvestmentReadinessSectionInjected['requestData']>(async (request) => {
+        if (request.operation === 'trading-core.holdings-user-config-update') {
+          provider = String((request.input?.entries as Record<string, unknown>).HOLDINGS_PROVIDER)
+          return {
+            written: { HOLDINGS_PROVIDER: provider },
+            effective: { HOLDINGS_PROVIDER: provider },
+            restart_required: false,
+          }
+        }
+        return { backend_env: { HOLDINGS_PROVIDER: provider }, effective: { HOLDINGS_PROVIDER: provider } }
+      })
+      const { requestRestart } = mount(CONFIGURED, { requestData })
+
+      const select = await screen.findByRole<HTMLSelectElement>('combobox', { name: '数据源' })
+      fireEvent.change(select, { target: { value: 'mac_ths' } })
+
+      expect(await screen.findByText('已切换为同花顺（macOS），当前窗口已生效。')).toBeTruthy()
+      expect(select.value).toBe('mac_ths')
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.holdings-user-config-update',
+        input: { entries: { HOLDINGS_PROVIDER: 'mac_ths' } },
+      })
+      expect(requestRestart).not.toHaveBeenCalled()
+      expect(screen.queryByText(/需要重启投研应用/)).toBeNull()
+    } finally {
+      platform.mockRestore()
+    }
   })
 
   it('disables current-conversation export when no Session is selected', () => {

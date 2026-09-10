@@ -1166,6 +1166,52 @@ describe('研究工作台', () => {
     expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
   })
 
+  it('在持仓弹窗用可读名称切换数据源并立即刷新状态', async () => {
+    let provider = 'easytrader'
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-source') {
+        return provider === 'manual'
+          ? { provider, label: '手动输入', available: true, reason: null }
+          : { provider, label: '同花顺（Windows）', available: true, reason: null }
+      }
+      if (request.operation === 'trading-core.holdings-user-config') {
+        return { backend_env: { HOLDINGS_PROVIDER: provider }, effective: { HOLDINGS_PROVIDER: provider } }
+      }
+      if (request.operation === 'trading-core.holdings-user-config-update') {
+        provider = String((request.input?.entries as Record<string, unknown>).HOLDINGS_PROVIDER)
+        return {
+          written: { HOLDINGS_PROVIDER: provider },
+          effective: { HOLDINGS_PROVIDER: provider },
+          restart_required: false,
+        }
+      }
+      if (request.operation === 'trading-core.holdings-detect') {
+        return { clients: [], cached: false, age_seconds: 0 }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+
+    const select = await within(dialog).findByRole<HTMLSelectElement>('combobox', { name: '持仓数据源' })
+    expect(within(select).getByRole('option', { name: '同花顺（Windows）' })).toBeTruthy()
+    expect(within(select).queryByText('easytrader')).toBeNull()
+    fireEvent.change(select, { target: { value: 'manual' } })
+
+    expect(await within(dialog).findByText('已切换为手动输入，当前窗口已生效。')).toBeTruthy()
+    expect(select.value).toBe('manual')
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'trading-core.holdings-user-config-update',
+      input: { entries: { HOLDINGS_PROVIDER: 'manual' } },
+    })
+    expect(within(dialog).queryByText('本机券商客户端')).toBeNull()
+    expect(within(dialog).getByText('手动模式不读取券商持仓')).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: '同步并替换持仓' }).hasAttribute('disabled')).toBe(true)
+  })
+
   it('数据源不可用时说明原因并禁止同步', async () => {
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
       if (request.operation === 'trading-core.holdings-source') {
