@@ -850,6 +850,12 @@
 .importBody { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px; }
 .importGuide { display: flex; flex-direction: column; gap: 5px; padding: 11px 12px; border-radius: 9px; color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); font-size: 0.8571rem; line-height: 1.5; }
 .importGuide span { color: var(--dsw-alias-label-secondary); }
+.sourceFacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 14px; padding: 11px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; background: var(--dsw-alias-bg-layer-2); }
+.sourceFacts > div { display: flex; align-items: center; gap: 7px; font-size: 0.8571rem; color: var(--dsw-alias-label-secondary); }
+.sourceFacts > div > span:first-child { color: var(--dsw-alias-label-tertiary); }
+.sourceFacts strong { color: var(--dsw-alias-label-primary); font-weight: 650; }
+.sourceFacts .secondaryButton { margin-left: auto; height: 30px; }
+.clientMeta { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; overflow-wrap: anywhere; }
 .fileButton { display: inline-flex; align-items: center; gap: 7px; min-height: var(--investment-control-height); margin-top: 14px; padding: 0 12px; border: 1px solid var(--investment-line); border-radius: 8px; color: var(--investment-primary); background: var(--dsw-alias-bg-base); font-size: 0.8571rem; font-weight: 650; cursor: pointer; transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 140ms ease; }
 .fileButton:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
 .fileButton:focus-within { outline: 2px solid var(--investment-primary); outline-offset: 2px; border-color: var(--investment-primary); }
@@ -1282,6 +1288,7 @@
 .workbenchHoldingToolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .workbenchHoldingToolbar > div { display: flex; align-items: baseline; gap: 8px; }
 .workbenchHoldingToolbar > div span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.workbenchHoldingToolbarActions { display: flex; flex: none; align-items: center; gap: 8px; }
 .workbenchHoldingNotice { margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: 0.8571rem; }
 .workbenchHoldingForm { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
 .workbenchHoldingForm label { display: grid; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
@@ -1297,6 +1304,7 @@
 .workbenchImportPanel { display: grid; gap: 12px; }
 .workbenchImportGuide { display: grid; gap: 5px; padding: 11px 12px; border-radius: 9px; color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); font-size: 0.8571rem; line-height: 1.5; }
 .workbenchImportGuide span { color: var(--dsw-alias-label-secondary); }
+.workbenchImportHint { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .workbenchImportDropzone { display: grid; justify-items: center; gap: 5px; min-height: 92px; box-sizing: border-box; padding: 18px; border: 1px dashed var(--dsw-alias-border-l2); border-radius: 10px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); text-align: center; cursor: pointer; transition: border-color 140ms ease, color 140ms ease, background 140ms ease; }
 .workbenchImportDropzone strong { color: var(--dsw-alias-label-primary); }
 .workbenchImportDropzone span { font-size: 0.8571rem; }

@@ -4,7 +4,7 @@ import type {
 
 interface RequestSpec {
   readonly backendId: InvestmentBackendId
-  readonly method: 'GET' | 'POST'
+  readonly method: 'GET' | 'POST' | 'PUT'
   /** Local learning facts must never be sent to a configured external backend. */
   readonly localOnly?: boolean
   readonly path: (input: Readonly<Record<string, unknown>>) => string
@@ -529,6 +529,38 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       if (!Array.isArray(holdings)) throw new TypeError('investment data: holdings must be an array')
       const source = oneOf(input, 'source', ['manual', 'bulk_import', 'api'])
       return { holdings, ...(source === undefined ? {} : { source }) }
+    },
+  },
+  'trading-core.holdings-source': noInput('/holdings/source', 'trading-core'),
+  'trading-core.holdings-detect': {
+    backendId: 'trading-core',
+    method: 'POST',
+    path: () => '/holdings/source/detect',
+    body: (input) => {
+      knownKeys(input, ['force'])
+      const force = optionalBoolean(input, 'force')
+      return force === undefined ? {} : { force }
+    },
+  },
+  'trading-core.holdings-sync': noInputPost('/holdings/sync', 'trading-core'),
+  'trading-core.holdings-user-config': noInput('/holdings/user-config', 'trading-core'),
+  'trading-core.holdings-user-config-update': {
+    backendId: 'trading-core',
+    method: 'PUT',
+    path: () => '/holdings/user-config',
+    body: (input) => {
+      knownKeys(input, ['entries'])
+      const entries = input.entries
+      if (typeof entries !== 'object' || entries === null || Array.isArray(entries)) {
+        throw new TypeError('investment data: entries must be an object')
+      }
+      const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+      for (const key of Object.keys(entries as Record<string, unknown>)) {
+        if (!ENV_NAME.test(key)) {
+          throw new TypeError(`investment data: invalid environment variable name ${JSON.stringify(key)}`)
+        }
+      }
+      return { entries }
     },
   },
   'trading-core.holdings-analyze': {

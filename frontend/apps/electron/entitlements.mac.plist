@@ -8,5 +8,9 @@
   <true/>
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
+  <!-- 读券商持仓走 AppleScript 控制同花顺 Mac 版；开启强化运行时后必须显式声明，
+       否则 osascript 发出的 Apple Event 会被系统拒绝。 -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>

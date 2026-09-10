@@ -27,6 +27,13 @@ from .analyzer import TaskManager
 from .backtest_engine import compute_summary
 from .decision_recorder import load_evaluated_results
 from .data_transfer import recover_incomplete_transactions, register_data_transfer_routes
+from .holdings_providers.base import ProviderUnavailable
+from .holdings_source import (
+    EmptyHoldingsError,
+    detect_clients,
+    provider_snapshot,
+    sync_holdings,
+)
 from .report_store import ReportStore, ReportValidationError
 from .portfolio_performance import (
     PortfolioPriceError,
@@ -43,8 +50,10 @@ from .schemas import (
     AnalyzeRequest,
     BacktestRunRequest,
     BriefRequest,
+    HoldingsDetectRequest,
     HoldingsRequest,
     HoldingsSaveRequest,
+    HoldingsUserConfigRequest,
     HypothesizeRequest,
     KycAdjustRequest,
     KycParseRequest,
@@ -462,6 +471,71 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             for h in (store.get("holdings", "default", []) or [])
         ]
         return {"items": items}
+
+    @app.get("/holdings/source", response_model=dict)
+    async def holdings_source_get():
+        """当前持仓数据源的配置与可用性快照（不扫盘、不抛错）。"""
+        return await run_in_threadpool(provider_snapshot)
+
+    @app.post("/holdings/source/detect", response_model=dict)
+    async def holdings_source_detect(req: Optional[HoldingsDetectRequest] = None):
+        """扫描本机已装券商客户端；默认走 TTL 缓存，force=true 强制重扫。"""
+        return await detect_clients(force=bool(req and req.force))
+
+    @app.post("/holdings/sync", response_model=dict)
+    async def holdings_sync_post():
+        """从数据源拉取真实持仓并整体替换本地持仓（会写入持仓快照）。"""
+        try:
+            return await run_in_threadpool(sync_holdings)
+        except ProviderUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except EmptyHoldingsError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/holdings/user-config", response_model=dict)
+    async def holdings_user_config_get():
+        """读取用户可写的后端配置（backend.env）及当前生效值。"""
+        from .config import settings
+
+        env_path = settings.user_config_dir / "backend.env"
+        entries: dict[str, str] = {}
+        if env_path.is_file():
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                value = value.strip()
+                # dotenv.set_key wraps values in single quotes; strip them
+                if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+                    value = value[1:-1]
+                elif len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                    value = value[1:-1]
+                entries[key.strip()] = value
+        return {
+            "backend_env": entries,
+            "effective": {
+                "HOLDINGS_PROVIDER": settings.holdings_provider,
+            },
+        }
+
+    @app.put("/holdings/user-config", response_model=dict)
+    async def holdings_user_config_put(req: HoldingsUserConfigRequest):
+        """更新用户可写的后端配置（backend.env）；更改需重启后端才生效。"""
+        import dotenv
+        from .config import settings
+
+        env_path = settings.user_config_dir / "backend.env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        written: dict[str, str] = {}
+        for key, value in req.entries.items():
+            dotenv.set_key(str(env_path), key, value, encoding="utf-8")
+            written[key] = value
+        return {
+            "written": written,
+            "restart_required": True,
+            "note": "更改需要重启投研后端才能生效。",
+        }
 
     @app.get("/portfolio/performance", response_model=dict)
     async def portfolio_performance_get(

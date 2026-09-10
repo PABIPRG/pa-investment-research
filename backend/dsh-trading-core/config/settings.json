@@ -16,8 +16,6 @@
   "realtime_data": false,
   "selected_analysts": [
     "market",
-    "social",
-    "news",
     "fundamentals"
   ],
   "risk_profile": "balanced",

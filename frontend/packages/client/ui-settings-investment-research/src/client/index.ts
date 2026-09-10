@@ -119,6 +119,7 @@ export function apply(ctx: ClientContext): void {
     reloadPage: () => window.location.reload(),
     loadProjectModels: () => loadProjectModels(connection.api),
     saveProjectModel: (selection, revision) => saveProjectModel(connection.api, selection, revision),
+    requestData: request => runtime.requestData(request),
   })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',

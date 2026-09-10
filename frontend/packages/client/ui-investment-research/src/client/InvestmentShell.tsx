@@ -76,7 +76,7 @@ const EMPTY_RESOURCE: ResourceState = Object.freeze({
  * A same-key refresh retains its prior value; a different request key clears
  * mismatched data. Effect replay and A-B-A selection reuse an unsettled flight.
  */
-function useRequestResource(requestData: RequestData): RequestResource {
+export function useRequestResource(requestData: RequestData): RequestResource {
   const [state, setState] = useState<ResourceState>(EMPTY_RESOURCE)
   const generationRef = useRef(0)
   const flightsRef = useRef(new Map<string, Promise<unknown>>())

@@ -1094,6 +1094,138 @@ describe('研究工作台', () => {
     expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
   })
 
+  it('从持仓明细检测本机券商客户端并同步真实持仓', async () => {
+    let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') return { items: savedHoldings }
+      if (request.operation === 'trading-core.holdings-source') {
+        return {
+          provider: 'easytrader', label: '平安证券（同花顺版）', available: true, reason: null,
+          broker: 'pingan', client_type: 'ths', client_path: 'C:/平安证券/同花顺版/xiadan.exe',
+        }
+      }
+      if (request.operation === 'trading-core.holdings-detect') {
+        return {
+          cached: false,
+          age_seconds: 0,
+          clients: [{
+            broker_id: 'pingan', label: '平安证券（同花顺版）', kernel: 'ths', trader_type: 'ths',
+            exe_path: 'C:/平安证券/同花顺版/xiadan.exe', main_dir: 'C:/平安证券/同花顺版',
+            running: true, matched: true,
+          }],
+        }
+      }
+      if (request.operation === 'trading-core.holdings-sync') {
+        savedHoldings = [
+          { ticker: '600519', name: '贵州茅台', quantity: 200, cost_price: 1480 },
+          { ticker: '000001', name: '平安银行', quantity: 300, cost_price: 11.2 },
+        ]
+        return {
+          provider: 'easytrader', label: '平安证券（同花顺版）', saved: 2,
+          items: [
+            { ticker: '600519', quantity: 200, cost_price: 1480 },
+            { ticker: '000001', quantity: 300, cost_price: 11.2 },
+          ],
+        }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    const holdingsReads = requestData.mock.calls
+      .filter(([request]) => request.operation === 'trading-core.holdings').length
+
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+
+    expect(within(dialog).getByRole('button', { name: '返回持仓明细' })).toBeTruthy()
+    expect(await within(dialog).findByText('可用')).toBeTruthy()
+    expect(within(dialog).getByRole('cell', { name: '平安证券（同花顺版）' })).toBeTruthy()
+    expect(within(dialog).getByRole('cell', { name: 'C:/平安证券/同花顺版/xiadan.exe' })).toBeTruthy()
+    expect(within(dialog).getByText('运行中')).toBeTruthy()
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-source')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-detect')).toHaveLength(1)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '同步并替换持仓' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.holdings-sync' })
+    })
+    expect((await within(dialog).findByRole('status')).textContent).toContain('已同步 2 条持仓')
+    expect(within(dialog).getByText('已同步持仓')).toBeTruthy()
+    expect(within(dialog).getByRole('cell', { name: '000001' })).toBeTruthy()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '返回持仓明细' }))
+    await within(dialog).findByText('持仓标的')
+    expect(within(dialog).getByRole('button', { name: '编辑 贵州茅台 600519' })).toBeTruthy()
+    expect(within(dialog).getByText('000001')).toBeTruthy()
+    await waitFor(() => {
+      expect(requestData.mock.calls
+        .filter(([request]) => request.operation === 'trading-core.holdings').length).toBeGreaterThan(holdingsReads)
+    })
+    expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+  })
+
+  it('数据源不可用时说明原因并禁止同步', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-source') {
+        return {
+          provider: 'easytrader', label: '平安证券（同花顺版）', available: false,
+          reason: '券商客户端未运行：请先启动并登录 平安证券（同花顺版）。',
+        }
+      }
+      if (request.operation === 'trading-core.holdings-detect') {
+        return { clients: [], cached: false, age_seconds: 0 }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+
+    const warning = await within(dialog).findByRole('status')
+    expect(warning.textContent).toContain('券商客户端未运行')
+    expect(within(dialog).getByText('不可用')).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: '同步并替换持仓' }).hasAttribute('disabled')).toBe(true)
+    expect(await within(dialog).findByText(/未在本机发现券商客户端/)).toBeTruthy()
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings-sync')).toBe(false)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '重新检测' }))
+    await waitFor(() => {
+      expect(requestData.mock.calls
+        .filter(([request]) => request.operation === 'trading-core.holdings-detect').length).toBeGreaterThan(1)
+    })
+  })
+
+  it('未发现客户端时展示后端下发的平台引导，而不是写死的 Windows 文案', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-source') {
+        return {
+          provider: 'mac_ths', label: '同花顺 Mac 版（同花顺）', available: false,
+          reason: '同花顺 Mac 版未运行：请先启动并登录 同花顺 的券商交易账号。',
+        }
+      }
+      if (request.operation === 'trading-core.holdings-detect') {
+        return {
+          clients: [], cached: false, age_seconds: 0,
+          hint: '未发现同花顺 Mac 版。请先安装并登录同花顺，再在「系统设置 → 隐私与安全性 → 辅助功能」中授权本应用。',
+        }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+
+    expect(await within(dialog).findByText(/辅助功能/)).toBeTruthy()
+    expect(within(dialog).queryByText(/xiadan\.exe/)).toBeNull()
+    expect(within(dialog).queryByText(/EASYTRADER_CLIENT_PATH/)).toBeNull()
+  })
+
   it('批量导入统一解析选择文件和拖放文件，并阻止错误数据提交', async () => {
     const requestData = vi.fn(async (request: InvestmentDataRequest) => completeResponse(request.operation))
     const view = renderWorkbench(requestData)
