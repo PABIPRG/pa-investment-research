@@ -765,7 +765,7 @@ export function ResearchWorkbenchPage({
                 {cardsAsOf === '' ? (cards.busy ? '加载中…' : `${eventCards.length} 条`) : `更新于 ${displayTime(cardsAsOf)}`}
               </span>
             </div>
-            <div className={css.segmented} role="group" aria-label="事件业务视角">
+            <div className={`${css.segmented} ${css.dashboardEventViews}`} role="group" aria-label="事件业务视角">
               {(Object.keys(EVENT_VIEW_LABELS) as EventView[]).map(value => {
                 const count = value === 'all' ? allEventCount : eventCounts[value]
                 return (

@@ -2280,6 +2280,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .opportunityWorkspace { grid-template-columns: minmax(0, 1fr); }
   .marketNewsRail { position: relative; top: auto; min-height: 420px; max-height: none; }
   .marketNewsPanel { min-height: 420px; max-height: min(620px, 70vh); }
+  .dashboardEventViews { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; overflow: visible; }
   .researchFloatingSurface, .researchFloatingSurface[data-mode='expanded'] { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left)); width: auto; border-radius: 14px; }
 }
 
