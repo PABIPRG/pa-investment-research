@@ -765,7 +765,7 @@ export function ResearchWorkbenchPage({
                 {cardsAsOf === '' ? (cards.busy ? '加载中…' : `${eventCards.length} 条`) : `更新于 ${displayTime(cardsAsOf)}`}
               </span>
             </div>
-            <div className={`${css.segmented} ${css.dashboardEventViews}`} role="group" aria-label="事件业务视角">
+            <div className={css.segmented} role="group" aria-label="事件业务视角">
               {(Object.keys(EVENT_VIEW_LABELS) as EventView[]).map(value => {
                 const count = value === 'all' ? allEventCount : eventCounts[value]
                 return (
@@ -815,6 +815,7 @@ export function ResearchWorkbenchPage({
               const title = text(card.title, '市场事件').trim()
               const summary = text(card.summary, '').trim()
               const showSummary = summary !== '' && comparableCopy(summary) !== comparableCopy(title)
+              const riskNote = text(cardRisk.note, '').trim()
               return (
                 <ImpressionArticle
                   className={css.dashboardEvent}
@@ -836,7 +837,6 @@ export function ResearchWorkbenchPage({
                       {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
                       <span>{text(card.source, '来源未知')}</span>
                     </div>
-                    {showSummary && <p>{summary}</p>}
                     {reasons.length > 0 && (
                       <div className={css.dashboardReasons}>
                         {reasons.map((reason) => {
@@ -855,7 +855,12 @@ export function ResearchWorkbenchPage({
                         })}
                       </div>
                     )}
-                    {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
+                    {(showSummary || riskNote !== '') && (
+                      <div className={css.dashboardEventDescription}>
+                        {showSummary && <p>{summary}</p>}
+                        {riskNote !== '' && <small className={css.dashboardRiskNote}>{riskNote}</small>}
+                      </div>
+                    )}
                   </div>
                   <div className={css.dashboardEventControls} role="group" aria-label="事件操作">
                     <div className={css.dashboardEventActions} role="group" aria-label="快捷操作">

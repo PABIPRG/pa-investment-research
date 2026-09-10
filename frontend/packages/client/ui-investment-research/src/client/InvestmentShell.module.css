@@ -473,7 +473,8 @@
 .dashboardEventMeta > span[data-severity='低'] { color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); }
 .dashboardEventMeta time { flex: none; margin-right: 2px; color: var(--dsw-alias-label-caption); }
 .dashboardEvent h3 { margin: 0; font-size: 0.9286rem; line-height: 1.5; }
-.dashboardEventBody > p { margin: 5px 0 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.65; }
+.dashboardEventDescription { min-width: 0; }
+.dashboardEventDescription > p { margin: 5px 0 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.65; }
 .dashboardReasons { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .dashboardReasons span, .securityPillButton { padding: 4px 8px; border-radius: 99px; font: inherit; font-size: var(--investment-font-caption); }
 .dashboardReasons span { border: 0; color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2); }
@@ -550,6 +551,12 @@
 
 @container (max-width: 900px) {
   .dashboardEvent { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .dashboardEventBody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'title meta' 'subject description'; align-items: start; gap: 8px 20px; }
+  .dashboardEventBody > h3 { grid-area: title; }
+  .dashboardEventMeta { grid-area: meta; margin-top: 0; }
+  .dashboardReasons { grid-area: subject; margin-top: 0; }
+  .dashboardEventDescription { grid-area: description; }
+  .dashboardEventDescription > :first-child { margin-top: 0; }
   .dashboardEventControls { min-height: 34px; margin-top: 2px; padding: 8px 10px; border: 0; border-radius: 8px; background: var(--dsw-alias-bg-module-platform); }
 }
 
@@ -2280,7 +2287,6 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .opportunityWorkspace { grid-template-columns: minmax(0, 1fr); }
   .marketNewsRail { position: relative; top: auto; min-height: 420px; max-height: none; }
   .marketNewsPanel { min-height: 420px; max-height: min(620px, 70vh); }
-  .dashboardEventViews { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; overflow: visible; }
   .researchFloatingSurface, .researchFloatingSurface[data-mode='expanded'] { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); left: max(8px, env(safe-area-inset-left)); width: auto; border-radius: 14px; }
 }
 
@@ -2347,6 +2353,9 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .dashboardHoldingList { grid-template-columns: 1fr; }
   .dashboardHoldingList button { min-height: var(--investment-touch-target); }
   .dashboardEventViewport { height: clamp(180px, 42dvh, 380px); -webkit-overflow-scrolling: touch; }
+  .dashboardEventBody { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'title' 'meta' 'subject' 'description'; gap: 0; }
+  .dashboardEventMeta { margin-top: 7px; }
+  .dashboardReasons, .dashboardEventDescription > :first-child { margin-top: 8px; }
   .dashboardEventActions button { flex-basis: 56px; min-width: 56px; min-height: 34px; }
   .dashboardAlert .dashboardAlertDetailButton { min-height: var(--investment-touch-target); }
   .riskRow button, .alertRow button { min-height: var(--investment-touch-target); }
