@@ -1,12 +1,12 @@
 import type { ForgeConfig } from '@electron-forge/shared-types'
-import { appIdentity } from './src/app-identity.ts'
+import { appIdentity, packagerIconPath } from './src/app-identity.ts'
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: false,
     appBundleId: appIdentity.appBundleId,
     executableName: appIdentity.executableName,
-    icon: appIdentity.iconPath,
+    icon: packagerIconPath(process.platform),
     ignore: [
       /^\/(?:src|tests|out|lib\/types|\.cache|investment-python)(?:\/|$)/,
     ],

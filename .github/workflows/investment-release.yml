@@ -170,6 +170,52 @@ jobs:
         if: runner.os == 'Windows'
         run: pnpm run make:electron
 
+      - name: Verify packaged application icon (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          descriptor=$(find apps/electron/out -path '*/Resources/investment-python/runtime.json' -print -quit)
+          test -n "$descriptor"
+          app="${descriptor%%/Contents/Resources/*}"
+          icon_name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist")
+          test -n "$icon_name"
+          cmp apps/electron/assets/app-icon.icns "$app/Contents/Resources/$icon_name"
+
+      - name: Verify packaged application icon (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $descriptor = Get-ChildItem apps/electron/out -Filter runtime.json -Recurse |
+            Where-Object { $_.FullName -match 'resources[\\/]investment-python[\\/]runtime.json$' } |
+            Select-Object -First 1
+          if ($null -eq $descriptor) { throw 'packaged investment sidecar not found' }
+          $packageRoot = $descriptor.Directory.Parent.Parent
+          $executable = Get-ChildItem $packageRoot.FullName -Filter '*.exe' | Select-Object -First 1
+          if ($null -eq $executable) { throw 'packaged Electron executable not found' }
+          Add-Type -AssemblyName System.Drawing.Common
+          $expectedIcon = [System.Drawing.Icon]::new((Resolve-Path 'apps/electron/assets/app-icon.ico').Path, 32, 32)
+          $actualIcon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable.FullName)
+          if ($null -eq $actualIcon) { throw 'packaged Electron executable has no associated icon' }
+          $expectedBitmap = $expectedIcon.ToBitmap()
+          $actualBitmap = $actualIcon.ToBitmap()
+          try {
+            if ($expectedBitmap.Width -ne $actualBitmap.Width -or $expectedBitmap.Height -ne $actualBitmap.Height) {
+              throw 'packaged Electron icon has an unexpected size'
+            }
+            for ($x = 0; $x -lt $expectedBitmap.Width; $x += 1) {
+              for ($y = 0; $y -lt $expectedBitmap.Height; $y += 1) {
+                if ($expectedBitmap.GetPixel($x, $y).ToArgb() -ne $actualBitmap.GetPixel($x, $y).ToArgb()) {
+                  throw "packaged Electron icon differs at $x,$y"
+                }
+              }
+            }
+          } finally {
+            $expectedBitmap.Dispose()
+            $actualBitmap.Dispose()
+            $expectedIcon.Dispose()
+            $actualIcon.Dispose()
+          }
+
       - name: Smoke packaged sidecar (macOS)
         if: runner.os == 'macOS'
         shell: bash
