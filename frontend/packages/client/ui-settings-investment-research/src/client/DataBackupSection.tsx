@@ -62,6 +62,8 @@ export interface DataBackupSectionProps {
 }
 
 type DialogState = 'create' | 'import' | 'reset' | 'delete' | null
+type BackupStorageState = 'unknown' | 'managed' | 'local'
+type ActivePreview = { value: BackupPreview; ownership: 'client' | 'importing' }
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -210,13 +212,14 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   const fileInput = useRef<HTMLInputElement>(null)
   const transferAbort = useRef<AbortController>()
   const previewAbort = useRef<AbortController>()
-  const activePreview = useRef<BackupPreview>()
+  const activePreview = useRef<ActivePreview>()
   const cancelPreview = useRef(props.backupPreviewCancel)
   const transferTrigger = useRef<HTMLButtonElement>()
   const restoreTransferFocus = useRef(false)
+  const mounted = useRef(true)
   cancelPreview.current = props.backupPreviewCancel
   const [directory, setDirectory] = useState('')
-  const [managedStorage, setManagedStorage] = useState(false)
+  const [storageState, setStorageState] = useState<BackupStorageState>('unknown')
   const [items, setItems] = useState<BackupListItem[]>([])
   const [dialog, setDialog] = useState<DialogState>(null)
   const [selected, setSelected] = useState<BackupCategory[]>(ALL_CATEGORIES)
@@ -234,10 +237,11 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   const refresh = async (): Promise<void> => {
     setLoading(true)
     setLoadFailed(false)
+    setStorageState('unknown')
     try {
       const [description, backups] = await Promise.all([props.backupDescribe(), props.backupList()])
       const managed = 'location' in description && description.location.kind === 'managed'
-      setManagedStorage(managed)
+      setStorageState(managed ? 'managed' : 'local')
       setDirectory('directory' in description ? description.directory : '')
       setItems(backups)
     }
@@ -256,13 +260,14 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       ([description, backups]) => {
         if (!alive) return
         const managed = 'location' in description && description.location.kind === 'managed'
-        setManagedStorage(managed)
+        setStorageState(managed ? 'managed' : 'local')
         setDirectory('directory' in description ? description.directory : '')
         setItems(backups)
         setLoading(false)
       },
       () => {
         if (!alive) return
+        setStorageState('unknown')
         setLoading(false)
         setLoadFailed(true)
         setFeedback(props.t('backupLoadFailed'))
@@ -271,14 +276,20 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     return () => { alive = false }
   }, [props.backupDescribe, props.backupList, props.t])
 
-  useEffect(() => () => {
-    transferAbort.current?.abort()
-    transferAbort.current = undefined
-    previewAbort.current?.abort()
-    previewAbort.current = undefined
-    const current = activePreview.current
-    activePreview.current = undefined
-    if (current !== undefined) void cancelPreview.current?.(current.id)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      transferAbort.current?.abort()
+      transferAbort.current = undefined
+      previewAbort.current?.abort()
+      previewAbort.current = undefined
+      const current = activePreview.current
+      if (current?.ownership === 'client') {
+        activePreview.current = undefined
+        void cancelPreview.current?.(current.value.id)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -298,14 +309,16 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
 
   const openPreview = (value: BackupPreview): void => {
     const current = activePreview.current
-    if (current !== undefined && current.id !== value.id) void cancelPreview.current?.(current.id)
+    if (current?.ownership === 'client' && current.value.id !== value.id) {
+      void cancelPreview.current?.(current.value.id)
+    }
     const defaults: Partial<Record<BackupCategory, BackupConflictRule>> = {}
     for (const domain of Object.values(value.domains)) {
       for (const [category, summary] of Object.entries(domain.categories)) {
         defaults[category as BackupCategory] = summary.defaultRule
       }
     }
-    activePreview.current = value
+    activePreview.current = { value, ownership: 'client' }
     setPreview(value)
     setRules(defaults)
     setBackupBefore(true)
@@ -313,7 +326,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   }
 
   const releasePreview = (value: BackupPreview): void => {
-    if (activePreview.current?.id === value.id) activePreview.current = undefined
+    if (activePreview.current?.value.id === value.id) activePreview.current = undefined
     void cancelPreview.current?.(value.id)
   }
 
@@ -432,24 +445,35 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   }
 
   const importData = (): void => {
-    if (!preview) return
+    if (!preview || busy) return
+    const ownership = activePreview.current
+    if (ownership?.value.id !== preview.id || ownership.ownership !== 'client') return
+    ownership.ownership = 'importing'
     run(async () => {
       try {
         await props.backupImport({ previewId: preview.id, rules, backupBefore })
-        activePreview.current = undefined
+        if (activePreview.current?.value.id === preview.id) activePreview.current = undefined
+        if (!mounted.current) return
         setDialog(null)
         setPreview(undefined)
         setFeedback(props.t('backupImportSucceeded'))
         props.reloadPage()
       }
       catch (error) {
-        releasePreview(preview)
-        setDialog(null)
-        setPreview(undefined)
         if (error instanceof Error && error.message.includes('预览已失效')) {
+          if (activePreview.current?.value.id === preview.id) activePreview.current = undefined
+          if (!mounted.current) return
+          setDialog(null)
+          setPreview(undefined)
           setFeedback(props.t('backupPreviewExpired'))
           return
         }
+        if (!mounted.current) {
+          if (activePreview.current?.value.id === preview.id) activePreview.current = undefined
+          void cancelPreview.current?.(preview.id)
+          return
+        }
+        if (activePreview.current?.value.id === preview.id) activePreview.current.ownership = 'client'
         throw error
       }
     })
@@ -515,11 +539,13 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     <section className={css.location} aria-labelledby="backup-location-title">
       <div>
         <h3 id="backup-location-title">{props.t('backupLocation')}</h3>
-        {managedStorage
+        {storageState === 'managed'
           ? <span>{props.t('backupManagedStorage')}</span>
-          : <code title={directory}>{directory || props.t('backupLoading')}</code>}
+          : storageState === 'local'
+            ? <code title={directory}>{directory}</code>
+            : <span>{props.t(loadFailed ? 'backupLoadFailed' : 'backupLoading')}</span>}
       </div>
-      {!managedStorage && <div className={css.rowActions}>
+      {storageState === 'local' && <div className={css.rowActions}>
         <button type="button" className={css.textButton} disabled={!directory} onClick={() => {
           void navigator.clipboard.writeText(directory).then(() => {
             setFeedback(props.t('backupPathCopied'))

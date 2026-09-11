@@ -54,8 +54,8 @@ function exhausted(message: string): BackupPublicError {
   return new BackupPublicError('resource-exhausted', message)
 }
 
-function expired(message: string): BackupPublicError {
-  return new BackupPublicError('resource-expired', message)
+function expired(message: string, cause?: unknown): BackupPublicError {
+  return new BackupPublicError('resource-expired', message, cause)
 }
 
 /** Transactional operation names supported by each owned Python backend. */
@@ -86,6 +86,11 @@ export interface BackupServiceOptions {
   now?: () => Date
   /** Ignore user-selected Host paths and use instance-managed storage only. */
   managedStorage?: boolean
+  /** Host-only file adapters used to make archive failures and creation ordering deterministic. */
+  fileOperations?: {
+    readArchive?(path: string, signal?: AbortSignal): Promise<Uint8Array>
+    initializeUpload?(path: string, signal?: AbortSignal): Promise<void>
+  }
 }
 
 /** Client-safe metadata for one direct child of the configured backup directory. */
@@ -142,6 +147,11 @@ interface CoordinatorTransaction {
   transactionId: string
   phase: 'preparing' | 'committing' | 'committed'
   targets: BackupBackend[]
+}
+
+interface ResourceCreation {
+  readonly signal: AbortSignal
+  finish(): void
 }
 
 function errorMessage(error: unknown): string {
@@ -249,6 +259,8 @@ export class BackupService {
   private readonly request: BackupBackendRequest
   private readonly now: () => Date
   private readonly managedStorage: boolean
+  private readonly readArchive: (path: string, signal?: AbortSignal) => Promise<Uint8Array>
+  private readonly initializeUpload: (path: string, signal?: AbortSignal) => Promise<void>
   private readonly previews = new Map<string, PreviewEntry>()
   private readonly previewReservations = new Map<string, PreviewReservation>()
   private readonly uploads = new Map<string, UploadEntry>()
@@ -256,6 +268,10 @@ export class BackupService {
   private downloadCleanupTimer: ReturnType<typeof setTimeout> | undefined
   private previewCleanupTimer: ReturnType<typeof setTimeout> | undefined
   private uploadCleanupTimer: ReturnType<typeof setTimeout> | undefined
+  private disposed = false
+  private resourceCreations = 0
+  private resourceCreationDrain: Promise<void> | undefined
+  private resolveResourceCreationDrain: (() => void) | undefined
 
   constructor(options: BackupServiceOptions) {
     this.dshHome = resolve(options.dshHome)
@@ -263,6 +279,63 @@ export class BackupService {
     this.request = options.request
     this.now = options.now ?? (() => new Date())
     this.managedStorage = options.managedStorage ?? false
+    this.readArchive = options.fileOperations?.readArchive ?? (async (path, signal) => (
+      readFile(path, signal === undefined ? undefined : { signal })
+    ))
+    this.initializeUpload = options.fileOperations?.initializeUpload ?? (async (path, signal) => {
+      await writeFile(path, new Uint8Array(), {
+        flag: 'wx',
+        mode: 0o600,
+        ...signal === undefined ? {} : { signal },
+      })
+    })
+  }
+
+  private beginResourceCreation(signal?: AbortSignal): ResourceCreation {
+    this.assertOpen()
+    this.resourceCreations += 1
+    let finished = false
+    return {
+      signal: signal === undefined ? this.lifecycleSignal : AbortSignal.any([signal, this.lifecycleSignal]),
+      finish: () => {
+        if (finished) return
+        finished = true
+        this.resourceCreations -= 1
+        if (this.resourceCreations === 0) {
+          this.resolveResourceCreationDrain?.()
+          this.resolveResourceCreationDrain = undefined
+          this.resourceCreationDrain = undefined
+        }
+      },
+    }
+  }
+
+  private readonly lifecycleAbort = new AbortController()
+
+  private get lifecycleSignal(): AbortSignal { return this.lifecycleAbort.signal }
+
+  private assertOpen(): void {
+    if (this.disposed) throw expired('备份服务已关闭，请刷新页面后重试')
+  }
+
+  private assertCreationActive(creation: ResourceCreation): void {
+    this.assertOpen()
+    creation.signal.throwIfAborted()
+  }
+
+  private creationFailure(error: unknown): never {
+    if (this.disposed) throw expired('备份服务已关闭，请刷新页面后重试', error)
+    throw error
+  }
+
+  private waitForResourceCreations(): Promise<void> {
+    if (this.resourceCreations === 0) return Promise.resolve()
+    if (this.resourceCreationDrain === undefined) {
+      this.resourceCreationDrain = new Promise<void>((resolve) => {
+        this.resolveResourceCreationDrain = resolve
+      })
+    }
+    return this.resourceCreationDrain
   }
 
   private get settingsPath(): string {
@@ -418,15 +491,15 @@ export class BackupService {
         continue
       }
       try {
-        const { manifest } = inspectBackupArchive(await readFile(path))
+        const { manifest } = inspectBackupArchive(await this.readArchive(path))
         items.push({ ...base, status: 'ready', manifest })
       }
       catch (error) {
-        const problem = errorMessage(error)
+        const unsupported = /更新版本/.test(errorMessage(error))
         items.push({
           ...base,
-          status: /更新版本/.test(problem) ? 'unsupported' : 'damaged',
-          problem,
+          status: unsupported ? 'unsupported' : 'damaged',
+          problem: unsupported ? '备份由更新版本创建，当前版本暂不支持' : '无法读取或验证备份文件',
         })
       }
     }
@@ -451,41 +524,47 @@ export class BackupService {
    * @returns An opaque download id and the exact transfer dimensions.
    */
   async beginDownload(filename: string, signal?: AbortSignal): Promise<{ id: string; filename: string; size: number; chunkSize: number }> {
-    signal?.throwIfAborted()
-    ensureFilename(filename)
-    this.cleanupDownloads()
-    if (this.downloads.size >= MAX_ACTIVE_DOWNLOADS) throw exhausted('已有过多下载，请先完成或取消当前下载')
-    // Reserve before the first await: concurrent starts cannot all pass the
-    // capacity check and then over-allocate immutable archive snapshots.
-    const id = randomUUID()
-    const entry: DownloadEntry = {
-      filename, bytes: undefined, offset: 0, touchedAtMs: this.now().getTime(),
-    }
-    this.downloads.set(id, entry)
-    this.scheduleDownloadCleanup()
+    const creation = this.beginResourceCreation(signal)
+    let id: string | undefined
     try {
+      this.assertCreationActive(creation)
+      ensureFilename(filename)
+      this.cleanupDownloads()
+      if (this.downloads.size >= MAX_ACTIVE_DOWNLOADS) throw exhausted('已有过多下载，请先完成或取消当前下载')
+      // Reserve before the first await: concurrent starts cannot all pass the
+      // capacity check and then over-allocate immutable archive snapshots.
+      id = randomUUID()
+      const entry: DownloadEntry = {
+        filename, bytes: undefined, offset: 0, touchedAtMs: this.now().getTime(),
+      }
+      this.downloads.set(id, entry)
+      this.scheduleDownloadCleanup()
       const path = join(await this.directory(), filename)
-      signal?.throwIfAborted()
+      this.assertCreationActive(creation)
       const info = await lstat(path)
+      this.assertCreationActive(creation)
       if (info.isSymbolicLink() || !info.isFile()) throw rejected('所选备份不是可下载的普通文件')
       if (info.size > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
       const handle = await open(path, 'r')
       let bytes: Uint8Array
       try {
-        bytes = await readStableDownloadSnapshot(handle, info, signal)
+        bytes = await readStableDownloadSnapshot(handle, info, creation.signal)
       }
       finally { await handle.close() }
-      signal?.throwIfAborted()
+      this.assertCreationActive(creation)
       inspectBackupArchive(bytes)
-      if (!this.downloads.has(id)) throw expired('下载会话已失效，请重新下载')
+      if (this.downloads.get(id) !== entry) throw expired('下载会话已失效，请重新下载')
       entry.bytes = bytes
       entry.touchedAtMs = this.now().getTime()
       this.scheduleDownloadCleanup()
       return { id, filename, size: bytes.byteLength, chunkSize: UPLOAD_CHUNK_BYTES }
     }
     catch (error) {
-      this.deleteDownload(id)
-      throw error
+      if (id !== undefined) this.deleteDownload(id)
+      this.creationFailure(error)
+    }
+    finally {
+      creation.finish()
     }
   }
 
@@ -522,6 +601,17 @@ export class BackupService {
 
   /** Release every active transfer resource, remove temporary uploads, and stop expiry timers. */
   async dispose(): Promise<void> {
+    if (!this.disposed) {
+      this.disposed = true
+      this.lifecycleAbort.abort()
+    }
+    if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
+    if (this.previewCleanupTimer !== undefined) clearTimeout(this.previewCleanupTimer)
+    if (this.uploadCleanupTimer !== undefined) clearTimeout(this.uploadCleanupTimer)
+    this.downloadCleanupTimer = undefined
+    this.previewCleanupTimer = undefined
+    this.uploadCleanupTimer = undefined
+    await this.waitForResourceCreations()
     if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
     if (this.previewCleanupTimer !== undefined) clearTimeout(this.previewCleanupTimer)
     if (this.uploadCleanupTimer !== undefined) clearTimeout(this.uploadCleanupTimer)
@@ -558,24 +648,34 @@ export class BackupService {
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
   async previewFile(path: string, signal?: AbortSignal): Promise<BackupPreview> {
-    signal?.throwIfAborted()
-    const info = await lstat(path)
-    if (info.isSymbolicLink()) throw rejected('不支持通过符号链接读取备份文件')
-    if (!info.isFile()) throw rejected('所选路径不是备份文件')
-    if (info.size > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
-    const reservationId = this.reservePreview(info.size)
+    const creation = this.beginResourceCreation(signal)
+    let reservationId: string | undefined
     try {
+      this.assertCreationActive(creation)
+      const info = await lstat(path)
+      this.assertCreationActive(creation)
+      if (info.isSymbolicLink()) throw rejected('不支持通过符号链接读取备份文件')
+      if (!info.isFile()) throw rejected('所选路径不是备份文件')
+      if (info.size > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
+      reservationId = this.reservePreview(info.size)
       const handle = await open(path, 'r')
       let bytes: Uint8Array
       try {
-        bytes = await readStableDownloadSnapshot(handle, info, signal)
+        bytes = await readStableDownloadSnapshot(handle, info, creation.signal)
       }
       finally { await handle.close() }
-      return await this.buildPreview(bytes, basename(path), reservationId, signal)
+      this.assertCreationActive(creation)
+      const value = await this.buildPreview(bytes, basename(path), reservationId, creation.signal)
+      this.assertCreationActive(creation)
+      reservationId = undefined
+      return value
     }
     catch (error) {
-      this.releasePreviewReservation(reservationId)
-      throw error
+      if (reservationId !== undefined) this.cancelPreview(reservationId)
+      this.creationFailure(error)
+    }
+    finally {
+      creation.finish()
     }
   }
 
@@ -587,15 +687,23 @@ export class BackupService {
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
   async previewBytes(bytes: Uint8Array, filename = '外部备份.pabackup', signal?: AbortSignal): Promise<BackupPreview> {
-    signal?.throwIfAborted()
-    if (bytes.byteLength > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
-    const reservationId = this.reservePreview(bytes.byteLength)
+    const creation = this.beginResourceCreation(signal)
+    let reservationId: string | undefined
     try {
-      return await this.buildPreview(bytes, filename, reservationId, signal)
+      this.assertCreationActive(creation)
+      if (bytes.byteLength > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
+      reservationId = this.reservePreview(bytes.byteLength)
+      const value = await this.buildPreview(bytes, filename, reservationId, creation.signal)
+      this.assertCreationActive(creation)
+      reservationId = undefined
+      return value
     }
     catch (error) {
-      this.releasePreviewReservation(reservationId)
-      throw error
+      if (reservationId !== undefined) this.cancelPreview(reservationId)
+      this.creationFailure(error)
+    }
+    finally {
+      creation.finish()
     }
   }
 
@@ -729,42 +837,52 @@ export class BackupService {
    * @returns An opaque upload id and maximum raw chunk size.
    */
   async beginUpload(input: { filename: string; size: number }, signal?: AbortSignal): Promise<{ id: string; chunkSize: number }> {
-    signal?.throwIfAborted()
-    await this.cleanupUploads()
-    signal?.throwIfAborted()
-    if (!input.filename.endsWith('.pabackup')) throw rejected('请选择 .pabackup 备份文件')
-    if (!Number.isSafeInteger(input.size) || input.size <= 0) throw rejected('备份文件不能为空')
-    if (input.size > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
-    if (this.uploads.size >= MAX_ACTIVE_UPLOADS) throw exhausted('已有过多上传，请先完成或取消当前上传')
-    const reservedBytes = [...this.uploads.values()].reduce((total, upload) => total + upload.declaredSize, 0)
-    if (reservedBytes + input.size > MAX_RESERVED_UPLOAD_BYTES) {
-      throw exhausted('上传总大小超过 128 MiB 限制，请先完成或取消当前上传')
-    }
-    const id = randomUUID()
-    const path = join(this.uploadDirectory, `${id}.part`)
-    this.uploads.set(id, {
-      filename: basename(input.filename),
-      declaredSize: input.size,
-      path,
-      receivedSize: 0,
-      touchedAtMs: this.now().getTime(),
-      busy: false,
-      settled: undefined,
-      settle: undefined,
-    })
-    this.scheduleUploadCleanup()
+    const creation = this.beginResourceCreation(signal)
+    let id: string | undefined
+    let path: string | undefined
+    let upload: UploadEntry | undefined
     try {
+      this.assertCreationActive(creation)
+      await this.cleanupUploads()
+      this.assertCreationActive(creation)
+      if (!input.filename.endsWith('.pabackup')) throw rejected('请选择 .pabackup 备份文件')
+      if (!Number.isSafeInteger(input.size) || input.size <= 0) throw rejected('备份文件不能为空')
+      if (input.size > MAX_COMPRESSED_BYTES) throw exhausted('备份文件超过 64 MiB 限制')
+      if (this.uploads.size >= MAX_ACTIVE_UPLOADS) throw exhausted('已有过多上传，请先完成或取消当前上传')
+      const reservedBytes = [...this.uploads.values()].reduce((total, current) => total + current.declaredSize, 0)
+      if (reservedBytes + input.size > MAX_RESERVED_UPLOAD_BYTES) {
+        throw exhausted('上传总大小超过 128 MiB 限制，请先完成或取消当前上传')
+      }
+      id = randomUUID()
+      path = join(this.uploadDirectory, `${id}.part`)
+      upload = {
+        filename: basename(input.filename),
+        declaredSize: input.size,
+        path,
+        receivedSize: 0,
+        touchedAtMs: this.now().getTime(),
+        busy: false,
+        settled: undefined,
+        settle: undefined,
+      }
+      this.uploads.set(id, upload)
+      this.scheduleUploadCleanup()
       await mkdir(this.uploadDirectory, { recursive: true, mode: 0o700 })
-      signal?.throwIfAborted()
-      await writeFile(path, new Uint8Array(), { flag: 'wx', mode: 0o600, signal })
-      signal?.throwIfAborted()
+      this.assertCreationActive(creation)
+      if (this.uploads.get(id) !== upload) throw expired('上传会话已失效，请重新选择文件')
+      await this.initializeUpload(path, creation.signal)
+      this.assertCreationActive(creation)
+      if (this.uploads.get(id) !== upload) throw expired('上传会话已失效，请重新选择文件')
       return { id, chunkSize: UPLOAD_CHUNK_BYTES }
     }
     catch (error) {
-      this.uploads.delete(id)
+      if (id !== undefined) this.uploads.delete(id)
       this.scheduleUploadCleanup()
-      await this.unlinkUpload(path)
-      throw error
+      if (path !== undefined) await this.unlinkUpload(path)
+      this.creationFailure(error)
+    }
+    finally {
+      creation.finish()
     }
   }
 
@@ -821,25 +939,39 @@ export class BackupService {
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
   async inspectUpload(id: string, signal?: AbortSignal): Promise<BackupPreview> {
-    signal?.throwIfAborted()
-    await this.cleanupUploads()
-    signal?.throwIfAborted()
-    const upload = this.uploads.get(id)
-    if (!upload) throw expired('上传会话已失效，请重新选择文件')
-    if (upload.busy) throw rejected('上传会话正忙，请稍后重试')
-    if (upload.receivedSize !== upload.declaredSize) throw rejected('备份文件尚未上传完整')
-    this.uploads.delete(id)
-    this.scheduleUploadCleanup()
+    const creation = this.beginResourceCreation(signal)
+    let upload: UploadEntry | undefined
     let reservationId: string | undefined
     try {
+      this.assertCreationActive(creation)
+      await this.cleanupUploads()
+      this.assertCreationActive(creation)
+      upload = this.uploads.get(id)
+      if (!upload) throw expired('上传会话已失效，请重新选择文件')
+      if (upload.busy) throw rejected('上传会话正忙，请稍后重试')
+      if (upload.receivedSize !== upload.declaredSize) throw rejected('备份文件尚未上传完整')
+      this.uploads.delete(id)
+      this.scheduleUploadCleanup()
       reservationId = this.reservePreview(upload.declaredSize)
-      const preview = await this.buildPreview(await readFile(upload.path, { signal }), upload.filename, reservationId, signal)
+      const bytes = await this.readArchive(upload.path, creation.signal)
+      this.assertCreationActive(creation)
+      const preview = await this.buildPreview(bytes, upload.filename, reservationId, creation.signal)
+      this.assertCreationActive(creation)
       reservationId = undefined
       return preview
     }
+    catch (error) {
+      if (reservationId !== undefined) this.cancelPreview(reservationId)
+      reservationId = undefined
+      return this.creationFailure(error)
+    }
     finally {
-      if (reservationId !== undefined) this.releasePreviewReservation(reservationId)
-      await this.unlinkUpload(upload.path)
+      try {
+        if (upload !== undefined) await this.unlinkUpload(upload.path)
+      }
+      finally {
+        creation.finish()
+      }
     }
   }
 
@@ -878,6 +1010,7 @@ export class BackupService {
   }
 
   private reservePreview(reservedBytes: number): string {
+    this.assertOpen()
     this.cleanupPreviews()
     if (this.previews.size + this.previewReservations.size >= MAX_ACTIVE_PREVIEWS) {
       throw exhausted('已有过多导入预览，请先完成或取消当前导入')
@@ -904,6 +1037,7 @@ export class BackupService {
   private schedulePreviewCleanup(): void {
     if (this.previewCleanupTimer !== undefined) clearTimeout(this.previewCleanupTimer)
     this.previewCleanupTimer = undefined
+    if (this.disposed) return
     const expiries = [
       ...[...this.previews.values()].map(entry => entry.expiresAtMs),
       ...[...this.previewReservations.values()].map(entry => entry.expiresAtMs),
@@ -933,6 +1067,7 @@ export class BackupService {
   private scheduleDownloadCleanup(): void {
     if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
     this.downloadCleanupTimer = undefined
+    if (this.disposed) return
     if (this.downloads.size === 0) return
     const expiresAt = Math.min(...[...this.downloads.values()].map(entry => entry.touchedAtMs + DOWNLOAD_TTL_MS))
     const delay = Math.max(1, expiresAt - this.now().getTime())
@@ -971,6 +1106,7 @@ export class BackupService {
   private scheduleUploadCleanup(): void {
     if (this.uploadCleanupTimer !== undefined) clearTimeout(this.uploadCleanupTimer)
     this.uploadCleanupTimer = undefined
+    if (this.disposed) return
     const idle = [...this.uploads.values()].filter(upload => !upload.busy)
     if (idle.length === 0) return
     const expiresAt = Math.min(...idle.map(upload => upload.touchedAtMs + UPLOAD_TTL_MS))
