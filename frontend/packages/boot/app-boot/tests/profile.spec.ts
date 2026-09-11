@@ -4,7 +4,7 @@
  * empty-root composition, and the installation module-fallback healing.
  */
 
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -342,6 +342,34 @@ describe('healProfilesModuleFallback', () => {
     healProfilesModuleFallback(anchor, home)
     const before = readlinkSync(join(fallback, 'dep-of-a'))
     expect(before).toContain('dep-of-a')
+  })
+
+  it('walks dependencies from the real location of a symlinked package', () => {
+    const root = tmp()
+    const appDir = join(root, 'app')
+    const storeDir = join(root, 'store')
+    const bundleDir = join(storeDir, 'bundle-a')
+    const pluginDir = join(storeDir, 'node_modules', 'plugin-a')
+    mkdirSync(join(appDir, 'node_modules'), { recursive: true })
+    mkdirSync(bundleDir, { recursive: true })
+    mkdirSync(pluginDir, { recursive: true })
+    writeFileSync(join(appDir, 'package.json'), JSON.stringify({
+      dependencies: { 'bundle-a': '0.0.0' },
+      name: 'dsh-app',
+    }))
+    writeFileSync(join(bundleDir, 'package.json'), JSON.stringify({
+      dependencies: { 'plugin-a': '0.0.0' },
+      name: 'bundle-a',
+    }))
+    writeFileSync(join(pluginDir, 'package.json'), JSON.stringify({ name: 'plugin-a' }))
+    symlinkSync(bundleDir, join(appDir, 'node_modules', 'bundle-a'), 'junction')
+    const home = tmp()
+
+    healProfilesModuleFallback(join(appDir, 'package.json'), home)
+
+    const fallback = join(home, 'profiles', 'node_modules')
+    expect(readlinkSync(join(fallback, 'bundle-a'))).toBe(realpathSync(bundleDir))
+    expect(readlinkSync(join(fallback, 'plugin-a'))).toBe(realpathSync(pluginDir))
   })
 
   it('throws when a fallback entry is a real directory', () => {

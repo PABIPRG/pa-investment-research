@@ -3,7 +3,7 @@
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import { appIdentity, packagerIconPath } from '../src/app-identity.ts'
@@ -316,6 +316,61 @@ describe('Electron investment sidecar packaging', () => {
       expect(await realpath(selfLink)).not.toBe(await realpath(stagingDir))
       await expect(stat(join(selfLink, 'node_modules'))).rejects.toMatchObject({ code: 'ENOENT' })
       await expect(stat(join(selfLink, 'out'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
+  it('recursively materializes runtime dependencies of workspace links outside the virtual root', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-root-link-test-'))
+    const workspaceDir = join(rootDir, 'workspace')
+    const baseSourceDir = join(workspaceDir, 'packages', 'bundle', 'base')
+    const pluginSourceDir = join(workspaceDir, 'packages', 'plugin', 'example')
+    const appSourceDir = join(workspaceDir, 'apps', 'electron')
+    const stagingDir = join(rootDir, 'app')
+    const stagedBase = join(stagingDir, 'node_modules', '@deepseek-ai', 'dsh-base')
+    const workspacePlugin = join(
+      workspaceDir,
+      'node_modules',
+      '.pnpm',
+      'node_modules',
+      '@deepseek-ai',
+      'dsh-example',
+    )
+    try {
+      await mkdir(join(baseSourceDir, 'lib'), { recursive: true })
+      await mkdir(join(pluginSourceDir, 'lib'), { recursive: true })
+      await mkdir(appSourceDir, { recursive: true })
+      await mkdir(dirname(stagedBase), { recursive: true })
+      await mkdir(dirname(workspacePlugin), { recursive: true })
+      await writeFile(join(baseSourceDir, 'package.json'), JSON.stringify({
+        dependencies: { '@deepseek-ai/dsh-example': 'workspace:^' },
+        exports: './lib/index.mjs',
+        name: '@deepseek-ai/dsh-base',
+        type: 'module',
+      }))
+      await writeFile(join(baseSourceDir, 'lib', 'index.mjs'), "export { value } from '@deepseek-ai/dsh-example'\n")
+      await writeFile(join(pluginSourceDir, 'package.json'), JSON.stringify({
+        exports: './lib/index.mjs',
+        name: '@deepseek-ai/dsh-example',
+        type: 'module',
+      }))
+      await writeFile(join(pluginSourceDir, 'lib', 'index.mjs'), "export const value = 'recursive dependency'\n")
+      await writeFile(join(appSourceDir, 'package.json'), '{"name":"@deepseek-ai/dsh-electron"}')
+      await writeFile(join(stagingDir, 'package.json'), '{"name":"@deepseek-ai/dsh-electron"}')
+      await symlink(baseSourceDir, stagedBase, 'dir')
+      await symlink(relative(dirname(workspacePlugin), pluginSourceDir), workspacePlugin, 'dir')
+
+      expect(await materializePackagingWorkspaceLinks(stagingDir, workspaceDir, appSourceDir)).toBe(1)
+
+      const baseRequire = createRequire(join(await realpath(stagedBase), 'package.json'))
+      const pluginEntry = baseRequire.resolve('@deepseek-ai/dsh-example')
+      const loadedBase = await import(join(stagedBase, 'lib', 'index.mjs')) as { value: string }
+      expect(loadedBase.value).toBe('recursive dependency')
+      const pluginRelative = relative(await realpath(stagingDir), await realpath(pluginEntry))
+      expect(pluginRelative).not.toBe('..')
+      expect(pluginRelative.startsWith(`..${sep}`)).toBe(false)
+      expect(isAbsolute(pluginRelative)).toBe(false)
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }

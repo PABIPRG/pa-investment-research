@@ -5,7 +5,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { load } from 'js-yaml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createContainerAppPlan } from './build-investment-container-app.ts'
+import {
+  assertConfiguredPluginResolution,
+  configuredPluginNames,
+  createContainerAppPlan,
+} from './build-investment-container-app.ts'
 
 const frontendDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repoRoot = resolve(frontendDir, '..')
@@ -52,6 +56,40 @@ describe('investment container delivery contract', () => {
     ])
     expect(plan.appSourceDir).toBe(join(plan.workspaceDir, 'apps', 'cli'))
     expect(plan.output).toBe(output)
+  })
+
+  it('validates every plugin named by the actual profile from its Loader anchor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-container-plugin-'))
+    roots.push(root)
+    const profileDir = join(root, 'profiles', 'investment-research')
+    const packageRoot = join(root, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-example')
+    const profileAnchor = join(profileDir, 'cordis.yml')
+    await mkdir(packageRoot, { recursive: true })
+    await mkdir(profileDir, { recursive: true })
+    await writeFile(profileAnchor, '[]\n')
+    await writeFile(join(packageRoot, 'package.json'), '{"name":"@deepseek-ai/dsh-example","main":"index.js"}\n')
+    await writeFile(join(packageRoot, 'index.js'), 'export default {}\n')
+
+    const names = configuredPluginNames(`
+- id: example
+  name: '@deepseek-ai/dsh-example'
+- id: example-subpath
+  name: "@deepseek-ai/dsh-example/index.js"
+`)
+
+    expect(names).toEqual(['@deepseek-ai/dsh-example', '@deepseek-ai/dsh-example/index.js'])
+    expect(() => { assertConfiguredPluginResolution(profileAnchor, names) }).not.toThrow()
+  })
+
+  it('fails packaging when a configured plugin is absent from the production deployment', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-container-missing-plugin-'))
+    roots.push(root)
+    const profileAnchor = join(root, 'profiles', 'investment-research', 'cordis.yml')
+    await mkdir(dirname(profileAnchor), { recursive: true })
+    await writeFile(profileAnchor, '[]\n')
+
+    expect(() => { assertConfiguredPluginResolution(profileAnchor, ['@deepseek-ai/dsh-missing']) })
+      .toThrow(/configured plugin cannot be resolved/u)
   })
 
   it('builds once and keeps the runtime image non-root and dependency-install free', async () => {

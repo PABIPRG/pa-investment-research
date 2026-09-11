@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { lstat, mkdir, mkdtemp, opendir, readlink, realpath, rename, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -46,6 +47,52 @@ async function run(command: string, args: readonly string[], cwd: string): Promi
   if (exitCode !== 0) throw new Error(`container application deploy failed with exit code ${exitCode}`)
 }
 
+async function capture(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string> {
+  let stdout = ''
+  const exitCode = await new Promise<number>((resolveExit, reject) => {
+    const child = spawn(command, [...args], {
+      cwd,
+      env: { ...process.env, ...environment },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    })
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk })
+    child.once('error', reject)
+    child.once('exit', (code) => { resolveExit(code ?? 1) })
+  })
+  if (exitCode !== 0) throw new Error(`container application inspection failed with exit code ${exitCode}`)
+  return stdout
+}
+
+/** Extract the configured plugin module specifiers from a dumped profile. */
+export function configuredPluginNames(config: string): string[] {
+  const names = new Set<string>()
+  for (const line of config.split(/\r?\n/u)) {
+    const match = /^  name:\s+(?:'([^']+)'|"([^"]+)"|([^\s#]+))\s*$/u.exec(line)
+    const name = match?.[1] ?? match?.[2] ?? match?.[3]
+    if (name) names.add(name)
+  }
+  if (names.size === 0) throw new Error('container application profile does not configure any plugins')
+  return [...names]
+}
+
+/** Verify that every dynamically loaded profile plugin resolves from the Loader's exact anchor. */
+export function assertConfiguredPluginResolution(profileAnchor: string, pluginNames: readonly string[]): void {
+  const profileRequire = createRequire(profileAnchor)
+  for (const pluginName of pluginNames) {
+    try {
+      profileRequire.resolve(pluginName)
+    } catch {
+      throw new Error(`configured plugin cannot be resolved from its container profile: ${pluginName}`)
+    }
+  }
+}
+
 async function assertRelocatable(root: string): Promise<void> {
   const canonicalRoot = await realpath(root)
   const pending = [root]
@@ -79,6 +126,17 @@ export async function buildContainerApp(options: BuildContainerAppOptions): Prom
   try {
     await run(plan.command, plan.args, plan.workspaceDir)
     await materializePackagingWorkspaceLinks(plan.stagingDir, plan.workspaceDir, plan.appSourceDir, 'linux')
+    const profileHome = join(rootDir, 'profile-home')
+    const defaultConfig = await capture(
+      process.execPath,
+      [join(plan.stagingDir, 'lib', 'bin.js'), '--profile', 'investment-research', '--dump-default-config'],
+      plan.stagingDir,
+      { DSH_HOME: profileHome },
+    )
+    assertConfiguredPluginResolution(
+      join(profileHome, 'profiles', 'investment-research', 'cordis.yml'),
+      configuredPluginNames(defaultConfig),
+    )
     await assertRelocatable(plan.stagingDir)
     await rm(output, { force: true, recursive: true })
     await rename(plan.stagingDir, output)
