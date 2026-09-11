@@ -59,10 +59,15 @@ describe('investment container delivery contract', () => {
     const dockerignore = await readFile(join(repoRoot, '.dockerignore'), 'utf8')
 
     const pinnedBase = 'node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106'
+    const sidecarBuild = 'RUN CI=true pnpm run investment:sidecar:build --target linux-x64'
+    const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
     expect(dockerfile).toContain(`FROM ${pinnedBase} AS build`)
     expect(dockerfile).toContain('pnpm install --frozen-lockfile')
-    expect(dockerfile).toContain('investment:sidecar:build --target linux-x64')
-    expect(dockerfile).toContain('build-investment-container-app.ts')
+    expect(dockerfile).toContain(sidecarBuild)
+    expect(dockerfile).toContain(applicationDeploy)
+    expect(dockerfile.indexOf(sidecarBuild)).toBeLessThan(dockerfile.indexOf(applicationDeploy))
+    expect(dockerfile).not.toContain('confirmModulesPurge=false')
+    expect(dockerfile).not.toMatch(/^ENV CI=/mu)
     expect(dockerfile).toContain(`FROM ${pinnedBase} AS runtime`)
     expect(dockerfile).toMatch(/^USER dsh$/mu)
     expect(dockerfile).toContain('install -d -m 0700 -o dsh -g dsh /var/lib/dsh')

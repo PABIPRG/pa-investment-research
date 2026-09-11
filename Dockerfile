@@ -17,8 +17,9 @@ COPY . .
 WORKDIR /src/frontend
 RUN pnpm install --frozen-lockfile
 RUN pnpm run build:lib && pnpm run build:web
+# Run the final pnpm command non-interactively before production deploy changes the shared modules state.
+RUN CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 RUN node --import tsx/esm scripts/build-investment-container-app.ts --output /opt/dsh
-RUN pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 
 FROM node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106 AS runtime
 
