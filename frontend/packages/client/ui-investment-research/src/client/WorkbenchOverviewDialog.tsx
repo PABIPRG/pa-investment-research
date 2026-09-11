@@ -359,6 +359,7 @@ function HoldingsSyncPanel({
   const [syncing, setSyncing] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState('')
+  const [selectedAccountMode, setSelectedAccountMode] = useState('')
   const [providerNotice, setProviderNotice] = useState('')
   const [providerError, setProviderError] = useState('')
   const [error, setError] = useState('')
@@ -375,13 +376,20 @@ function HoldingsSyncPanel({
   const sourceRecord = asRecord(source.state.value)
   const configRecord = asRecord(config.state.value)
   const configuredProvider = text(asRecord(configRecord.effective).HOLDINGS_PROVIDER, '')
+  const configuredAccountMode = text(asRecord(configRecord.effective).HOLDINGS_ACCOUNT_MODE, '')
   const provider = selectedProvider || configuredProvider || text(sourceRecord.provider, 'manual')
+  const accountMode = selectedAccountMode || configuredAccountMode || text(sourceRecord.account_mode, 'real')
+  const accountHoldingLabel = accountMode === 'simulated' ? '模拟持仓' : '真实持仓'
+  const sourceAccountModes = sourceRecord.supported_account_modes
+  const supportedAccountModes = Array.isArray(sourceAccountModes)
+    ? sourceAccountModes.filter((value): value is string => value === 'real' || value === 'simulated')
+    : ['real']
   const providerOptions = holdingsProviderOptions(provider)
   const available = source.state.loaded && !source.busy && sourceRecord.available === true
   const sourceReason = text(sourceRecord.reason, '')
   const clients = records(asRecord(detected.state.value).clients)
   // 空态引导由后端按平台给出：Windows 讲 xiadan.exe / EASYTRADER_CLIENT_PATH，
-  // macOS 讲装同花顺 Mac 版与辅助功能授权。前端不再写死其中一种。
+  // macOS 讲装同花顺 Mac 版与自动化/辅助功能授权。前端不再写死其中一种。
   const detectHint = text(asRecord(detected.state.value).hint, '')
   const detecting = source.busy || config.busy || detected.busy
   const canSync = available && provider !== 'manual' && !switching && !syncing && result === undefined
@@ -405,6 +413,25 @@ function HoldingsSyncPanel({
     }
   }
 
+  const selectAccountMode = async (value: 'real' | 'simulated'): Promise<void> => {
+    if (switching || value === accountMode || !supportedAccountModes.includes(value)) return
+    setSwitching(true); onSavingChange(true); setProviderError(''); setProviderNotice(''); setError(''); setResult(undefined)
+    try {
+      await requestData({
+        operation: 'trading-core.holdings-user-config-update',
+        input: { entries: { HOLDINGS_ACCOUNT_MODE: value } },
+      })
+      setSelectedAccountMode(value)
+      setProviderNotice(`已切换为${value === 'simulated' ? '模拟操盘' : '真实操盘'}，当前窗口已生效。`)
+      source.run({ operation: 'trading-core.holdings-source' })
+      config.run({ operation: 'trading-core.holdings-user-config' })
+    } catch (reason) {
+      setProviderError(productErrorText(reason))
+    } finally {
+      setSwitching(false); onSavingChange(false)
+    }
+  }
+
   const sync = async (): Promise<void> => {
     if (!canSync) return
     setSyncing(true); onSavingChange(true); setError('')
@@ -419,15 +446,34 @@ function HoldingsSyncPanel({
   }
 
   return (
-    <section aria-label="从券商同步持仓">
+    <section className={css.workbenchSyncPanel} aria-label="从券商同步持仓">
       <div className={css.workbenchImportHeader}>
-        <div><strong>从券商同步持仓</strong><span>读取本机券商客户端里的真实持仓</span></div>
+        <div><strong>从券商同步持仓</strong><span>读取本机券商客户端里的{accountHoldingLabel}</span></div>
         <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={syncing || switching} onClick={onBack}>返回持仓明细</button>
       </div>
       <div className={css.workbenchImportGuide}>
         <strong>同步会整体替换当前持仓</strong>
-        <span>读取券商客户端中的真实持仓覆盖本地已保存的持仓，并重新计算组合风险。请先启动并登录券商客户端，并让其窗口停留在“持仓”页。</span>
+        <span>读取券商客户端中的{accountHoldingLabel}覆盖本地已保存的持仓，并重新计算组合风险。请先启动并登录券商客户端；系统会优先自动进入对应账户，必要时再提示一次辅助操作。</span>
       </div>
+      {provider !== 'manual' && (
+        <div className={css.workbenchAccountMode}>
+          <div><strong>操盘账户</strong><span>{accountMode === 'simulated' ? '用于先验证投研方案，不会读取真实账户' : '读取已登录券商的真实账户持仓'}</span></div>
+          <div className={css.workbenchAccountModeChoices} role="group" aria-label="操盘账户">
+            <button
+              type="button"
+              aria-pressed={accountMode === 'real'}
+              disabled={switching || syncing || !supportedAccountModes.includes('real')}
+              onClick={() => { void selectAccountMode('real') }}
+            >真实操盘</button>
+            <button
+              type="button"
+              aria-pressed={accountMode === 'simulated'}
+              disabled={switching || syncing || !supportedAccountModes.includes('simulated')}
+              onClick={() => { void selectAccountMode('simulated') }}
+            >模拟操盘</button>
+          </div>
+        </div>
+      )}
       <div className={css.sourceFacts}>
         <label className={css.sourceSelect}>
           <span>数据源</span>
@@ -508,7 +554,7 @@ function HoldingsSyncPanel({
       )}
       {result !== undefined && (
         <div className={css.workbenchImportPreview}>
-          <div><strong>已同步持仓</strong><span>{result.length} 条</span></div>
+          <div><strong>已同步{accountHoldingLabel}</strong><span>{result.length} 条</span></div>
           <div className={css.workbenchImportTableWrap}>
             <table>
               <thead><tr><th>股票代码</th><th>数量</th><th>成本价</th></tr></thead>
@@ -529,13 +575,13 @@ function HoldingsSyncPanel({
       <div className={css.workbenchImportCommit}>
         <div aria-label="同步范围">
           {result === undefined
-            ? <span>{provider === 'manual' ? '手动模式不读取券商持仓' : '读取真实持仓并整体替换当前持仓'}</span>
-            : <strong>已同步 {result.length} 条持仓</strong>}
+            ? <span>{provider === 'manual' ? '手动模式不读取券商持仓' : `读取${accountHoldingLabel === '模拟持仓' ? '模拟账户持仓' : '真实持仓'}并整体替换当前持仓`}</span>
+            : <strong>已同步{accountHoldingLabel} · {result.length} 条</strong>}
         </div>
         {result === undefined
           ? (
             <button type="button" className={css.primaryButton} aria-busy={syncing} disabled={!canSync} onClick={() => { void sync() }}>
-              {syncing ? '正在读取券商持仓…' : '同步并替换持仓'}
+              {syncing ? `正在读取${accountHoldingLabel}…` : `同步${accountHoldingLabel}`}
             </button>
           )
           : <button type="button" className={css.primaryButton} onClick={onBack}>完成</button>}

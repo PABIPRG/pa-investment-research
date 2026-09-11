@@ -90,6 +90,9 @@ class HoldingsUserConfigRequest(BaseModel):
         for key in value:
             if not pattern.match(key):
                 raise ValueError(f"不合法的环境变量名: {key}")
+        account_mode = value.get("HOLDINGS_ACCOUNT_MODE")
+        if account_mode is not None and account_mode.strip().lower() not in {"real", "simulated"}:
+            raise ValueError("HOLDINGS_ACCOUNT_MODE 仅支持 real 或 simulated")
         return value
 
 

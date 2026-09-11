@@ -20,7 +20,9 @@ class TestHoldingsUserConfigAPI(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_user_config_dir = settings.user_config_dir
         self.original_provider = settings.holdings_provider
+        self.original_account_mode = getattr(settings, "holdings_account_mode", "real")
         self.original_provider_env = os.environ.get("HOLDINGS_PROVIDER")
+        self.original_account_mode_env = os.environ.get("HOLDINGS_ACCOUNT_MODE")
         settings.user_config_dir = Path(self.temp_dir.name)
         self.app = create_app()
         self.client = TestClient(self.app)
@@ -30,10 +32,15 @@ class TestHoldingsUserConfigAPI(unittest.TestCase):
 
         settings.user_config_dir = self.original_user_config_dir
         settings.holdings_provider = self.original_provider
+        settings.holdings_account_mode = self.original_account_mode
         if self.original_provider_env is None:
             os.environ.pop("HOLDINGS_PROVIDER", None)
         else:
             os.environ["HOLDINGS_PROVIDER"] = self.original_provider_env
+        if self.original_account_mode_env is None:
+            os.environ.pop("HOLDINGS_ACCOUNT_MODE", None)
+        else:
+            os.environ["HOLDINGS_ACCOUNT_MODE"] = self.original_account_mode_env
         self.temp_dir.cleanup()
 
     def test_get_returns_backend_env_and_effective(self):
@@ -43,6 +50,7 @@ class TestHoldingsUserConfigAPI(unittest.TestCase):
         self.assertIn("backend_env", body)
         self.assertIn("effective", body)
         self.assertIn("HOLDINGS_PROVIDER", body["effective"])
+        self.assertIn("HOLDINGS_ACCOUNT_MODE", body["effective"])
         self.assertIsInstance(body["backend_env"], dict)
 
     def test_put_applies_provider_without_restart(self):
@@ -66,6 +74,23 @@ class TestHoldingsUserConfigAPI(unittest.TestCase):
         resp = self.client.get("/holdings/user-config")
         body = resp.json()
         self.assertEqual(body["backend_env"].get("HOLDINGS_PROVIDER"), "easytrader")
+
+    def test_put_applies_account_mode_without_restart(self):
+        resp = self.client.put("/holdings/user-config", json={
+            "entries": {"HOLDINGS_ACCOUNT_MODE": "simulated"},
+        })
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertFalse(body["restart_required"])
+        self.assertEqual(body["effective"]["HOLDINGS_ACCOUNT_MODE"], "simulated")
+
+    def test_put_rejects_unknown_account_mode(self):
+        resp = self.client.put("/holdings/user-config", json={
+            "entries": {"HOLDINGS_ACCOUNT_MODE": "paper-ish"},
+        })
+
+        self.assertEqual(resp.status_code, 422)
 
     def test_put_rejects_invalid_key(self):
         resp = self.client.put("/holdings/user-config", json={

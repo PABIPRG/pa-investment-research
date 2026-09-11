@@ -1147,12 +1147,12 @@ describe('研究工作台', () => {
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-source')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-detect')).toHaveLength(1)
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '同步并替换持仓' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '同步真实持仓' }))
     await waitFor(() => {
       expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.holdings-sync' })
     })
     expect((await within(dialog).findByRole('status')).textContent).toContain('已同步 2 条持仓')
-    expect(within(dialog).getByText('已同步持仓')).toBeTruthy()
+    expect(within(dialog).getByText('已同步真实持仓')).toBeTruthy()
     expect(within(dialog).getByRole('cell', { name: '000001' })).toBeTruthy()
 
     fireEvent.click(within(dialog).getByRole('button', { name: '返回持仓明细' }))
@@ -1164,6 +1164,61 @@ describe('研究工作台', () => {
         .filter(([request]) => request.operation === 'trading-core.holdings').length).toBeGreaterThan(holdingsReads)
     })
     expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+  })
+
+  it('切换模拟操盘后明确按模拟账户同步并保留当前窗口选择', async () => {
+    let accountMode = 'real'
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-source') {
+        return {
+          provider: 'mac_ths', label: '同花顺（macOS）', available: true, reason: null,
+          account_mode: accountMode, supported_account_modes: ['real', 'simulated'],
+        }
+      }
+      if (request.operation === 'trading-core.holdings-user-config') {
+        return {
+          backend_env: { HOLDINGS_PROVIDER: 'mac_ths', HOLDINGS_ACCOUNT_MODE: accountMode },
+          effective: { HOLDINGS_PROVIDER: 'mac_ths', HOLDINGS_ACCOUNT_MODE: accountMode },
+        }
+      }
+      if (request.operation === 'trading-core.holdings-user-config-update') {
+        accountMode = String((request.input?.entries as Record<string, unknown>).HOLDINGS_ACCOUNT_MODE)
+        return {
+          written: { HOLDINGS_ACCOUNT_MODE: accountMode },
+          effective: { HOLDINGS_PROVIDER: 'mac_ths', HOLDINGS_ACCOUNT_MODE: accountMode },
+          restart_required: false,
+        }
+      }
+      if (request.operation === 'trading-core.holdings-detect') {
+        return { clients: [], cached: false, age_seconds: 0 }
+      }
+      if (request.operation === 'trading-core.holdings-sync') {
+        return {
+          provider: 'mac_ths', account_mode: accountMode, account_label: '模拟操盘', saved: 1,
+          items: [{ ticker: '000001', quantity: 300, cost_price: 11.2 }],
+        }
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+
+    const accountGroup = await within(dialog).findByRole('group', { name: '操盘账户' })
+    const simulation = within(accountGroup).getByRole('button', { name: '模拟操盘' })
+    fireEvent.click(simulation)
+
+    expect(await within(dialog).findByText('已切换为模拟操盘，当前窗口已生效。')).toBeTruthy()
+    expect(simulation.getAttribute('aria-pressed')).toBe('true')
+    expect(requestData).toHaveBeenCalledWith({
+      operation: 'trading-core.holdings-user-config-update',
+      input: { entries: { HOLDINGS_ACCOUNT_MODE: 'simulated' } },
+    })
+    expect(within(dialog).getByText(/读取模拟账户持仓并整体替换/)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: '同步模拟持仓' }))
+    expect(await within(dialog).findByText('已同步模拟持仓')).toBeTruthy()
   })
 
   it('在持仓弹窗用可读名称切换数据源并立即刷新状态', async () => {
@@ -1209,7 +1264,7 @@ describe('研究工作台', () => {
     })
     expect(within(dialog).queryByText('本机券商客户端')).toBeNull()
     expect(within(dialog).getByText('手动模式不读取券商持仓')).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: '同步并替换持仓' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '同步真实持仓' }).hasAttribute('disabled')).toBe(true)
   })
 
   it('数据源不可用时说明原因并禁止同步', async () => {
@@ -1234,7 +1289,7 @@ describe('研究工作台', () => {
     const warning = await within(dialog).findByRole('status')
     expect(warning.textContent).toContain('券商客户端未运行')
     expect(within(dialog).getByText('不可用')).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: '同步并替换持仓' }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '同步真实持仓' }).hasAttribute('disabled')).toBe(true)
     expect(await within(dialog).findByText(/未在本机发现券商客户端/)).toBeTruthy()
     expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings-sync')).toBe(false)
 

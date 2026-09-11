@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""QMTProvider：真券商持仓接入（miniQMT / xtquant）。
+"""QMTProvider：真实或模拟券商持仓接入（miniQMT / xtquant）。
 
 原理：
   QMT（迅投）是券商提供的量化交易终端，miniQMT/xtquant 是其 Python 接口。
@@ -18,6 +18,7 @@
 
 配置（.env）：
   QMT_ACCOUNT_ID=                     # 券商资金账号
+  QMT_SIM_ACCOUNT_ID=                 # 模拟账号（使用 simulated 时必填）
   QMT_SESSION_ID=888888               # xtquant 会话 ID（可自定义）
 
 用法：
@@ -38,7 +39,7 @@ import re
 
 from ..config import settings
 from ..schemas import HoldingItem
-from .base import HoldingsProvider, ProviderUnavailable
+from .base import HoldingsProvider, ProviderUnavailable, current_account_mode
 
 log = logging.getLogger(__name__)
 
@@ -62,9 +63,10 @@ class QMTProvider(HoldingsProvider):
 
     name = "qmt"
 
-    def __init__(self) -> None:
+    def __init__(self, account_mode: str | None = None) -> None:
         self._imported = False
         self._session = None
+        self._account_mode = account_mode or current_account_mode()
         try:
             import xtquant  # noqa: F401
 
@@ -84,7 +86,7 @@ class QMTProvider(HoldingsProvider):
         """
         if not self._imported:
             return False
-        if not settings.qmt_account_id:
+        if not self._account_id():
             return False
         if not self._miniqmt_running():
             return False
@@ -104,9 +106,11 @@ class QMTProvider(HoldingsProvider):
                 "xtquant 未安装：pip install xtquant。"
                 "详见 docs/券商接入方案.md §QMT。"
             )
-        if not settings.qmt_account_id:
+        account_id = self._account_id()
+        if not account_id:
+            key = "QMT_SIM_ACCOUNT_ID" if self._account_mode == "simulated" else "QMT_ACCOUNT_ID"
             raise ProviderUnavailable(
-                "QMT_ACCOUNT_ID 未配置：需提供券商资金账号。"
+                f"{key} 未配置：需提供对应的 QMT 账号。"
                 "详见 docs/券商接入方案.md §QMT。"
             )
         if not self._miniqmt_running():
@@ -118,7 +122,7 @@ class QMTProvider(HoldingsProvider):
             from xtquant.xttype import StockAccount
 
             session = self._get_session()
-            account = StockAccount(settings.qmt_account_id, "STOCK")
+            account = StockAccount(account_id, "STOCK")
             raw_positions = session.query_stock_positions(account)
         except Exception as exc:
             log.error("QMT 连接/查询失败: %s", exc, exc_info=True)
@@ -154,7 +158,7 @@ class QMTProvider(HoldingsProvider):
             from xtquant.xttype import StockAccount
 
             session = self._get_session()
-            account = StockAccount(settings.qmt_account_id, "STOCK")
+            account = StockAccount(self._account_id(), "STOCK")
             asset = session.query_stock_asset(account)
             return {
                 "total_asset": float(asset.total_asset) if asset.total_asset else 0.0,
@@ -167,6 +171,11 @@ class QMTProvider(HoldingsProvider):
             raise ProviderUnavailable(f"QMT 资金查询失败: {exc}") from exc
 
     # ---- 内部方法 ----
+
+    def _account_id(self) -> str:
+        if self._account_mode == "simulated":
+            return getattr(settings, "qmt_sim_account_id", "") or ""
+        return settings.qmt_account_id
 
     def _get_session(self):
         """获取/缓存 XtQuantTrader 会话（懒初始化）。"""
