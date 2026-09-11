@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  containerLeaseSupersedesOwner,
   coordinateInvestmentInstance,
   INVESTMENT_INSTANCE_CONFLICT_CODE,
   investmentInstanceLockDirectory,
@@ -26,6 +27,13 @@ afterEach(async () => {
 })
 
 describe('investment application instance coordination', () => {
+  it('requires a different recorded container token before ignoring a PID collision', () => {
+    expect(containerLeaseSupersedesOwner({ containerLeaseToken: 'expired-container-token' }, 'current-container-token')).toBe(true)
+    expect(containerLeaseSupersedesOwner({ containerLeaseToken: 'current-container-token' }, 'current-container-token')).toBe(false)
+    expect(containerLeaseSupersedesOwner({}, 'current-container-token')).toBe(false)
+    expect(containerLeaseSupersedesOwner({ containerLeaseToken: 'expired-container-token' }, undefined)).toBe(false)
+  })
+
   it('reports the live owner and never replaces it without confirmation', async () => {
     const dshHome = await temporaryRoot()
     const web = await coordinateInvestmentInstance({ mode: 'web', dshHome })
@@ -101,6 +109,41 @@ describe('investment application instance coordination', () => {
     const lease = await coordinateInvestmentInstance({ mode: 'electron', dshHome, pollMs: 5 })
     try {
       expect(lease.owner.mode).toBe('electron')
+    } finally {
+      await lease.release()
+    }
+  })
+
+  it('uses the outer container lease to reject a stale inner PID collision', async () => {
+    const dshHome = await temporaryRoot()
+    const instanceRoot = join(dshHome, 'investment-research')
+    const outerLock = join(instanceRoot, '.container-instance.lock')
+    const containerLeaseFile = join(outerLock, 'owner.json')
+    const lockDir = investmentInstanceLockDirectory(dshHome)
+    await mkdir(outerLock, { recursive: true })
+    await writeFile(containerLeaseFile, `${JSON.stringify({ version: 1, token: 'current-container-token' })}\n`)
+    await mkdir(lockDir)
+    await writeFile(join(lockDir, 'owner.json'), `${JSON.stringify({
+      version: 1,
+      instanceId: crypto.randomUUID(),
+      mode: 'web',
+      pid: process.pid,
+      startedAt: new Date(0).toISOString(),
+      projectDir: '/stale-container',
+      controlPort: 65_535,
+      controlToken: 'x'.repeat(64),
+      containerLeaseToken: 'expired-container-token',
+    })}\n`)
+
+    const lease = await coordinateInvestmentInstance({
+      mode: 'web', dshHome, containerLeaseFile, pollMs: 5,
+    })
+    try {
+      expect(lease.owner.pid).toBe(process.pid)
+      const persisted = JSON.parse(await readFile(join(lockDir, 'owner.json'), 'utf8')) as {
+        containerLeaseToken?: string
+      }
+      expect(persisted.containerLeaseToken).toBe('current-container-token')
     } finally {
       await lease.release()
     }

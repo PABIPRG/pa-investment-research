@@ -227,8 +227,12 @@ function runtimeWorkspaceDependencies(
     workspacePackage.manifest.dependencies,
     workspacePackage.manifest.peerDependencies,
   ]) {
-    for (const name of Object.keys(dependencies ?? {})) {
-      if (workspacePackages.has(name)) names.add(name)
+    for (const [name, specifier] of Object.entries(dependencies ?? {})) {
+      if (workspacePackages.has(name)) {
+        names.add(name)
+      } else if (specifier.startsWith('workspace:')) {
+        throw new Error(`workspace runtime dependency is missing from the packaging map: ${workspacePackage.manifest.name} -> ${name}`)
+      }
     }
   }
   return [...names].sort()
@@ -307,6 +311,16 @@ export async function materializePackagingWorkspaceLinks(
 
   const workspacePackages = await collectWorkspacePackages(workspaceDir)
   const pending: string[] = []
+  for (const { sourceDir } of links) {
+    try {
+      const manifest = JSON.parse(await readFile(join(sourceDir, 'package.json'), 'utf8')) as WorkspacePackage['manifest']
+      if (typeof manifest.name !== 'string' || manifest.name === '') continue
+      workspacePackages.set(manifest.name, { manifest, sourceDir })
+      pending.push(manifest.name)
+    } catch {
+      // collectPackagingWorkspaceLinks may encounter non-package directory links.
+    }
+  }
   for (const name of workspacePackages.keys()) {
     if (await pathResolves(join(deployedModules, ...name.split('/')))) pending.push(name)
   }
@@ -333,6 +347,27 @@ export async function materializePackagingWorkspaceLinks(
         await createPackagingDirectoryLink(targetDir, deployedDependency, platform)
       }
       pending.push(dependencyName)
+    }
+  }
+
+  for (const name of visited) {
+    const workspacePackage = workspacePackages.get(name)
+    if (workspacePackage === undefined) continue
+    const packageDir = canonicalTargets.get(workspacePackage.sourceDir)
+      ?? join(deployedModules, ...name.split('/'))
+    const packageRequire = createRequire(join(packageDir, 'package.json'))
+    for (const dependencyName of runtimeWorkspaceDependencies(workspacePackage, workspacePackages)) {
+      const searchPaths = packageRequire.resolve.paths(dependencyName) ?? []
+      let resolves = false
+      for (const searchPath of searchPaths) {
+        if (await pathResolves(join(searchPath, ...dependencyName.split('/'), 'package.json'))) {
+          resolves = true
+          break
+        }
+      }
+      if (!resolves) {
+        throw new Error(`materialized workspace dependency cannot be resolved: ${name} -> ${dependencyName}`)
+      }
     }
   }
   return links.length

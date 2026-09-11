@@ -62,9 +62,14 @@ function forwarded(address: string, method?: string) {
   }, method)
 }
 
-function routeRequest(path: string, headers: Record<string, string>, method = 'GET'): IncomingMessage {
+function routeRequest(
+  path: string,
+  headers: Record<string, string>,
+  method = 'GET',
+  remoteAddress = '127.0.0.1',
+): IncomingMessage {
   const request = Readable.from([]) as unknown as IncomingMessage
-  Object.assign(request, { url: path, method, headers, socket: { remoteAddress: '127.0.0.1' } })
+  Object.assign(request, { url: path, method, headers, socket: { remoteAddress } })
   return request
 }
 
@@ -274,6 +279,35 @@ describe('WebAuthService', () => {
 })
 
 describe('Web auth HTTP boundary', () => {
+  it('accepts a trusted non-loopback health authority across a bridge and rejects another Host', async () => {
+    const routes: WebRoute[] = []
+    const ctx = new Context()
+    ctx.provide('webServer', {
+      host: '0.0.0.0', port: 39080,
+      register(route: WebRoute) { routes.push(route); return () => {} },
+    } as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply: applyWebAuth }, configured({
+      secureCookies: true,
+      trustedHosts: ['investment.test:39080'],
+      trustedProxyAddresses: ['192.0.2.1'],
+    }))
+    await fiber.await()
+    const health = routes.find(route => route.path === '/healthz')!
+    const accepted = routeResponse()
+    await health.handler(routeRequest(
+      '/healthz', { host: 'investment.test:39080' }, 'GET', '172.30.20.1',
+    ), accepted.response)
+    expect(accepted.state).toEqual({ status: 200, body: '{"status":"ok"}' })
+    expect(accepted.state.body).not.toContain('correct horse battery staple')
+
+    const rejected = routeResponse()
+    await health.handler(routeRequest(
+      '/healthz', { host: 'attacker.test:39080' }, 'GET', '172.30.20.1',
+    ), rejected.response)
+    expect(rejected.state).toEqual({ status: 403, body: '{"code":"request-untrusted"}' })
+    await fiber.dispose()
+  })
+
   it('keeps the boot capability graph private until the session is authorized', async () => {
     const routes: WebRoute[] = []
     const ctx = new Context()

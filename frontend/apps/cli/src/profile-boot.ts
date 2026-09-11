@@ -201,10 +201,19 @@ export interface RunProfileOptions {
   watchPatches?: boolean
   /** Cross-surface ownership for the investment product; omitted by non-product profiles and tests. */
   instanceMode?: InvestmentInstanceMode
+  /** Outer container lease record that disambiguates PIDs across container namespaces. */
+  containerLeaseFile?: string
   /** User-facing decision when the other investment surface already owns the product runtime. */
   onInstanceConflict?: (
     owner: InvestmentInstanceOwner,
   ) => Promise<InvestmentInstanceConflictDecision> | InvestmentInstanceConflictDecision
+}
+
+/** Keep profile-file HMR out of container-owned runtimes that cannot expose Node internals safely. */
+export function shouldWatchProfilePatches(
+  options: Pick<RunProfileOptions, 'containerLeaseFile' | 'watchPatches'>,
+): boolean {
+  return options.containerLeaseFile === undefined && (options.watchPatches ?? true)
 }
 
 /**
@@ -234,6 +243,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
     ? undefined
     : await coordinateInvestmentInstance({
       mode: options.instanceMode,
+      ...(options.containerLeaseFile === undefined ? {} : { containerLeaseFile: options.containerLeaseFile }),
       ...(options.onInstanceConflict === undefined ? {} : { onConflict: options.onInstanceConflict }),
     })
   let composed: ComposedProfile
@@ -312,7 +322,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
     // landed mid-setup. Long-lived profile launches watch by default; runtimes
     // without the Node loader internals required by Cordis HMR opt out. A
     // one-shot exits through bounded shutdown, which disposes the watchers.
-    if ((options.watchPatches ?? true)
+    if (shouldWatchProfilePatches(options)
       && !signalShutdown.signal.aborted
       && ctx.fiber.state === FiberState.ACTIVE
       && ctx.get('loader') !== undefined) {
