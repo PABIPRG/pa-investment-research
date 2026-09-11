@@ -1,10 +1,17 @@
 /** Behavior of the /api browser-trust fence (rebinding + cross-site defense). */
 
 import { describe, expect, it } from 'vitest'
-import { assertTrustedAuthority, isTrustedApiRequest } from '../src/api-request-trust.ts'
+import {
+  assertTrustedAuthority,
+  assertTrustedProxyAddress,
+  isLoopbackRequestPeer,
+  isTrustedApiRequest,
+  isTrustedForwardedHttps,
+  requestClientAddress,
+} from '../src/api-request-trust.ts'
 
-function request(headers: Record<string, string | undefined>): { headers: Record<string, string | undefined> } {
-  return { headers }
+function request(headers: Record<string, string | undefined>, remoteAddress = '127.0.0.1') {
+  return { headers, socket: { remoteAddress } }
 }
 
 describe('isTrustedApiRequest', () => {
@@ -23,6 +30,45 @@ describe('isTrustedApiRequest', () => {
     for (const host of ['localhost', 'localhost:3080', '127.0.0.1', '127.0.0.1:3080', '127.8.9.10:80', '[::1]', '[::1]:3080', 'LOCALHOST:3080']) {
       expect(isTrustedApiRequest(request({ host, origin: `http://${host}` }), [])).toBe(true)
     }
+  })
+
+  it('uses the socket peer rather than a forged loopback Host', () => {
+    expect(isTrustedApiRequest(request({ host: '127.0.0.1:3080' }, '10.0.0.9'), [])).toBe(false)
+    expect(isTrustedApiRequest(request({ host: 'localhost:3080' }, '::ffff:10.0.0.9'), [])).toBe(false)
+    expect(isTrustedApiRequest(request({ host: '127.0.0.1:3080' }, '::ffff:127.0.0.1'), [])).toBe(true)
+  })
+
+  it('resolves an effective client only through explicitly trusted proxy hops', () => {
+    const proxy = ['127.0.0.1']
+    const forwarded = request({
+      host: 'harness.internal',
+      'x-forwarded-for': '10.0.0.8, 127.0.0.1',
+      'x-forwarded-proto': 'https',
+    })
+    expect(requestClientAddress(forwarded, proxy)).toBe('10.0.0.8')
+    expect(isLoopbackRequestPeer(forwarded, proxy)).toBe(false)
+    expect(isTrustedForwardedHttps(forwarded, proxy)).toBe(true)
+    expect(isTrustedApiRequest(forwarded, ['harness.internal'], proxy)).toBe(true)
+
+    const spoofed = request({
+      host: '127.0.0.1:3080',
+      'x-forwarded-for': '127.0.0.1',
+      'x-forwarded-proto': 'https',
+    }, '10.0.0.9')
+    expect(requestClientAddress(spoofed, proxy)).toBe('10.0.0.9')
+    expect(isTrustedForwardedHttps(spoofed, proxy)).toBe(false)
+    expect(isTrustedApiRequest(spoofed, [], proxy)).toBe(false)
+  })
+
+  it('fails closed on malformed proxy configuration and forwarding chains', () => {
+    for (const entry of ['localhost', '127.000.0.1', '10.0.0.1 ', '']) {
+      expect(() => { assertTrustedProxyAddress(entry) }).toThrow(/canonical IP address/)
+    }
+    expect(() => { assertTrustedProxyAddress('10.0.0.1') }).not.toThrow()
+    expect(requestClientAddress(request({ 'x-forwarded-for': 'bad' }), ['127.0.0.1'])).toBeUndefined()
+    expect(isTrustedForwardedHttps(request({
+      'x-forwarded-for': '10.0.0.2', 'x-forwarded-proto': 'http',
+    }), ['127.0.0.1'])).toBe(false)
   })
 
   it('refuses a rebound Host: the attacker domain names the socket it did not expect', () => {

@@ -25,6 +25,7 @@
     "packages/*/*/tests/**/*.client.ts",
     // Client package outside packages/client with a local CSS module face.
     "packages/extensions/ui-cordis/src/css-modules.d.ts",
+    "packages/api/web-auth/src/css-modules.d.ts",
     "packages/client/tsdown.client.ts",
     "scripts/client-bundle-css.spec.ts",
     "scripts/client-bundle-purity.spec.ts"
@@ -58,6 +59,7 @@
     { "path": "./packages/typert/registry" },
     { "path": "./packages/api/gateway/tsconfig.client.json" },
     { "path": "./packages/api/remotes/tsconfig.client.json" },
+    { "path": "./packages/api/web-auth/tsconfig.client.json" },
     { "path": "./packages/client/investment-research-runtime" },
     { "path": "./packages/client/ui-investment-research" },
     { "path": "./packages/client/runtime" },

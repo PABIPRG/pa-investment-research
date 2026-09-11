@@ -124,7 +124,7 @@
     # frontend-static fallback owner, registers the web-surface prompt
     # section and the bash runtime variable, and prints the URL line. The
     # webStartup provider supplies invocation-only values; after the server
-    # binds, this row samples LAN trust once and provides `webRuntime`. A
+    # binds, this row provides explicit authority trust as `webRuntime`. A
     # complete agent-preset persona suppresses the prompt section for that
     # agent while retaining the host-owned shell variable.
     - id: web-runtime
@@ -146,6 +146,7 @@
         passwordHashFile: !!js ctx.webStartup.authPasswordHashFile
         secureCookies: !!js ctx.webStartup.secureCookies
         trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
 
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
@@ -162,17 +163,18 @@
     # entry by the kernel, never fetched).
     - id: modules
       name: '@deepseek-ai/dsh-client-modules'
+      config:
+        injectBootManifest: false
 
     # Owns both ends of the web transport: node half binds the gateway to the
     # webserver under /api; browser half is the fetch/SSE client.
     - id: connection
       name: '@deepseek-ai/dsh-client-connection'
-      inject: [webRuntime, webAuth]
+      inject: [webStartup, webRuntime, webAuth]
       config:
-        # LAN literals derived from the active bind plus --trusted-host extras.
-        # A deployment adding authorities keeps this expression and concatenates
-        # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
+        # Exact public authorities explicitly supplied with --trusted-host.
         trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
 
     - id: api-remotes
       name: '@deepseek-ai/dsh-api-remotes'

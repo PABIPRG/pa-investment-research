@@ -41,7 +41,11 @@ function writePackage(
 async function constructWithRoute(
   packageNames: string[],
   additionalPackages: string[] = [],
-): Promise<{ service: ClientModuleRegistry; route: WebRoute }> {
+  options: {
+    injectBootManifest?: boolean
+    authorize?: () => { ok: true } | { ok: false; status: number; code: string }
+  } = {},
+): Promise<{ service: ClientModuleRegistry; route: WebRoute; tapped: boolean }> {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root!).href + '/'
   ctx.provide('loader', {
@@ -52,25 +56,32 @@ async function constructWithRoute(
     },
   })
   let route: WebRoute | undefined
+  let tapped = false
   const webServer: Pick<WebServer, 'port' | 'register' | 'tapIndex'> = {
     port: 0,
     register: (candidate) => {
       if (candidate.path === '/plugins') route = candidate
       return () => {}
     },
-    tapIndex: () => () => {},
+    tapIndex: () => { tapped = true; return () => {} },
   }
   ctx.provide('webServer', webServer as WebServer)
+  if (options.authorize !== undefined) {
+    ctx.provide('webAuth', { authorize: options.authorize } as never)
+  }
   let service: ClientModuleRegistry | undefined
   const fiber = ctx.plugin({
     apply(pluginCtx) {
-      service = new ClientModuleRegistry(pluginCtx, { additionalPackages })
+      service = new ClientModuleRegistry(pluginCtx, {
+        additionalPackages,
+        ...(options.injectBootManifest === undefined ? {} : { injectBootManifest: options.injectBootManifest }),
+      })
     },
   })
   await fiber.await()
   if (route === undefined) throw new Error('client bundle route was not registered')
   if (service === undefined) throw new Error('client module registry was not constructed')
-  return { service, route }
+  return { service, route, tapped }
 }
 
 /** Construct the node-half service over the enabled fixture entries. */
@@ -139,7 +150,7 @@ describe('client bundle activation', () => {
     expect(String(thrown)).not.toContain('pnpm run build')
   })
 
-  it('serves the source map beside a registered client bundle', async () => {
+  it('does not serve source maps beside registered client bundles', async () => {
     const packageName = '@fixture/source-map'
     const clientPath = writePackage(packageName)
     mkdirSync(dirname(clientPath), { recursive: true })
@@ -167,11 +178,35 @@ describe('client bundle activation', () => {
       url: `/plugins/${packageName}/client.js.map`,
     } as IncomingMessage, response)
 
-    expect(status).toBe(200)
-    expect(headers).toEqual({
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-cache',
+    expect(status).toBe(404)
+    expect(headers).toBeUndefined()
+    expect(body).toBe('')
+  })
+
+  it('protects plugin bundles before reading them and can keep the boot graph out of public HTML', async () => {
+    const packageName = '@fixture/protected-bundle'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'PRIVATE_PLUGIN_MARKER\n')
+    const { route, tapped } = await constructWithRoute([packageName], [], {
+      injectBootManifest: false,
+      authorize: () => ({ ok: false, status: 401, code: 'auth-required' }),
     })
-    expect(body).toBe(map)
+    let status = 0
+    let body = ''
+    const response = {
+      writeHead(nextStatus: number) { status = nextStatus; return response },
+      end(chunk?: string | Uint8Array) {
+        body = chunk === undefined ? '' : Buffer.from(chunk).toString('utf8')
+        return response
+      },
+    } as unknown as ServerResponse
+
+    await route.handler({ method: 'GET', url: `/plugins/${packageName}/client.js` } as IncomingMessage, response)
+
+    expect(status).toBe(401)
+    expect(body).toContain('auth-required')
+    expect(body).not.toContain('PRIVATE_PLUGIN_MARKER')
+    expect(tapped).toBe(false)
   })
 })

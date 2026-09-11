@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-dsh 浏览器表层组合包。[`cordis.patch.yml`](cordis.patch.yml) 叠加在 [`dsh-base`](../base/README.md) 之上：设置 coding persona，插入 Web 宿主行（webserver、API 网关、workspace、投影缓存、存储）、浏览器插件名录与始终挂载的客户端插件重载链（[`dsh-client-hmr`](../../client/hmr/README.md)，在重建 watcher 改写客户端 bundle 之前保持空闲），并挂载本包的 `web-runtime` 粘合插件（配置为 `{printUrl, surfaceContext, trustedHosts}`）。该插件通过 `@deepseek-ai/dsh-web-frontend` 的 exports 解析已构建的前端 dist，只采样一次依赖 bind 的 LAN 信任信息并将其作为 `webRuntime` 提供给浏览器信任栅栏和客户端名录，挂载 [`frontend-static`](../../host/frontend-static/README.md) 回退席位所有者，在 `surfaceContext` 为 true 时注册 Harness 源码与 Web 表层提示词段落，以及 bash 可见的 `DSH_WEB_URL` 运行时变量，并在 `printUrl` 为 true 时等自身的 Loader 配置树结算后再打印 `dsh web:` URL 行，避免兄弟行失败时公告一个已失效的应用。本组合包还持有应用命令行：普通 `web-startup` 提供方（[`src/startup.ts`](src/startup.ts)）注入 `ctx.cmdlineArgs`（[`dsh-cmdline`](../../boot/cmdline/README.md)），解析 `--host`、`--port`、可重复的 `--trusted-host` 以及应用自己的 `--help`，再提供 `webStartup`。它会在发布该服务前拒绝 `--host 0.0.0.0`，因为 CLI 目前有意不支持绑定所有网络接口。由 flag 配置的行会注入该服务，并在惰性配置中直接读取它，因此参数解析完成前不会有任何东西绑定端口，`dsh --profile web --help` 也不会启动服务器。[`dsh-headless`](../headless/README.md) 是同一 base 之上的同级表层，不挂载本组合包。
+dsh 浏览器表层组合包。[`cordis.patch.yml`](cordis.patch.yml) 叠加在 [`dsh-base`](../base/README.md) 之上：设置 coding persona，插入 Web 宿主行与浏览器插件名录，保持客户端插件重载链挂载，并挂载本包的 `web-runtime` 粘合插件。运行时解析已构建的前端 dist，只把显式配置的公共 authority 提供给浏览器信任栅栏，挂载 [`frontend-static`](../../host/frontend-static/README.md) 回退席位，注册模型可见的 Web 表层上下文与 `DSH_WEB_URL`，并在 Loader 结算后打印一个规范 URL。普通 `web-startup` 提供方解析 `--host`、`--port`、可重复的 `--trusted-host`、可重复的 `--trusted-proxy` 与 `--help`。默认仍只绑定回环；仅当已启用必需的管理员鉴权、至少一个可信 HTTPS authority、至少一个精确可信反向代理地址且保持安全 Cookie 时，才接受 `--host 0.0.0.0`。此时公告的地址是 `https://` 加第一个可信 authority，不再公告可直接访问的 LAN HTTP 地址。代理边界与凭据文件契约见 [`docs/web-auth.md`](../../../docs/web-auth.md)。
 
 ## 模型体验
 
@@ -23,4 +23,4 @@ dsh 浏览器表层组合包。[`cordis.patch.yml`](cordis.patch.yml) 叠加在 
 ## 已知限制与延期工作
 
 - **前端 dist 必须已构建**：对 dist 的 `require.resolve` 在激活时明确报错并给出构建提示；没有从源码直接服务的回退路径。
-- **`lanAddresses` 是启动期快照**：启动后的网卡变化不会重新公告；打印的 LAN URL 始终与配置的信任栅栏一致。
+- **TLS 在上游终止**：本组合只验证显式可信代理套接字提供的转发元数据；部署必须阻止客户端直接访问后端 HTTP 监听端口。

@@ -17,6 +17,16 @@ import type { Duplex } from 'node:stream'
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
+export {
+  assertTrustedAuthority,
+  assertTrustedProxyAddress,
+  isLoopbackRequestPeer,
+  isTrustedApiRequest,
+  isTrustedForwardedHttps,
+  requestClientAddress,
+  type BrowserTrustRequest,
+} from './request-trust.ts'
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     webServer: WebServer

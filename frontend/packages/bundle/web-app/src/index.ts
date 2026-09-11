@@ -11,7 +11,6 @@
  */
 
 import { createRequire } from 'node:module'
-import { networkInterfaces } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -55,11 +54,9 @@ export const Config: z<Config> = z.object({
   trustedHosts: z.array(String).default([]),
 })
 
-/** Bind-dependent Web values shared by the trust fence and URL display. */
+/** Explicit Web values shared by the trust fence and URL display. */
 export interface WebRuntimeValues {
-  /** LAN IPv4 literals sampled once when the server binds all interfaces. */
-  lanAddresses: string[]
-  /** LAN literals followed by explicit invocation authorities. */
+  /** Explicit public authorities accepted by the browser trust fence. */
   trustedHosts: string[]
 }
 
@@ -73,22 +70,13 @@ const LOOPBACK_HOST = '127.0.0.1'
 const ALL_INTERFACES_HOST = '0.0.0.0'
 
 /**
- * Resolve one LAN-trust snapshot from the active server bind.
- *
- * Derived entries are port-less IP literals: DNS rebinding needs an
- * attacker-controlled name, while an IP-literal Host is safe on any port and
- * an OS-assigned port is unknowable before bind.
+ * Resolve the explicit public-authority trust for this invocation.
  * @param bindHost - the active webserver bind host.
  * @param extra - explicit `--trusted-host` values, in argument order.
- * @returns the LAN display addresses and invocation-derived fence authorities.
+ * @returns the invocation's exact configured fence authorities.
  */
-export function resolveLanTrust(bindHost: string, extra: readonly string[]): WebRuntimeValues {
-  const lanAddresses = bindHost === ALL_INTERFACES_HOST
-    ? Object.values(networkInterfaces()).flat()
-      .filter((iface): iface is NonNullable<typeof iface> => iface !== undefined && iface.family === 'IPv4' && !iface.internal)
-      .map(iface => iface.address)
-    : []
-  return { lanAddresses, trustedHosts: [...lanAddresses, ...extra] }
+export function resolveWebTrust(_bindHost: string, extra: readonly string[]): WebRuntimeValues {
+  return { trustedHosts: [...extra] }
 }
 
 /** Model-visible orientation and acceptance boundary for sessions created through `dsh web`. */
@@ -106,9 +94,14 @@ function webSurfacePrompt(webUrl: string): string {
 }
 
 /** Resolve the canonical loopback URL from the active Web server. */
-function localWebUrl(ctx: Context): string {
+function webUrl(ctx: Context, runtime: WebRuntimeValues): string {
   const port = ctx.get('webServer')?.port
   if (port === undefined) throw new Error('web-app: webServer service missing while resolving Web runtime')
+  if (ctx.webServer.host === ALL_INTERFACES_HOST) {
+    const authority = runtime.trustedHosts[0]
+    if (authority === undefined) throw new Error('web-app: public Web server has no trusted HTTPS authority')
+    return `https://${authority}`
+  }
   return `http://${LOOPBACK_HOST}:${String(port)}`
 }
 
@@ -133,7 +126,7 @@ export const internals: { resolveDistIndex: () => string } = { resolveDistIndex 
  * @param config - validated {@link Config}.
  */
 export function apply(ctx: Context, config: Config): void {
-  const runtime = resolveLanTrust(ctx.webServer.host, config.trustedHosts)
+  const runtime = resolveWebTrust(ctx.webServer.host, config.trustedHosts)
   // Release dependent rows only after bind-dependent trust has been sampled once.
   ctx.provide(WEB_RUNTIME_SERVICE, runtime)
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
@@ -143,7 +136,7 @@ export function apply(ctx: Context, config: Config): void {
       promptCtx.systemPrompt.section({
         name: 'app:web-surface',
         order: -98,
-        text: () => webSurfacePrompt(localWebUrl(promptCtx)),
+        text: () => webSurfacePrompt(webUrl(promptCtx, runtime)),
       })
     })
     ctx.inject(['shellEnv'], (runtimeCtx) => {
@@ -152,7 +145,7 @@ export function apply(ctx: Context, config: Config): void {
         variables: {
           [DSH_WEB_URL]: { description: 'Canonical local URL of the DeepSeek Harness Web GUI serving this session.' },
         },
-        resolve: () => ({ [DSH_WEB_URL]: localWebUrl(runtimeCtx) }),
+        resolve: () => ({ [DSH_WEB_URL]: webUrl(runtimeCtx, runtime) }),
       })
     })
   }
@@ -162,10 +155,7 @@ export function apply(ctx: Context, config: Config): void {
     // sibling rows (the /api route owner) are still mounting. Await Loader
     // settlement first; a hand-built tree without a Loader prints at once.
     const printUrl = (): void => {
-      // Reuse the exact LAN snapshot provided to the /api trust fence.
-      const lanCandidate = runtime.lanAddresses[0]
-      const port = ctx.webServer.port
-      console.log(`dsh web: ${localWebUrl(ctx)}${lanCandidate === undefined ? '' : ` (LAN: http://${lanCandidate}:${String(port)})`}`)
+      console.log(`dsh web: ${webUrl(ctx, runtime)}`)
     }
     // This row's own activation can precede a sibling failure. The app owns
     // readiness by waiting for its Loader tree, or prints at once in a

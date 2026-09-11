@@ -23,6 +23,11 @@ export async function runWebPasswordHash(): Promise<number> {
     process.stderr.write('密码不能为空。\n')
     return 1
   }
-  process.stdout.write(`${hashPassword(password)}\n`)
-  return 0
+  try {
+    process.stdout.write(`${hashPassword(password)}\n`)
+    return 0
+  } catch {
+    process.stderr.write('密码至少需要 12 个字符。\n')
+    return 1
+  }
 }

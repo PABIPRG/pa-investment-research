@@ -1,6 +1,6 @@
 /**
  * The web app's command-line provider: it parses the `dsh --profile web` flag
- * family (`--host`, `--port`, `--trusted-host`) and its `--help`
+ * family (`--host`, `--port`, `--trusted-host`, `--trusted-proxy`) and its `--help`
  * text, then provides the immutable values as {@link WEB_STARTUP_SERVICE}.
  * Ordinary rows inject that service before reading it from lazy config.
  * @module @deepseek-ai/dsh-web-app/startup
@@ -28,6 +28,8 @@ export interface WebStartupValues {
   port?: number
   /** Explicit `--trusted-host` authorities, in argument order. */
   trustedHosts: string[]
+  /** Exact reverse-proxy socket addresses whose forwarding headers are accepted. */
+  trustedProxyAddresses: string[]
   /** Whether the Web transport must authenticate one configured administrator. */
   authMode: 'disabled' | 'required'
   /** Administrator identifier, never a secret. */
@@ -43,6 +45,7 @@ interface WebOptions {
   host?: string
   port?: string
   trustedHost?: string[]
+  trustedProxy?: string[]
 }
 
 /**
@@ -57,6 +60,7 @@ function webCommand(): Command {
     .option('--host <host>', 'bind host')
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
     .option('--trusted-host <authority...>', 'extra authority the /api browser-trust fence accepts (host or host:port; repeatable)')
+    .option('--trusted-proxy <address...>', 'exact reverse-proxy IP allowed to supply forwarding headers (repeatable)')
     .addHelpText('after', `
 Examples:
   dsh --profile web                          serve on the composed host and port
@@ -66,9 +70,9 @@ Examples:
 
 /**
  * Parse and provide the Web invocation as an ordinary Cordis service. The
- * command's action publishes the flags this invocation named; `--host 0.0.0.0`
- * or a non-numeric `--port` is a usage error, so on rejection (and on `--help`)
- * nothing is provided.
+ * command's action publishes the flags this invocation named. An incomplete
+ * non-loopback security boundary or a non-numeric `--port` is a usage error;
+ * on rejection (and on `--help`) nothing is provided.
  * @param ctx - plugin context carrying the command line.
  */
 export function apply(ctx: Context): void {
@@ -85,8 +89,10 @@ export function apply(ctx: Context): void {
     const authPasswordHashFile = environment.get('DSH_WEB_ADMIN_PASSWORD_HASH_FILE')?.value
     if (options.host === '0.0.0.0'
       && (authMode !== 'required' || authUsername === undefined || authUsername === ''
-        || authPasswordHashFile === undefined || authPasswordHashFile === '')) {
-      program.error('error: --host 0.0.0.0 requires DSH_WEB_AUTH=required plus DSH_WEB_ADMIN_USERNAME and DSH_WEB_ADMIN_PASSWORD_HASH_FILE')
+        || authPasswordHashFile === undefined || authPasswordHashFile === ''
+        || options.trustedHost?.length === 0 || options.trustedHost === undefined
+        || options.trustedProxy?.length === 0 || options.trustedProxy === undefined)) {
+      program.error('error: --host 0.0.0.0 requires required authentication, --trusted-host, and --trusted-proxy')
     }
     if (options.host === '0.0.0.0' && environment.get('DSH_WEB_INSECURE_COOKIES')?.value === '1') {
       program.error('error: DSH_WEB_INSECURE_COOKIES=1 is allowed only with the loopback Web server')
@@ -98,6 +104,7 @@ export function apply(ctx: Context): void {
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
+      trustedProxyAddresses: options.trustedProxy ?? [],
       authMode,
       ...authUsername !== undefined && { authUsername },
       ...authPasswordHashFile !== undefined && { authPasswordHashFile },

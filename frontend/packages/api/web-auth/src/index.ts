@@ -1,9 +1,15 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Context, Service } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-host-webserver'
-import { isTrustedApiRequest } from '@deepseek-ai/dsh-host-webserver/request-trust'
+import {
+  assertTrustedProxyAddress,
+  isLoopbackRequestPeer,
+  isTrustedApiRequest,
+  isTrustedForwardedHttps,
+  requestClientAddress,
+  type BrowserTrustRequest,
+} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 
 declare module '@deepseek-ai/cordis' { interface Context { webAuth?: WebAuthService } }
@@ -11,7 +17,8 @@ declare module '@deepseek-ai/cordis' { interface Context { webAuth?: WebAuthServ
 export const name = 'web-auth'
 export const inject = ['webServer']
 const MAX_LOGIN_BODY_BYTES = 16 * 1024
-const PASSWORD_PREFIX = 'dsh-scrypt-v1'
+const PASSWORD_PREFIX = 'dsh-scrypt-v2'
+const MIN_PASSWORD_CHARACTERS = 12
 const SCRYPT_COST = 16_384
 const SCRYPT_BLOCK_SIZE = 8
 const SCRYPT_PARALLELISM = 1
@@ -19,15 +26,28 @@ const SCRYPT_KEY_BYTES = 32
 const GLOBAL_ATTEMPT_KEY = '__global__'
 
 export interface WebAuthConfig {
+  /** Whether browser administrator authentication is disabled or required. */
   mode: 'disabled' | 'required'
+  /** Administrator account name accepted by the login endpoint. */
   username?: string
+  /** Protected file containing the versioned scrypt password record. */
   passwordHashFile?: string
+  /** Whether session cookies require an HTTPS browser transport. */
   secureCookies?: boolean
+  /** Public hostnames accepted for non-loopback browser requests. */
   trustedHosts?: string[]
+  /** Direct reverse-proxy addresses allowed to supply forwarding headers. */
+  trustedProxyAddresses?: string[]
+  /** Maximum inactive time before a browser session expires. */
   idleTimeoutMs?: number
+  /** Maximum total lifetime of a browser session. */
   absoluteTimeoutMs?: number
+  /** Rolling time window used by the login attempt limiter. */
   loginWindowMs?: number
+  /** Maximum login attempts allowed within one limiter window. */
   loginMaxAttempts?: number
+  /** Maximum number of client-address limiter entries retained in memory. */
+  loginMaxTrackedAddresses?: number
 }
 
 export const Config: z<WebAuthConfig> = z.object({
@@ -36,10 +56,12 @@ export const Config: z<WebAuthConfig> = z.object({
   passwordHashFile: z.string(),
   secureCookies: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
+  trustedProxyAddresses: z.array(String).default([]),
   idleTimeoutMs: z.natural().min(1_000).default(30 * 60_000),
   absoluteTimeoutMs: z.natural().min(1_000).default(12 * 60 * 60_000),
   loginWindowMs: z.natural().min(1_000).default(60_000),
   loginMaxAttempts: z.natural().min(1).default(5),
+  loginMaxTrackedAddresses: z.natural().min(1).default(1_024),
 })
 
 interface RequestFacts {
@@ -65,14 +87,14 @@ interface SessionView { username: string; csrfToken: string; expiresAt: number }
 
 export type WebAuthSessionState =
   | { state: 'disabled' }
-  | { state: 'unavailable'; reason: 'configuration' }
+  | { state: 'unavailable'; reason: 'configuration' | 'transport' }
   | { state: 'signed-out' }
   | ({ state: 'signed-in' } & SessionView)
 
 export type WebAuthDecision = { ok: true; sessionId?: string } | {
   ok: false
   status: 401 | 403 | 429 | 503
-  code: 'auth-required' | 'auth-unavailable' | 'csrf-invalid' | 'invalid-credentials' | 'rate-limited'
+  code: 'auth-required' | 'auth-unavailable' | 'secure-transport-required' | 'csrf-invalid' | 'invalid-credentials' | 'rate-limited'
 }
 
 export type WebAuthLoginResult = WebAuthDecision & Partial<{
@@ -83,11 +105,15 @@ export type WebAuthLoginResult = WebAuthDecision & Partial<{
 
 /** Produce a salted, versioned password record suitable for a protected file. */
 export function hashPassword(password: string): string {
+  const characterCount = Array.from(password).length
+  if (characterCount < MIN_PASSWORD_CHARACTERS) {
+    throw new Error(`web-auth: password must contain at least ${String(MIN_PASSWORD_CHARACTERS)} characters`)
+  }
   const salt = randomBytes(16)
   const derived = scryptSync(password, salt, SCRYPT_KEY_BYTES, {
     N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELISM, maxmem: 64 * 1024 * 1024,
   })
-  return [PASSWORD_PREFIX, SCRYPT_COST, SCRYPT_BLOCK_SIZE, SCRYPT_PARALLELISM,
+  return [PASSWORD_PREFIX, SCRYPT_COST, SCRYPT_BLOCK_SIZE, SCRYPT_PARALLELISM, characterCount,
     salt.toString('base64url'), derived.toString('base64url')].join('$')
 }
 
@@ -99,18 +125,20 @@ export function verifyPassword(password: string, encoded: string): boolean {
     const actual = scryptSync(password, parsed.salt, parsed.expected.length, {
       N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELISM, maxmem: 64 * 1024 * 1024,
     })
-    return timingSafeEqual(actual, parsed.expected)
+    return timingSafeEqual(actual, parsed.expected) && Array.from(password).length === parsed.characterCount
   } catch { return false }
 }
 
-function parsePasswordRecord(encoded: string): { salt: Buffer; expected: Buffer } | undefined {
-  const [prefix, rawN, rawR, rawP, rawSalt, rawDerived, ...extra] = encoded.trim().split('$')
+function parsePasswordRecord(encoded: string): { salt: Buffer; expected: Buffer; characterCount: number } | undefined {
+  const [prefix, rawN, rawR, rawP, rawLength, rawSalt, rawDerived, ...extra] = encoded.trim().split('$')
   if (prefix !== PASSWORD_PREFIX || extra.length > 0 || rawSalt === undefined || rawDerived === undefined
     || Number(rawN) !== SCRYPT_COST || Number(rawR) !== SCRYPT_BLOCK_SIZE
-    || Number(rawP) !== SCRYPT_PARALLELISM) return undefined
+    || Number(rawP) !== SCRYPT_PARALLELISM || !/^\d+$/.test(rawLength ?? '')
+    || Number(rawLength) < MIN_PASSWORD_CHARACTERS) return undefined
   try {
     const salt = Buffer.from(rawSalt, 'base64url'); const expected = Buffer.from(rawDerived, 'base64url')
-    return salt.length === 16 && expected.length === SCRYPT_KEY_BYTES ? { salt, expected } : undefined
+    return salt.length === 16 && expected.length === SCRYPT_KEY_BYTES
+      ? { salt, expected, characterCount: Number(rawLength) } : undefined
   } catch { return undefined }
 }
 
@@ -136,6 +164,19 @@ function safeEqual(left: string, right: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
+function readProtectedPasswordHash(path: string): string | undefined {
+  let descriptor: number | undefined
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+    const stat = fstatSync(descriptor)
+    if (!stat.isFile() || stat.size > 4_096) return undefined
+    if (process.platform !== 'win32' && (stat.mode & 0o077) !== 0) return undefined
+    const encoded = readFileSync(descriptor, 'utf8').trim()
+    return parsePasswordRecord(encoded) === undefined ? undefined : encoded
+  } catch { return undefined }
+  finally { if (descriptor !== undefined) closeSync(descriptor) }
+}
+
 /** Process-local, fail-closed Web authentication authority. */
 export class WebAuthService extends Service {
   readonly enabled: boolean
@@ -148,8 +189,11 @@ export class WebAuthService extends Service {
   private readonly absoluteTimeoutMs: number
   private readonly loginWindowMs: number
   private readonly loginMaxAttempts: number
+  private readonly loginMaxTrackedAddresses: number
+  private readonly trustedProxyAddresses: readonly string[]
   private readonly sessions = new Map<string, SessionRecord>()
   private readonly attempts = new Map<string, number[]>()
+  private readonly attemptCleanup: ReturnType<typeof setInterval>
 
   constructor(ctx: Context, config: WebAuthConfig) {
     super(ctx, 'webAuth')
@@ -161,16 +205,20 @@ export class WebAuthService extends Service {
     this.absoluteTimeoutMs = config.absoluteTimeoutMs ?? 12 * 60 * 60_000
     this.loginWindowMs = config.loginWindowMs ?? 60_000
     this.loginMaxAttempts = config.loginMaxAttempts ?? 5
-    let loaded: string | undefined
-    if (this.enabled && config.passwordHashFile !== undefined) {
-      try { loaded = readFileSync(config.passwordHashFile, 'utf8').trim() } catch { loaded = undefined }
-    }
+    this.loginMaxTrackedAddresses = config.loginMaxTrackedAddresses ?? 1_024
+    this.trustedProxyAddresses = config.trustedProxyAddresses ?? []
+    for (const address of this.trustedProxyAddresses) assertTrustedProxyAddress(address)
+    const loaded = this.enabled && config.passwordHashFile !== undefined
+      ? readProtectedPasswordHash(config.passwordHashFile) : undefined
     this.passwordHash = loaded
     this.available = !this.enabled || (this.username !== undefined && this.username !== ''
       && loaded !== undefined && parsePasswordRecord(loaded) !== undefined)
+    this.attemptCleanup = setInterval(() => { this.cleanupAttempts() }, Math.min(this.loginWindowMs, 60_000))
+    this.attemptCleanup.unref()
     ctx.effect(() => () => {
       for (const id of [...this.sessions.keys()]) this.revoke(id)
       this.attempts.clear()
+      clearInterval(this.attemptCleanup)
     }, 'web-auth: session cleanup')
   }
 
@@ -182,6 +230,9 @@ export class WebAuthService extends Service {
   sessionState(facts?: RequestFacts): WebAuthSessionState {
     if (!this.enabled) return { state: 'disabled' }
     if (!this.available) return { state: 'unavailable', reason: 'configuration' }
+    if (facts !== undefined && !this.isAllowedTransport(facts)) {
+      return { state: 'unavailable', reason: 'transport' }
+    }
     const found = facts === undefined ? undefined : this.find(facts, false)
     return found === undefined ? { state: 'signed-out' } : { state: 'signed-in', ...this.view(found.record) }
   }
@@ -194,6 +245,9 @@ export class WebAuthService extends Service {
   authorize(facts: RequestFacts): WebAuthDecision {
     if (!this.enabled) return { ok: true }
     if (!this.available) return { ok: false, status: 503, code: 'auth-unavailable' }
+    if (!this.isAllowedTransport(facts)) {
+      return { ok: false, status: 403, code: 'secure-transport-required' }
+    }
     const found = this.find(facts, true)
     if (found === undefined) return { ok: false, status: 401, code: 'auth-required' }
     if (facts.method !== undefined && !['GET', 'HEAD', 'OPTIONS'].includes(facts.method.toUpperCase())) {
@@ -212,9 +266,16 @@ export class WebAuthService extends Service {
    * @param address - transport source used by the per-address limiter.
    * @returns a rejection or the new opaque token and public session view.
    */
-  login(username: string, password: string, address: string): WebAuthLoginResult {
+  login(username: string, password: string, facts: BrowserTrustRequest): WebAuthLoginResult {
     if (!this.enabled) return { ok: true }
     if (!this.available) return { ok: false, status: 503, code: 'auth-unavailable' }
+    if (!this.isAllowedTransport(facts)) {
+      return { ok: false, status: 403, code: 'secure-transport-required' }
+    }
+    const address = requestClientAddress(facts, this.trustedProxyAddresses)
+    if (address === undefined || this.addressCapacityReached(address)) {
+      return { ok: false, status: 429, code: 'rate-limited' }
+    }
     if (this.rateLimited(address)) return { ok: false, status: 429, code: 'rate-limited' }
     // Always pay the password-verification cost so a remote caller cannot use
     // response timing to distinguish a valid administrator identifier.
@@ -323,6 +384,14 @@ export class WebAuthService extends Service {
     if (recent.length === 0) this.attempts.delete(address); else this.attempts.set(address, recent)
     return recent
   }
+  private cleanupAttempts(): void {
+    for (const address of [...this.attempts.keys()]) this.recent(address)
+  }
+  private addressCapacityReached(address: string): boolean {
+    if (address === GLOBAL_ATTEMPT_KEY || this.attempts.has(address)) return false
+    return [...this.attempts.keys()].filter(key => key !== GLOBAL_ATTEMPT_KEY).length
+      >= this.loginMaxTrackedAddresses
+  }
   private rateLimited(address: string): boolean {
     return this.recent(address).length >= this.loginMaxAttempts
       || this.recent(GLOBAL_ATTEMPT_KEY).length >= this.loginMaxAttempts * 10
@@ -331,6 +400,11 @@ export class WebAuthService extends Service {
     const now = Date.now()
     this.attempts.set(address, [...this.recent(address), now])
     this.attempts.set(GLOBAL_ATTEMPT_KEY, [...this.recent(GLOBAL_ATTEMPT_KEY), now])
+  }
+  private isAllowedTransport(facts: BrowserTrustRequest): boolean {
+    return this.secureCookies
+      ? isTrustedForwardedHttps(facts, this.trustedProxyAddresses)
+      : isLoopbackRequestPeer(facts)
   }
 }
 
@@ -363,25 +437,37 @@ export function apply(ctx: Context, config: WebAuthConfig): void {
   if (config.mode === 'required' && config.secureCookies === false && ctx.webServer.host !== '127.0.0.1') {
     throw new Error('web-auth: insecure cookies are allowed only on the loopback Web server')
   }
+  if (config.mode === 'required' && ctx.webServer.host !== '127.0.0.1'
+    && ((config.trustedProxyAddresses?.length ?? 0) === 0 || (config.trustedHosts?.length ?? 0) === 0)) {
+    throw new Error('web-auth: a non-loopback Web server requires trusted proxy addresses and trusted public hosts')
+  }
   const auth = new WebAuthService(ctx, config)
   const trustedHosts = config.trustedHosts ?? []
+  const trustedProxyAddresses = config.trustedProxyAddresses ?? []
   const route = (path: string, handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void): void => {
     const webServer = ctx.get('webServer')
     if (webServer === undefined) throw new Error('web-auth: webServer service unavailable')
     ctx.effect(() => webServer.register({ kind: 'exact', path, handler: async (req, res) => {
-      if (!isTrustedApiRequest(req, trustedHosts)) { writeJson(res, 403, { code: 'request-untrusted' }); return }
+      if (!isTrustedApiRequest(req, trustedHosts, trustedProxyAddresses)) {
+        writeJson(res, 403, { code: 'request-untrusted' }); return
+      }
       await handler(req, res)
     } }), `web-auth: ${path}`)
   }
   route('/auth/session', (req, res) => {
     if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
-    const state = auth.sessionState(req); writeJson(res, state.state === 'unavailable' ? 503 : 200, state)
+    const state = auth.sessionState(req)
+    writeJson(res, state.state === 'unavailable' ? state.reason === 'configuration' ? 503 : 403 : 200, state)
   })
   route('/auth/login', async (req, res) => {
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+    const transport = auth.sessionState(req)
+    if (transport.state === 'unavailable' && transport.reason === 'transport') {
+      writeJson(res, 403, { code: 'secure-transport-required' }); return
+    }
     const body = await readLoginBody(req)
     if (body === undefined) { writeJson(res, 400, { code: 'invalid-request' }); return }
-    const result = auth.login(body.username, body.password, req.socket.remoteAddress ?? 'unknown')
+    const result = auth.login(body.username, body.password, req)
     if (!result.ok) { writeJson(res, result.status, { code: result.code }); return }
     if (result.session === undefined || result.token === undefined) { writeJson(res, 200, { state: 'disabled' }); return }
     writeJson(res, 200, { state: 'signed-in', ...result.session }, { 'set-cookie': auth.cookieHeader(result.token) })
@@ -391,6 +477,14 @@ export function apply(ctx: Context, config: WebAuthConfig): void {
     const result = auth.logout(req)
     if (!result.ok) { writeJson(res, result.status, { code: result.code }); return }
     writeJson(res, 200, { state: 'signed-out' }, { 'set-cookie': auth.clearCookieHeader() })
+  })
+  route('/auth/boot', (req, res) => {
+    if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+    const result = auth.authorize(req)
+    if (!result.ok) { writeJson(res, result.status, { code: result.code }); return }
+    const modules = ctx.get('clientModules') as { graph(): unknown } | undefined
+    if (modules === undefined) { writeJson(res, 503, { code: 'boot-unavailable' }); return }
+    writeJson(res, 200, modules.graph())
   })
   route('/healthz', (req, res) => {
     if (req.method !== 'GET') { res.writeHead(405); res.end(); return }

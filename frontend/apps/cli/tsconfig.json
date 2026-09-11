@@ -9,7 +9,7 @@
   ],
   "references": [
     {
-      "path": "../../packages/api/web-auth"
+      "path": "../../packages/api/web-auth/tsconfig.host.json"
     },
     {
       "path": "../../vendor/cordis"

@@ -19,7 +19,7 @@
   ],
   "references": [
     {
-      "path": "../../api/web-auth"
+      "path": "../../api/web-auth/tsconfig.host.json"
     },
     {
       "path": "../../attachment/attachment"

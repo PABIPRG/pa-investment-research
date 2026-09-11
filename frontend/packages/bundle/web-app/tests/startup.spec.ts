@@ -59,6 +59,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     "    host: !!js ctx.webStartup.host ?? '127.0.0.1'",
     '    port: !!js ctx.webStartup.port ?? 3080',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
+    '    trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses',
     '    authMode: !!js ctx.webStartup.authMode',
     '    authUsername: !!js ctx.webStartup.authUsername',
     '    authPasswordHashFile: !!js ctx.webStartup.authPasswordHashFile',
@@ -97,11 +98,13 @@ describe('web command-line provider', () => {
       '--port', '8080',
       '--trusted-host', 'lab.internal', 'lab-2.internal',
       '--trusted-host', '10.0.0.9',
+      '--trusted-proxy', '127.0.0.1', '10.0.0.10',
     ])
     expect(values).toEqual({
       host: '127.0.0.1',
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
+      trustedProxyAddresses: ['127.0.0.1', '10.0.0.10'],
       authMode: 'disabled',
       secureCookies: true,
     })
@@ -111,11 +114,12 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ trustedHosts: [], authMode: 'disabled', secureCookies: true })
+    expect(values).toEqual({ trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true })
     expect(observed.readerConfig).toEqual({
       host: '127.0.0.1',
       port: 3080,
       trustedHosts: [],
+      trustedProxyAddresses: [],
       authMode: 'disabled',
       secureCookies: true,
     })
@@ -125,6 +129,7 @@ describe('web command-line provider', () => {
     const { values, observed } = await bootProvider(['--help'])
     expect(observed.out).toContain('dsh --profile web')
     expect(observed.out).toContain('--trusted-host')
+    expect(observed.out).toContain('--trusted-proxy')
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([0])
@@ -140,7 +145,7 @@ describe('web command-line provider', () => {
 
   it('rejects all-interfaces binding until required authentication is configured', async () => {
     const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(observed.out).toContain('--host 0.0.0.0 requires DSH_WEB_AUTH=required')
+    expect(observed.out).toContain('--host 0.0.0.0 requires required authentication, --trusted-host, and --trusted-proxy')
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([1])
@@ -150,10 +155,15 @@ describe('web command-line provider', () => {
     vi.stubEnv('DSH_WEB_AUTH', 'required')
     vi.stubEnv('DSH_WEB_ADMIN_USERNAME', 'admin')
     vi.stubEnv('DSH_WEB_ADMIN_PASSWORD_HASH_FILE', '/run/secrets/dsh-web-password')
-    const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
+    const { values, observed } = await bootProvider([
+      '--host', '0.0.0.0',
+      '--trusted-host', 'harness.internal',
+      '--trusted-proxy', '127.0.0.1',
+    ])
     expect(values).toMatchObject({
       host: '0.0.0.0', authMode: 'required', authUsername: 'admin',
       authPasswordHashFile: '/run/secrets/dsh-web-password', secureCookies: true,
+      trustedHosts: ['harness.internal'], trustedProxyAddresses: ['127.0.0.1'],
     })
     expect(observed.exits).toEqual([])
   })

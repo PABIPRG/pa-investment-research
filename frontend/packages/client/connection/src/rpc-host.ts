@@ -48,7 +48,11 @@ export class HostConnectionService extends Service implements HostConnectionHand
    * @param ctx - owning Connection plugin context.
    * @param trustedHosts - deployment authorities accepted by trusted-host channels.
    */
-  constructor(ctx: Context, private readonly trustedHosts: readonly string[]) {
+  constructor(
+    ctx: Context,
+    private readonly trustedHosts: readonly string[],
+    private readonly trustedProxyAddresses: readonly string[],
+  ) {
     super(ctx, 'connection')
   }
 
@@ -79,9 +83,6 @@ export class HostConnectionService extends Service implements HostConnectionHand
         if (endpoint === undefined || interceptor === undefined || !interceptor.matches(endpoint)) {
           return fallback.fetch(request)
         }
-        if (interceptor.options.authority === 'loopback' && !isTrustedApiRequest(request, [])) {
-          return Promise.resolve(new Response('forbidden', { status: 403 }))
-        }
         return interceptor.fetchHandler.fetch(request)
       },
     }
@@ -100,9 +101,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
       kind: 'prefix',
       path: channel,
       handler: async (req, res) => {
-        if (!isTrustedApiRequest(req, trustedHosts)) {
+        if (!isTrustedApiRequest(req, trustedHosts, this.trustedProxyAddresses)) {
           res.writeHead(403)
           res.end('forbidden')
+          return
+        }
+        const decision = owner.get('webAuth')?.authorize(req)
+        if (decision !== undefined && !decision.ok) {
+          res.writeHead(decision.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(JSON.stringify({ code: decision.code }))
           return
         }
         await bridge(req, res, fetchHandler)
@@ -138,6 +145,15 @@ export class HostConnectionService extends Service implements HostConnectionHand
         this.interceptors.delete(channel)
       }
     }, `client-connection: ${channel} rpc interceptor`)
+  }
+
+  /** Whether a registered shared-channel interceptor restricts this endpoint to loopback. */
+  isLoopbackInterceptor(pathname: string): boolean {
+    const endpoint = endpointFromPath(API_PATH, pathname)
+    if (endpoint === undefined) return false
+    const interceptor = this.interceptors.get(API_PATH)
+    return interceptor !== undefined && interceptor.matches(endpoint)
+      && interceptor.options.authority === 'loopback'
   }
 }
 

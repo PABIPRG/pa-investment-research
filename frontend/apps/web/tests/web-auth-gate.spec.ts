@@ -33,4 +33,20 @@ describe('Web administrator login gate', () => {
     }))
     expect(screen.getByText('登录已过期，请重新登录。')).toBeTruthy()
   })
+
+  it('distinguishes retryable network loss from configuration and secure-transport failures', () => {
+    const retry = vi.fn()
+    const network = render(React.createElement(LoginGate, {
+      initialPhase: 'network', onLogin: async () => 'network' as const, onRetry: retry,
+    }))
+    expect(screen.getByText('无法连接到登录服务，请检查网络后重试。')).toBeTruthy()
+    expect(screen.getByLabelText<HTMLInputElement>('用户名').disabled).toBe(false)
+    network.unmount()
+
+    render(React.createElement(LoginGate, {
+      initialPhase: 'transport', onLogin: async () => 'transport' as const, onRetry: retry,
+    }))
+    expect(screen.getByText('当前连接未经过受信任的 HTTPS 入口，请使用部署管理员提供的安全地址。')).toBeTruthy()
+    expect(screen.getByLabelText<HTMLInputElement>('用户名').disabled).toBe(true)
+  })
 })

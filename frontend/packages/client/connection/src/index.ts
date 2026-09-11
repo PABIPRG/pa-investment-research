@@ -8,7 +8,12 @@ import type { WebAuthDecision } from '@deepseek-ai/dsh-api-web-auth'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
-import { assertTrustedAuthority, isTrustedApiRequest } from './api-request-trust.ts'
+import {
+  assertTrustedAuthority,
+  assertTrustedProxyAddress,
+  isLoopbackRequestPeer,
+  isTrustedApiRequest,
+} from './api-request-trust.ts'
 import { HostConnectionService } from './rpc-host.ts'
 import { rejectWebSocketUpgrade, WebSocketDownlinks } from './websocket-downlink.ts'
 
@@ -54,16 +59,19 @@ export interface ConnectionConfig {
    * port-less `host` matching any port. The /api trust fence refuses any
    * request whose Host is neither loopback nor listed here, so a
    * non-loopback (`0.0.0.0`) deployment must declare the names it is reached
-   * by (the dsh CLI derives the machine's LAN IP literals itself). An entry
+   * by explicitly. An entry
    * that is not a bare, canonical authority fails the plugin load.
    */
   trustedHosts?: string[]
+  /** Exact socket addresses of reverse proxies whose forwarding headers are trusted. */
+  trustedProxyAddresses?: string[]
   /** Maximum buffered JSON body for every `/api` request. */
   maxRequestBodyBytes?: number
 }
 
 export const Config: z<ConnectionConfig> = z.object({
   trustedHosts: z.array(String).default([]),
+  trustedProxyAddresses: z.array(String).default([]),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
 })
 
@@ -74,18 +82,18 @@ export const Config: z<ConnectionConfig> = z.object({
  * privileged — `settings.describe` returns every exposed namespace's
  * configuration and `credentials.describe` reports whether an arbitrary
  * environment-variable name is configured and where from, which is
- * reconnaissance no anonymous caller should have. `trustedHosts` is a
- * DNS-rebinding fence, explicitly not authentication, so the whole
- * configuration plane stays loopback-same-origin until a real authentication
- * layer exists. `llm.discoverModels` belongs to that plane on both counts: it
+ * reconnaissance no remote caller should have. Authentication protects the
+ * whole transport, while this list keeps the host-local configuration plane
+ * pinned to the effective loopback peer as defense in depth.
+ * `llm.discoverModels` belongs to that plane on both counts: it
  * carries a draft credential, and it makes the HOST issue a GET to a URL the
- * caller chose and reports back the status or the parsed body — an anonymous
- * LAN caller would have a probe for whatever the host can reach and the
+ * caller chose and reports back the status or the parsed body — a remote
+ * caller would otherwise have a probe for whatever the host can reach and the
  * browser cannot.
  *
  * The model catalog (`llm.providers`, `llm.models`) is deliberately NOT here:
  * it carries provider ids, display names, and model lists — no endpoints,
- * keys, or key state — and a LAN client's model picker legitimately needs it.
+ * keys, or key state — and an authenticated remote model picker legitimately needs it.
  */
 const PRIVILEGED_METHODS = new Set([
   // A preset composition names the plugins a session runs, so reading one is
@@ -131,23 +139,17 @@ const PRIVILEGED_METHODS = new Set([
 export function apply(ctx: Context, config?: ConnectionConfig): void {
   // The Loader resolves schema defaults; hand-built test contexts may pass none.
   const trustedHosts = config?.trustedHosts ?? []
+  const trustedProxyAddresses = config?.trustedProxyAddresses ?? []
   const maxRequestBodyBytes = config?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
+  for (const address of trustedProxyAddresses) assertTrustedProxyAddress(address)
   if (ctx.get('apiProxy') !== undefined) assertImageBodyCapacity(ctx, maxRequestBodyBytes)
-  const connection = new HostConnectionService(ctx, trustedHosts)
+  const connection = new HostConnectionService(ctx, trustedHosts, trustedProxyAddresses)
   const fetchHandler = connection.createSharedFetchHandler(API_PATH, {
     async fetch(request) {
       const pathname = new URL(request.url).pathname
-      const method = pathname.startsWith(`${API_PATH}/`)
-        ? pathname.slice(API_PATH.length + 1)
-        : undefined
-      if (method !== undefined
-        && PRIVILEGED_METHODS.has(method)
-        && !isTrustedApiRequest(request, [])) {
-        return new Response('forbidden', { status: 403 })
-      }
       if (request.method === 'GET' && (pathname === MUX_EVENTS_PATH || pathname === HOST_EVENTS_PATH)) {
         return new Response('upgrade required', {
           status: 426,
@@ -163,7 +165,7 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
     kind: 'prefix',
     path: API_PATH,
     handler: async (req, res) => {
-      if (!isTrustedApiRequest(req, trustedHosts)) {
+      if (!isTrustedApiRequest(req, trustedHosts, trustedProxyAddresses)) {
         res.writeHead(403)
         res.end('forbidden')
         return
@@ -173,6 +175,18 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
       if (decision !== undefined && !decision.ok) {
         res.writeHead(decision.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         res.end(JSON.stringify({ code: decision.code }))
+        return
+      }
+      /* v8 ignore next -- node:http always sets url on server requests. */
+      const pathname = new URL(req.url ?? '/', 'http://x').pathname
+      const method = pathname.startsWith(`${API_PATH}/`)
+        ? pathname.slice(API_PATH.length + 1)
+        : undefined
+      if (((method !== undefined && PRIVILEGED_METHODS.has(method))
+        || connection.isLoopbackInterceptor(pathname))
+        && !isLoopbackRequestPeer(req, trustedProxyAddresses)) {
+        res.writeHead(403)
+        res.end('forbidden')
         return
       }
       await bridge(req, res, fetchHandler, maxRequestBodyBytes)
@@ -189,7 +203,7 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
       apiCtx.effect(() => apiCtx.webServer.registerUpgrade({
         path,
         handler: (req, socket, head) => {
-          if (!isTrustedApiRequest(req, trustedHosts)) {
+          if (!isTrustedApiRequest(req, trustedHosts, trustedProxyAddresses)) {
             rejectWebSocketUpgrade(socket)
             return
           }

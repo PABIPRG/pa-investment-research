@@ -35,6 +35,7 @@ async function loadComposition(): Promise<Context> {
   const distIndex = join(dist, 'index.html')
   await writeFile(distIndex, '<head></head><body>shell</body>')
   await writeFile(join(dist, 'app.js'), 'export {}')
+  await writeFile(join(dist, 'app.js.map'), '{"sources":["src/private.ts"]}')
   await writeFile(join(dist, 'blob.bin'), 'BLOB')
   await writeFile(join(dist, 'manifest.webmanifest'), '{}')
   const configPath = join(root, 'cordis.yml')
@@ -95,6 +96,7 @@ describe('real Loader composition', () => {
 
     // Real assets with their MIME types; a live rebuild is served on the next read.
     expect(await request(port, '/app.js')).toMatchObject({ status: 200, type: 'text/javascript; charset=utf-8', body: 'export {}' })
+    expect(await request(port, '/app.js.map')).toMatchObject({ status: 404, body: '' })
     expect(await request(port, '/manifest.webmanifest')).toMatchObject({
       status: 200,
       type: 'application/manifest+json',
