@@ -65,7 +65,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
         run: >-
-          pnpm exec tsx scripts/investment-release.ts preflight
+          node scripts/investment-release.ts preflight
           --expected-version "$EXPECTED_VERSION"
           --channel "$RELEASE_CHANNEL"
           --ref-name "$RELEASE_REF_NAME"
@@ -108,6 +108,10 @@ jobs:
     needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
+      PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
+      ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
     defaults:
       run:
         working-directory: frontend
@@ -136,6 +140,13 @@ jobs:
           node-version: '24'
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # Cache downloads only; packages are assembled and verified on every run.
+      - name: Cache packaging downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/investment-downloads
+          key: investment-downloads-v1-${{ matrix.target }}-${{ hashFiles('frontend/config/investment-python-runtime-lock.json', 'frontend/pnpm-lock.yaml') }}
 
       - name: Verify native target
         shell: bash
@@ -179,7 +190,7 @@ jobs:
 
       - name: Stage immutable release asset
         run: >-
-          pnpm exec tsx scripts/investment-release.ts stage
+          node scripts/investment-release.ts stage
           --version "${{ needs.preflight.outputs.version }}"
           --target "${{ matrix.target }}"
           --source-root apps/electron/out/make

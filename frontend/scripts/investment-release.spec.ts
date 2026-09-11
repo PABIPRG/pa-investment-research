@@ -26,6 +26,38 @@ function loadWorkflow(name: string): Record<string, unknown> {
 describe('investment release contract', () => {
   const sha = '0123456789abcdef0123456789abcdef01234567'
 
+  it('stages through the workflow Node entrypoint without development dependencies', () => {
+    const workflow = loadWorkflow('investment-release.yml')
+    const jobs = workflow.jobs as Record<string, { steps: { name?: string; run?: string }[] }>
+    const command = jobs.build!.steps.find(step => step.name === 'Stage immutable release asset')!.run!
+    expect(command).toMatch(/^node scripts\/investment-release\.ts stage/)
+    const fixture = mkdtempSync(resolve(tmpdir(), 'release-no-deps-'))
+    try {
+      writeFileSync(resolve(fixture, 'release.ts'), readFileSync(resolve(frontendRoot, 'scripts/investment-release.ts')))
+      mkdirSync(resolve(fixture, 'make'))
+      writeFileSync(resolve(fixture, 'make/package.zip'), 'zip fixture')
+      const result = spawnSync(process.execPath, ['release.ts', 'stage', '--version', '0.1.0-rc.11',
+        '--target', 'darwin-arm64', '--source-root', 'make', '--destination-root', 'assets'], {
+        cwd: fixture, encoding: 'utf8', env: { ...process.env, NODE_ENV: 'production' },
+      })
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+      expect(readFileSync(resolve(fixture, 'assets/investment-agent-0.1.0-rc.11-darwin-arm64.zip'), 'utf8')).toBe('zip fixture')
+    } finally { rmSync(fixture, { recursive: true, force: true }) }
+  })
+
+  it('skips CI hooks before resolving missing development dependencies', () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), 'hooks-no-deps-'))
+    try {
+      writeFileSync(resolve(fixture, 'install.mjs'), readFileSync(resolve(frontendRoot, 'scripts/install-lefthook.mjs')))
+      const result = spawnSync(process.execPath, ['install.mjs'], {
+        cwd: fixture, encoding: 'utf8', env: { ...process.env, CI: 'true' },
+      })
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+    } finally { rmSync(fixture, { recursive: true, force: true }) }
+  })
+
   it('locks a prerelease to the requested master commit', () => {
     expect(createInvestmentReleasePlan({
       channel: 'prerelease',
