@@ -64,6 +64,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     '    authUsername: !!js ctx.webStartup.authUsername',
     '    authPasswordHashFile: !!js ctx.webStartup.authPasswordHashFile',
     '    secureCookies: !!js ctx.webStartup.secureCookies',
+    '    deploymentSurface: !!js ctx.webStartup.deploymentSurface',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -101,6 +102,7 @@ describe('web command-line provider', () => {
       '--trusted-proxy', '127.0.0.1', '10.0.0.10',
     ])
     expect(values).toEqual({
+      deploymentSurface: 'local-web',
       host: '127.0.0.1',
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
@@ -114,7 +116,7 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true })
+    expect(values).toEqual({ deploymentSurface: 'local-web', trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true })
     expect(observed.readerConfig).toEqual({
       host: '127.0.0.1',
       port: 3080,
@@ -122,7 +124,17 @@ describe('web command-line provider', () => {
       trustedProxyAddresses: [],
       authMode: 'disabled',
       secureCookies: true,
+      deploymentSurface: 'local-web',
     })
+  })
+
+  it('publishes only an explicit cloud deployment surface', async () => {
+    vi.stubEnv('DSH_DEPLOYMENT_SURFACE', 'cloud-web')
+    expect((await bootProvider([])).values?.deploymentSurface).toBe('cloud-web')
+    vi.stubEnv('DSH_DEPLOYMENT_SURFACE', 'browser-guessed')
+    const rejected = await bootProvider([])
+    expect(rejected.values).toBeUndefined()
+    expect(rejected.observed.out).toContain('DSH_DEPLOYMENT_SURFACE must be local-web or cloud-web')
   })
 
   it('prints its own help and leaves the consumer pending', async () => {

@@ -93,6 +93,9 @@
       "path": "../directory-picker"
     },
     {
+      "path": "../deployment-capabilities"
+    },
+    {
       "path": "../../extensions/cordis-host-runner"
     },
     {

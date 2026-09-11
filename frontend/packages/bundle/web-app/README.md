@@ -4,6 +4,8 @@ English | [中文](README.zh.md)
 
 The dsh browser-surface bundle. [`cordis.patch.yml`](cordis.patch.yml) rides over [`dsh-base`](../base/README.md): it sets the coding persona, inserts the Web host rows and browser plugin roster, keeps the client-plugin reload chain mounted, and mounts this package's `web-runtime` glue plugin. The runtime resolves the built frontend dist, provides only explicitly configured public authorities to the browser-trust fence, mounts the [`frontend-static`](../../host/frontend-static/README.md) fallback owner, registers the model-visible Web surface plus `DSH_WEB_URL`, and prints one canonical URL after Loader settlement. The ordinary `web-startup` provider parses `--host`, `--port`, repeatable `--trusted-host`, repeatable `--trusted-proxy`, and `--help`. Loopback remains the default; `--host 0.0.0.0` is accepted only with required administrator authentication, at least one trusted HTTPS authority, at least one exact trusted reverse-proxy address, and secure cookies. In that mode the announced URL is `https://` plus the first trusted authority; no direct LAN HTTP URL is advertised. See [`docs/web-auth.md`](../../../docs/web-auth.md) for the proxy boundary and credential-file contract.
 
+`DSH_DEPLOYMENT_SURFACE` explicitly selects `local-web` (the default) or `cloud-web`; any other value fails startup. The resulting Host capability snapshot controls path disclosure, directory interaction, native opening, local broker synchronization, and browser backup transfer. See the [deployment capability matrix](../../../docs/deployment-capabilities.md).
+
 ## Model Experience
 
 ### Harness-source and Web-surface context

@@ -9,6 +9,7 @@ import type { ConnectionRpcHandler } from '@deepseek-ai/dsh-client-connection'
 import {
   remoteMethods,
   TypertLookupFailure,
+  TypertRemoteFailure,
   type InvocationDescriptor,
   type InvocationParameterDescriptor,
   type TypertCodec,
@@ -478,11 +479,14 @@ function rpcFailure(error: unknown): ConnectionRpcResult {
   if (error instanceof TypertLookupFailure) {
     return { ok: false, error: error.failure as ConnectionRpcError }
   }
+  if (error instanceof TypertRemoteFailure) {
+    return { ok: false, error: error.failure as ConnectionRpcError }
+  }
   return {
     ok: false,
     error: {
       code: 'internal',
-      message: error instanceof Error ? error.message : String(error),
+      message: 'Remote operation failed',
       details: {},
     },
   }

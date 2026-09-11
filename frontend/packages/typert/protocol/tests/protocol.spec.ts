@@ -7,6 +7,7 @@ import {
   TypertRemoteService,
   Remote,
   RemoteScope,
+  TypertRemoteFailure,
   remoteMethods,
   type TypertContext,
   type TypertForwardableEvent,
@@ -44,6 +45,16 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
 }
 
 describe('typert-protocol Remote declarations', () => {
+  it('retains a redacted Remote failure payload and a Host-only cause', () => {
+    const cause = new Error('/private/server/path')
+    const failure = { code: 'remote-rejected', message: '请求无法完成', details: {} }
+    const error = new TypertRemoteFailure(failure, cause)
+
+    expect(error.failure).toBe(failure)
+    expect(error.cause).toBe(cause)
+    expect(error.message).not.toContain('/private/server/path')
+  })
+
   it('binds a TypertRemoteService name and executes decorators through the Vitest source transform', async () => {
     class Goals extends TypertRemoteService {
       constructor(ctx: Context) {

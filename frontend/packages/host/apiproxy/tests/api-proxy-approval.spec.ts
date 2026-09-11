@@ -18,7 +18,7 @@ import type { ApprovalRequestId } from '@deepseek-ai/dsh-user-approval'
 import type { ApiProxy, MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId as mintRpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
-import { createApiProxy } from '../src/api-proxy.ts'
+import { createApiProxy } from './create-api-proxy.ts'
 
 async function harness(): Promise<{ ctx: Context; api: ApiProxy }> {
   const ctx = new Context()

@@ -1,6 +1,7 @@
 import clsx from 'clsx'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import type {
   HostObservable, InjectFace, PropsLocale, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -18,6 +19,8 @@ import type {
 import type { InvestmentReadinessKey } from './locales.ts'
 import css from './InvestmentReadinessSection.module.css'
 
+type HostDescriptionSource = ConnectionHandle['hostDescription']
+
 /** Registration-side facade narrowed to the facts and actions this page consumes. */
 export interface InvestmentReadinessSectionInjected extends Omit<
   DataBackupSectionProps,
@@ -29,6 +32,8 @@ export interface InvestmentReadinessSectionInjected extends Omit<
     /** Shared Session export state owned by the existing Header action. */
     sessionLogDownload: HostObservable<SessionLogDownloadState>
   }
+  /** Host-declared deployment capabilities from the authenticated handshake. */
+  hostDescription?: HostDescriptionSource
   /** Start the existing Session-tree download and let its shared modal report progress. */
   downloadSession: (sessionId: SessionId) => Promise<void>
   /** Re-read Host readiness after an operator repair. */
@@ -169,6 +174,12 @@ function projectModelOption(
 
 /** Render the secret-free investment Runtime readiness and explicit actions. */
 export function InvestmentReadinessSection(props: InvestmentReadinessSectionProps): ReactNode {
+  const hostDescription = props.hostDescription
+  const deployment = useSyncExternalStore(
+    listener => hostDescription?.subscribe(listener) ?? (() => {}),
+    () => hostDescription?.getSnapshot()?.deployment,
+    () => undefined,
+  )
   const snapshot = props.useInvestmentReadiness(value => value)
   const currentSession = props.useSessions(value => value.current)
   const interaction = props.useStore(value => value)
@@ -242,6 +253,10 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
       <HoldingsProviderSection
         t={props.t}
         requestData={props.requestData}
+        brokerSync={props.hostDescription === undefined ? true : deployment?.brokerSync ?? false}
+        providers={props.hostDescription === undefined
+          ? ['manual', 'easytrader', 'mac_ths', 'qmt']
+          : deployment?.holdingsProviders ?? ['manual']}
       />
 
       <section className={css.modelRouting} aria-labelledby="investment-project-model-title">

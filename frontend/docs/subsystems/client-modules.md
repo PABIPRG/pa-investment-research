@@ -125,5 +125,5 @@ onRebuilt(listener: (id: string, rev: string) => void): () => void
 onGraphChanged(listener: () => void): () => void
 ```
 
-Source: [`packages/client/modules/src/index.ts:206`](../../packages/client/modules/src/index.ts)
+Source: [`packages/client/modules/src/index.ts:223`](../../packages/client/modules/src/index.ts)
 <!-- END GENERATED cordis-surface -->

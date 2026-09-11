@@ -20,8 +20,8 @@ export type WorkspaceId = Branded<'WorkspaceId'>
 /** One workspace row: the record projection every workspace.* value carries. */
 export interface WorkspaceView {
   workspaceId: WorkspaceId
-  /** Canonical directory path (host-side realpath canon). */
-  path: string
+  /** Canonical directory path when this deployment is allowed to expose Host paths. */
+  path?: string
   /** Display title (defaults to the path basename at create). */
   title: string
   /**

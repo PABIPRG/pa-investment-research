@@ -16,6 +16,13 @@
     - id: timer
       name: '@deepseek-ai/cordis-plugin-timer'
 
+    # Process-lifetime deployment policy. Surface bundles replace this explicit
+    # neutral default; browser input never participates in the selection.
+    - id: deployment-capabilities
+      name: '@deepseek-ai/dsh-host-deployment-capabilities'
+      config:
+        surface: cli
+
     - id: hmr
       name: '@deepseek-ai/cordis-plugin-hmr'
       config:

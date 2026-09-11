@@ -36,4 +36,30 @@ describe('uploadBackup', () => {
     await expect(uploadBackup(new File(['abc'], 'broken.pabackup'), api as never)).rejects.toThrow('network failed')
     expect(api.backupUploadCancel).toHaveBeenCalledWith('upload-2')
   })
+
+  it('passes cancellation into a hanging chunk request and removes the partial upload', async () => {
+    let chunkSignal: AbortSignal | undefined
+    const api = {
+      backupUploadBegin: vi.fn(async () => ({ id: 'upload-3', chunkSize: 3 })),
+      backupUploadChunk: vi.fn((_input: unknown, signal?: AbortSignal) => {
+        chunkSignal = signal
+        return new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            reject(signal.reason instanceof Error ? signal.reason : new DOMException('Aborted', 'AbortError'))
+          }, { once: true })
+        })
+      }),
+      backupUploadInspect: vi.fn(),
+      backupUploadCancel: vi.fn(async () => {}),
+    }
+    const controller = new AbortController()
+    const pending = uploadBackup(new File(['abc'], '备份.pabackup'), api, () => {}, controller.signal)
+    await vi.waitFor(() => { expect(api.backupUploadChunk).toHaveBeenCalledOnce() })
+
+    controller.abort(new Error('component unmounted'))
+
+    await expect(pending).rejects.toThrow('component unmounted')
+    expect(chunkSignal).toBe(controller.signal)
+    expect(api.backupUploadCancel).toHaveBeenCalledWith('upload-3')
+  })
 })

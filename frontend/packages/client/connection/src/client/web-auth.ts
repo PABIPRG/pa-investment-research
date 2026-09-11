@@ -20,6 +20,12 @@ export function authenticatedInit(init?: RequestInit): RequestInit | undefined {
 
 /** Notify the app gate when the server invalidates the browser session. */
 export function observeAuthResponse(response: Response): Response {
-  if (response.status === 401) bridge()?.unauthorized()
+  const authBridge = bridge()
+  if (response.status === 401) authBridge?.unauthorized()
+  else if (response.status === 403) {
+    void response.clone().json().then((body: unknown) => {
+      if ((body as { code?: unknown } | null)?.code === 'csrf-invalid') authBridge?.unauthorized()
+    }).catch(() => {})
+  }
   return response
 }

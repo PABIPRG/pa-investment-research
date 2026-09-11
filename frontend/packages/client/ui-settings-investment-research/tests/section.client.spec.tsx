@@ -6,6 +6,7 @@ import {
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import type { BackupCategory, BackupListItem, BackupPreview } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
 import type {
@@ -15,6 +16,8 @@ import { createInvestmentReadinessStore } from '../src/client/store.ts'
 import type { InvestmentReadinessSnapshot, InvestmentRestartResult } from '../src/client/store.ts'
 import { en, zh } from '../src/client/locales.ts'
 import type { InvestmentReadinessKey } from '../src/client/locales.ts'
+
+type HostDescriptionSource = ConnectionHandle['hostDescription']
 
 afterEach(cleanup)
 
@@ -110,12 +113,19 @@ function mount(
     locale?: 'zh' | 'en'
     loadProjectModels?: () => Promise<ProjectModelSettings>
     saveProjectModel?: InvestmentReadinessSectionInjected['saveProjectModel']
+    backupDescribe?: InvestmentReadinessSectionInjected['backupDescribe']
     backupList?: () => Promise<BackupListItem[]>
-    backupPreviewStored?: (filename: string) => Promise<BackupPreview>
+    backupDownloadBegin?: InvestmentReadinessSectionInjected['backupDownloadBegin']
+    backupDownloadChunk?: InvestmentReadinessSectionInjected['backupDownloadChunk']
+    backupDownloadCancel?: InvestmentReadinessSectionInjected['backupDownloadCancel']
+    backupPreviewStored?: (filename: string, signal?: AbortSignal) => Promise<BackupPreview>
+    backupPreviewCancel?: (id: string) => Promise<void>
+    backupImport?: InvestmentReadinessSectionInjected['backupImport']
     backupReset?: InvestmentReadinessSectionInjected['backupReset']
     pickBackupDirectory?: () => Promise<string | null>
     reloadPage?: () => void
     requestData?: InvestmentReadinessSectionInjected['requestData']
+    cloud?: boolean
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
@@ -135,7 +145,9 @@ function mount(
   })))
   const dictionary = overrides.locale === 'en' ? en : zh
   const backup = {
-    backupDescribe: vi.fn(async () => ({ directory: '/Users/example/投研备份', format: 'pabackup' as const, scheduledBackup: false as const })),
+    backupDescribe: vi.fn(overrides.backupDescribe ?? (async () => overrides.cloud === true
+      ? ({ location: { kind: 'managed' as const }, format: 'pabackup' as const, scheduledBackup: false as const })
+      : ({ directory: '/Users/example/投研备份', location: { kind: 'local' as const, directory: '/Users/example/投研备份' }, format: 'pabackup' as const, scheduledBackup: false as const }))),
     backupSetDirectory: vi.fn(async (directory: string) => ({ directory })),
     backupCreate: vi.fn(async () => ({
       filename: '投研备份-全量数据-2026-09-07_14-35-20.pabackup',
@@ -143,17 +155,36 @@ function mount(
     })),
     backupList: vi.fn(overrides.backupList ?? (async () => [])),
     backupDelete: vi.fn(async () => {}),
+    backupDownloadBegin: vi.fn(overrides.backupDownloadBegin ?? (async (filename: string) => ({ id: 'download-1', filename, size: 4, chunkSize: 4 }))),
+    backupDownloadChunk: vi.fn(overrides.backupDownloadChunk ?? (async () => ({ base64: 'dGVzdA==', nextOffset: 4, done: true }))),
+    backupDownloadCancel: vi.fn(overrides.backupDownloadCancel ?? (async () => {})),
     backupPreviewStored: vi.fn(overrides.backupPreviewStored),
     backupUploadBegin: vi.fn(),
     backupUploadChunk: vi.fn(),
     backupUploadInspect: vi.fn(),
     backupUploadCancel: vi.fn(async () => {}),
-    backupImport: vi.fn(),
+    backupPreviewCancel: vi.fn(overrides.backupPreviewCancel ?? (async () => {})),
+    backupImport: vi.fn(overrides.backupImport),
     backupReset: vi.fn(overrides.backupReset ?? (async (input: { categories: BackupCategory[] }) => ({ status: 'reset' as const, categories: input.categories }))),
     pickBackupDirectory: vi.fn(overrides.pickBackupDirectory ?? (async () => null)),
     openBackupDirectory: vi.fn(async () => {}),
     reloadPage: vi.fn(overrides.reloadPage),
   }
+  const requestData = vi.fn(overrides.requestData ?? (async () => ({
+    backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' },
+  })))
+  const cloudDescription = {
+    version: 'test', attachedSessions: 0, canOpenPath: false,
+    deployment: {
+      surface: 'cloud-web' as const, browserFileTransfer: true, hostDirectories: false,
+      openHostPath: false, brokerSync: false, nativeHoldings: false,
+      holdingsProviders: ['manual' as const],
+    },
+  }
+  const hostDescription: HostDescriptionSource | undefined = overrides.cloud === true ? {
+    subscribe: () => () => {},
+    getSnapshot: () => cloudDescription,
+  } : undefined
   const unusedHook = (() => { throw new Error('unused standing hook') }) as never
   const view = render(<InvestmentReadinessSection
     close={() => {}}
@@ -169,9 +200,8 @@ function mount(
     refresh={refresh}
     loadProjectModels={loadProjectModels}
     saveProjectModel={saveProjectModel}
-    requestData={vi.fn(overrides.requestData ?? (async () => ({
-      backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' },
-    })))}
+    requestData={requestData}
+    {...hostDescription === undefined ? {} : { hostDescription }}
     {...backup}
     t={key => dictionary[key as InvestmentReadinessKey]}
   />)
@@ -187,6 +217,7 @@ function mount(
     loadProjectModels,
     saveProjectModel,
     backup,
+    requestData,
   }
 }
 
@@ -213,6 +244,130 @@ describe('InvestmentReadinessSection', () => {
     )).toBeTruthy()
     expect(english.container.textContent?.toLowerCase()).not.toContain('workspace')
     expect(english.container.textContent?.toLowerCase()).not.toContain('scheduled backup')
+  })
+
+  it('uses managed storage and a manual-only holdings policy in cloud Web', async () => {
+    const filename = '投研备份-全量数据-2026-09-11_09-30-00.pabackup'
+    const { requestData } = mount(CONFIGURED, {
+      cloud: true,
+      backupList: async () => [{
+        filename,
+        size: 4,
+        modifiedAt: '2026-09-11T01:30:00.000Z',
+        status: 'ready',
+        manifest: {
+          format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-11T01:30:00.000Z',
+          createdByAppVersion: '0.1.0', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+        },
+      }],
+    })
+
+    expect(await screen.findByText('由云端安全托管；可在下方下载或导入备份。')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '复制路径' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开文件夹' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '更改位置' })).toBeNull()
+    expect(screen.getByRole('button', { name: '下载' })).toBeTruthy()
+    expect(screen.getByText('云端不会连接或扫描券商客户端；请使用手工录入或批量导入。')).toBeTruthy()
+    expect(requestData).not.toHaveBeenCalled()
+  })
+
+  it('fails closed for Host directory actions while backup storage is unknown or failed', async () => {
+    let resolveDescription: ((value: Awaited<ReturnType<InvestmentReadinessSectionInjected['backupDescribe']>>) => void) | undefined
+    const pendingDescription = new Promise<Awaited<ReturnType<InvestmentReadinessSectionInjected['backupDescribe']>>>((resolve) => {
+      resolveDescription = resolve
+    })
+    const pending = mount(CONFIGURED, { backupDescribe: () => pendingDescription })
+
+    expect(screen.getAllByText('正在读取…')).not.toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '更改位置' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开文件夹' })).toBeNull()
+    await act(async () => {
+      resolveDescription?.({
+        directory: '/Users/example/投研备份',
+        location: { kind: 'local', directory: '/Users/example/投研备份' },
+        format: 'pabackup',
+        scheduledBackup: false,
+      })
+      await pendingDescription
+    })
+    expect(await screen.findByRole('button', { name: '更改位置' })).toBeTruthy()
+    pending.unmount()
+
+    mount(CONFIGURED, { backupDescribe: async () => { throw new Error('/private/server/backups') } })
+    expect(await screen.findAllByText('备份信息读取失败，请检查投研后端后重试。')).not.toHaveLength(0)
+    expect(screen.queryByRole('button', { name: '更改位置' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '复制路径' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开文件夹' })).toBeNull()
+  })
+
+  it('renders only the safe problem supplied for an unreadable backup item', async () => {
+    const hostPath = '/private/server/backups/权限失败.pabackup'
+    const { container } = mount(CONFIGURED, {
+      backupList: async () => [{
+        filename: '权限失败.pabackup',
+        size: 4,
+        modifiedAt: '2026-09-11T01:30:00.000Z',
+        status: 'damaged',
+        problem: '无法读取或验证备份文件',
+      }],
+    })
+
+    expect(await screen.findByText(/无法读取或验证备份文件/)).toBeTruthy()
+    expect(container.textContent).not.toContain(hostPath)
+    expect(container.textContent).not.toContain('/private/server')
+  })
+
+  it('aborts an in-flight backup transfer and releases its Host session on unmount', async () => {
+    const filename = '投研备份-全量数据-2026-09-11_09-30-00.pabackup'
+    let chunkSignal: AbortSignal | undefined
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: '2026-09-11T01:30:00.000Z', status: 'ready', manifest: {
+        format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-11T01:30:00.000Z',
+        createdByAppVersion: '0.1.0', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+      } }],
+      backupDownloadChunk: (_input, signal) => {
+        chunkSignal = signal
+        return new Promise((_, reject) => {
+          signal?.addEventListener('abort', () => { reject(new DOMException('Aborted', 'AbortError')) }, { once: true })
+        })
+      },
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
+    await waitFor(() => { expect(view.backup.backupDownloadChunk).toHaveBeenCalledOnce() })
+
+    view.unmount()
+
+    await waitFor(() => { expect(chunkSignal?.aborted).toBe(true) })
+    await waitFor(() => { expect(view.backup.backupDownloadCancel).toHaveBeenCalledWith('download-1') })
+  })
+
+  it('exposes transfer progress to assistive technology and restores focus after cancellation', async () => {
+    const filename = '投研备份-全量数据-2026-09-11_09-30-00.pabackup'
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: '2026-09-11T01:30:00.000Z', status: 'ready', manifest: {
+        format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-11T01:30:00.000Z',
+        createdByAppVersion: '0.1.0', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+      } }],
+      backupDownloadChunk: (_input, signal) => new Promise((_, reject) => {
+        signal?.addEventListener('abort', () => { reject(new DOMException('Aborted', 'AbortError')) }, { once: true })
+      }),
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    const trigger = screen.getByRole('button', { name: '下载' })
+    trigger.focus()
+    fireEvent.click(trigger)
+
+    const progress = await screen.findByRole('progressbar', { name: '正在下载 0%' })
+    expect(progress.getAttribute('value')).toBe('0')
+    expect(screen.getByRole('status').textContent).toContain('正在下载')
+    const cancel = screen.getByRole('button', { name: '取消' })
+    cancel.focus()
+    fireEvent.click(cancel)
+
+    await waitFor(() => { expect(view.backup.backupDownloadCancel).toHaveBeenCalledWith('download-1') })
+    await waitFor(() => { expect(screen.queryByRole('progressbar')).toBeNull() })
+    expect(document.activeElement).toBe(trigger)
   })
 
   it('shows the project default model, explains module routing, and persists a new default', async () => {
@@ -352,6 +507,171 @@ describe('InvestmentReadinessSection', () => {
         previewId: 'preview-1', rules: { holdings: 'use_import' }, backupBefore: false,
       })
       expect(backup.reloadPage).toHaveBeenCalledOnce()
+    })
+  })
+
+  it('passes cancellation into stored preview and releases the preview on cancel and unmount', async () => {
+    const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
+    const manifest = {
+      format: 'pa-investment-backup' as const, formatVersion: 1 as const,
+      createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12',
+      reason: 'manual' as const, scope: ['holdings'] as BackupCategory[], contents: [], domains: [],
+    }
+    const preview: BackupPreview = {
+      id: 'preview-lifecycle', filename, manifest, expiresAt: '2026-09-08T06:35:20.000Z',
+      domains: { 'trading-core': { currentRevision: 'local', categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } } } },
+    }
+    let signal: AbortSignal | undefined
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: manifest.createdAt, status: 'ready', manifest }],
+      backupPreviewStored: async (_filename, nextSignal) => {
+        signal = nextSignal
+        return preview
+      },
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+    expect(await screen.findByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
+    expect(signal).toBeInstanceOf(AbortSignal)
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '取消' }))
+    await waitFor(() => { expect(view.backup.backupPreviewCancel).toHaveBeenCalledWith('preview-lifecycle') })
+
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+    expect(await screen.findByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
+    view.unmount()
+    await waitFor(() => {
+      expect(view.backup.backupPreviewCancel).toHaveBeenCalledTimes(2)
+      expect(view.backup.backupPreviewCancel).toHaveBeenLastCalledWith('preview-lifecycle')
+    })
+  })
+
+  it('closes an expired preview without issuing a redundant cancellation', async () => {
+    const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
+    const manifest = {
+      format: 'pa-investment-backup' as const, formatVersion: 1 as const,
+      createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12',
+      reason: 'manual' as const, scope: ['holdings'] as BackupCategory[], contents: [], domains: [],
+    }
+    const preview: BackupPreview = {
+      id: 'preview-failure', filename, manifest, expiresAt: '2026-09-08T06:35:20.000Z',
+      domains: { 'trading-core': { currentRevision: 'local', categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } } } },
+    }
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: manifest.createdAt, status: 'ready', manifest }],
+      backupPreviewStored: async () => preview,
+      backupImport: async () => { throw new Error('导入预览已失效，请重新选择备份') },
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+    await screen.findByRole('dialog', { name: '确认增量导入' })
+    fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+
+    await waitFor(() => { expect(view.backup.backupImport).toHaveBeenCalledOnce() })
+    expect(view.backup.backupPreviewCancel).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: '确认增量导入' })).toBeNull()
+    expect(screen.getByText('导入预览已失效，请重新选择备份。')).toBeTruthy()
+  })
+
+  it('keeps a non-consumed preview available for retry after an import failure', async () => {
+    const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
+    const manifest = {
+      format: 'pa-investment-backup' as const, formatVersion: 1 as const,
+      createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12',
+      reason: 'manual' as const, scope: ['holdings'] as BackupCategory[], contents: [], domains: [],
+    }
+    const preview: BackupPreview = {
+      id: 'preview-retry', filename, manifest, expiresAt: '2026-09-08T06:35:20.000Z',
+      domains: { 'trading-core': { currentRevision: 'local', categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } } } },
+    }
+    let attempts = 0
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: manifest.createdAt, status: 'ready', manifest }],
+      backupPreviewStored: async () => preview,
+      backupImport: async input => {
+        attempts += 1
+        if (attempts === 1) throw new Error('导入暂时失败，请重试')
+        return { status: 'applied', categories: input.rules.holdings === undefined ? [] : ['holdings'] }
+      },
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+    await screen.findByRole('dialog', { name: '确认增量导入' })
+    fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+
+    expect(await screen.findByText('导入暂时失败，请重试')).toBeTruthy()
+    expect(screen.getByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
+    expect(view.backup.backupPreviewCancel).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+    await waitFor(() => { expect(view.backup.reloadPage).toHaveBeenCalledOnce() })
+    expect(view.backup.backupImport).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cancel an import-owned preview when unmounted before a successful import settles', async () => {
+    const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
+    const manifest = {
+      format: 'pa-investment-backup' as const, formatVersion: 1 as const,
+      createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12',
+      reason: 'manual' as const, scope: ['holdings'] as BackupCategory[], contents: [], domains: [],
+    }
+    const preview: BackupPreview = {
+      id: 'preview-importing', filename, manifest, expiresAt: '2026-09-08T06:35:20.000Z', domains: {},
+    }
+    let settle: ((value: { status: 'applied'; categories: BackupCategory[] }) => void) | undefined
+    const importing = new Promise<{ status: 'applied'; categories: BackupCategory[] }>((resolve) => { settle = resolve })
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: manifest.createdAt, status: 'ready', manifest }],
+      backupPreviewStored: async () => preview,
+      backupImport: () => importing,
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+    await screen.findByRole('dialog', { name: '确认增量导入' })
+    fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+    await waitFor(() => { expect(view.backup.backupImport).toHaveBeenCalledOnce() })
+
+    view.unmount()
+    expect(view.backup.backupPreviewCancel).not.toHaveBeenCalled()
+    await act(async () => {
+      settle?.({ status: 'applied', categories: ['holdings'] })
+      await importing
+    })
+    expect(view.backup.backupPreviewCancel).not.toHaveBeenCalled()
+    expect(view.backup.reloadPage).not.toHaveBeenCalled()
+  })
+
+  it('releases an import-owned preview if the in-flight import fails after unmount', async () => {
+    const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
+    const manifest = {
+      format: 'pa-investment-backup' as const, formatVersion: 1 as const,
+      createdAt: '2026-09-07T06:35:20.000Z', createdByAppVersion: '0.1.0-rc.12',
+      reason: 'manual' as const, scope: ['holdings'] as BackupCategory[], contents: [], domains: [],
+    }
+    const preview: BackupPreview = {
+      id: 'preview-import-failed', filename, manifest, expiresAt: '2026-09-08T06:35:20.000Z', domains: {},
+    }
+    let rejectImport: ((reason: Error) => void) | undefined
+    const importing = new Promise<{ status: 'applied'; categories: BackupCategory[] }>((_resolve, reject) => {
+      rejectImport = reject
+    })
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: manifest.createdAt, status: 'ready', manifest }],
+      backupPreviewStored: async () => preview,
+      backupImport: () => importing,
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getAllByRole('button', { name: '导入数据' })[1]!)
+    await screen.findByRole('dialog', { name: '确认增量导入' })
+    fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+    await waitFor(() => { expect(view.backup.backupImport).toHaveBeenCalledOnce() })
+
+    view.unmount()
+    expect(view.backup.backupPreviewCancel).not.toHaveBeenCalled()
+    await act(async () => {
+      rejectImport?.(new Error('导入暂时失败'))
+      await importing.catch(() => undefined)
+    })
+    await waitFor(() => {
+      expect(view.backup.backupPreviewCancel).toHaveBeenCalledWith('preview-import-failed')
     })
   })
 

@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BackupService } from '../src/backup-service.ts'
+import { BackupService, readStableDownloadSnapshot } from '../src/backup-service.ts'
 import type { BackupBackendOperation } from '../src/backup-service.ts'
 import type { DomainSnapshot } from '../src/backup-archive.ts'
 
@@ -15,6 +15,7 @@ async function home(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.useRealTimers()
   const { rm } = await import('node:fs/promises')
   await Promise.all(homes.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
@@ -48,6 +49,17 @@ function tradingSnapshot(categories: string[]): DomainSnapshot {
 }
 
 describe('BackupService storage', () => {
+  it('rejects growth observed after opening before allocating or reading the file', async () => {
+    const expected = { dev: 1, ino: 2, size: 4, isFile: () => true }
+    const handle = {
+      stat: vi.fn(async () => ({ ...expected, size: 64 * 1024 * 1024 + 1 })),
+      read: vi.fn(),
+    }
+
+    await expect(readStableDownloadSnapshot(handle as never, expected as never)).rejects.toThrow(/下载前发生变化/)
+    expect(handle.read).not.toHaveBeenCalled()
+  })
+
   it('uses the DSH home default, persists an explicit directory, and scans readable and damaged backups', async () => {
     const dshHome = await home()
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
@@ -76,6 +88,35 @@ describe('BackupService storage', () => {
     ].sort((left, right) => left.filename.localeCompare(right.filename)))
   })
 
+  it('maps a file-level archive read failure to a stable path-free list problem', async () => {
+    const dshHome = await home()
+    const directory = join(dshHome, 'investment-research', 'backups')
+    const filename = '权限失败.pabackup'
+    const path = join(directory, filename)
+    await mkdir(directory, { recursive: true })
+    await writeFile(path, 'placeholder')
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async () => { throw new Error('unexpected backend request') },
+      fileOperations: {
+        readArchive: async () => { throw new Error(`EACCES: permission denied, open '${path}'`) },
+      },
+    })
+
+    const items = await service.list()
+
+    expect(items).toEqual([{
+      filename,
+      size: 11,
+      modifiedAt: expect.any(String),
+      status: 'damaged',
+      problem: '无法读取或验证备份文件',
+    }])
+    expect(JSON.stringify(items)).not.toContain(directory)
+    expect(JSON.stringify(items)).not.toContain('EACCES')
+  })
+
   it('deletes only an explicitly named direct backup file', async () => {
     const dshHome = await home()
     const service = new BackupService({
@@ -90,6 +131,69 @@ describe('BackupService storage', () => {
     await expect(service.delete('../secrets.pabackup')).rejects.toThrow(/文件名/)
     await service.delete(created.filename)
     await expect(stat(created.path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('downloads only a validated direct backup through bounded ordered chunks', async () => {
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        throw new Error(`unexpected ${operation}`)
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const expected = await readFile(created.path)
+    const download = await service.beginDownload(created.filename)
+    const chunks: Buffer[] = []
+    let offset = 0
+    while (offset < download.size) {
+      const chunk = service.downloadChunk({ id: download.id, offset })
+      chunks.push(Buffer.from(chunk.base64, 'base64'))
+      offset = chunk.nextOffset
+    }
+    expect(Buffer.concat(chunks)).toEqual(expected)
+    expect(() => service.downloadChunk({ id: download.id, offset })).toThrow(/失效/)
+    const invalid = await service.beginDownload(created.filename)
+    expect(() => service.downloadChunk({ id: invalid.id, offset: 1 })).toThrow(/位置无效/)
+    expect(() => service.downloadChunk({ id: invalid.id, offset: 0 })).toThrow(/失效/)
+    await expect(service.beginDownload('../escape.pabackup')).rejects.toThrow(/文件名/)
+    await service.dispose()
+  })
+
+  it('reserves download capacity atomically and actively expires abandoned snapshots', async () => {
+    vi.useFakeTimers()
+    let nowMs = Date.parse('2026-09-11T00:00:00.000Z')
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      now: () => new Date(nowMs),
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        throw new Error(`unexpected ${operation}`)
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+
+    const starts = await Promise.allSettled([
+      service.beginDownload(created.filename),
+      service.beginDownload(created.filename),
+      service.beginDownload(created.filename),
+    ])
+    expect(starts.filter(result => result.status === 'fulfilled')).toHaveLength(2)
+    expect(starts.filter(result => result.status === 'rejected')).toHaveLength(1)
+    const active = starts.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+    service.cancelDownload(active[0]!.id)
+    service.cancelDownload(active[1]!.id)
+
+    await expect(service.beginDownload('missing.pabackup')).rejects.toThrow()
+    const abandoned = await service.beginDownload(created.filename)
+    nowMs += 15 * 60 * 1000 + 1
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1)
+    expect(() => service.downloadChunk({ id: abandoned.id, offset: 0 })).toThrow(/失效/)
+    await service.dispose()
   })
 
   it('streams an external backup through a bounded temporary file and enforces chunk order', async () => {
@@ -134,6 +238,182 @@ describe('BackupService storage', () => {
     await expect(service.appendUploadChunk({ id: upload.id, offset: 0, base64: oversized }))
       .rejects.toThrow(/256 KiB/)
     await service.cancelUpload(upload.id)
+  })
+
+  it('atomically limits concurrent uploads and reserved bytes, then releases files on cancel, expiry, and disposal', async () => {
+    vi.useFakeTimers()
+    let nowMs = Date.parse('2026-09-11T00:00:00.000Z')
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      now: () => new Date(nowMs),
+      request: async () => { throw new Error('unexpected backend request') },
+    })
+
+    const starts = await Promise.allSettled(Array.from({ length: 5 }, (_, index) => (
+      service.beginUpload({ filename: `并发-${index}.pabackup`, size: 1 })
+    )))
+    expect(starts.filter(result => result.status === 'fulfilled')).toHaveLength(4)
+    expect(starts.filter(result => result.status === 'rejected')).toHaveLength(1)
+    const active = starts.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+    await Promise.all(active.map(upload => service.cancelUpload(upload.id)))
+
+    const first = await service.beginUpload({ filename: '预算-1.pabackup', size: 64 * 1024 * 1024 })
+    const second = await service.beginUpload({ filename: '预算-2.pabackup', size: 64 * 1024 * 1024 })
+    await expect(service.beginUpload({ filename: '预算-3.pabackup', size: 1 }))
+      .rejects.toMatchObject({ code: 'resource-exhausted' })
+    await service.cancelUpload(first.id)
+    await service.cancelUpload(second.id)
+
+    const expiredUpload = await service.beginUpload({ filename: '过期.pabackup', size: 1 })
+    const expiredPath = join(dshHome, 'investment-research', 'backup-uploads', `${expiredUpload.id}.part`)
+    nowMs += 15 * 60 * 1000 + 1
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1)
+    await vi.waitFor(async () => {
+      await expect(stat(expiredPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    })
+    await expect(service.appendUploadChunk({ id: expiredUpload.id, offset: 0, base64: 'YQ==' }))
+      .rejects.toMatchObject({ code: 'resource-expired' })
+
+    const disposedUpload = await service.beginUpload({ filename: '释放.pabackup', size: 1 })
+    const disposedPath = join(dshHome, 'investment-research', 'backup-uploads', `${disposedUpload.id}.part`)
+    await service.dispose()
+    await expect(stat(disposedPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('waits for in-flight upload and preview creation before disposal and rejects later transfers', async () => {
+    const dshHome = await home()
+    let enterUpload: (() => void) | undefined
+    const uploadEntered = new Promise<void>((resolve) => { enterUpload = resolve })
+    let releaseUpload: (() => void) | undefined
+    const uploadBarrier = new Promise<void>((resolve) => { releaseUpload = resolve })
+    let enterPreview: (() => void) | undefined
+    const previewEntered = new Promise<void>((resolve) => { enterPreview = resolve })
+    let releasePreview: (() => void) | undefined
+    const previewBarrier = new Promise<void>((resolve) => { releasePreview = resolve })
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        if (operation === 'preview') {
+          enterPreview?.()
+          await previewBarrier
+          return {
+            currentRevision: 'local-revision',
+            categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } },
+          }
+        }
+        throw new Error(`unexpected ${operation}`)
+      },
+      fileOperations: {
+        initializeUpload: async (path) => {
+          enterUpload?.()
+          await uploadBarrier
+          await writeFile(path, new Uint8Array(), { flag: 'wx', mode: 0o600 })
+        },
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const bytes = await readFile(created.path)
+    const upload = service.beginUpload({ filename: '并发释放.pabackup', size: 1 })
+    const preview = service.previewBytes(bytes)
+    const uploadRejected = expect(upload).rejects.toMatchObject({ code: 'resource-expired' })
+    const previewRejected = expect(preview).rejects.toMatchObject({ code: 'resource-expired' })
+    await Promise.all([uploadEntered, previewEntered])
+
+    let disposed = false
+    const disposing = service.dispose().then(() => { disposed = true })
+    await Promise.resolve()
+    expect(disposed).toBe(false)
+    releaseUpload?.()
+    releasePreview?.()
+
+    await uploadRejected
+    await previewRejected
+    await disposing
+    expect(disposed).toBe(true)
+    const uploadDirectory = join(dshHome, 'investment-research', 'backup-uploads')
+    expect((await readdir(uploadDirectory)).filter(name => name.endsWith('.part'))).toEqual([])
+    await expect(service.beginUpload({ filename: '关闭后.pabackup', size: 1 }))
+      .rejects.toMatchObject({ code: 'resource-expired' })
+    await expect(service.previewBytes(bytes)).rejects.toMatchObject({ code: 'resource-expired' })
+    await expect(service.previewFile(created.path)).rejects.toMatchObject({ code: 'resource-expired' })
+    await expect(service.beginDownload(created.filename)).rejects.toMatchObject({ code: 'resource-expired' })
+  })
+
+  it('reserves preview capacity before reading a third archive and actively releases expired previews', async () => {
+    vi.useFakeTimers()
+    let nowMs = Date.parse('2026-09-11T00:00:00.000Z')
+    const dshHome = await home()
+    const previewResolvers: Array<() => void> = []
+    const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      if (operation === 'export') return tradingSnapshot(requestCategories(input))
+      if (operation === 'preview') {
+        await new Promise<void>(resolve => { previewResolvers.push(resolve) })
+        return {
+          currentRevision: 'local-revision',
+          categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } },
+        }
+      }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const service = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', now: () => new Date(nowMs), request })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const first = service.previewFile(created.path)
+    const second = service.previewFile(created.path)
+    await vi.waitFor(() => { expect(previewResolvers).toHaveLength(2) })
+    const damaged = join(dshHome, 'damaged-before-read.pabackup')
+    await writeFile(damaged, 'not a zip')
+
+    await expect(service.previewFile(damaged)).rejects.toMatchObject({ code: 'resource-exhausted' })
+    previewResolvers.splice(0).forEach(resolve => resolve())
+    const previews = await Promise.all([first, second])
+    nowMs += 15 * 60 * 1000 + 1
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000 + 1)
+    await expect(service.importPreview(previews[0]!.id)).rejects.toMatchObject({ code: 'resource-expired' })
+    expect(() => service.cancelPreview(previews[1]!.id)).not.toThrow()
+    await service.dispose()
+  })
+
+  it('keeps cloud managed storage isolated from a stale local custom directory', async () => {
+    const dshHome = await home()
+    const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      if (operation === 'export') return tradingSnapshot(requestCategories(input))
+      if (operation === 'preview') return {
+        currentRevision: 'local-revision',
+        categories: { holdings: { added: 1, conflicts: 0, defaultRule: 'keep_local' } },
+      }
+      if (operation === 'prepare') return { status: 'prepared' }
+      if (operation === 'commit') return { status: 'applied' }
+      if (operation === 'finalize') return { status: 'finalized' }
+      throw new Error(`unexpected ${operation}`)
+    })
+    const local = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+    const custom = join(dshHome, 'old-local-backups')
+    await local.setDirectory(custom)
+    const localBackup = await local.create({ categories: ['holdings'], reason: 'manual' })
+
+    const managed = new BackupService({
+      dshHome, appVersion: '0.1.0-rc.12', request, managedStorage: true,
+    })
+    const managedDirectory = join(dshHome, 'investment-research', 'backups')
+    expect((await managed.describe()).directory).toBe(managedDirectory)
+    expect(await managed.list()).toEqual([])
+    const created = await managed.create({ categories: ['holdings'], reason: 'manual' })
+    expect(created.path).toBe(join(managedDirectory, created.filename))
+    const download = await managed.beginDownload(created.filename)
+    managed.cancelDownload(download.id)
+    const preview = await managed.previewStored(created.filename)
+    await managed.importPreview(preview.id, { holdings: 'keep_local' })
+    await managed.delete(created.filename)
+    expect(await readFile(localBackup.path)).toBeTruthy()
+
+    const restoredLocal = new BackupService({ dshHome, appVersion: '0.1.0-rc.12', request })
+    expect((await restoredLocal.describe()).directory).toBe(custom)
+    expect((await restoredLocal.list()).map(item => item.filename)).toContain(localBackup.filename)
+    await Promise.all([local.dispose(), managed.dispose(), restoredLocal.dispose()])
   })
 })
 

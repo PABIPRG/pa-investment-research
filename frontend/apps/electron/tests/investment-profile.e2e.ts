@@ -10,6 +10,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import DeploymentCapabilities from '../../../packages/host/deployment-capabilities/src/index.ts'
 import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import InvestmentPythonRuntime from '../../../packages/investment-research/python-runtime/src/index.ts'
 import * as StockAnalysis from '../../../packages/investment-research/stock-analysis/src/index.ts'
@@ -126,6 +127,7 @@ describe('Electron investment Profile composition', () => {
       { name: '@deepseek-ai/dsh-agent' },
       { name: '@deepseek-ai/dsh-system-prompt' },
       { name: '@deepseek-ai/dsh-tools' },
+      byId.get('deployment-capabilities'),
       { name: '@deepseek-ai/dsh-subprocess-local' },
       { name: '@test/credentials' },
       { id: 'investment-python-runtime', name: byId.get('investment-python-runtime')?.name, config: { dshHome: join(root, 'home') } },
@@ -148,6 +150,7 @@ describe('Electron investment Profile composition', () => {
       ['@deepseek-ai/dsh-agent', AgentRegistry],
       ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
       ['@deepseek-ai/dsh-tools', ToolRuntime],
+      ['@deepseek-ai/dsh-host-deployment-capabilities', DeploymentCapabilities],
       ['@deepseek-ai/dsh-subprocess-local', LocalSubprocessRuntime],
       ['@test/credentials', KeylessCredentials],
       ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],
@@ -170,6 +173,7 @@ describe('Electron investment Profile composition', () => {
     await ctx.loader.create({ name: 'cordis:include', config: { path: pathToFileURL(configPath).href } })
     await ctx.loader.await()
 
+    expect(ctx.deploymentCapabilities.snapshot().surface).toBe('electron')
     expect(ctx.tools.schemas()).toHaveLength(22)
     const industryReadiness = ctx.investmentPythonRuntime.readiness().backends.find(
       backend => backend.backendId === 'industry-chain',
@@ -180,6 +184,7 @@ describe('Electron investment Profile composition', () => {
     expect((ctx.credentials as unknown as KeylessCredentials).describeCalls).toEqual([])
     expect(imported).toEqual(expect.arrayContaining([
       '@deepseek-ai/dsh-investment-python-runtime',
+      '@deepseek-ai/dsh-host-deployment-capabilities',
       '@deepseek-ai/dsh-investment-stock-analysis',
       '@deepseek-ai/dsh-investment-market-watch',
       '@deepseek-ai/dsh-investment-industry-chain',

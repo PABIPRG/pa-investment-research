@@ -17,6 +17,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import HttpServer from '@deepseek-ai/dsh-host-webserver'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import type { DirectoryPicker } from '@deepseek-ai/dsh-host-directory-picker'
 import BrowseDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-browse'
 import NativeDirectoryPicker from '@deepseek-ai/dsh-host-directory-picker-native'
@@ -104,6 +105,7 @@ async function loadComposition(
   ].join('\n'))
 
   context = new Context()
+  new DeploymentCapabilities(context, { surface: 'local-web' })
   context.baseUrl = pathToFileURL(root).href + '/'
   await context.plugin(Loader)
   context.loader.builtins.include = Include
@@ -155,6 +157,15 @@ function stubAttendedHost(): void {
 }
 
 describe('real Loader composition', () => {
+  it('mounts no Host directory interaction for cloud Web', async () => {
+    const create = vi.fn()
+    await DirectoryPickerAuto.apply({
+      deploymentCapabilities: { snapshot: () => ({ hostDirectories: false }) },
+      loader: { create },
+    } as never)
+    expect(create).not.toHaveBeenCalled()
+  })
+
   // The 60s budget covers this file's static imports (webserver plus both
   // backend node halves through tsx), which dominate on cold caches; the
   // Loader itself resolves nothing here — `loader.internal` is a module map.

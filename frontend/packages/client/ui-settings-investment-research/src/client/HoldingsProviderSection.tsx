@@ -9,6 +9,8 @@ type RequestData = (request: InvestmentDataRequest) => Promise<InvestmentJsonVal
 export interface HoldingsProviderSectionProps {
   t: (key: InvestmentReadinessKey) => string
   requestData: RequestData
+  brokerSync?: boolean
+  providers?: readonly string[]
 }
 
 /** Provider option with a platform gate. */
@@ -28,7 +30,7 @@ const OPTIONS: readonly ProviderOption[] = [
 function currentPlatform(): string {
   return navigator.platform.startsWith('Mac') ? 'darwin'
     : navigator.platform.startsWith('Win') ? 'win32'
-    : 'linux'
+      : 'linux'
 }
 
 /** Settings section for choosing the holdings data-source provider. */
@@ -41,6 +43,11 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
   const [error, setError] = useState('')
 
   useEffect(() => {
+    if (props.brokerSync === false) {
+      setEffective('manual')
+      setLoading(false)
+      return () => {}
+    }
     let alive = true
     setLoading(true)
     setError('')
@@ -59,9 +66,11 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
       },
     )
     return () => { alive = false }
-  }, [requestData, t])
+  }, [props.brokerSync, requestData, t])
 
-  const availableOptions = OPTIONS.filter(option => option.value === effective || option.platforms.has(currentPlatform()))
+  const allowed = props.providers === undefined ? undefined : new Set(props.providers)
+  const availableOptions = OPTIONS.filter(option => option.value === effective
+    || (allowed === undefined ? option.platforms.has(currentPlatform()) : allowed.has(option.value)))
   const effectiveIsKnown = OPTIONS.some(option => option.value === effective)
   const optionLabel = (value: string): string => {
     const option = OPTIONS.find(candidate => candidate.value === value)
@@ -110,7 +119,7 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
             <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
           ))}
         </select>
-        <small>{t('providerHint')}</small>
+        <small>{t(props.brokerSync === false ? 'providerCloudHint' : 'providerHint')}</small>
       </label>
       {notice !== '' && <p className={css.success} role="status">{notice}</p>}
       {error !== '' && <p className={css.error} role="alert">{error}</p>}

@@ -538,6 +538,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'deploymentCapabilities',
+    summary: 'Single process-lifetime source of deployment capability truth.',
+    description: 'Single process-lifetime source of deployment capability truth.',
+    methods: [
+      {
+        signature: 'snapshot(): DeploymentCapabilitySnapshot',
+        description: 'Return the process-lifetime, immutable, client-safe capability snapshot.',
+        parameters: [],
+        returns: 'The deployment capabilities fixed for the lifetime of this process.',
+      },
+    ],
+  },
+  {
     key: 'directoryPicker',
     summary: 'Abstract directory-picking service.',
     description: 'Abstract directory-picking service. Subclass, implement `capability()`, and load the subclass as a plugin — it registers as `ctx.directoryPicker` (one implementation per context; loading a second throws, cordis\' standard duplicate-service behavior). The capability object must be stable for the service lifetime: consumers may capture it across calls.',
@@ -775,7 +788,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'The backend\'s lossless JSON response.',
       },
       {
-        signature: '@Remote(\'backup-describe\') backupDescribe(): Promise<{ directory: string; format: \'pabackup\'; scheduledBackup: false }>',
+        signature: 'async nativeHoldings(input: { action: \'read\' | \'launch\' | \'select_client\'; account_mode: \'real\' | \'simulated\'; client_path?: string }): Promise<unknown>',
+        description: 'Run one native holdings operation after the Electron main process obtained consent. This method is deliberately absent from the Remote registry.',
+        parameters: [{ name: 'input', description: 'fixed action and account; client path comes only from the native picker.' }],
+        returns: 'backend readiness or a read-only preview.',
+      },
+      {
+        signature: '@Remote(\'backup-describe\') async backupDescribe(): Promise<BackupDescription>',
         description: 'Read user-visible backup configuration without exposing internal upload paths.',
         parameters: [],
         returns: 'The configured directory and stable backup-format capabilities.',
@@ -785,6 +804,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Persist a user-selected backup directory.',
         parameters: [{ name: 'directory', description: 'Absolute directory selected by the local user.' }],
         returns: 'The normalized directory persisted by the Host.',
+      },
+      {
+        signature: '@Remote(\'backup-download-begin\') backupDownloadBegin(filename: string, signal: AbortSignal): Promise<{ id: string; filename: string; size: number; chunkSize: number }>',
+        description: 'Start a validated, bounded browser download for a stored backup.',
+        parameters: [{ name: 'filename', description: 'Direct child filename returned by the backup list.' }, { name: 'signal', description: 'Carrier cancellation for the allocation and bounded file read.' }],
+        returns: 'An opaque download id, immutable file metadata, and required chunk size.',
+      },
+      {
+        signature: '@Remote(\'backup-download-chunk\') backupDownloadChunk(input: { id: string; offset: number }, signal: AbortSignal): { base64: string; nextOffset: number; done: boolean }',
+        description: 'Read one chunk from a browser download session.',
+        parameters: [{ name: 'input', description: 'Download id and the exact next byte offset.' }, { name: 'signal', description: 'Carrier cancellation checked before reading the in-memory chunk.' }],
+        returns: 'The Base64 chunk, next byte offset, and completion flag.',
+      },
+      {
+        signature: '@Remote(\'backup-download-cancel\') backupDownloadCancel(id: string): void',
+        description: 'Release an incomplete browser download session.',
+        parameters: [{ name: 'id', description: 'Opaque download id allocated by {@link backupDownloadBegin}.' }],
       },
       {
         signature: '@Remote(\'backup-create\') async backupCreate(input: { categories: BackupCategory[]; reason: BackupReason }): Promise<{ filename: string manifest: BackupManifest }>',
@@ -804,33 +840,38 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'filename', description: 'Direct child filename returned by the backup list.' }],
       },
       {
-        signature: '@Remote(\'backup-preview-stored\') backupPreviewStored(filename: string): Promise<BackupPreview>',
+        signature: '@Remote(\'backup-preview-stored\') backupPreviewStored(filename: string, signal: AbortSignal): Promise<BackupPreview>',
         description: 'Inspect one immutable source already present in the configured backup directory.',
-        parameters: [{ name: 'filename', description: 'Direct child filename returned by the backup list.' }],
+        parameters: [{ name: 'filename', description: 'Direct child filename returned by the backup list.' }, { name: 'signal', description: 'Carrier cancellation for archive inspection and backend previews.' }],
         returns: 'A bounded preview with counts, conflicts, and an expiring preview id.',
       },
       {
-        signature: '@Remote(\'backup-upload-begin\') backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>',
+        signature: '@Remote(\'backup-upload-begin\') backupUploadBegin(input: { filename: string; size: number }, signal: AbortSignal): Promise<{ id: string; chunkSize: number }>',
         description: 'Allocate a bounded temporary-file upload session for an external backup.',
-        parameters: [{ name: 'input', description: 'Original filename and exact byte size of the selected archive.' }],
+        parameters: [{ name: 'input', description: 'Original filename and exact byte size of the selected archive.' }, { name: 'signal', description: 'Carrier cancellation for temporary-file allocation.' }],
         returns: 'The opaque upload id and required maximum chunk size.',
       },
       {
-        signature: '@Remote(\'backup-upload-chunk\') backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>',
+        signature: '@Remote(\'backup-upload-chunk\') backupUploadChunk(input: { id: string; offset: number; base64: string }, signal: AbortSignal): Promise<{ received: number }>',
         description: 'Append one ordered Base64 chunk to an upload session.',
-        parameters: [{ name: 'input', description: 'Upload id, required byte offset, and bounded Base64 payload.' }],
+        parameters: [{ name: 'input', description: 'Upload id, required byte offset, and bounded Base64 payload.' }, { name: 'signal', description: 'Carrier cancellation checked around the durable append.' }],
         returns: 'The total number of raw archive bytes received.',
       },
       {
-        signature: '@Remote(\'backup-upload-inspect\') backupUploadInspect(id: string): Promise<BackupPreview>',
+        signature: '@Remote(\'backup-upload-inspect\') backupUploadInspect(id: string, signal: AbortSignal): Promise<BackupPreview>',
         description: 'Validate a complete upload and create an editable import preview.',
-        parameters: [{ name: 'id', description: 'Opaque upload id allocated by {@link backupUploadBegin}.' }],
+        parameters: [{ name: 'id', description: 'Opaque upload id allocated by {@link backupUploadBegin}.' }, { name: 'signal', description: 'Carrier cancellation for archive inspection and backend previews.' }],
         returns: 'A bounded preview with counts, conflicts, and an expiring preview id.',
       },
       {
         signature: '@Remote(\'backup-upload-cancel\') backupUploadCancel(id: string): Promise<void>',
         description: 'Explicitly release an incomplete upload.',
         parameters: [{ name: 'id', description: 'Opaque upload id allocated by {@link backupUploadBegin}.' }],
+      },
+      {
+        signature: '@Remote(\'backup-preview-cancel\') backupPreviewCancel(id: string): void',
+        description: 'Explicitly release an import preview without mutating its source.',
+        parameters: [{ name: 'id', description: 'Opaque preview id returned by a stored or uploaded inspection.' }],
       },
       {
         signature: '@Remote(\'backup-import\') backupImport(input: { previewId: string rules: Partial<Record<BackupCategory, BackupConflictRule>> backupBefore: boolean }): Promise<{ status: \'applied\'; categories: BackupCategory[] }>',
@@ -2862,6 +2903,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type BackupConflictRule = \'keep_both\' | \'keep_local\' | \'use_import\' | \'merge\';',
   },
   {
+    name: 'BackupDescription',
+    declaration: 'export type BackupDescription = Readonly<{\n    readonly directory: string;\n    readonly location?: {\n        readonly kind: \'local\';\n        readonly directory: string;\n    };\n    readonly format: \'pabackup\';\n    readonly scheduledBackup: false;\n} | {\n    readonly location: {\n        readonly kind: \'managed\';\n    };\n    readonly format: \'pabackup\';\n    readonly scheduledBackup: false;\n}>;',
+  },
+  {
     name: 'BackupListItem',
     declaration: 'export interface BackupListItem {\n    filename: string;\n    size: number;\n    modifiedAt: string;\n    status: \'ready\' | \'damaged\' | \'unsupported\';\n    manifest?: BackupManifest;\n    problem?: string;\n}',
   },
@@ -3090,6 +3135,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CredentialRef = Branded<\'CredentialRef\'>;',
   },
   {
+    name: 'DeploymentCapabilitySnapshot',
+    declaration: 'export interface DeploymentCapabilitySnapshot {\n    readonly surface: DeploymentSurface;\n    readonly browserFileTransfer: boolean;\n    readonly hostDirectories: boolean;\n    readonly openHostPath: boolean;\n    readonly brokerSync: boolean;\n    readonly nativeHoldings: boolean;\n    readonly holdingsProviders: readonly HoldingsProvider[];\n}',
+  },
+  {
+    name: 'DeploymentSurface',
+    declaration: 'export type DeploymentSurface = \'cli\' | \'local-web\' | \'electron\' | \'cloud-web\';',
+  },
+  {
     name: 'DiffCallView',
     declaration: 'export interface DiffCallView {\n    card: \'diff\';\n    title: string;\n    diffs: FileDiff[];\n    locations?: FileLocation[];\n}',
   },
@@ -3296,6 +3349,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GoalView',
     declaration: 'export interface GoalView extends GoalSnapshot {\n    readonly roundsStarted: number;\n    readonly createdAt: number;\n    readonly updatedAt: number;\n    readonly activation: GoalActivation;\n}',
+  },
+  {
+    name: 'HoldingsProvider',
+    declaration: 'export type HoldingsProvider = \'manual\' | \'easytrader\' | \'mac_ths\' | \'qmt\';',
   },
   {
     name: 'ImageAttachmentLimits',

@@ -80,6 +80,9 @@ describe('rpcErrorSchema', () => {
     // The credentials producer still emits this code, so the branch has to stay.
     expect(rpcErrorSchema.parse({ code: 'credential-rejected', message: 'm', details: { ref: 'r' } }).code).toBe('credential-rejected')
     expect(rpcErrorSchema.parse({ code: 'internal', message: 'm', details: {} }).code).toBe('internal')
+    expect(rpcErrorSchema.parse({ code: 'remote-rejected', message: 'm', details: {} }).code).toBe('remote-rejected')
+    expect(rpcErrorSchema.parse({ code: 'resource-exhausted', message: 'm', details: {} }).code).toBe('resource-exhausted')
+    expect(rpcErrorSchema.parse({ code: 'resource-expired', message: 'm', details: {} }).code).toBe('resource-expired')
   })
 
   it('rejects a known code with missing details', () => {

@@ -1,7 +1,11 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import InvestmentPythonRuntime, {
   InvestmentPythonRuntime as NamedInvestmentPythonRuntime,
 } from '../src/index.ts'
@@ -26,16 +30,25 @@ class StubCredentials extends CredentialProvider {
   unset(): Promise<void> { return Promise.resolve() }
 }
 
-afterEach(() => {
+const homes: string[] = []
+
+afterEach(async () => {
   vi.unstubAllGlobals()
+  await Promise.all(homes.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
 describe('InvestmentPythonRuntime public API', () => {
   it('exports one Service class and merges ctx.investmentPythonRuntime into Context', () => {
     expect(InvestmentPythonRuntime).toBe(NamedInvestmentPythonRuntime)
     expect(InvestmentPythonRuntime.prototype).toBeInstanceOf(Service)
-    expect(InvestmentPythonRuntime.inject).toEqual(['credentials', 'subprocess'])
+    expect(InvestmentPythonRuntime.inject).toEqual(['credentials', 'deploymentCapabilities', 'subprocess'])
     expectTypeOf<Context['investmentPythonRuntime']>().toEqualTypeOf<InvestmentPythonRuntime>()
+  })
+
+  it('fails closed when the deployment capability service is missing', () => {
+    const ctx = new Context()
+    new StubCredentials(ctx)
+    expect(() => new InvestmentPythonRuntime(ctx)).toThrow(/deploymentCapabilities service is required/)
   })
 
   it('exposes every deployment tunable through its Config schema', () => {
@@ -89,6 +102,7 @@ describe('InvestmentPythonRuntime public API', () => {
     }))
     const ctx = new Context()
     new StubCredentials(ctx)
+    new DeploymentCapabilities(ctx, { surface: 'cli' })
     new InvestmentPythonRuntime(ctx)
     const runtime = ctx.investmentPythonRuntime
 
@@ -107,9 +121,12 @@ describe('InvestmentPythonRuntime public API', () => {
   })
 
   it('attaches to a matching managed service and rejects an occupied endpoint', async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), 'investment-public-api-'))
+    homes.push(dshHome)
     const ctx = new Context()
     new StubCredentials(ctx)
-    const runtime = new InvestmentPythonRuntime(ctx, { healthFreshnessMs: 0 })
+    new DeploymentCapabilities(ctx, { surface: 'cli' })
+    const runtime = new InvestmentPythonRuntime(ctx, { dshHome, healthFreshnessMs: 0 })
     runtime.register({ ...externalBackend, mode: 'managed', baseUrl: 'http://127.0.0.1:8000' })
     const signal = new AbortController().signal
     const healthSignals: AbortSignal[] = []

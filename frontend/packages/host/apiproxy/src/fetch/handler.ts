@@ -153,17 +153,18 @@ function methodFor(path: string): keyof RpcMethodMap | undefined {
  * bad-request report into a client-side parse failure). Fixed value, documented here as wire contract.
  */
 const INVALID_REQUEST_RPC_ID = RpcId('invalid-request')
+const RPC_JSON_HEADERS = { 'cache-control': 'no-store' } as const
 
 /** Wrap a business error as a ServerResponse full form (rpcId backfilled; an unreadable rpcId uses the invalid-request sentinel). */
 function errorResponse(rpcId: RpcId, error: RpcError): Response {
   const body: ServerResponse = { type: 'server-response', rpcId, result: { ok: false, error } }
-  return Response.json(body)
+  return Response.json(body, { headers: RPC_JSON_HEADERS })
 }
 
 /** Complete the impl's narrow form into a ServerResponse full form. */
 function fullResponse(narrow: RpcResponse<unknown>): Response {
   const body: ServerResponse = { type: 'server-response', rpcId: narrow.rpcId, result: narrow.result }
-  return Response.json(body)
+  return Response.json(body, { headers: RPC_JSON_HEADERS })
 }
 
 /**
@@ -295,8 +296,8 @@ export function toFetchHandler(api: ApiProxy): { fetch: typeof fetch } {
 
       if (path === '/api/respond') {
         const parsed = clientResponseSchema.safeParse(body)
-        if (!parsed.success) return Response.json({ accepted: false, reason: 'bad-response' })
-        return Response.json(await api.respond(parsed.data))
+        if (!parsed.success) return Response.json({ accepted: false, reason: 'bad-response' }, { headers: RPC_JSON_HEADERS })
+        return Response.json(await api.respond(parsed.data), { headers: RPC_JSON_HEADERS })
       }
 
       const method = methodFor(path.slice('/api/'.length))

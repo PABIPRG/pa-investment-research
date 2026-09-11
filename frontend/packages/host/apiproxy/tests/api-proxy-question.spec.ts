@@ -5,7 +5,7 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { ApiProxy, MuxFrame, RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
-import { createApiProxy } from '../src/api-proxy.ts'
+import { createApiProxy } from './create-api-proxy.ts'
 
 async function harness(): Promise<{ ctx: Context; api: ApiProxy }> {
   const ctx = new Context()

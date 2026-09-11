@@ -70,12 +70,16 @@ function fakeRawPost(
 }
 
 /** Response recorder compatible with both the fence's short-circuit and the bridge. */
-function fakeResponse(): { response: ServerResponse; state: { status?: number; body?: unknown } } {
-  const state: { status?: number; body?: unknown } = {}
+function fakeResponse(): { response: ServerResponse; state: { status?: number; body?: unknown; headers?: Record<string, unknown> } } {
+  const state: { status?: number; body?: unknown; headers?: Record<string, unknown> } = {}
   const chunks: Buffer[] = []
   const response = Object.assign(new EventEmitter(), {
     writableEnded: false,
-    writeHead(value: number) { state.status = value; return this },
+    writeHead(value: number, headers?: Record<string, unknown>) {
+      state.status = value
+      if (headers !== undefined) state.headers = headers
+      return this
+    },
     write(value: string | Uint8Array) { chunks.push(Buffer.from(value)); return true },
     end(this: { writableEnded: boolean }, value?: unknown) {
       if (typeof value === 'string' || value instanceof Uint8Array) chunks.push(Buffer.from(value))
@@ -432,6 +436,7 @@ describe('connection node half', () => {
       rpcId: 'rpc-shared',
       result: { ok: true, value: { accepted: true } },
     })
+    expect(claimed.state.headers).toMatchObject({ 'cache-control': 'no-store' })
     expect(calls).toEqual([{
       endpoint: 'goals/create',
       payload: { args: { agentId: 'agent-1' } },

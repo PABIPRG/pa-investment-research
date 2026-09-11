@@ -246,7 +246,9 @@ function errorResponse(rpcId: RpcIdType, error: RpcError, init?: ResponseInit): 
 
 function fullResponse(rpcId: RpcIdType, result: RpcServerResponse['result'], init?: ResponseInit): Response {
   const body: RpcServerResponse = { type: 'server-response', rpcId, result }
-  return Response.json(body, init)
+  const headers = new Headers(init?.headers)
+  headers.set('cache-control', 'no-store')
+  return Response.json(body, { ...init, headers })
 }
 
 function assertChannel(channel: string): void {

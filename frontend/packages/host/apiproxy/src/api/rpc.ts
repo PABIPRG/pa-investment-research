@@ -92,6 +92,12 @@ export interface RpcErrorDetailsMap {
   'subagent-not-resumable': { childSessionId: SessionId }
   'subagent-unauthorized': { childSessionId: SessionId }
   'subagent-delivery-unavailable': { childSessionId: SessionId }
+  /** A business operation rejected safe caller input or state. */
+  'remote-rejected': {}
+  /** A bounded business resource has reached its concurrency or byte limit. */
+  'resource-exhausted': {}
+  /** An opaque business resource expired or was already released. */
+  'resource-expired': {}
   'internal': {}
 }
 

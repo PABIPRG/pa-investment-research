@@ -9,6 +9,7 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import investmentRuntimeRemote from '@deepseek-ai/dsh-investment-python-runtime/remote'
 import type {
   BackupCategory,
+  BackupDescription,
   BackupConflictRule,
   BackupListItem,
   BackupManifest,
@@ -24,6 +25,7 @@ import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 export type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-investment-python-runtime/types'
 export type {
   BackupCategory,
+  BackupDescription,
   BackupConflictRule,
   BackupListItem,
   BackupManifest,
@@ -63,7 +65,7 @@ export interface InvestmentResearchRuntimeClient {
    * @returns the launcher-safe acknowledgement.
    */
   requestRestart(): Promise<InvestmentRestartResult>
-  backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }>
+  backupDescribe(): Promise<BackupDescription>
   backupSetDirectory(directory: string): Promise<{ directory: string }>
   backupCreate(input: { categories: BackupCategory[]; reason: BackupReason }): Promise<{
     filename: string
@@ -71,11 +73,21 @@ export interface InvestmentResearchRuntimeClient {
   }>
   backupList(): Promise<BackupListItem[]>
   backupDelete(filename: string): Promise<void>
-  backupPreviewStored(filename: string): Promise<BackupPreview>
-  backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>
-  backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>
-  backupUploadInspect(id: string): Promise<BackupPreview>
+  backupDownloadBegin(
+    filename: string,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; filename: string; size: number; chunkSize: number }>
+  backupDownloadChunk(
+    input: { id: string; offset: number },
+    signal?: AbortSignal,
+  ): Promise<{ base64: string; nextOffset: number; done: boolean }>
+  backupDownloadCancel(id: string): Promise<void>
+  backupPreviewStored(filename: string, signal?: AbortSignal): Promise<BackupPreview>
+  backupUploadBegin(input: { filename: string; size: number }, signal?: AbortSignal): Promise<{ id: string; chunkSize: number }>
+  backupUploadChunk(input: { id: string; offset: number; base64: string }, signal?: AbortSignal): Promise<{ received: number }>
+  backupUploadInspect(id: string, signal?: AbortSignal): Promise<BackupPreview>
   backupUploadCancel(id: string): Promise<void>
+  backupPreviewCancel(id: string): Promise<void>
   backupImport(input: {
     previewId: string
     rules: Partial<Record<BackupCategory, BackupConflictRule>>
@@ -173,7 +185,7 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     return unwrapRemote(await this.remote['request-data'](request), 'request-data')
   }
 
-  async backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }> {
+  async backupDescribe(): Promise<BackupDescription> {
     this.assertActive()
     return unwrapRemote(await this.remote['backup-describe'](), 'backup-describe')
   }
@@ -201,29 +213,55 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     unwrapRemote(await this.remote['backup-delete'](filename), 'backup-delete')
   }
 
-  async backupPreviewStored(filename: string): Promise<BackupPreview> {
+  async backupDownloadBegin(
+    filename: string,
+    signal?: AbortSignal,
+  ): Promise<{ id: string; filename: string; size: number; chunkSize: number }> {
     this.assertActive()
-    return unwrapRemote(await this.remote['backup-preview-stored'](filename), 'backup-preview-stored')
+    return unwrapRemote(await this.remote['backup-download-begin'](filename, signal), 'backup-download-begin')
   }
 
-  async backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }> {
+  async backupDownloadChunk(
+    input: { id: string; offset: number },
+    signal?: AbortSignal,
+  ): Promise<{ base64: string; nextOffset: number; done: boolean }> {
     this.assertActive()
-    return unwrapRemote(await this.remote['backup-upload-begin'](input), 'backup-upload-begin')
+    return unwrapRemote(await this.remote['backup-download-chunk'](input, signal), 'backup-download-chunk')
   }
 
-  async backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }> {
+  async backupDownloadCancel(id: string): Promise<void> {
     this.assertActive()
-    return unwrapRemote(await this.remote['backup-upload-chunk'](input), 'backup-upload-chunk')
+    unwrapRemote(await this.remote['backup-download-cancel'](id), 'backup-download-cancel')
   }
 
-  async backupUploadInspect(id: string): Promise<BackupPreview> {
+  async backupPreviewStored(filename: string, signal?: AbortSignal): Promise<BackupPreview> {
     this.assertActive()
-    return unwrapRemote(await this.remote['backup-upload-inspect'](id), 'backup-upload-inspect')
+    return unwrapRemote(await this.remote['backup-preview-stored'](filename, signal), 'backup-preview-stored')
+  }
+
+  async backupUploadBegin(input: { filename: string; size: number }, signal?: AbortSignal): Promise<{ id: string; chunkSize: number }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-upload-begin'](input, signal), 'backup-upload-begin')
+  }
+
+  async backupUploadChunk(input: { id: string; offset: number; base64: string }, signal?: AbortSignal): Promise<{ received: number }> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-upload-chunk'](input, signal), 'backup-upload-chunk')
+  }
+
+  async backupUploadInspect(id: string, signal?: AbortSignal): Promise<BackupPreview> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['backup-upload-inspect'](id, signal), 'backup-upload-inspect')
   }
 
   async backupUploadCancel(id: string): Promise<void> {
     this.assertActive()
     unwrapRemote(await this.remote['backup-upload-cancel'](id), 'backup-upload-cancel')
+  }
+
+  async backupPreviewCancel(id: string): Promise<void> {
+    this.assertActive()
+    unwrapRemote(await this.remote['backup-preview-cancel'](id), 'backup-preview-cancel')
   }
 
   async backupImport(input: {
@@ -267,6 +305,9 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     return Object.freeze({
       backupCreate: (input: { categories: BackupCategory[]; reason: BackupReason }) => this.backupCreate(input),
       backupDelete: (filename: string) => this.backupDelete(filename),
+      backupDownloadBegin: (filename: string, signal?: AbortSignal) => this.backupDownloadBegin(filename, signal),
+      backupDownloadChunk: (input: { id: string; offset: number }, signal?: AbortSignal) => this.backupDownloadChunk(input, signal),
+      backupDownloadCancel: (id: string) => this.backupDownloadCancel(id),
       backupDescribe: () => this.backupDescribe(),
       backupImport: (input: {
         previewId: string
@@ -274,13 +315,17 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
         backupBefore: boolean
       }) => this.backupImport(input),
       backupList: () => this.backupList(),
-      backupPreviewStored: (filename: string) => this.backupPreviewStored(filename),
+      backupPreviewStored: (filename: string, signal?: AbortSignal) => this.backupPreviewStored(filename, signal),
+      backupPreviewCancel: (id: string) => this.backupPreviewCancel(id),
       backupReset: (input: { categories: BackupCategory[]; backupBefore: boolean }) => this.backupReset(input),
       backupSetDirectory: (directory: string) => this.backupSetDirectory(directory),
-      backupUploadBegin: (input: { filename: string; size: number }) => this.backupUploadBegin(input),
+      backupUploadBegin: (input: { filename: string; size: number }, signal?: AbortSignal) => this.backupUploadBegin(input, signal),
       backupUploadCancel: (id: string) => this.backupUploadCancel(id),
-      backupUploadChunk: (input: { id: string; offset: number; base64: string }) => this.backupUploadChunk(input),
-      backupUploadInspect: (id: string) => this.backupUploadInspect(id),
+      backupUploadChunk: (
+        input: { id: string; offset: number; base64: string },
+        signal?: AbortSignal,
+      ) => this.backupUploadChunk(input, signal),
+      backupUploadInspect: (id: string, signal?: AbortSignal) => this.backupUploadInspect(id, signal),
       getSnapshot: this.getSnapshot,
       subscribe: this.subscribe,
       refresh: () => this.refresh(),

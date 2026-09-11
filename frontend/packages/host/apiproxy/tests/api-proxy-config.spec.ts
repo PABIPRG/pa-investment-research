@@ -23,9 +23,16 @@ import type { HostFrame } from '../src/api/index.ts'
 import type { RpcRequest, RpcResponse } from '../src/api/rpc.ts'
 import { RpcId } from '../src/api/rpc.ts'
 import { AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE } from '@deepseek-ai/dsh-agent-default-model'
-import { createApiProxy } from '../src/api-proxy.ts'
+import { createApiProxy } from './create-api-proxy.ts'
+import { createApiProxy as createStrictApiProxy } from '../src/api-proxy.ts'
 
 const DEFAULTS = { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' }
+
+describe('deployment capability dependency', () => {
+  it('refuses to construct when the deployment policy is omitted', () => {
+    expect(() => createStrictApiProxy(new Context(), DEFAULTS as never)).toThrow(/deploymentCapabilities is required/)
+  })
+})
 
 let nextRpc = 1
 function request<P>(payload: P): RpcRequest<P> {

@@ -40,6 +40,13 @@
     # once the web UI owns the choice per session.
     mode: !!js process.env.DSH_TOOLS_MODE
 
+# Web startup owns the explicit deployment classification.  This overrides the
+# base CLI value before any capability consumer starts; it is not a second row.
+- id: deployment-capabilities
+  inject: [webStartup]
+  config:
+    surface: !!js ctx.webStartup.deploymentSurface
+
 # ── web-only host rows, the transport layer, and the browser roster ─────────
 
 # `dsh.client` rows are the browser roster the modules node half scans into

@@ -22,6 +22,8 @@ export const WEB_STARTUP_SERVICE = 'webStartup'
 
 /** What the web rows read from {@link WEB_STARTUP_SERVICE}. */
 export interface WebStartupValues {
+  /** Explicit Host deployment surface; never inferred from browser or bind address. */
+  deploymentSurface: 'local-web' | 'cloud-web'
   /** `--host`, absent when the invocation did not name one. */
   host?: string
   /** `--port`, absent when the invocation did not name one. */
@@ -81,6 +83,11 @@ export function apply(ctx: Context): void {
     const options = program.opts<WebOptions>()
     const environment = launchEnvironmentOf(ctx)
     const authRaw = environment.get('DSH_WEB_AUTH')?.value
+    const deploymentRaw = environment.get('DSH_DEPLOYMENT_SURFACE')?.value
+    if (deploymentRaw !== undefined && deploymentRaw !== ''
+      && deploymentRaw !== 'local-web' && deploymentRaw !== 'cloud-web') {
+      program.error(`error: DSH_DEPLOYMENT_SURFACE must be local-web or cloud-web, got ${JSON.stringify(deploymentRaw)}`)
+    }
     if (authRaw !== undefined && authRaw !== '' && authRaw !== 'disabled' && authRaw !== 'required') {
       program.error(`error: DSH_WEB_AUTH must be disabled or required, got ${JSON.stringify(authRaw)}`)
     }
@@ -101,6 +108,7 @@ export function apply(ctx: Context): void {
       program.error(`error: --port must be a number, got ${JSON.stringify(options.port)}`)
     }
     ctx.provide(WEB_STARTUP_SERVICE, {
+      deploymentSurface: deploymentRaw === 'cloud-web' ? 'cloud-web' : 'local-web',
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],

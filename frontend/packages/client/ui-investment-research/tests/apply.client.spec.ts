@@ -155,12 +155,24 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
     getTheme: vi.fn(() => ({ active: { colorScheme: 'light' } })),
     setTheme,
   }
+  const hostDescription = {
+    getSnapshot: () => ({
+      version: 'test', attachedSessions: 0, cwd: '/tmp', canOpenPath: true,
+      deployment: {
+        surface: 'local-web' as const, browserFileTransfer: true, hostDirectories: true,
+        openHostPath: true, brokerSync: true, nativeHoldings: false,
+        holdingsProviders: ['manual' as const],
+      },
+    }),
+    subscribe: vi.fn(() => () => {}),
+  }
 
   ctx.provide('sessions', sessions as never)
   ctx.provide('workspaces', workspaces as never)
   ctx.provide('layout', layout as never)
   ctx.provide('theme', theme as never)
   ctx.provide('conversation', conversation as never)
+  ctx.provide('connection', { hostDescription } as never)
   ctx.provide('investmentResearchRuntimeClient', { requestData } as never)
   return {
     ctx, slots, sessions, workspaces, layout, theme, setTheme, setDraft, draftWrites,

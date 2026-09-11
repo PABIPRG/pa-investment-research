@@ -18,6 +18,7 @@
     { "path": "../../subprocess/subprocess" },
     { "path": "../../util/atomic-write" },
     { "path": "../../util/home-paths" },
-    { "path": "../../util/timeout" }
+    { "path": "../../util/timeout" },
+    { "path": "../../host/deployment-capabilities" }
   ]
 }

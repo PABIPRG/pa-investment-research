@@ -104,5 +104,5 @@ tapIndex(transform: (html: string) => string): () => void
 applyIndexTaps(html: string): string
 ```
 
-Source: [`packages/host/webserver/src/index.ts:61`](../../packages/host/webserver/src/index.ts)
+Source: [`packages/host/webserver/src/index.ts:76`](../../packages/host/webserver/src/index.ts)
 <!-- END GENERATED cordis-surface -->

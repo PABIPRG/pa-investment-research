@@ -28,6 +28,9 @@ function list(environment, name) {
 export function validateConfiguration(environment) {
   const dshHome = required(environment, 'DSH_HOME')
   if (!isAbsolute(dshHome)) throw new Error('DSH_HOME must be an absolute path')
+  if (environment.DSH_DEPLOYMENT_SURFACE !== 'cloud-web') {
+    throw new Error('DSH_DEPLOYMENT_SURFACE must be exactly cloud-web')
+  }
   if (required(environment, 'DSH_WEB_AUTH') !== 'required') throw new Error('DSH_WEB_AUTH must be required')
   if (environment.DSH_WEB_INSECURE_COOKIES === '1') throw new Error('DSH_WEB_INSECURE_COOKIES must not disable secure cookies')
   const portText = required(environment, 'PORT')
@@ -44,6 +47,7 @@ export function validateConfiguration(environment) {
   const passwordHashSourceFile = required(environment, 'DSH_WEB_ADMIN_PASSWORD_HASH_SOURCE_FILE')
   if (!isAbsolute(passwordHashSourceFile)) throw new Error('DSH_WEB_ADMIN_PASSWORD_HASH_SOURCE_FILE must be absolute')
   return Object.freeze({
+    deploymentSurface: 'cloud-web',
     dshHome,
     passwordHashSourceFile,
     port,
@@ -176,6 +180,7 @@ async function run() {
     const child = spawn(process.execPath, args, {
       env: {
         ...process.env,
+        DSH_DEPLOYMENT_SURFACE: configuration.deploymentSurface,
         DSH_CONTAINER_INSTANCE_LEASE_FILE: lease.ownerFile,
         DSH_WEB_ADMIN_PASSWORD_HASH_FILE: passwordHashFile,
       },

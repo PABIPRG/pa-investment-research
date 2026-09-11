@@ -15,6 +15,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // Empty type imports carry the `loader` and `webServer` Context merges for the reads below.
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-host-deployment-capabilities'
 import { canExecute, hasLinuxChooserBinary } from './probe.ts'
 import type { DirectoryPickerBackendKind } from './resolve.ts'
 import { resolveDirectoryPickerBackend } from './resolve.ts'
@@ -26,7 +27,7 @@ export { resolveDirectoryPickerBackend } from './resolve.ts'
 /** Cordis plugin name. */
 export const name = 'directory-picker-auto'
 /** Required services: the effective bind host (`webServer`) and the entry tree the backend mounts into (`loader`). */
-export const inject = ['webServer', 'loader']
+export const inject = ['webServer', 'loader', 'deploymentCapabilities']
 
 /**
  * Host backend package per resolved kind — fixed composition vocabulary, not a
@@ -60,6 +61,7 @@ export const SURFACE_PACKAGES: Record<DirectoryPickerBackendKind, string> = {
  * @param ctx - cordis context carrying the injected `webServer` and `loader`.
  */
 export async function apply(ctx: Context): Promise<void> {
+  if (!ctx.deploymentCapabilities.snapshot().hostDirectories) return
   const backend = resolveDirectoryPickerBackend({
     bindHost: ctx.webServer.host,
     platform: process.platform,

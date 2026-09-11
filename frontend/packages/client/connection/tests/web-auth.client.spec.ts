@@ -25,4 +25,16 @@ describe('browser auth transport bridge', () => {
     observeAuthResponse(new Response(null, { status: 401 }))
     expect(unauthorized).toHaveBeenCalledOnce()
   })
+
+  it('notifies only for a 403 that explicitly reports an invalid CSRF session', async () => {
+    const unauthorized = vi.fn()
+    ;(globalThis as typeof globalThis & { __DSH_WEB_AUTH__?: unknown }).__DSH_WEB_AUTH__ = {
+      csrfToken: () => 'stale', unauthorized,
+    }
+    observeAuthResponse(Response.json({ code: 'request-untrusted' }, { status: 403 }))
+    await Promise.resolve()
+    expect(unauthorized).not.toHaveBeenCalled()
+    observeAuthResponse(Response.json({ code: 'csrf-invalid' }, { status: 403 }))
+    await vi.waitFor(() => { expect(unauthorized).toHaveBeenCalledOnce() })
+  })
 })

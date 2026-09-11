@@ -20,7 +20,7 @@ import {
 } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { GoalId } from '@deepseek-ai/dsh-goal'
-import { createApiProxy } from '../src/api-proxy.ts'
+import { createApiProxy } from './create-api-proxy.ts'
 import { describe, expect, it } from 'vitest'
 
 let nextRpc = 0

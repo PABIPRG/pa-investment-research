@@ -14,6 +14,7 @@ import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepsee
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import { CallId } from '@deepseek-ai/dsh-llm'
 import { composeEntries, loadOverlayPatches, renderConfigDump } from '@deepseek-ai/dsh-app-boot'
 import InvestmentPythonRuntime, { checkBackendHealth } from '../src/index.ts'
@@ -126,6 +127,7 @@ async function mount(config: string, credential?: string): Promise<Context> {
     ['@deepseek-ai/dsh-agent', AgentRegistry],
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRuntime],
+    ['@deepseek-ai/dsh-host-deployment-capabilities', DeploymentCapabilities],
     ['@deepseek-ai/dsh-subprocess-local', LocalSubprocessRuntime],
     ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],
     ['@deepseek-ai/dsh-investment-stock-analysis', StockAnalysis],
@@ -162,6 +164,9 @@ function composition(options: {
     "- name: '@deepseek-ai/dsh-agent'",
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
+    "- name: '@deepseek-ai/dsh-host-deployment-capabilities'",
+    '  config:',
+    '    surface: local-web',
     "- name: '@deepseek-ai/dsh-subprocess-local'",
     "- name: '@deepseek-ai/dsh-investment-python-runtime'",
     '  config:',

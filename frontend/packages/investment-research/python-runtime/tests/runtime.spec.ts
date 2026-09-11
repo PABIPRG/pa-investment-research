@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import type { SubprocessHandle, SubprocessSpawnSpec, SubprocessTerminalHandle, SubprocessTerminalSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { InvestmentPythonRuntime } from '../src/index.ts'
 import { InvestmentBackendManager } from '../src/runtime.ts'
@@ -1265,6 +1266,7 @@ describe('InvestmentBackendManager', () => {
     }))
     const ctx = new Context()
     const credentialsFiber = await ctx.plugin(StubCredentials)
+    const deploymentFiber = await ctx.plugin(DeploymentCapabilities, { surface: 'cli' })
     const subprocessFiber = await ctx.plugin(StubSubprocess)
     const runtimeFiber = await ctx.plugin(InvestmentPythonRuntime)
     const runtime = ctx.investmentPythonRuntime
@@ -1275,10 +1277,12 @@ describe('InvestmentBackendManager', () => {
     unregister()
     await runtimeFiber.dispose()
     await subprocessFiber.dispose()
+    await deploymentFiber.dispose()
     await credentialsFiber.dispose()
 
     const directContext = new Context()
     new StubCredentials(directContext)
+    new DeploymentCapabilities(directContext, { surface: 'cli' })
     new StubSubprocess(directContext)
     const direct = new InvestmentPythonRuntime(directContext)
     expect(direct.invariantSnapshot()).toEqual({ active: [], flights: [] })
@@ -1302,6 +1306,7 @@ describe('InvestmentBackendManager', () => {
     })
     const ctx = new Context()
     const credentialsFiber = await ctx.plugin(StubCredentials)
+    const deploymentFiber = await ctx.plugin(DeploymentCapabilities, { surface: 'cli' })
     const subprocessFiber = await ctx.plugin(StubSubprocess)
     const credentials = ctx.credentials as StubCredentials
     const subprocess = ctx.subprocess
@@ -1332,6 +1337,7 @@ describe('InvestmentBackendManager', () => {
 
     handle.exit()
     await runtimeFiber.dispose()
+    await deploymentFiber.dispose()
     credentials.update(credentialRef('DEEPSEEK_API_KEY'))
     expect(updated).toHaveBeenCalledOnce()
     await lease.release()

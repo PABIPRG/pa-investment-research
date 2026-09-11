@@ -12,7 +12,7 @@ Status: implemented
 
 仓库根目录的 `Dockerfile` 用两个阶段构建一个 Linux x86_64 镜像。构建阶段安装由 lockfile 管理的 pnpm 依赖图、编译 Host 与 Web 应用、物化可迁移的 CLI 生产依赖闭包，并组装由校验值锁定的 Python 3.10 运行时、精确版本的 Python requirements 和三个后端。运行阶段只包含这些产物及构建时选择的操作系统运行库，以非特权 `dsh` 用户运行，不安装依赖或编译源码。
 
-`compose.yaml` 只把 Web 端口发布到主机回环地址，要求使用既有 Web 认证及受信 Host/代理边界，在 `$DSH_HOME` 挂载一个命名卷，并保持根文件系统只读。管理员密码哈希副本和临时文件只写入 tmpfs。`TZ` 与 `TIMEZONE` 必须指定同一时区，使 Node 与 Python 调度器使用相同墙上时间。
+`compose.yaml` 只把 Web 端口发布到主机回环地址，要求使用既有 Web 认证及受信 Host/代理边界，声明 `DSH_DEPLOYMENT_SURFACE=cloud-web`，在 `$DSH_HOME` 挂载一个命名卷，并保持根文件系统只读。容器入口只接受该精确的部署值，并把验证后的声明传给 CLI 子进程；直接启动镜像时若缺少该值、值中含前后空白或指定了其他模式，会在获取应用资源前终止启动。管理员密码哈希副本和临时文件只写入 tmpfs。`TZ` 与 `TIMEZONE` 必须指定同一时区，使 Node 与 Python 调度器使用相同墙上时间。
 
 容器入口在已挂载的投研状态目录下认领原子锁目录，并每两秒刷新携带随机 token 的心跳。第二个容器拒绝仍存活的租约；废弃租约十秒后才可替换。CLI 会把外层 token 写入既有应用锁；后继容器只有在内层锁携带已过期外层 token 时才可隔离它，即使其命名空间内 PID 已被复用，未标记或携带当前 token 的所有者仍遵循普通冲突行为。只有 token 所有者可以释放租约，因此旧所有者不能删除后继租约。入口把终止信号转发给 CLI，并在 Compose 宽限期内限制关闭时间。
 
@@ -28,9 +28,11 @@ Status: implemented
 
 **在 Pull Request CI 推送镜像。** 拒绝，因为 PR 验证不等同于发布授权。工作流只导出内容可验证的镜像归档，后续必须由获得明确授权的交付流程提升。
 
+**根据容器镜像、认证模式或监听地址推断云端 Web。** 拒绝，因为打包形态和网络拓扑不授予产品能力。容器在启动应用进程前验证 Host 所消费的同一份显式部署声明。
+
 ## Verification
 
-容器契约测试固定 Dockerfile 阶段、非 root 运行时、Compose 端口与卷边界、失败关闭的启动配置和排他租约行为。Sidecar 测试固定 Linux 描述符和既有打包隐私规则。Pull Request CI 提供真实 Linux 镜像构建、符号链接闭包、非 root/只读断言、Compose 聚合健康、优雅停止和按 commit 导出的证据。反向代理浏览器路径和完整业务 UAT 仍属于环境特定的验收工作。
+容器契约测试固定 Dockerfile 阶段、非 root 运行时、Compose 端口与卷边界、精确的云端 Web 声明及子进程继承、失败关闭的启动配置和排他租约行为。Sidecar 测试固定 Linux 描述符和既有打包隐私规则。Pull Request CI 提供真实 Linux 镜像构建、符号链接闭包、非 root/只读断言、Compose 聚合健康、优雅停止和按 commit 导出的证据。PAB-21 负责在真实容器环境中完成反向代理浏览器路径和完整业务 UAT。
 
 ## Consequences
 
