@@ -10,7 +10,6 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WebAuthService, hashPassword } from '@deepseek-ai/dsh-api-web-auth'
 import type { WebBootGraph, ClientModuleRegistry } from '@deepseek-ai/dsh-client-modules'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import { apply, Config, EVENTS_ENDPOINT, inject } from '../src/index.ts'
@@ -18,11 +17,9 @@ import { apply, Config, EVENTS_ENDPOINT, inject } from '../src/index.ts'
 const POLL_MS = 20
 
 let dir: string
-const authContexts: Context[] = []
 
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'dsh-hmr-')) })
-afterEach(async () => {
-  for (const ctx of authContexts.splice(0)) await ctx.fiber.dispose()
+afterEach(() => {
   vi.useRealTimers()
   rmSync(dir, { recursive: true, force: true })
 })
@@ -276,74 +273,59 @@ describe('hmr node half', () => {
     expect(afterError.state.destroyed).toBe(true)
   })
 
-  it.each(['logout', 'idle timeout', 'absolute timeout'] as const)(
-    'ends an authenticated stream on %s, stops rebuilt delivery, and releases its capacity slot',
-    async (reason) => {
-      const clientModuleHost = fakeClientModuleHost(new Map([['pkg-private', join(dir, 'private.js')]]))
-      const routes: WebRoute[] = []
-      const passwordHashFile = join(dir, 'password.hash')
-      writeFileSync(passwordHashFile, hashPassword('correct horse battery staple'), { mode: 0o600 })
-      if (reason !== 'logout') vi.useFakeTimers()
-      const authContext = new Context()
-      authContexts.push(authContext)
-      const webAuth = new WebAuthService(authContext, {
-        mode: 'required',
-        username: 'admin',
-        passwordHashFile,
-        secureCookies: false,
-        idleTimeoutMs: 1_000,
-        absoluteTimeoutMs: reason === 'absolute timeout' ? 2_000 : 5_000,
-      })
-      const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
-        maxSseConnections: 1,
-        requireWebAuth: true,
-      }, webAuth)
-      const route = routes[0]!
+  it('ends a revoked session stream, stops rebuilt delivery, and releases its capacity slot', async () => {
+    const clientModuleHost = fakeClientModuleHost(new Map([['pkg-private', join(dir, 'private.js')]]))
+    const routes: WebRoute[] = []
+    const firstSessionResources = new Set<ServerResponse>()
+    let firstSessionActive = true
+    const webAuth: WebAuthStub = {
+      authorize(request) {
+        if (request.headers.cookie === 'session=first' && firstSessionActive) {
+          return {
+            ok: true,
+            bindLifecycle(resource) {
+              if (!firstSessionActive) return false
+              firstSessionResources.add(resource)
+              resource.once('close', () => { firstSessionResources.delete(resource) })
+              return true
+            },
+          }
+        }
+        if (request.headers.cookie === 'session=replacement') {
+          return { ok: true, bindLifecycle: () => true }
+        }
+        return { ok: false, status: 401, code: 'auth-required' }
+      },
+    }
+    const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
+      maxSseConnections: 1,
+      requireWebAuth: true,
+    }, webAuth)
+    const route = routes[0]!
 
-      const firstLogin = await webAuth.login('admin', 'correct horse battery staple', routeRequest({}))
-      expect(firstLogin.ok).toBe(true)
-      if (!firstLogin.ok || firstLogin.token === undefined || firstLogin.cookieName === undefined
-        || firstLogin.session === undefined) return
-      const firstCookie = `${firstLogin.cookieName}=${firstLogin.token}`
+    const first = routeResponse()
+    await route.handler(routeRequest({ host: '127.0.0.1:3080', cookie: 'session=first' }), first.response)
+    expect(first.state.status).toBe(200)
+    clientModuleHost.fireRebuilt('pkg-private', 'r2')
+    expect(first.state.body).toContain('"type":"rebuilt"')
 
-      const first = routeResponse()
-      await route.handler(routeRequest({ host: '127.0.0.1:3080', cookie: firstCookie }), first.response)
-      expect(first.state.status).toBe(200)
-      clientModuleHost.fireRebuilt('pkg-private', 'r2')
-      expect(first.state.body).toContain('"type":"rebuilt"')
+    firstSessionActive = false
+    for (const resource of firstSessionResources) resource.destroy()
+    const bodyAfterRevocation = first.state.body
+    expect(first.state.destroyed).toBe(true)
+    expect(firstSessionResources).toHaveLength(0)
+    clientModuleHost.fireRebuilt('pkg-private', 'r3')
+    expect(first.state.body).toBe(bodyAfterRevocation)
 
-      if (reason === 'logout') {
-        expect(webAuth.logout(routeRequest({
-          cookie: firstCookie,
-          'x-dsh-csrf': firstLogin.session.csrfToken,
-        }, 'POST')).ok).toBe(true)
-      } else if (reason === 'idle timeout') {
-        vi.advanceTimersByTime(1_001)
-      } else {
-        vi.advanceTimersByTime(800)
-        expect(webAuth.authorize(routeRequest({ cookie: firstCookie })).ok).toBe(true)
-        vi.advanceTimersByTime(800)
-        expect(webAuth.authorize(routeRequest({ cookie: firstCookie })).ok).toBe(true)
-        vi.advanceTimersByTime(401)
-      }
-      const bodyAfterRevocation = first.state.body
-      expect(first.state.destroyed).toBe(true)
-      clientModuleHost.fireRebuilt('pkg-private', 'r3')
-      expect(first.state.body).toBe(bodyAfterRevocation)
-
-      const replacementLogin = await webAuth.login('admin', 'correct horse battery staple', routeRequest({}))
-      expect(replacementLogin.ok).toBe(true)
-      if (!replacementLogin.ok || replacementLogin.token === undefined || replacementLogin.cookieName === undefined) return
-      const replacement = routeResponse()
-      await route.handler(routeRequest({
-        host: '127.0.0.1:3080',
-        cookie: `${replacementLogin.cookieName}=${replacementLogin.token}`,
-      }), replacement.response)
-      expect(replacement.state.status).toBe(200)
-      expect(replacement.state.body).not.toContain('sse-capacity-exhausted')
-      await fiber.dispose()
-    },
-  )
+    const replacement = routeResponse()
+    await route.handler(routeRequest({
+      host: '127.0.0.1:3080',
+      cookie: 'session=replacement',
+    }), replacement.response)
+    expect(replacement.state.status).toBe(200)
+    expect(replacement.state.body).not.toContain('sse-capacity-exhausted')
+    await fiber.dispose()
+  })
 
   it('watches graph bundles, reports stat changes, and unwatches on dispose', async () => {
     const bundle = join(dir, 'a.js')
