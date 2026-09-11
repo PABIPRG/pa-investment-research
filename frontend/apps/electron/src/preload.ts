@@ -7,6 +7,7 @@ import type {
   ElectronStreamKind,
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import {
+  HOLDINGS_NATIVE_CHANNEL,
   STREAM_CLOSE_CHANNEL,
   STREAM_EVENT_CHANNEL,
   STREAM_OPEN_CHANNEL,
@@ -37,6 +38,7 @@ ipcRenderer.on(SHORTCUT_ACTION_CHANNEL, (_event, value: unknown) => {
 
 const bridge: ElectronRendererBridge = {
   version: 1,
+  holdingsAction: input => ipcRenderer.invoke(HOLDINGS_NATIVE_CHANNEL, input),
   platform: desktopPlatform(process.platform),
   openStream(kind: ElectronStreamKind, id: string, listener: (event: ElectronStreamEvent) => void): void {
     if (streamListeners.has(id)) throw new Error(`dsh-electron preload: duplicate stream id ${JSON.stringify(id)}`)

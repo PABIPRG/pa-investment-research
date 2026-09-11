@@ -5,3 +5,5 @@ export const STREAM_CLOSE_CHANNEL = 'dsh:electron:stream-close'
 export const STREAM_EVENT_CHANNEL = 'dsh:electron:stream-event'
 export const SHORTCUT_ACTION_CHANNEL = 'dsh:electron:shortcut-action'
 export const SHORTCUT_CAPTURE_CHANNEL = 'dsh:electron:shortcut-capture'
+
+export const HOLDINGS_NATIVE_CHANNEL = 'dsh:electron:holdings'

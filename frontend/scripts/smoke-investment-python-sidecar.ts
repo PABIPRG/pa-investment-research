@@ -5,6 +5,8 @@ import { isAbsolute, join, posix, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 
+import { scanPackagedBackends } from './investment-backend-package-policy.ts'
+
 const BACKENDS = ['trading-core', 'market-watch', 'industry-chain'] as const
 
 interface RuntimeDescriptor {
@@ -98,6 +100,7 @@ export async function smokeInvestmentPythonSidecar(
     if (backend === undefined) throw new Error(`missing backend descriptor: ${id}`)
     return { projectDir: safePath(backend.projectDir), module: backend.module }
   })
+  await scanPackagedBackends(root)
   await verifyFiles(root, descriptor.files)
   const stateRoot = await mkdtemp(join(tmpdir(), 'dsh-investment-sidecar-smoke-'))
   const script = [

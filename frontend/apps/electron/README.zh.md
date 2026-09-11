@@ -77,3 +77,5 @@ Electron 不暴露 Cordis HMR 所需的 Node loader 内部机制，因此桌面�
 #### KV Cache 影响
 
 无；Electron 层只改变本地传输与应用打包。
+
+持仓向导的原生动作仅接受固定目的地，前台读取每次由主进程弹窗确认，结束后返回应用；任意命令、URL 和应用路径不能由页面传入。Windows 客户端位置仅通过本机选择器选择 xiadan.exe。

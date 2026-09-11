@@ -65,6 +65,21 @@ class HoldingsSaveRequest(BaseModel):
     )
 
 
+class HoldingsSyncRequest(BaseModel):
+    """预览默认只读；提交必须引用后端签发的预览。"""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["preview", "commit"] = "preview"
+    preview_token: str = Field(default="", max_length=128)
+
+
+class HoldingsNativeRequest(BaseModel):
+    """仅宿主私有认证入口允许的本机动作。"""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["read", "launch", "select_client"]
+    account_mode: Literal["real", "simulated"]
+    client_path: str = Field(default="", max_length=4096)
+
+
 class HoldingsDetectRequest(BaseModel):
     """POST /holdings/source/detect 请求体。"""
 
@@ -88,6 +103,8 @@ class HoldingsUserConfigRequest(BaseModel):
 
         pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
         for key in value:
+            if key.upper() == "DSH_HOLDINGS_NATIVE_TOKEN":
+                raise ValueError("原生持仓凭证仅由宿主管理")
             if not pattern.match(key):
                 raise ValueError(f"不合法的环境变量名: {key}")
         account_mode = value.get("HOLDINGS_ACCOUNT_MODE")

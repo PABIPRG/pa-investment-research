@@ -1,6 +1,6 @@
 # 应用图标
 
-PAB-22 / APP-ICON-001：0.2.0 新版应用图标。原包保存在 `source/app-icons-0.2.0.zip`，源图为包内 `original/icon-1024.png`，与 `app-icon.png` 相同。
+PAB-22 / APP-ICON-001：0.2.0 新版应用图标。原包保存在 `../icon-source/app-icons-0.2.0.zip`，源图为包内 `original/icon-1024.png`，与 `app-icon.png` 相同。
 
 原包 SHA-256：`749e4a5d41f28757149a4f5aefab779f164e7fecec3cd65d3c53a61229a42f01`。
 
@@ -14,7 +14,7 @@ Web 复用原包的 favicon、触屏图标和 192/512 像素资源，路径为 `
 
 结论：代码与资源接入已实现；发布验收 Inconclusive，桌面安装包与升级验证尚未完成。
 
-- passed：Electron packaging 14 项、Web PWA 2 项、frontend-static 真实 Loader/HTTP 组合测试 1 项（PNG/ICO GET 与 HEAD）。
+- passed：Electron packaging 15 项、Web PWA 2 项、frontend-static 真实 Loader/HTTP 组合测试 1 项（PNG/ICO GET 与 HEAD）。
 - passed：`build:lib`、`build:web`、`build:electron`；MIME 修改后补跑 frontend-static TypeScript 与包构建。
 - passed：源图逐字节一致；ICO 7 档 PNG 帧尺寸与偏移、ICNS 容器、manifest 尺寸；Electron Packager 实际解析 `.icns` / `.ico`。
 - passed：隔离 `DSH_HOME=/tmp/pab22-dsh-home`，`dsh web --port 3182`；真实浏览器加载 Web 壳、检查 DOM 图标引用，1440×900 和 1024×768 浅色入口可渲染；512px 图标在浏览器深色图片背景下显示完整。截图保留于本次 Codex 任务的浏览器工具记录。
@@ -26,3 +26,5 @@ Web 复用原包的 favicon、触屏图标和 192/512 像素资源，路径为 `
 ## Windows 发布图标回归
 
 发布运行 `34578047814` 的 Windows 构建记录了找不到 `.ico` 并跳过应用图标的 warning；运行总体成功，不代表图标已嵌入。当前修复补齐 `app-icon.ico`，使用 Packager WindowsApp 的实际 `getIconPath()` 验证命中资源，并检查 7 档 PNG 帧的头、尺寸与偏移。该回归归入 PAB-22，关联 PAB-15。现有已发布资产未修改；最终 Windows EXE 图标仍须由下一轮候选包验收。
+
+原始 ZIP 位于 `icon-source/`，不属于 Electron `files` 发布白名单；安装包只携带运行所需图标。主线的 assets 入包策略及下载缓存回归测试均已保留。

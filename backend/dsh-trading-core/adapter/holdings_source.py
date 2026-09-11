@@ -22,6 +22,10 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+import secrets
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
 
 from .config import settings
 from .holdings_providers import get_provider
@@ -86,7 +90,7 @@ def platform_gate(provider_name: str) -> str | None:
     if sys.platform == "win32":
         if name == "mac_ths":
             return (
-                "mac_ths 仅支持 macOS（同花顺 Mac 版 + AppleScript）。"
+                "mac_ths 仅支持 macOS（同花顺 Mac 版）。"
                 "Windows 请改用 HOLDINGS_PROVIDER=easytrader。"
             )
         return None
@@ -95,7 +99,7 @@ def platform_gate(provider_name: str) -> str | None:
             return (
                 "easytrader 依赖 pywinauto 操控 Win32 控件，仅支持 Windows。"
                 "macOS 请改用 HOLDINGS_PROVIDER=mac_ths"
-                "（同花顺 Mac 版 + AppleScript，需在系统设置中授予自动化与辅助功能权限）。"
+                "（同花顺 Mac 版，首次需辅助功能权限）。"
             )
         return None
     return (
@@ -105,57 +109,65 @@ def platform_gate(provider_name: str) -> str | None:
 
 
 def provider_snapshot() -> dict:
-    """当前持仓数据源的配置快照（不扫盘、不抛错）。"""
-    provider_name = settings.holdings_provider.strip().lower()
-    snapshot: dict = {
-        "provider": provider_name,
-        "label": _PROVIDER_LABELS.get(provider_name, "未知数据源"),
-        "available": False,
-        "reason": None,
-        "broker": getattr(settings, "easytrader_broker", "") or "",
-        "client_type": getattr(settings, "easytrader_client_type", "") or "",
-        "client_path": getattr(settings, "easytrader_client_path", "") or "",
-        "account_mode": str(getattr(settings, "holdings_account_mode", "real") or "real"),
-        "supported_account_modes": _ACCOUNT_MODE_SUPPORT.get(provider_name, ["real"]),
+    """只探测安装、进程和权限；不读取表格、不导航、不触发权限弹窗。"""
+    name = settings.holdings_provider.strip().lower()
+    platform = sys.platform if sys.platform in {"darwin", "win32"} else "unsupported"
+    state = {
+        "provider": name, "label": _PROVIDER_LABELS.get(name, "未知数据源"),
+        "platform": platform, "surface": "web", "available": False, "reason": None,
+        "installation": "unknown", "process": "unknown", "accessibility": "not_applicable",
+        "automation": "not_requested" if platform == "darwin" else "not_applicable",
+        "session": "unknown", "readiness": "blocked", "blocking_reason": None,
+        "available_actions": ["manual", "recheck"],
+        "account_mode": str(getattr(settings, "holdings_account_mode", "simulated")),
+        "supported_account_modes": _ACCOUNT_MODE_SUPPORT.get(name, ["real"]),
     }
+    def blocked(code, message):
+        state.update(blocking_reason=code, reason=message)
+        return state
     try:
-        snapshot["account_mode"] = current_account_mode()
-    except ProviderUnavailable as exc:
-        snapshot["reason"] = str(exc)
-        return snapshot
-    gate = platform_gate(settings.holdings_provider)
-    if gate is not None:
-        snapshot["reason"] = gate
-        return snapshot
-
-    try:
-        provider = get_provider()
-    except Exception as exc:  # ValueError（未知 provider）或实例化期错误
-        snapshot["reason"] = str(exc)
-        return snapshot
-
-    snapshot["label"] = _provider_label(provider)
-    try:
-        snapshot["available"] = bool(provider.is_available())
-    except Exception as exc:
-        snapshot["reason"] = str(exc)
-        return snapshot
-
-    if not snapshot["available"]:
-        snapshot["reason"] = _unavailable_reason(provider)
-    return snapshot
-
-
-def _unavailable_reason(provider) -> str:
-    """数据源不可用时，尽量给出可执行的中文原因（走 get_holdings 的前置校验）。"""
-    try:
-        provider.get_holdings()
-    except ProviderUnavailable as exc:
-        return str(exc)
-    except Exception as exc:
-        return str(exc)
-    # is_available 为 False 但 get_holdings 没抛——理论上不会发生
-    return "数据源当前不可用，请检查配置与客户端状态。"
+        state["account_mode"] = current_account_mode()
+    except ProviderUnavailable:
+        return blocked("invalid_account", "账户配置无效，请重新选择操盘账户。")
+    gate = platform_gate(name)
+    if gate:
+        return blocked("unsupported_platform", gate)
+    if name == "mac_ths":
+        from .holdings_providers.mac_ths import app_bundles, app_running, accessibility_status
+        state["installation"] = "installed" if app_bundles() else "missing"
+        state["process"] = "running" if app_running() else "not_running"
+        state["accessibility"] = accessibility_status()
+        if state["installation"] == "missing":
+            state["available_actions"].append("download")
+            return blocked("client_missing", "尚未安装同花顺 Mac 版。")
+        if state["accessibility"] != "granted":
+            return blocked("accessibility_required" if state["accessibility"] == "not_granted" else "dependency_missing",
+                           "请先授予读取进程辅助功能权限。" if state["accessibility"] == "not_granted" else "读取组件不可用，请更新或修复本应用。")
+        if state["process"] != "running":
+            return blocked("client_not_running", "请打开同花顺并登录所选账户。")
+    elif name == "easytrader":
+        from .holdings_providers.easytrader import EasyTraderProvider
+        provider = EasyTraderProvider()
+        path = provider._client_path()
+        state["installation"] = "installed" if path and Path(path).is_file() else "unknown"
+        state["process"] = "running" if provider._client_running() else "not_running"
+        if state["installation"] != "installed":
+            state["available_actions"].append("download")
+            return blocked("client_location_required", "尚未定位同花顺下单客户端，请安装或选择客户端位置。")
+        if not provider._imported:
+            return blocked("dependency_missing", "持仓读取组件不可用，请修复本应用。")
+        if state["process"] != "running":
+            return blocked("client_not_running", "请打开同花顺并登录所选账户。")
+    else:
+        try:
+            provider = get_provider()
+            if not provider.is_available():
+                return blocked("provider_unavailable", "当前数据源不可用，请检查配置或改用手动录入。")
+        except Exception:
+            return blocked("provider_unavailable", "当前数据源不可用，请检查配置。")
+    state.update(available=True, readiness="ready")
+    state["available_actions"].append("read")
+    return state
 
 
 def _project(client) -> dict:
@@ -180,9 +192,7 @@ _WINDOWS_DETECT_HINT = (
 )
 
 _MAC_DETECT_HINT = (
-    "未发现同花顺 Mac 版。macOS 上的持仓自动同步走 AppleScript 读同花顺 Mac 版"
-    "（内置 80+ 券商账号登录），请先安装并登录同花顺，再在"
-    "「系统设置 → 隐私与安全性」中授予本应用自动化与辅助功能权限。"
+    "未发现同花顺 Mac 版。请从官网下载并登录；首次读取需授予实际读取进程辅助功能权限。"
 )
 
 
@@ -203,13 +213,13 @@ def _mac_clients() -> list[dict]:
         {
             "broker_id": "mac_ths",
             "label": f"同花顺 Mac 版（{app_name}）",
-            "kernel": "apple_script",
+            "kernel": "accessibility",
             "trader_type": "mac_ths",
             "exe_path": bundles[0],
             "main_dir": "/Applications",
             "running": app_running(app_name),
             "matched": True,
-            "note": "需在系统设置中授予自动化与辅助功能权限" if osascript_available() else "未找到 osascript",
+            "note": "首次需授予读取进程辅助功能权限",
         }
     ]
 
@@ -302,3 +312,119 @@ def reset_cache() -> None:
     """清空发现缓存（测试用）。"""
     global _DETECT_CACHE
     _DETECT_CACHE = None
+
+
+class PreviewConflict(Exception):
+    """预览已过期、已使用或与当前事实不一致。"""
+
+
+_PREVIEWS: dict[str, dict] = {}
+_PREVIEW_LOCK = threading.Lock()
+_PREVIEW_TTL = 300
+_READ_LOCK = threading.Lock()
+
+
+def preview_holdings(*, foreground: bool = False, expected_account: str | None = None) -> dict:
+    """读取预览不落盘；foreground 仅由经宿主认证的原生入口传入。"""
+    if not _READ_LOCK.acquire(blocking=False):
+        raise ProviderUnavailable("另一次持仓读取正在进行，请稍后重试。", "busy")
+    try:
+        mode = current_account_mode()
+        name = settings.holdings_provider
+        if expected_account is not None and expected_account != mode:
+            raise ProviderUnavailable("账户选择已变化，请重新读取。", "account_changed")
+        gate = platform_gate(name)
+        if gate:
+            raise ProviderUnavailable(gate, "unsupported_platform")
+        provider = get_provider()
+        store = JsonStore()
+        previous = store.get("holdings", "default", []) or []
+        if name in _CLIENT_AUTOMATION_PROVIDERS:
+            items = provider.read_holdings(foreground=foreground)
+        else:
+            items = provider.get_holdings()
+        if not items:
+            raise EmptyHoldingsError("没有读到持仓，当前持仓保持不变。请确认账户与持仓页后重试。")
+        if mode != current_account_mode() or name != settings.holdings_provider:
+            raise ProviderUnavailable("读取期间账户或数据源发生变化，请重试。", "account_changed")
+        payload = [item.model_dump() for item in items]
+        token = secrets.token_urlsafe(32)
+        result = {"preview_token": token, "items": payload, "previous_count": len(previous),
+                  "account_mode": mode, "account_label": _ACCOUNT_LABELS[mode], "provider": name,
+                  "label": _provider_label(provider), "read_at": datetime.now(timezone.utc).isoformat(),
+                  "expires_in_seconds": _PREVIEW_TTL, "readiness": "preview", "session": "ready",
+                  "surface": "electron" if foreground else "web", "platform": sys.platform}
+        with _PREVIEW_LOCK:
+            now = time.monotonic()
+            for key in list(_PREVIEWS):
+                if _PREVIEWS[key]["expires"] <= now:
+                    del _PREVIEWS[key]
+            if len(_PREVIEWS) >= 32:
+                del _PREVIEWS[next(iter(_PREVIEWS))]
+            _PREVIEWS[token] = {"result": result, "previous": previous,
+                                "root": str(store.base_dir.resolve()), "expires": now + _PREVIEW_TTL}
+        return result
+    finally:
+        _READ_LOCK.release()
+
+
+def commit_holdings(token: str) -> dict:
+    """在同一存储事务内校验预览基线并保存；token 成功后仅可使用一次。"""
+    with _READ_LOCK:
+        with _PREVIEW_LOCK:
+            preview = _PREVIEWS.get(token)
+            if preview is None or preview["expires"] <= time.monotonic():
+                raise PreviewConflict("预览已过期或已使用，请重新读取。")
+            result = preview["result"]
+            store = JsonStore()
+            if (result["account_mode"] != current_account_mode()
+                    or result["provider"] != settings.holdings_provider
+                    or preview["root"] != str(store.base_dir.resolve())):
+                raise PreviewConflict("账户、数据源或数据目录已变化，请重新读取。")
+            with store.transaction():
+                if (store.get("holdings", "default", []) or []) != preview["previous"]:
+                    raise PreviewConflict("本地持仓已变化，请重新读取并确认替换范围。")
+                snapshot = record_holdings_snapshot(store, result["items"], "broker_" + result["account_mode"])
+            del _PREVIEWS[token]
+            return {**result, "saved": len(result["items"]), "snapshot_id": snapshot["snapshot_id"] if snapshot else None}
+
+
+def native_action(action: str, account_mode: str, client_path: str = "") -> dict:
+    """仅认证宿主可调用；启动路径经过固定应用名校验。"""
+    import subprocess
+    import os
+    env = {key: value for key, value in os.environ.items()
+           if not any(marker in key.upper() for marker in ("KEY", "SECRET", "TOKEN", "PASSWORD"))}
+    if account_mode != current_account_mode():
+        raise ProviderUnavailable("账户选择已变化，请重试。", "account_changed")
+    if action == "read":
+        if settings.holdings_provider not in _CLIENT_AUTOMATION_PROVIDERS:
+            raise ProviderUnavailable("此数据源无需同花顺原生操作。", "unsupported_action")
+        return preview_holdings(foreground=True, expected_account=account_mode)
+    if action == "select_client" and sys.platform == "win32":
+        path = Path(client_path).resolve(strict=True)
+        if path.name.lower() != "xiadan.exe" or not path.is_file():
+            raise ProviderUnavailable("请选择同花顺 xiadan.exe。", "invalid_client")
+        import dotenv
+        env_path = settings.user_config_dir / "backend.env"
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        key = "EASYTRADER_SIM_CLIENT_PATH" if account_mode == "simulated" else "EASYTRADER_CLIENT_PATH"
+        dotenv.set_key(str(env_path), key, str(path), encoding="utf-8")
+        setattr(settings, key.lower(), str(path))
+        return {"readiness": "ready"}
+    if action == "launch":
+        if sys.platform == "darwin":
+            from .holdings_providers.mac_ths import app_bundles
+            bundles = app_bundles()
+            if not bundles:
+                raise ProviderUnavailable("请先安装同花顺。", "client_missing")
+            subprocess.run(["/usr/bin/open", bundles[0]], check=True, timeout=10, env=env)
+            return {"readiness": "ready"}
+        if sys.platform == "win32":
+            from .holdings_providers.easytrader import EasyTraderProvider
+            path = Path(EasyTraderProvider()._client_path()).resolve(strict=True)
+            if path.name.lower() != "xiadan.exe" or not path.is_file():
+                raise ProviderUnavailable("请选择同花顺 xiadan.exe。", "invalid_client")
+            subprocess.Popen([str(path)], cwd=str(path.parent), env=env)
+            return {"readiness": "ready"}
+    raise ProviderUnavailable("此平台不支持该动作。", "unsupported_action")

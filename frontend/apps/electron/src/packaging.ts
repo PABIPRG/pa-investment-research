@@ -75,13 +75,16 @@ export function commandRequiresShell(command: string, platform: NodeJS.Platform 
  * @param rootDir - Temporary root removed after packaging succeeds or fails.
  * @param platform - Electron target platform.
  * @param arch - Electron target architecture.
+ * @param downloadCacheRoot - Optional persistent download directory outside staging.
  * @returns Ordered command inputs and sibling staging paths.
  */
-export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, arch: string): PackagingPlan {
+export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, arch: string, downloadCacheRoot?: string): PackagingPlan {
   const stagingDir = join(rootDir, 'app')
   const portableStagingDir = join(rootDir, 'app-portable')
   const sidecarDir = join(rootDir, 'investment-python')
-  const sidecarCacheDir = join(rootDir, 'sidecar-cache')
+  const sidecarCacheDir = downloadCacheRoot
+    ? resolve(downloadCacheRoot, `${platform}-${arch}`)
+    : join(rootDir, 'sidecar-cache')
   const pnpmCommand = platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   return {
     appSourceDir: appDir,
@@ -586,11 +589,21 @@ export async function signPackagedMacApplications(
   }
 }
 
+async function timed<T>(phase: string, action: () => Promise<T>): Promise<T> {
+  const started = Date.now()
+  console.log(`Electron packaging: ${phase} started`)
+  try {
+    return await action()
+  } finally {
+    console.log(`Electron packaging: ${phase} finished after ${Date.now() - started}ms`)
+  }
+}
+
 async function packageApplication(): Promise<void> {
   const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-'))
-  const plan = createPackagingPlan(rootDir, process.platform, process.arch)
+  const plan = createPackagingPlan(rootDir, process.platform, process.arch, process.env.INVESTMENT_PYTHON_DOWNLOAD_CACHE)
   try {
-    await run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd)
+    await timed('production deploy', () => run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd))
     let packagingStagingDir = plan.stagingDir
     if (process.platform === 'darwin' || process.platform === 'win32') {
       const startedAt = Date.now()
@@ -609,7 +622,7 @@ async function packageApplication(): Promise<void> {
       packagingStagingDir = plan.portableStagingDir
       console.log(`Electron packaging: portable Windows staging completed in ${Date.now() - startedAt}ms`)
     }
-    await run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd)
+    await timed('Python sidecar', () => run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd))
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
     if (typeof electronPackage !== 'object' || electronPackage === null
       || typeof (electronPackage as { version?: unknown }).version !== 'string') {
@@ -617,14 +630,15 @@ async function packageApplication(): Promise<void> {
     }
     const electronVersion = (electronPackage as { version: string }).version
     const checksums = JSON.parse(await readFile(join(dirname(electronPackagePath), 'checksums.json'), 'utf8')) as Record<string, string>
-    const electronZip = await downloadArtifact({
+    const electronZip = await timed('Electron download', () => downloadArtifact({
       arch: process.arch,
       artifactName: 'electron',
       checksums,
       platform: process.platform,
       version: electronVersion,
-    })
-    const appPaths = await packager(createPackagerOptions({
+      ...(process.env.ELECTRON_CACHE ? { cacheRoot: process.env.ELECTRON_CACHE } : {}),
+    }))
+    const appPaths = await timed('application assembly', () => packager(createPackagerOptions({
       arch: process.arch,
       electronVersion,
       electronZipDir: dirname(electronZip),
@@ -632,8 +646,17 @@ async function packageApplication(): Promise<void> {
       sidecarDir: plan.sidecarDir,
       stagingDir: packagingStagingDir,
       outDir: join(appDir, 'out'),
-    }))
-    await signPackagedMacApplications(appPaths, process.platform)
+    })))
+    for (const packagePath of appPaths) {
+      const resources = process.platform === 'darwin'
+        ? join(packagePath, `${appIdentity.name}.app`, 'Contents', 'Resources')
+        : join(packagePath, 'resources')
+      await run(process.execPath, [
+        join(workspaceDir, 'scripts', 'investment-backend-package-policy.ts'),
+        '--root', join(resources, 'investment-python'),
+      ], workspaceDir)
+    }
+    await timed('macOS signing', () => signPackagedMacApplications(appPaths, process.platform))
   } finally {
     await removePackagingRoot(plan.rootDir)
   }
@@ -647,7 +670,7 @@ async function main(): Promise<void> {
   await packageApplication()
   if (mode === 'make') {
     const forgeBinary = join(appDir, 'node_modules', '.bin', process.platform === 'win32' ? 'electron-forge.cmd' : 'electron-forge')
-    await run(forgeBinary, ['make', '--skip-package'], appDir)
+    await timed('ZIP compression', () => run(forgeBinary, ['make', '--skip-package'], appDir))
   }
 }
 

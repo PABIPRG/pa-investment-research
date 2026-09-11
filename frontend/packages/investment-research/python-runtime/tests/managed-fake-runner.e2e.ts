@@ -159,10 +159,13 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     const byModule = new Map(specs.map(spec => [spec.argv[3], spec]))
     const dataTransferToken = byModule.get('adapter.app:app')?.env?.DSH_DATA_TRANSFER_TOKEN
     expect(dataTransferToken).toEqual(expect.any(String))
+    const holdingsNativeToken = byModule.get('adapter.app:app')?.env?.DSH_HOLDINGS_NATIVE_TOKEN
+    expect(holdingsNativeToken).toEqual(expect.any(String))
     expect(byModule.get('adapter.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'trading-visible',
       DEEPSEEK_API_KEY: CANARY,
       OPENAI_API_KEY: CANARY,
+      DSH_HOLDINGS_NATIVE_TOKEN: holdingsNativeToken,
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
     })
@@ -178,6 +181,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     })
     expect(specs.flatMap(spec => spec.argv)).not.toContain(CANARY)
     expect(specs.flatMap(spec => spec.argv)).not.toContain(dataTransferToken)
+    expect(specs.flatMap(spec => spec.argv)).not.toContain(holdingsNativeToken)
 
     for (const id of ['trading-core', 'market-watch', 'industry-chain'] as const) {
       await expect(access(ownedBackendStatePath(home, id))).resolves.toBeUndefined()
@@ -185,9 +189,11 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       expect(log).toContain('fake uvicorn ready')
       expect(log).not.toContain(CANARY)
       expect(log).not.toContain(dataTransferToken)
+      expect(log).not.toContain(holdingsNativeToken)
     }
     expect(JSON.stringify(runtime.readiness())).not.toContain(CANARY)
     expect(JSON.stringify(runtime.readiness())).not.toContain(dataTransferToken)
+    expect(JSON.stringify(runtime.readiness())).not.toContain(holdingsNativeToken)
 
     await Promise.all(leases.map(lease => lease.release()))
     for (const definition of [trading, market, industry]) {

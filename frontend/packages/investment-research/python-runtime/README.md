@@ -69,3 +69,5 @@ None; business plugins own every model-visible contribution after their backend 
 - **Dependency distribution hashes are deferred hardening** — target files pin every installed version and are themselves hashed, while individual wheel/sdist hashes remain a follow-up release-supply-chain gate.
 - **State is diagnostic, not recovery authority** — a restarted dsh instance reports stale state but never adopts or kills a PID from disk; use `external` for independently supervised services.
 - **One active and one previous log** — rotation is size-based at open time; long-running children do not rotate mid-process.
+
+Holdings sync returns a read-only preview valid for five minutes; commit requires its token and rejects changed accounts, providers, or local holdings. Native actions use a host-private credential and a non-Remote method restricted to owned local backends.

@@ -15,13 +15,17 @@ from ..schemas import HoldingItem
 class ProviderUnavailable(Exception):
     """数据源不可用（未授权/未安装/未登录），给上层明确的降级信号。"""
 
+    def __init__(self, message: str, code: str = "read_failed"):
+        super().__init__(message)
+        self.code = code
+
 
 ACCOUNT_MODES = ("real", "simulated")
 
 
 def current_account_mode() -> str:
     """返回规范化的操盘账户类型；拒绝把未知值悄悄当成实盘。"""
-    mode = str(getattr(settings, "holdings_account_mode", "real") or "real").strip().lower()
+    mode = str(getattr(settings, "holdings_account_mode", "simulated") or "simulated").strip().lower()
     if mode not in ACCOUNT_MODES:
         raise ProviderUnavailable(
             f"未知 HOLDINGS_ACCOUNT_MODE: {mode}（可选: real/simulated）。"

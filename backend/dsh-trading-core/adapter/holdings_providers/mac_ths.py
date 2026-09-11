@@ -1,40 +1,16 @@
 # -*- coding: utf-8 -*-
-"""MacThsProvider：macOS 上通过 AppleScript 读取同花顺 Mac 版持仓。
+"""同花顺 macOS 持仓读取。
 
-为什么需要单独的 provider：
-  Windows 走 easytrader + pywinauto 操控 Win32 控件树；macOS 上既没有
-  pywinauto，也没有券商自研的下单客户端（xiadan.exe 等全是 Windows PE）。
-  唯一在 macOS 上能登录券商并看到持仓的现成客户端是「同花顺 Mac 版」
-  （内置 80+ 券商账号登录，含平安、国金、银河、中信、广发等）。
-  因此 macOS 侧改用系统自带的 AppleScript + System Events 辅助功能 API
-  遍历同花顺的 Cocoa 控件树，等价于 pywinauto 在 Windows 上做的事。
-
-AppleScript 常量来源：
-  https://github.com/zetatez/evolving （MIT，最后更新 2026-08）
-  上游把「交易 → A股 → 股票 → 持仓」的点击序列和控件路径沉淀成了常量，
-  本模块按 MIT 许可引用其控件路径知识，并做了三处改造：
-    1. 只取持仓，去掉下单/撤单/银证转账等资金操作入口；
-    2. 返回值改为 TAB/换行分隔的文本，避免上游 return 一个 AppleScript
-       list 时被 osascript 用逗号拼接——千分位（"1,000"）会被拆错列；
-    3. 表格定位由「写死 scroll area 4 / 5」改为在 1..8 里找表头含「代码」
-       的表，并按表头名映射列，降低客户端改版造成的脆性。
-
-前置条件（缺一不可，UI 会逐条提示）：
-  * macOS
-  * 同花顺 Mac 版已安装并登录券商交易账号
-  * 系统设置 → 隐私与安全性：授予运行本应用的进程自动化与辅助功能权限
-  * 客户端窗口停在「交易」模块
-
-局限：
-  * 与 easytrader 同为 GUI 自动化，同花顺改版会导致控件路径失效
-  * 需要用户在系统设置里授权，属一次性信任成本
-  * 部分券商在同花顺 Mac 版上无交易权限（只能看行情），此时点「交易」
-    会失败并返回 ERR，本 provider 会原样把原因透出
+AXUIElement 为默认被动读取路径。权限属于实际 Python 读取进程；检测不触发
+TCC 弹窗。需要导航时返回稳定状态；只有经认证的 Electron 本次同意入口允许
+激活窗口和固定路径点击，AX 导航失败后才使用 AppleScript，并尽力恢复前台。
+表格或账户身份无法完整确认时拒绝读取，不以部分结果覆盖当前持仓。
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import subprocess
 import sys
 from typing import Callable
@@ -107,9 +83,11 @@ on run
 	tell application "System Events"
 		tell process appName
 			try
-				click button 1 of window 1
-				click button 6 of window 1
+				click button "交易" of window 1
 				click button accountTab of window 1
+				if value of button accountTab of window 1 is not 1 then
+					return "ERR" & tab & "无法确认当前账户类型，已取消读取。"
+				end if
 				click button "股票" of window 1
 				click button "持仓" of window 1
 				delay 0.6
@@ -141,6 +119,8 @@ on run
 				try
 					set cells to (value of every static text of row r of targetTable)
 					set outText to outText & (my joinList(cells, tab)) & linefeed
+				on error
+					return "ERR" & tab & "部分持仓行读取失败，已取消替换。"
 				end try
 			end repeat
 			return "OK" & tab & outText
@@ -269,7 +249,7 @@ def rows_to_items(header: list[str], rows: list[list[str]]) -> list[HoldingItem]
             把实际表头回给用户便于排查。
     """
     columns = locate_columns(header)
-    if "ticker" not in columns:
+    if not {"ticker", "quantity", "cost_price"}.issubset(columns):
         raise MacThsScriptError(
             "同花顺持仓表列名无法识别（未找到代码列）。"
             f"实际表头：{' | '.join(header)}。请把这条信息反馈给开发者补充列名映射。"
@@ -285,17 +265,22 @@ def rows_to_items(header: list[str], rows: list[list[str]]) -> list[HoldingItem]
 
         ticker = normalize_ticker(cell("ticker"))
         if ticker is None:
+            if any(str(value).strip() for value in row):
+                raise ProviderUnavailable("部分持仓行无法识别，未覆盖本地持仓。", "partial_read")
             continue
         quantity_raw = cell("quantity")
+        if quantity_raw is None or quantity_raw.strip() in ("", "--", "-", "—"):
+            raise ProviderUnavailable("部分持仓数量缺失，未覆盖本地持仓。", "partial_read")
         cost_raw = cell("cost_price")
         try:
             quantity = _to_float(quantity_raw)
             cost_price = _to_float(cost_raw)
         except ValueError:
-            log.warning("mac_ths 持仓字段转换失败，跳过: %s", row)
+            raise ProviderUnavailable("部分持仓数值无法识别，未覆盖本地持仓。", "partial_read")
+        if quantity == 0:
             continue
-        if quantity <= 0 or cost_price <= 0:
-            continue
+        if not math.isfinite(quantity) or not math.isfinite(cost_price) or quantity < 0 or cost_price <= 0:
+            raise ProviderUnavailable("部分持仓成本或数量缺失，未覆盖本地持仓。", "partial_read")
         items.append(HoldingItem(ticker=ticker, quantity=quantity, cost_price=cost_price))
     return items
 
@@ -311,7 +296,7 @@ def _to_float(raw: str | None) -> float:
 
 
 class MacThsProvider(HoldingsProvider):
-    """macOS 持仓数据源：AppleScript 读同花顺 Mac 版持仓。"""
+    """macOS 持仓数据源：优先 AX，被动读取与获准导航分离。"""
 
     name = "mac_ths"
 
@@ -334,52 +319,131 @@ class MacThsProvider(HoldingsProvider):
         """需同时满足：macOS + osascript 存在 + 同花顺 Mac 版在运行。"""
         if self._platform != "darwin":
             return False
-        if not osascript_available():
-            return False
-        return app_running(self._app_name)
+        return accessibility_status() == "granted" and app_running(self._app_name)
 
     def get_holdings(self) -> list[HoldingItem]:
-        """读取同花顺 Mac 版当前持仓。
+        """普通调用只允许被动读取，绝不自动激活窗口。"""
+        return self.read_holdings()
 
-        Raises:
-            ProviderUnavailable: 平台/依赖/权限/客户端状态任一不满足
-        """
+    def read_holdings(self, *, foreground: bool = False) -> list[HoldingItem]:
         if self._platform != "darwin":
-            raise ProviderUnavailable(
-                "持仓自动同步目前仅支持 Windows（easytrader）与 macOS（同花顺 Mac 版 AppleScript）；"
-                f"当前平台为 {self._platform}，请改用「导入持仓」手动维护。"
-            )
-        if not osascript_available():
-            raise ProviderUnavailable("未找到 osascript：该能力依赖 macOS 自带的 AppleScript 运行时。")
+            raise ProviderUnavailable("此数据源仅支持 macOS。", "unsupported_platform")
+        permission = accessibility_status()
+        if permission != "granted":
+            raise ProviderUnavailable("请先授予读取进程辅助功能权限。",
+                                      "accessibility_required" if permission == "not_granted" else "dependency_missing")
         if not app_running(self._app_name):
-            raise ProviderUnavailable(
-                f"同花顺 Mac 版未运行：请先启动并登录 {self._app_name} 的券商交易账号，窗口保持打开。"
-            )
-
-        script = apple_script(self._app_name, self._account_mode)
+            raise ProviderUnavailable("请先打开同花顺并登录。", "client_not_running")
         try:
-            code, stdout, stderr = self._runner(script)
+            return read_ax_table(self._account_mode)
+        except ProviderUnavailable as exc:
+            if not foreground or exc.code != "navigation_required":
+                raise
+        from AppKit import NSWorkspace, NSApplicationActivateIgnoringOtherApps
+        workspace = NSWorkspace.sharedWorkspace()
+        previous = workspace.frontmostApplication()
+        activated = False
+        try:
+            target = next((app for app in workspace.runningApplications()
+                           if app.localizedName() == DEFAULT_APP_NAME), None)
+            if target is None:
+                raise ProviderUnavailable("同花顺已经退出。", "client_not_running")
+            if accessibility_status() != "granted":
+                raise ProviderUnavailable("读取进程的辅助功能权限已失效。", "accessibility_required")
+            target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+            activated = True
+            try:
+                return read_ax_table(self._account_mode, navigate=True)
+            except ProviderUnavailable as exc:
+                if exc.code != "navigation_required":
+                    raise
+            # Apple Events are used only after an actual AX navigation failure.
+            code, stdout, stderr = self._runner(apple_script(DEFAULT_APP_NAME, self._account_mode))
+            message = stderr or stdout
+            if any(marker in message for marker in _AUTOMATION_PERMISSION_MARKERS):
+                raise ProviderUnavailable("辅助功能已授权；本次降级读取需要自动化权限。", "automation_required")
+            if any(marker in message for marker in _ACCESSIBILITY_PERMISSION_MARKERS):
+                raise ProviderUnavailable("读取进程的辅助功能权限已失效。", "accessibility_required")
+            if code != 0:
+                raise ProviderUnavailable("读取失败，请检查登录、验证码或客户端弹窗。", "read_failed")
+            try:
+                header, rows = parse_output(stdout)
+                return rows_to_items(header, rows)
+            except MacThsScriptError as exc:
+                raise ProviderUnavailable(str(exc), "read_failed") from exc
         except subprocess.TimeoutExpired as exc:
-            raise ProviderUnavailable(
-                f"读取同花顺持仓超时（>{settings.mac_ths_timeout:g}s）："
-                "客户端可能被弹窗/验证码阻塞，请处理后重试。"
-            ) from exc
-        except Exception as exc:  # 运行器本身不可用
-            raise ProviderUnavailable(f"无法执行 AppleScript：{exc}") from exc
+            raise ProviderUnavailable("读取超时，请处理客户端弹窗后重试。", "read_timeout") from exc
+        except ProviderUnavailable:
+            raise
+        except Exception as exc:
+            raise ProviderUnavailable("读取组件执行失败，请重新检查客户端。", "read_failed") from exc
+        finally:
+            if activated and previous is not None:
+                try:
+                    previous.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                except Exception:
+                    log.warning("未能恢复原前台应用")
 
-        if code != 0:
-            message = (stderr or stdout).strip()
-            hint = permission_hint(message)
-            if hint is not None:
-                raise ProviderUnavailable(hint)
-            raise ProviderUnavailable(f"AppleScript 执行失败：{message or '未知错误'}。请确认同花顺已登录券商账号。")
 
-        try:
-            header, rows = parse_output(stdout)
-            items = rows_to_items(header, rows)
-        except MacThsScriptError as exc:
-            message = str(exc)
-            raise ProviderUnavailable(permission_hint(message) or message) from exc
+def accessibility_status() -> str:
+    """检查实际 Python 读取进程的 TCC 权限，不弹出授权请求。"""
+    try:
+        from ApplicationServices import AXIsProcessTrusted
+        return "granted" if AXIsProcessTrusted() else "not_granted"
+    except ImportError:
+        return "unknown"
 
-        log.info("mac_ths(%s) 获取持仓 %d 条", self._app_name, len(items))
-        return items
+
+def read_ax_table(account_mode: str, *, navigate: bool = False) -> list[HoldingItem]:
+    """被动 AX 遍历；仅获准原生调用允许固定账户路径的 AXPress。"""
+    import time
+    from AppKit import NSWorkspace
+    from ApplicationServices import (
+        AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
+        AXUIElementPerformAction, AXUIElementSetMessagingTimeout,
+    )
+    if accessibility_status() != "granted":
+        raise ProviderUnavailable("请先授予读取进程辅助功能权限。", "accessibility_required")
+    target = next((app for app in NSWorkspace.sharedWorkspace().runningApplications()
+                   if app.localizedName() == DEFAULT_APP_NAME), None)
+    if target is None:
+        raise ProviderUnavailable("同花顺未运行。", "client_not_running")
+    root = AXUIElementCreateApplication(target.processIdentifier())
+    AXUIElementSetMessagingTimeout(root, 1.0)
+    deadline = time.monotonic() + settings.mac_ths_timeout
+    def attr(node, key):
+        if time.monotonic() > deadline:
+            raise ProviderUnavailable("读取超时，请重试。", "read_timeout")
+        code, value = AXUIElementCopyAttributeValue(node, key, None)
+        return value if code == 0 else None
+    def walk(node):
+        pending = [node]
+        count = 0
+        while pending:
+            current = pending.pop(0)
+            count += 1
+            if count > 4000:
+                raise ProviderUnavailable("窗口内容过多，无法完整读取。", "partial_read")
+            yield current
+            pending.extend(attr(current, "AXChildren") or [])
+    account = "模拟" if account_mode == "simulated" else "A股"
+    if navigate:
+        for label in ("交易", account, "股票", "持仓"):
+            button = next((n for n in walk(root) if attr(n, "AXTitle") == label
+                           and attr(n, "AXRole") in ("AXButton", "AXRadioButton")), None)
+            if button is None or AXUIElementPerformAction(button, "AXPress") != 0:
+                raise ProviderUnavailable("请进入所选账户的持仓页。", "navigation_required")
+    nodes = list(walk(root))
+    # Passive reads must prove the selected account, not infer it from a visible tab label.
+    if not any(attr(n, "AXTitle") == account and
+                                 (attr(n, "AXSelected") is True or attr(n, "AXValue") == 1) for n in nodes):
+        raise ProviderUnavailable("请进入所选账户的持仓页后再读取。", "navigation_required")
+    for table in nodes:
+        if attr(table, "AXRole") != "AXTable":
+            continue
+        rows = attr(table, "AXRows") or []
+        values = [[str(attr(n, "AXValue") or "") for n in walk(row)
+                   if attr(n, "AXRole") == "AXStaticText"] for row in rows]
+        if values and any("代码" in cell for cell in values[0]):
+            return rows_to_items(values[0], values[1:])
+    raise ProviderUnavailable("未找到完整持仓表格，请确认已登录并进入持仓页。", "navigation_required")

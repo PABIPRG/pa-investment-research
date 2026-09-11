@@ -83,17 +83,17 @@ return 最终 result 给调用方                    ← [client.py L265]
 
 | 功能 | client.py 方法 | → 调 → | app.py 路由 |
 |---|---|---|---|
-| 健康检查 | `health()` [L96](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L96) | → | `GET /health` [L81](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L81) |
-| 启动个股分析 | `analyze_stock()` [L102](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L102) | → | `POST /analyze` [L88](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L88) |
-| 启动持仓分析 | `analyze_holdings()` [L124](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L124) | → | `POST /holdings/analyze` [L96](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L96) |
-| 保存持仓 | `save_holdings()` [L140](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L140) | → | `POST /holdings/save` [L102](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L102) |
-| 读/写自选 | `get_watchlist()` / `set_watchlist()` | → | `GET/POST /watchlist` [L113-L119](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L113) |
-| 风险偏好 | `get_risk_profile()` / `set_risk_profile()` | → | `GET/POST /risk_profile` [L126-L134](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L126) |
-| 市场简报 | `generate_brief()` / `get_latest_brief()` / `mark_brief_pushed()` | → | `POST /brief` 等 [L144-L163](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L144) |
-| 查任务状态 | `get_task_status(task_id)` [L203](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L203) | → | `GET /analyze/{id}` [L191](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L191) |
-| 查最终结果 | `get_task_result(task_id)` [L208](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L208) | → | `GET /analyze/{id}/result` [L182](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L182) |
-| **SSE 进度流** | `stream_task(task_id)` [L214](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L214) + `_iter_sse_frames()` [L340](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L340) **解帧** | → | `GET /analyze/{id}/stream` [L173](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L173) + `_sse_gen()` [L201](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter/app.py#L201) **组帧** |
-| **一站式阻塞** | `run_analysis()` / `run_holdings_analysis()` / `run_brief()` [L243](file:///c:/Users/18681/Desktop/投顾智能体/pa-trading/pa-investment-research/backend/dsh-trading-core/adapter_client/client.py#L243) **启动+流消费+拿结果** | → | 组合调用 「启动路由」+「SSE 路由」 |
+| 健康检查 | `health()` [L96](../adapter_client/client.py#L96) | → | `GET /health` [L81](../adapter/app.py#L81) |
+| 启动个股分析 | `analyze_stock()` [L102](../adapter_client/client.py#L102) | → | `POST /analyze` [L88](../adapter/app.py#L88) |
+| 启动持仓分析 | `analyze_holdings()` [L124](../adapter_client/client.py#L124) | → | `POST /holdings/analyze` [L96](../adapter/app.py#L96) |
+| 保存持仓 | `save_holdings()` [L140](../adapter_client/client.py#L140) | → | `POST /holdings/save` [L102](../adapter/app.py#L102) |
+| 读/写自选 | `get_watchlist()` / `set_watchlist()` | → | `GET/POST /watchlist` [L113-L119](../adapter/app.py#L113) |
+| 风险偏好 | `get_risk_profile()` / `set_risk_profile()` | → | `GET/POST /risk_profile` [L126-L134](../adapter/app.py#L126) |
+| 市场简报 | `generate_brief()` / `get_latest_brief()` / `mark_brief_pushed()` | → | `POST /brief` 等 [L144-L163](../adapter/app.py#L144) |
+| 查任务状态 | `get_task_status(task_id)` [L203](../adapter_client/client.py#L203) | → | `GET /analyze/{id}` [L191](../adapter/app.py#L191) |
+| 查最终结果 | `get_task_result(task_id)` [L208](../adapter_client/client.py#L208) | → | `GET /analyze/{id}/result` [L182](../adapter/app.py#L182) |
+| **SSE 进度流** | `stream_task(task_id)` [L214](../adapter_client/client.py#L214) + `_iter_sse_frames()` [L340](../adapter_client/client.py#L340) **解帧** | → | `GET /analyze/{id}/stream` [L173](../adapter/app.py#L173) + `_sse_gen()` [L201](../adapter/app.py#L201) **组帧** |
+| **一站式阻塞** | `run_analysis()` / `run_holdings_analysis()` / `run_brief()` [L243](../adapter_client/client.py#L243) **启动+流消费+拿结果** | → | 组合调用 「启动路由」+「SSE 路由」 |
 
 ---
 

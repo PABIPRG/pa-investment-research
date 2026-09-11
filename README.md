@@ -2,6 +2,14 @@
 
 投资研究项目：`frontend/` 为前端（源自 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)，通过 git subtree 同步上游），`backend/` 为后端，`dsh-trading-core/` 为前后端共用的 A 股分析插件。
 
+## 下载与使用
+
+- [桌面应用下载（GitHub Releases）](https://github.com/PABIPRG/pa-investment-research/releases)
+- [首次使用与数据迁移](docs/user-guide/首次使用与数据迁移.md)：平台选择、安装校验、模型配置、备份导入与问题反馈。
+- [维护者发版操作手册](docs/maintainers/发版操作手册.md)：发布触发、审批、验收与失败恢复。
+
+以下快速开始面向源码开发；使用独立桌面包不需要执行源码初始化。
+
 ## 快速开始
 
 所有常用操作通过根目录入口 `start.sh` 完成（跨平台：Linux / macOS 原生支持，Windows 需在 Git Bash 中运行）：

@@ -27,10 +27,6 @@ function holdingsProviderPlatform(): string {
     : 'linux'
 }
 
-function holdingsProviderLabel(value: string): string {
-  return HOLDINGS_PROVIDER_OPTIONS.find(option => option.value === value)?.label ?? '未知数据源'
-}
-
 function holdingsProviderOptions(current: string): readonly HoldingsProviderOption[] {
   const platform = holdingsProviderPlatform()
   const options = HOLDINGS_PROVIDER_OPTIONS.filter(option => option.value === current || option.platforms.has(platform))
@@ -75,7 +71,7 @@ interface WorkbenchOverviewDialogProps {
   readonly alertsState: WorkbenchResourceStatus
   readonly onOpenAlert: (item: Record<string, unknown>) => void
   readonly onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
-  readonly onSyncHoldings: () => Promise<readonly WorkbenchHoldingInput[]>
+  readonly onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   readonly requestData: RequestData
   readonly onClose: () => void
 }
@@ -344,262 +340,196 @@ function HoldingsBulkImport({
  * Chooses a persisted holdings provider, reads real holdings from its broker
  * client, and replaces the saved portfolio with them after explicit confirmation.
  */
-function HoldingsSyncPanel({
-  requestData, onSync, onBack, onSavingChange,
-}: {
+function HoldingsSyncPanel({ requestData, onSync, onBack, onSavingChange }: {
   requestData: RequestData
-  onSync: () => Promise<readonly WorkbenchHoldingInput[]>
+  onSync: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onBack: () => void
   onSavingChange: (saving: boolean) => void
 }) {
-  const source = useRequestResource(requestData)
-  const config = useRequestResource(requestData)
-  const detected = useRequestResource(requestData)
+  const boundedRequest = useCallback((request: InvestmentDataRequest): Promise<unknown> => new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => { reject(new Error('检测暂未完成，请重新检测，或先手动录入持仓。')) }, 12_000)
+    Promise.resolve().then(() => requestData(request)).then(resolve, reject).finally(() => { window.clearTimeout(timer) })
+  }), [requestData])
+  const source = useRequestResource(boundedRequest)
+  const config = useRequestResource(boundedRequest)
+  const [slow, setSlow] = useState(false)
   const backButtonRef = useRef<HTMLButtonElement>(null)
-  const [syncing, setSyncing] = useState(false)
-  const [switching, setSwitching] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState('')
-  const [selectedAccountMode, setSelectedAccountMode] = useState('')
-  const [providerNotice, setProviderNotice] = useState('')
-  const [providerError, setProviderError] = useState('')
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [result, setResult] = useState<readonly WorkbenchHoldingInput[]>()
-
+  const [blocking, setBlocking] = useState('')
+  const [preview, setPreview] = useState<Record<string, unknown>>()
+  const [saved, setSaved] = useState(false)
+  const [troubleshoot, setTroubleshoot] = useState(false)
+  const recheckOnFocus = useRef(false)
+  const alive = useRef(true)
+  const native = (window as unknown as { __DSH_ELECTRON__?: {
+    holdingsAction?: (input: { action: string; account_mode: string }) => Promise<unknown>
+  } }).__DSH_ELECTRON__?.holdingsAction
   const reload = useCallback((): void => {
     source.run({ operation: 'trading-core.holdings-source' })
     config.run({ operation: 'trading-core.holdings-user-config' })
-    detected.run({ operation: 'trading-core.holdings-detect' })
-  }, [config.run, detected.run, source.run])
-  useEffect(() => { reload() }, [reload])
-  useEffect(() => { backButtonRef.current?.focus() }, [])
-
-  const sourceRecord = asRecord(source.state.value)
-  const configRecord = asRecord(config.state.value)
-  const configuredProvider = text(asRecord(configRecord.effective).HOLDINGS_PROVIDER, '')
-  const configuredAccountMode = text(asRecord(configRecord.effective).HOLDINGS_ACCOUNT_MODE, '')
-  const provider = selectedProvider || configuredProvider || text(sourceRecord.provider, 'manual')
-  const accountMode = selectedAccountMode || configuredAccountMode || text(sourceRecord.account_mode, 'real')
-  const accountHoldingLabel = accountMode === 'simulated' ? '模拟持仓' : '真实持仓'
-  const sourceAccountModes = sourceRecord.supported_account_modes
-  const supportedAccountModes = Array.isArray(sourceAccountModes)
-    ? sourceAccountModes.filter((value): value is string => value === 'real' || value === 'simulated')
-    : ['real']
-  const providerOptions = holdingsProviderOptions(provider)
-  const available = source.state.loaded && !source.busy && sourceRecord.available === true
-  const sourceReason = text(sourceRecord.reason, '')
-  const clients = records(asRecord(detected.state.value).clients)
-  // 空态引导由后端按平台给出：Windows 讲 xiadan.exe / EASYTRADER_CLIENT_PATH，
-  // macOS 讲装同花顺 Mac 版与自动化/辅助功能授权。前端不再写死其中一种。
-  const detectHint = text(asRecord(detected.state.value).hint, '')
-  const detecting = source.busy || config.busy || detected.busy
-  const canSync = available && provider !== 'manual' && !switching && !syncing && result === undefined
-
-  const selectProvider = async (value: string): Promise<void> => {
-    if (switching || value === provider) return
-    setSwitching(true); onSavingChange(true); setProviderError(''); setProviderNotice(''); setError(''); setResult(undefined)
-    try {
-      await requestData({
-        operation: 'trading-core.holdings-user-config-update',
-        input: { entries: { HOLDINGS_PROVIDER: value } },
-      })
-      setSelectedProvider(value)
-      setProviderNotice(`已切换为${holdingsProviderLabel(value)}，当前窗口已生效。`)
-      source.run({ operation: 'trading-core.holdings-source' })
-      config.run({ operation: 'trading-core.holdings-user-config' })
-    } catch (reason) {
-      setProviderError(productErrorText(reason))
+  }, [source.run, config.run])
+  useEffect(() => { reload(); backButtonRef.current?.focus() }, [reload])
+  useEffect(() => {
+    alive.current = true
+    const focus = (): void => {
+      if (!recheckOnFocus.current) return
+      recheckOnFocus.current = false
+      setBlocking(''); reload()
+    }
+    window.addEventListener('focus', focus)
+    return () => { alive.current = false; window.removeEventListener('focus', focus) }
+  }, [reload])
+  const state = asRecord(source.state.value)
+  const effective = asRecord(asRecord(config.state.value).effective)
+  const provider = text(effective.HOLDINGS_PROVIDER, text(state.provider, 'manual'))
+  const account = text(effective.HOLDINGS_ACCOUNT_MODE, text(state.account_mode, 'simulated')) === 'real' ? 'real' : 'simulated'
+  const accountLabel = account === 'simulated' ? '模拟操盘' : '真实操盘'
+  const path = `交易 → ${account === 'simulated' ? '模拟' : 'A股'} → 股票 → 持仓`
+  const platform = text(state.platform, holdingsProviderPlatform())
+  const reason = blocking || text(state.blocking_reason, '')
+  const loading = source.busy || config.busy
+  useEffect(() => {
+    setSlow(false)
+    if (!loading) return
+    const timer = window.setTimeout(() => { setSlow(true) }, 3_000)
+    return () => { window.clearTimeout(timer) }
+  }, [loading])
+  const permission = reason === 'accessibility_required' || reason === 'automation_required'
+  const missing = reason === 'client_missing' || reason === 'client_location_required'
+  const navigation = reason === 'navigation_required'
+  const options = holdingsProviderOptions(provider)
+  const run = async (operation: () => Promise<void>): Promise<void> => {
+    if (busy) return
+    setBusy(true); setError(''); onSavingChange(true)
+    try { await operation() } catch (failure) {
+      if (alive.current) setError(productErrorText(failure))
     } finally {
-      setSwitching(false); onSavingChange(false)
+      if (alive.current) setBusy(false)
+      onSavingChange(false)
     }
   }
-
-  const selectAccountMode = async (value: 'real' | 'simulated'): Promise<void> => {
-    if (switching || value === accountMode || !supportedAccountModes.includes(value)) return
-    setSwitching(true); onSavingChange(true); setProviderError(''); setProviderNotice(''); setError(''); setResult(undefined)
-    try {
-      await requestData({
-        operation: 'trading-core.holdings-user-config-update',
-        input: { entries: { HOLDINGS_ACCOUNT_MODE: value } },
-      })
-      setSelectedAccountMode(value)
-      setProviderNotice(`已切换为${value === 'simulated' ? '模拟操盘' : '真实操盘'}，当前窗口已生效。`)
-      source.run({ operation: 'trading-core.holdings-source' })
-      config.run({ operation: 'trading-core.holdings-user-config' })
-    } catch (reason) {
-      setProviderError(productErrorText(reason))
-    } finally {
-      setSwitching(false); onSavingChange(false)
+  const change = (entries: Record<string, string>): void => {
+    void run(async () => {
+      await requestData({ operation: 'trading-core.holdings-user-config-update', input: { entries } })
+      setPreview(undefined); setSaved(false); setBlocking(''); reload()
+    })
+  }
+  const acceptPreview = (value: unknown): void => {
+    const result = asRecord(value)
+    if (result.canceled === true) return
+    if (typeof result.preview_token === 'string' && records(result.items).length > 0) {
+      setPreview(result); setBlocking(''); setSaved(false)
+    } else {
+      setBlocking(text(result.blocking_reason, 'read_failed'))
+      setError(text(result.reason, '读取未完成，当前持仓保持不变。'))
     }
   }
-
-  const sync = async (): Promise<void> => {
-    if (!canSync) return
-    setSyncing(true); onSavingChange(true); setError('')
-    try {
-      setResult(await onSync())
-    } catch (reason) {
-      setError(productErrorText(reason))
-      reload()
-    } finally {
-      setSyncing(false); onSavingChange(false)
-    }
+  const read = (): void => { void run(async () => { acceptPreview(await requestData({ operation: 'trading-core.holdings-sync', input: { action: 'preview' } })) }) }
+  const nativeAction = (action: string): void => {
+    if (native === undefined) return
+    void run(async () => {
+      if (action !== 'read') recheckOnFocus.current = true
+      const value = await native({ action, account_mode: account })
+      if (action === 'read') acceptPreview(value)
+      else {
+        const result = asRecord(value)
+        if (result.blocking_reason) { setBlocking(text(result.blocking_reason, '')); setError(text(result.reason, '操作未完成。')) }
+        reload()
+      }
+    })
   }
-
-  return (
-    <section className={css.workbenchSyncPanel} aria-label="从券商同步持仓">
-      <div className={css.workbenchImportHeader}>
-        <div><strong>从券商同步持仓</strong><span>读取本机券商客户端里的{accountHoldingLabel}</span></div>
-        <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={syncing || switching} onClick={onBack}>返回持仓明细</button>
+  const download = (): void => {
+    recheckOnFocus.current = true
+    if (native !== undefined) nativeAction('download')
+    else window.open(platform === 'darwin' ? 'https://download.10jqka.com.cn/free/mac/' : 'https://download.10jqka.com.cn/free/', '_blank', 'noopener,noreferrer')
+  }
+  const confirm = (): void => {
+    if (preview === undefined) return
+    void run(async () => {
+      await onSync(text(preview.preview_token, ''))
+      setSaved(true)
+    })
+  }
+  const items = records(preview?.items)
+  return <section className={css.workbenchSyncPanel} aria-label="从券商同步持仓">
+    <div className={css.workbenchImportHeader}>
+      <div><span>账户选择 → 客户端准备 → 预览确认</span></div>
+      <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>返回持仓明细</button>
+    </div>
+    <div className={css.workbenchAccountMode}>
+      <div><strong>1 · 操盘账户</strong><span>选择要同步的账户，设置会自动记住</span></div>
+      <div className={css.workbenchAccountModeChoices} role="group" aria-label="操盘账户">
+        {(['simulated', 'real'] as const).map(mode => <button key={mode} type="button" aria-pressed={account === mode} disabled={busy || loading} onClick={() => { change({ HOLDINGS_ACCOUNT_MODE: mode }) }}>{mode === 'simulated' ? '模拟操盘' : '真实操盘'}</button>)}
       </div>
-      <div className={css.workbenchImportGuide}>
-        <strong>同步会整体替换当前持仓</strong>
-        <span>读取券商客户端中的{accountHoldingLabel}覆盖本地已保存的持仓，并重新计算组合风险。请先启动并登录券商客户端；系统会优先自动进入对应账户，必要时再提示一次辅助操作。</span>
+    </div>
+    <div className={css.workbenchSyncPreparation}>
+      <strong>2 · 同花顺准备状态</strong>
+      <label className={css.sourceSelect}><span>持仓数据源</span><select aria-label="持仓数据源" value={provider} disabled={busy || loading} onChange={event => { change({ HOLDINGS_PROVIDER: event.target.value }) }}>
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select></label>
+      <p role="status">{loading ? (slow ? '检测耗时较长，最多等待 12 秒。你也可以先手动录入。' : '正在检测客户端与权限，请稍候…') : state.available === true ? '已具备读取条件；读取时仍需确认账户与登录状态。' : text(state.reason, '请选择数据源并检查客户端。')}</p>
+      <div className={css.syncStatusList} aria-label="检测结果">
+        <span>客户端 <strong>{state.installation === 'installed' ? '已安装' : state.installation === 'missing' ? '未安装' : '待确认'}</strong></span>
+        <span>运行状态 <strong>{state.process === 'running' ? '运行中' : state.process === 'not_running' ? '未启动' : '待确认'}</strong></span>
+        <span>读取权限 <strong>{state.accessibility === 'granted' ? '已授权' : permission ? '待授权' : '待确认'}</strong></span>
       </div>
-      {provider !== 'manual' && (
-        <div className={css.workbenchAccountMode}>
-          <div><strong>操盘账户</strong><span>{accountMode === 'simulated' ? '用于先验证投研方案，不会读取真实账户' : '读取已登录券商的真实账户持仓'}</span></div>
-          <div className={css.workbenchAccountModeChoices} role="group" aria-label="操盘账户">
-            <button
-              type="button"
-              aria-pressed={accountMode === 'real'}
-              disabled={switching || syncing || !supportedAccountModes.includes('real')}
-              onClick={() => { void selectAccountMode('real') }}
-            >真实操盘</button>
-            <button
-              type="button"
-              aria-pressed={accountMode === 'simulated'}
-              disabled={switching || syncing || !supportedAccountModes.includes('simulated')}
-              onClick={() => { void selectAccountMode('simulated') }}
-            >模拟操盘</button>
-          </div>
+      {missing && <>
+        <button type="button" className={css.primaryButton} disabled={busy} onClick={download}>前往官网下载 {platform === 'darwin' ? 'Mac' : 'Windows'} 版</button>
+        <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={reload}>已安装，重新检测</button>
+        {native !== undefined && platform === 'win32' && <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { nativeAction('select_client') }}>选择客户端位置</button>}
+      </>}
+      {permission && <div className={css.syncPermissionGuide}>
+        <strong>{reason === 'automation_required' ? '补充自动化授权' : '允许读取同花顺持仓'}</strong>
+        <span>{reason === 'automation_required' ? '本次读取还需要系统自动化授权，请按下面的步骤开启。' : '读取同花顺窗口中的持仓表格需要辅助功能权限；不读取交易密码、不提交买卖委托。'}</span>
+        <ol>
+          <li>{native ? '点击下方按钮打开系统设置' : '打开系统设置 → 隐私与安全性'} → {reason === 'automation_required' ? '自动化' : '辅助功能'}</li>
+          <li>{reason === 'automation_required' ? '找到实际读取进程，允许其控制 System Events。' : '找到投研智能体，开启权限开关。'}</li>
+          <li>{native ? '返回本应用，将自动检查一次权限。' : '返回浏览器，点击“重新检查”；Web 无法自动控制系统设置或恢复焦点。'}</li>
+        </ol>
+        <div className={css.syncActions}>
+        {native && <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction(reason === 'automation_required' ? 'automation' : 'accessibility') }}>打开{reason === 'automation_required' ? '自动化' : '辅助功能'}设置</button>}
+        <button type="button" className={css.secondaryButton} onClick={() => { setBlocking(''); reload() }} disabled={busy || loading}>重新检查</button>
         </div>
-      )}
-      <div className={css.sourceFacts}>
-        <label className={css.sourceSelect}>
-          <span>数据源</span>
-          <select
-            aria-label="持仓数据源"
-            aria-busy={switching}
-            value={provider}
-            disabled={!source.state.loaded || !config.state.loaded || switching || syncing}
-            onChange={(event) => { void selectProvider(event.target.value) }}
-          >
-            {providerOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
-        <div>
-          <span>状态</span>
-          <span
-            className={css.statusBadge}
-            data-status={source.busy ? 'pending' : available ? 'success' : source.state.loaded ? 'failed' : 'pending'}
-          >{source.busy ? '检测中' : source.state.loaded ? (available ? '可用' : '不可用') : '检测中'}</span>
-        </div>
-        <button type="button" className={css.secondaryButton} disabled={detecting} onClick={reload}>
-          {detecting ? '检测中…' : '重新检测'}
-        </button>
-      </div>
-      {providerNotice !== '' && <p className={css.workbenchProviderNotice} role="status">{providerNotice}</p>}
-      {providerError !== '' && (
-        <div className={css.workbenchImportErrors} role="alert"><strong>数据源切换失败</strong><span>{providerError}</span></div>
-      )}
-      {source.state.error !== '' && (
-        <div className={css.workbenchImportErrors} role="alert"><strong>数据源状态读取失败</strong><span>{source.state.error}</span></div>
-      )}
-      {source.state.error === '' && source.state.loaded && !source.busy && !available && (
-        <div className={css.workbenchImportErrors} role="status">
-          <strong>当前数据源不可用，暂时无法同步</strong>
-          {sourceReason !== '' && <span>{sourceReason}</span>}
-          <span>可直接在上方切换数据源；选择券商模式前，请先启动并登录对应客户端。</span>
-        </div>
-      )}
-      {source.state.error === '' && source.state.loaded && !source.busy && provider === 'manual' && (
-        <p className={css.workbenchImportHint}>当前为手动输入模式；如需读取券商持仓，可直接在上方切换数据源。</p>
-      )}
-      {error !== '' && (
-        <div className={css.workbenchImportErrors} role="alert"><strong>同步失败</strong><span>{error}</span></div>
-      )}
-      {provider !== 'manual' && (
-        <div className={css.workbenchImportPreview}>
-          <div><strong>本机券商客户端</strong><span>{detected.state.loaded ? `${clients.length} 个` : '检测中'}</span></div>
-          {detected.state.error !== '' && <p>{detected.state.error}</p>}
-          {!detected.state.loaded && detected.state.error === '' && <p>正在扫描本机已安装的券商客户端，首次扫描可能需要十几秒。</p>}
-          {detected.state.loaded && clients.length === 0 && (
-            <p>
-              {detectHint !== ''
-                ? detectHint
-                : '未在本机发现券商客户端。可参考 backend/dsh-trading-core/docs/券商接入方案.md 配置数据源。'}
-            </p>
-          )}
-          {detected.state.loaded && clients.length > 0 && (
-            <div className={css.workbenchImportTableWrap}>
-              <table>
-                <thead><tr><th>券商</th><th>客户端路径</th><th>状态</th></tr></thead>
-                <tbody>
-                  {clients.slice(0, 20).map((client, index) => (
-                    <tr key={`${text(client.broker_id, '')}-${index}`}>
-                      <td>{text(client.label, '未识别券商')}</td>
-                      <td className={css.clientMeta}>{text(client.exe_path, '—')}</td>
-                      <td>
-                        <span className={css.statusBadge} data-status={client.running === true ? 'success' : 'pending'}>
-                          {client.running === true ? '运行中' : '未运行'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-      {result !== undefined && (
-        <div className={css.workbenchImportPreview}>
-          <div><strong>已同步{accountHoldingLabel}</strong><span>{result.length} 条</span></div>
-          <div className={css.workbenchImportTableWrap}>
-            <table>
-              <thead><tr><th>股票代码</th><th>数量</th><th>成本价</th></tr></thead>
-              <tbody>
-                {result.slice(0, 20).map(item => (
-                  <tr key={item.ticker}>
-                    <td>{item.ticker}</td>
-                    <td>{item.quantity.toLocaleString('zh-CN')}</td>
-                    <td>{money(item.cost_price)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {result.length > 20 && <p>仅预览前 20 条，全部 {result.length} 条已保存。</p>}
-        </div>
-      )}
-      <div className={css.workbenchImportCommit}>
-        <div aria-label="同步范围">
-          {result === undefined
-            ? <span>{provider === 'manual' ? '手动模式不读取券商持仓' : `读取${accountHoldingLabel === '模拟持仓' ? '模拟账户持仓' : '真实持仓'}并整体替换当前持仓`}</span>
-            : <strong>已同步{accountHoldingLabel} · {result.length} 条</strong>}
-        </div>
-        {result === undefined
-          ? (
-            <button type="button" className={css.primaryButton} aria-busy={syncing} disabled={!canSync} onClick={() => { void sync() }}>
-              {syncing ? `正在读取${accountHoldingLabel}…` : `同步${accountHoldingLabel}`}
-            </button>
-          )
-          : <button type="button" className={css.primaryButton} onClick={onBack}>完成</button>}
-      </div>
-    </section>
-  )
+        <button type="button" className={css.syncHelpButton} aria-expanded={troubleshoot} onClick={() => { setTroubleshoot(value => !value) }}>没有看到本应用？</button>
+        {troubleshoot && <p>实际权限属于读取进程。辅助功能列表中可点击“+”添加投研智能体；源码运行时请检查 Python 或启动终端。更换运行环境后可能需要重新授权。</p>}
+      </div>}
+      {reason === 'client_not_running' && (native
+        ? <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('launch') }}>打开同花顺</button>
+        : <p>请手动打开同花顺并登录，进入 {path}，然后返回浏览器重新检测。</p>)}
+      {!permission && !missing && <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={() => { setBlocking(''); reload() }}>重新检测</button>}
+      <button type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>{missing ? '暂不安装，改用手动录入' : '改用手动录入 / 批量导入'}</button>
+    </div>
+    <div className={css.workbenchSyncPreparation}>
+      <strong>3 · 读取、预览与确认</strong>
+      <p>{path}</p>
+      {state.available !== true && !navigation && <p className={css.syncHint}>完成上方准备后即可读取；确认预览前不会修改本地持仓。</p>}
+      {native === undefined && <p>Web 版请在同花顺手动进入上述路径，完成后返回读取。浏览器不会自动切换同花顺或保证恢复焦点。</p>}
+      {navigation && native !== undefined && <div className={css.workbenchImportGuide}><strong>后台读取未完成</strong><span>继续时会先弹窗说明访问路径、窗口切换和返回行为，取得本次同意后再操作。</span><button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('read') }}>查看本次切换说明</button></div>}
+      {preview === undefined && !(navigation && native) && <button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual' || (state.available !== true && !navigation)} onClick={read}>{busy ? '正在读取持仓…' : native ? '读取持仓预览' : '我已打开持仓页，开始读取'}</button>}
+      {preview !== undefined && <div className={css.workbenchImportPreview}>
+        <div><strong>{saved ? '已同步持仓' : '持仓预览 · 尚未保存'}</strong><span>{text(preview.account_label, accountLabel)} · 当前 {String(preview.previous_count)} 条 → {items.length} 条</span></div>
+        <p>来源：{text(preview.label, '同花顺')} · 读取时间：{text(preview.read_at, '—')} · 预览有效期 5 分钟</p>
+        <div className={css.workbenchImportTableWrap}><table><thead><tr><th>股票代码</th><th>数量（股）</th><th>成本价（元）</th></tr></thead><tbody>{items.map((item, index) => <tr key={`${text(item.ticker, '')}-${index}`}><td>{text(item.ticker, '—')}</td><td>{number(item.quantity)?.toLocaleString('zh-CN') ?? '—'}</td><td>{number(item.cost_price)?.toLocaleString('zh-CN') ?? '—'}</td></tr>)}</tbody></table></div>
+        {saved ? <><strong>本次同步记录</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p><button type="button" className={css.primaryButton} onClick={onBack}>完成</button></> : <><p>确认后整体替换本地持仓并重新计算组合风险；空结果不会清空持仓。</p><button type="button" className={css.primaryButton} disabled={busy} onClick={confirm}>确认替换 {items.length} 条持仓</button><button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { setPreview(undefined); setError('') }}>取消预览</button></>}
+      </div>}
+    </div>
+    {(error || source.state.error || config.state.error) && <div className={css.workbenchImportErrors} role="alert"><strong>当前操作未完成</strong><span>{error || source.state.error || config.state.error}</span><span>本地持仓保持不变；可重新读取或改用手动录入。</span></div>}
+  </section>
 }
 
 function HoldingsEditor({
-  positions, requestData, onSaveHoldings, onSyncHoldings, onSavingChange,
+  positions, requestData, onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
 }: {
   positions: readonly WorkbenchPositionDetail[]
   requestData: RequestData
   onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
-  onSyncHoldings: () => Promise<readonly WorkbenchHoldingInput[]>
+  onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onSavingChange: (saving: boolean) => void
+  onFlowChange: (flow: 'view' | 'import' | 'sync') => void
 }) {
   const [flow, setFlow] = useState<'view' | 'import' | 'sync'>('view')
+  useEffect(() => { onFlowChange(flow) }, [flow, onFlowChange])
   const [importMode, setImportMode] = useState<'single' | 'batch'>('single')
   const [editDraft, setEditDraft] = useState<HoldingEditorDraft>()
   const [singleDraft, setSingleDraft] = useState<HoldingEditorDraft>(EMPTY_HOLDING_DRAFT)
@@ -652,8 +582,8 @@ function HoldingsEditor({
     setPendingDelete(''); setViewError(''); setNotice(''); setFlow('sync')
   }
   const returnToView = (): void => { focusRequestRef.current = 'view'; setFlow('view') }
-  const applySyncedHoldings = async (): Promise<readonly WorkbenchHoldingInput[]> => {
-    const items = await onSyncHoldings()
+  const applySyncedHoldings = async (token: string): Promise<readonly WorkbenchHoldingInput[]> => {
+    const items = await onSyncHoldings(token)
     setSavedSnapshot(items)
     setNotice(`已同步 ${items.length} 条持仓，工作台数据正在刷新。`)
     return items
@@ -1017,12 +947,14 @@ export function WorkbenchOverviewDialog({
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
+  const [holdingFlow, setHoldingFlow] = useState<'view' | 'import' | 'sync'>('view')
+  const syncing = kind === 'holdings' && holdingFlow === 'sync'
   const close = (): void => { if (!holdingSaving) onClose() }
   return (
     <DetailDialog
-      title={copy.title}
-      description={copy.description}
-      eyebrow="投研概览"
+      title={syncing ? '同步同花顺持仓' : copy.title}
+      description={syncing ? '选择账户，完成准备后读取预览；确认后才会替换本地持仓。' : copy.description}
+      {...(syncing ? {} : { eyebrow: '投研概览' })}
       wide
       onClose={close}
       closeDisabled={holdingSaving}
@@ -1039,6 +971,7 @@ export function WorkbenchOverviewDialog({
                     onSaveHoldings={onSaveHoldings}
                     onSyncHoldings={onSyncHoldings}
                     onSavingChange={setHoldingSaving}
+                    onFlowChange={setHoldingFlow}
                   />
                 : <CostDetail positions={positions} />}
             </>

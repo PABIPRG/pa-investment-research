@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "requirements": {
-    "backend/dsh-trading-core/requirements.txt": "2ab3ec6b2fcb5f80509643d124755bae408ce8c8fd4f56fabfc98b2d19c0a780",
+    "backend/dsh-trading-core/requirements.txt": "a80d521233cde3e13a3c72a15a7e6a348f2ac785f1f393b0cc471404c5a572dc",
     "backend/industry-chain/requirements.txt": "e22996d7b257e1a574dacbfdc9427dc45f5924a6445c35c6740ad2265caeee28",
     "backend/market-watch/requirements.txt": "8ccd6f579039edeb2efba69301f4cd4d626b10b41f79a60cc820ab8af51fd39c"
   },
@@ -13,7 +13,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-arm64.txt",
-      "requirementsSha256": "eb340ca64f897c6d61c97f06fa05f30908ddf1d22c5c4946bbaecb94e507ff58"
+      "requirementsSha256": "3160ac807bfe822f7a02540ce21a6aebaa713980e4741dca0f3d09fe03a18e7f"
     },
     "darwin-x64": {
       "pythonVersion": "3.10.20",
@@ -22,7 +22,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-x64.txt",
-      "requirementsSha256": "eb340ca64f897c6d61c97f06fa05f30908ddf1d22c5c4946bbaecb94e507ff58"
+      "requirementsSha256": "3160ac807bfe822f7a02540ce21a6aebaa713980e4741dca0f3d09fe03a18e7f"
     },
     "win32-x64": {
       "pythonVersion": "3.10.20",
@@ -31,7 +31,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/python.exe",
       "requirementsLock": "frontend/config/investment-python-requirements/win32-x64.txt",
-      "requirementsSha256": "cabbaf0a33c14c5352ecb91b0ee9d15547681affcd226c94456975ec66774246"
+      "requirementsSha256": "170d4c40cb62dcdc6605f65cac254f44784c10197300f02414edb8fa668b6458"
     }
   }
 }

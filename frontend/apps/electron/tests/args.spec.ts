@@ -12,6 +12,11 @@ describe('resolveElectronProfile', () => {
     ])).toBe('investment-research')
   })
 
+  it('uses the packaged investment default while allowing explicit selection', () => {
+    expect(resolveElectronProfile(['/app'], 'investment-research')).toBe('investment-research')
+    expect(resolveElectronProfile(['/app', '--profile', 'web'], 'investment-research')).toBe('web')
+  })
+
   it('rejects duplicate, missing, and empty profile values', () => {
     expect(() => resolveElectronProfile(['/electron', '/app', '--profile'])).toThrow(/--profile.*value/)
     expect(() => resolveElectronProfile(['/electron', '/app', '--profile', ''])).toThrow(/--profile.*non-empty/)

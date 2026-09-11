@@ -22,6 +22,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Validate GitHub Actions workflows
+        working-directory: .
+        env:
+          GOBIN: ${{ runner.temp }}/actionlint-bin
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$GOBIN/actionlint" -shellcheck= -pyflakes= .github/workflows/investment-ci.yml .github/workflows/investment-release.yml .github/workflows/investment-sidecar.yml
+
       - uses: pnpm/action-setup@v4
         with:
           dest: ${{ runner.temp }}/setup-pnpm
@@ -35,6 +43,9 @@ jobs:
 
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
+
+      - name: Test release workflow guards
+        run: pnpm exec vitest run scripts/investment-release.spec.ts
 
       - name: Type-check startup graph
         run: pnpm run typecheck:startup

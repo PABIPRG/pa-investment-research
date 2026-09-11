@@ -43,12 +43,26 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
+      # Cache downloads only; packages are assembled and verified on every run.
+      - name: Cache packaging downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/investment-downloads
+          key: investment-downloads-v1-${{ matrix.target }}-${{ hashFiles('frontend/config/investment-python-runtime-lock.json', 'frontend/pnpm-lock.yaml') }}
+
       - name: Verify native target
         shell: bash
         run: test "$(node -p "process.platform+'-'+process.arch")" = "${{ matrix.target }}"
 
       - name: Install frontend
         run: pnpm install --frozen-lockfile
+
+      - name: Test backend package privacy gates
+        run: >-
+          pnpm exec vitest run
+          scripts/investment-backend-package-policy.spec.ts
+          scripts/build-investment-python-sidecar.spec.ts
+          scripts/smoke-investment-python-sidecar.spec.ts
 
       - name: Verify shared application version
         id: app_version
@@ -58,7 +72,16 @@ jobs:
           app_version=$(node -p "require('./package.json').version")
           echo "value=$app_version" >> "$GITHUB_OUTPUT"
 
+      - name: Record commit identity
+        id: commit
+        shell: bash
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Build test application and sidecar (macOS)
+        env:
+          INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
+          PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
+          ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -66,6 +89,10 @@ jobs:
           pnpm run make:electron
 
       - name: Build test application and sidecar (Windows)
+        env:
+          INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
+          PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
+          ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
         if: runner.os == 'Windows'
         run: pnpm run make:electron
 
@@ -92,10 +119,18 @@ jobs:
           if ($null -eq $descriptor) { throw 'packaged investment sidecar not found' }
           node scripts/smoke-investment-python-sidecar.ts --root $descriptor.Directory.FullName
 
+      - name: Verify release asset staging
+        run: >-
+          node scripts/investment-release.ts stage
+          --version "${{ steps.app_version.outputs.value }}"
+          --target "${{ matrix.target }}"
+          --source-root apps/electron/out/make
+          --destination-root release-assets
+
       - name: Upload downloadable test package
         uses: actions/upload-artifact@v4
         with:
-          name: investment-agent-${{ steps.app_version.outputs.value }}-${{ matrix.target }}
+          name: investment-agent-${{ steps.app_version.outputs.value }}-${{ steps.commit.outputs.short_sha }}-${{ matrix.target }}
           path: frontend/apps/electron/out/make/**
           if-no-files-found: error
           retention-days: 14

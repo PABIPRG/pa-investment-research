@@ -565,7 +565,17 @@ describe('研究工作台', () => {
     expect((within(dialog).getByRole('radio', { name: /时间加权收益率/ }) as HTMLInputElement).checked).toBe(true)
     expect(within(dialog).getByText('+3.57%')).toBeTruthy()
     expect(within(dialog).getByText('历史记录始于 2026-08-01')).toBeTruthy()
-    expect(within(dialog).getByRole('img', { name: /组合收益曲线/ })).toBeTruthy()
+    const chart = within(dialog).getByRole('group', { name: /组合收益曲线/ })
+    const chartGraphic = within(chart).getByRole('img', { name: /左右方向键逐点查看估值明细/ })
+    expect(within(chart).getByText('总资产估值')).toBeTruthy()
+    expect(within(chart).getByText('2 个估值日')).toBeTruthy()
+    expect(within(chart).getByText('最新估值 · 2026-09-09')).toBeTruthy()
+    expect(within(chart).getByText('悬停节点查看明细；键盘聚焦图表后，可用左右方向键切换估值日。')).toBeTruthy()
+    fireEvent.focus(chartGraphic)
+    fireEvent.keyDown(chartGraphic, { key: 'ArrowLeft' })
+    const selectedPoint = within(chart).getByText('2026-08-01').parentElement
+    expect(selectedPoint?.textContent).toContain('总资产 ¥14.0 万')
+    expect(selectedPoint?.textContent).toContain('累计盈亏 ¥0')
     const contributionTable = within(dialog).getByRole('table', { name: '标的区间盈亏贡献明细' })
     const contributionRow = within(contributionTable).getByRole('row', { name: /贵州茅台600519/ })
     expect(within(contributionTable).getByRole('columnheader', { name: '期末成本价' })).toBeTruthy()
@@ -714,7 +724,7 @@ describe('研究工作台', () => {
 
     expect(controls?.nextElementSibling).toBe(content)
     expect(content.className).toContain(css.performanceContent)
-    expect(within(content).getByRole('img', { name: /组合收益曲线/ })).toBeTruthy()
+    expect(within(content).getByRole('group', { name: /组合收益曲线/ })).toBeTruthy()
   })
 
   it('历史估值点不足时不伪造零收益，并以实时行情展示当前成本盈亏', async () => {
@@ -1094,109 +1104,44 @@ describe('研究工作台', () => {
     expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
   })
 
-  it('从持仓明细检测本机券商客户端并同步真实持仓', async () => {
-    let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
+  it('默认模拟账户，读取仅预览，明确确认才替换并刷新', async () => {
+    let saved = false
+    const positions = [{ ticker: '000001', quantity: 300, cost_price: 11.2 }]
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
-      if (request.operation === 'trading-core.holdings') return { items: savedHoldings }
-      if (request.operation === 'trading-core.holdings-source') {
-        return {
-          provider: 'easytrader', label: '平安证券（同花顺版）', available: true, reason: null,
-          broker: 'pingan', client_type: 'ths', client_path: 'C:/平安证券/同花顺版/xiadan.exe',
-        }
-      }
-      if (request.operation === 'trading-core.holdings-detect') {
-        return {
-          cached: false,
-          age_seconds: 0,
-          clients: [{
-            broker_id: 'pingan', label: '平安证券（同花顺版）', kernel: 'ths', trader_type: 'ths',
-            exe_path: 'C:/平安证券/同花顺版/xiadan.exe', main_dir: 'C:/平安证券/同花顺版',
-            running: true, matched: true,
-          }],
-        }
-      }
+      if (request.operation === 'trading-core.holdings-source') return { provider: 'mac_ths', platform: 'darwin', available: true }
       if (request.operation === 'trading-core.holdings-sync') {
-        savedHoldings = [
-          { ticker: '600519', name: '贵州茅台', quantity: 200, cost_price: 1480 },
-          { ticker: '000001', name: '平安银行', quantity: 300, cost_price: 11.2 },
-        ]
-        return {
-          provider: 'easytrader', label: '平安证券（同花顺版）', saved: 2,
-          items: [
-            { ticker: '600519', quantity: 200, cost_price: 1480 },
-            { ticker: '000001', quantity: 300, cost_price: 11.2 },
-          ],
-        }
+        if (request.input?.action === 'commit') { saved = true; return { saved: 1, items: positions } }
+        return { preview_token: 'preview-1', previous_count: 2, items: positions, account_label: '模拟操盘', read_at: '2026-09-11T01:00:00Z' }
       }
       return completeResponse(request.operation)
     })
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
-    const holdingsReads = requestData.mock.calls
-      .filter(([request]) => request.operation === 'trading-core.holdings').length
-
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-
-    expect(within(dialog).getByRole('button', { name: '返回持仓明细' })).toBeTruthy()
-    expect(await within(dialog).findByText('可用')).toBeTruthy()
-    expect(within(dialog).getByRole('cell', { name: '平安证券（同花顺版）' })).toBeTruthy()
-    expect(within(dialog).getByRole('cell', { name: 'C:/平安证券/同花顺版/xiadan.exe' })).toBeTruthy()
-    expect(within(dialog).getByText('运行中')).toBeTruthy()
-    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-source')).toHaveLength(1)
-    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-detect')).toHaveLength(1)
-
-    fireEvent.click(within(dialog).getByRole('button', { name: '同步真实持仓' }))
-    await waitFor(() => {
-      expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.holdings-sync' })
-    })
-    expect((await within(dialog).findByRole('status')).textContent).toContain('已同步 2 条持仓')
-    expect(within(dialog).getByText('已同步真实持仓')).toBeTruthy()
-    expect(within(dialog).getByRole('cell', { name: '000001' })).toBeTruthy()
-
-    fireEvent.click(within(dialog).getByRole('button', { name: '返回持仓明细' }))
-    await within(dialog).findByText('持仓标的')
-    expect(within(dialog).getByRole('button', { name: '编辑 贵州茅台 600519' })).toBeTruthy()
-    expect(within(dialog).getByText('000001')).toBeTruthy()
-    await waitFor(() => {
-      expect(requestData.mock.calls
-        .filter(([request]) => request.operation === 'trading-core.holdings').length).toBeGreaterThan(holdingsReads)
-    })
-    expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
+    const read = await within(dialog).findByRole('button', { name: '我已打开持仓页，开始读取' })
+    await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
+    expect(within(dialog).getByRole('button', { name: '模拟操盘' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(read)
+    const confirm = await within(dialog).findByRole('button', { name: '确认替换 1 条持仓' })
+    expect(saved).toBe(false)
+    expect(within(dialog).getByText('持仓预览 · 尚未保存')).toBeTruthy()
+    fireEvent.click(confirm)
+    expect(await within(dialog).findByText('已同步持仓')).toBeTruthy()
+    expect(saved).toBe(true)
+    expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.holdings-sync', input: { action: 'commit', preview_token: 'preview-1' } })
   })
 
-  it('切换模拟操盘后明确按模拟账户同步并保留当前窗口选择', async () => {
-    let accountMode = 'real'
+  it('持仓预览可取消，空结果和过期提交不能显示成功', async () => {
+    let attempt = 0
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
-      if (request.operation === 'trading-core.holdings-source') {
-        return {
-          provider: 'mac_ths', label: '同花顺（macOS）', available: true, reason: null,
-          account_mode: accountMode, supported_account_modes: ['real', 'simulated'],
-        }
-      }
-      if (request.operation === 'trading-core.holdings-user-config') {
-        return {
-          backend_env: { HOLDINGS_PROVIDER: 'mac_ths', HOLDINGS_ACCOUNT_MODE: accountMode },
-          effective: { HOLDINGS_PROVIDER: 'mac_ths', HOLDINGS_ACCOUNT_MODE: accountMode },
-        }
-      }
-      if (request.operation === 'trading-core.holdings-user-config-update') {
-        accountMode = String((request.input?.entries as Record<string, unknown>).HOLDINGS_ACCOUNT_MODE)
-        return {
-          written: { HOLDINGS_ACCOUNT_MODE: accountMode },
-          effective: { HOLDINGS_PROVIDER: 'mac_ths', HOLDINGS_ACCOUNT_MODE: accountMode },
-          restart_required: false,
-        }
-      }
-      if (request.operation === 'trading-core.holdings-detect') {
-        return { clients: [], cached: false, age_seconds: 0 }
-      }
+      if (request.operation === 'trading-core.holdings-source') return { provider: 'mac_ths', available: true }
       if (request.operation === 'trading-core.holdings-sync') {
-        return {
-          provider: 'mac_ths', account_mode: accountMode, account_label: '模拟操盘', saved: 1,
-          items: [{ ticker: '000001', quantity: 300, cost_price: 11.2 }],
-        }
+        if (request.input?.action === 'commit') return { blocking_reason: 'preview_conflict', reason: '预览已过期，请重新读取。' }
+        attempt++
+        if (attempt === 1) return { blocking_reason: 'empty_result', reason: '没有读到持仓。' }
+        return { preview_token: 'p', items: [{ ticker: '000001', quantity: 1, cost_price: 2 }], previous_count: 1 }
       }
       return completeResponse(request.operation)
     })
@@ -1205,43 +1150,57 @@ describe('研究工作台', () => {
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+    const read = await within(dialog).findByRole('button', { name: '我已打开持仓页，开始读取' })
+    await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
+    fireEvent.click(read)
+    expect(await within(dialog).findByText('没有读到持仓。')).toBeTruthy()
+    expect(within(dialog).queryByText(/确认替换/)).toBeNull()
+    fireEvent.click(read)
+    fireEvent.click(await within(dialog).findByRole('button', { name: '取消预览' }))
+    expect(requestData.mock.calls.some(([r]) => r.input?.action === 'commit')).toBe(false)
+    fireEvent.click(within(dialog).getByRole('button', { name: '我已打开持仓页，开始读取' }))
+    fireEvent.click(await within(dialog).findByRole('button', { name: '确认替换 1 条持仓' }))
+    expect(await within(dialog).findByText('预览已过期，请重新读取。')).toBeTruthy()
+    expect(within(dialog).queryByText('已同步持仓')).toBeNull()
+  })
 
-    const accountGroup = await within(dialog).findByRole('group', { name: '操盘账户' })
-    const simulation = within(accountGroup).getByRole('button', { name: '模拟操盘' })
+  it('账户选择和数据源变更使用已有配置并刷新状态', async () => {
+    let provider = 'mac_ths'
+    let mode = 'real'
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings-source') return { provider, available: true, account_mode: mode }
+      if (request.operation === 'trading-core.holdings-user-config') return { effective: { HOLDINGS_PROVIDER: provider, HOLDINGS_ACCOUNT_MODE: mode } }
+      if (request.operation === 'trading-core.holdings-user-config-update') {
+        const entries = request.input?.entries as Record<string, string>
+        provider = entries.HOLDINGS_PROVIDER ?? provider
+        mode = entries.HOLDINGS_ACCOUNT_MODE ?? mode
+        return {}
+      }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+    const simulation = await within(dialog).findByRole('button', { name: '模拟操盘' })
+    await waitFor(() => { expect(simulation.hasAttribute('disabled')).toBe(false) })
     fireEvent.click(simulation)
-
-    expect(await within(dialog).findByText('已切换为模拟操盘，当前窗口已生效。')).toBeTruthy()
-    expect(simulation.getAttribute('aria-pressed')).toBe('true')
-    expect(requestData).toHaveBeenCalledWith({
-      operation: 'trading-core.holdings-user-config-update',
-      input: { entries: { HOLDINGS_ACCOUNT_MODE: 'simulated' } },
-    })
-    expect(within(dialog).getByText(/读取模拟账户持仓并整体替换/)).toBeTruthy()
-    fireEvent.click(within(dialog).getByRole('button', { name: '同步模拟持仓' }))
-    expect(await within(dialog).findByText('已同步模拟持仓')).toBeTruthy()
+    await waitFor(() => { expect(simulation.getAttribute('aria-pressed')).toBe('true') })
+    expect(within(dialog).getByText('交易 → 模拟 → 股票 → 持仓')).toBeTruthy()
+    fireEvent.change(within(dialog).getByRole('combobox', { name: '持仓数据源' }), { target: { value: 'manual' } })
+    await waitFor(() => { expect(provider).toBe('manual') })
+    expect(within(dialog).getByRole('button', { name: '我已打开持仓页，开始读取' }).hasAttribute('disabled')).toBe(true)
   })
 
-  it('在持仓弹窗用可读名称切换数据源并立即刷新状态', async () => {
-    let provider = 'easytrader'
+  it('检测超时后恢复重试入口，迟到结果不覆盖重试成功状态', async () => {
+    let resolveLate: (value: unknown) => void = () => {}
+    let attempts = 0
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
       if (request.operation === 'trading-core.holdings-source') {
-        return provider === 'manual'
-          ? { provider, label: '手动输入', available: true, reason: null }
-          : { provider, label: '同花顺（Windows）', available: true, reason: null }
-      }
-      if (request.operation === 'trading-core.holdings-user-config') {
-        return { backend_env: { HOLDINGS_PROVIDER: provider }, effective: { HOLDINGS_PROVIDER: provider } }
-      }
-      if (request.operation === 'trading-core.holdings-user-config-update') {
-        provider = String((request.input?.entries as Record<string, unknown>).HOLDINGS_PROVIDER)
-        return {
-          written: { HOLDINGS_PROVIDER: provider },
-          effective: { HOLDINGS_PROVIDER: provider },
-          restart_required: false,
-        }
-      }
-      if (request.operation === 'trading-core.holdings-detect') {
-        return { clients: [], cached: false, age_seconds: 0 }
+        attempts += 1
+        if (attempts === 1) return new Promise(resolve => { resolveLate = resolve })
+        return { provider: 'mac_ths', available: false, blocking_reason: 'accessibility_required' }
       }
       return completeResponse(request.operation)
     })
@@ -1250,81 +1209,75 @@ describe('研究工作台', () => {
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-
-    const select = await within(dialog).findByRole<HTMLSelectElement>('combobox', { name: '持仓数据源' })
-    expect(within(select).getByRole('option', { name: '同花顺（Windows）' })).toBeTruthy()
-    expect(within(select).queryByText('easytrader')).toBeNull()
-    fireEvent.change(select, { target: { value: 'manual' } })
-
-    expect(await within(dialog).findByText('已切换为手动输入，当前窗口已生效。')).toBeTruthy()
-    expect(select.value).toBe('manual')
-    expect(requestData).toHaveBeenCalledWith({
-      operation: 'trading-core.holdings-user-config-update',
-      input: { entries: { HOLDINGS_PROVIDER: 'manual' } },
-    })
-    expect(within(dialog).queryByText('本机券商客户端')).toBeNull()
-    expect(within(dialog).getByText('手动模式不读取券商持仓')).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: '同步真实持仓' }).hasAttribute('disabled')).toBe(true)
-  })
-
-  it('数据源不可用时说明原因并禁止同步', async () => {
-    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
-      if (request.operation === 'trading-core.holdings-source') {
-        return {
-          provider: 'easytrader', label: '平安证券（同花顺版）', available: false,
-          reason: '券商客户端未运行：请先启动并登录 平安证券（同花顺版）。',
-        }
-      }
-      if (request.operation === 'trading-core.holdings-detect') {
-        return { clients: [], cached: false, age_seconds: 0 }
-      }
-      return completeResponse(request.operation)
-    })
-    const view = renderWorkbench(requestData)
-    await view.findByText('白酒板块经营数据改善')
-    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
-    const dialog = view.getByRole('dialog', { name: '持仓明细' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-
-    const warning = await within(dialog).findByRole('status')
-    expect(warning.textContent).toContain('券商客户端未运行')
-    expect(within(dialog).getByText('不可用')).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: '同步真实持仓' }).hasAttribute('disabled')).toBe(true)
-    expect(await within(dialog).findByText(/未在本机发现券商客户端/)).toBeTruthy()
-    expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings-sync')).toBe(false)
-
+    expect(await within(dialog).findByText(/检测耗时较长/, {}, { timeout: 5000 })).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: '返回持仓明细' }).hasAttribute('disabled')).toBe(false)
+    expect(await within(dialog).findByText('检测暂未完成，请重新检测，或先手动录入持仓。', {}, { timeout: 11000 })).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: '重新检测' }))
-    await waitFor(() => {
-      expect(requestData.mock.calls
-        .filter(([request]) => request.operation === 'trading-core.holdings-detect').length).toBeGreaterThan(1)
-    })
-  })
+    expect(await within(dialog).findByText('允许读取同花顺持仓')).toBeTruthy()
+    resolveLate({ available: true })
+    await waitFor(() => { expect(within(dialog).getByText('允许读取同花顺持仓')).toBeTruthy() })
+  }, 20000)
 
-  it('未发现客户端时展示后端下发的平台引导，而不是写死的 Windows 文案', async () => {
-    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
-      if (request.operation === 'trading-core.holdings-source') {
-        return {
-          provider: 'mac_ths', label: '同花顺 Mac 版（同花顺）', available: false,
-          reason: '同花顺 Mac 版未运行：请先启动并登录 同花顺 的券商交易账号。',
-        }
-      }
-      if (request.operation === 'trading-core.holdings-detect') {
-        return {
-          clients: [], cached: false, age_seconds: 0,
-          hint: '未发现同花顺 Mac 版。请先安装并登录同花顺，再在「系统设置 → 隐私与安全性 → 辅助功能」中授权本应用。',
-        }
-      }
-      return completeResponse(request.operation)
-    })
+  it('未授权展示操作示例且不尝试读取，Web 不提供系统控制按钮', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
+      ? { provider: 'mac_ths', platform: 'darwin', available: false, blocking_reason: 'accessibility_required', reason: '需要辅助功能权限。' }
+      : completeResponse(request.operation))
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+    expect(await within(dialog).findByText('允许读取同花顺持仓')).toBeTruthy()
+    expect(within(dialog).queryByRole('button', { name: '打开辅助功能设置' })).toBeNull()
+    expect(within(dialog).queryByText('补充自动化授权')).toBeNull()
+    expect(within(dialog).getByRole('button', { name: '我已打开持仓页，开始读取' }).hasAttribute('disabled')).toBe(true)
+    expect(requestData.mock.calls.some(([r]) => r.operation === 'trading-core.holdings-sync')).toBe(false)
+  })
 
-    expect(await within(dialog).findByText(/辅助功能/)).toBeTruthy()
-    expect(within(dialog).queryByText(/xiadan\.exe/)).toBeNull()
-    expect(within(dialog).queryByText(/EASYTRADER_CLIENT_PATH/)).toBeNull()
+  it('Electron 后台失败后只展示本次切换入口，取消不保存', async () => {
+    const native = vi.fn().mockResolvedValue({ canceled: true })
+    Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+    try {
+      const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+        if (request.operation === 'trading-core.holdings-source') return { provider: 'mac_ths', available: true }
+        if (request.operation === 'trading-core.holdings-sync') return { blocking_reason: 'navigation_required', reason: '请进入持仓页。' }
+        return completeResponse(request.operation)
+      })
+      const view = renderWorkbench(requestData)
+      await view.findByText('白酒板块经营数据改善')
+      fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+      const dialog = view.getByRole('dialog', { name: '持仓明细' })
+      fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+      const read = await within(dialog).findByRole('button', { name: '读取持仓预览' })
+      await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
+      fireEvent.click(read)
+      const next = await within(dialog).findByRole('button', { name: '查看本次切换说明' })
+      expect(native).not.toHaveBeenCalled()
+      fireEvent.click(next)
+      await waitFor(() => { expect(native).toHaveBeenCalledWith({ action: 'read', account_mode: 'simulated' }) })
+      expect(within(dialog).queryByText(/确认替换/)).toBeNull()
+      expect(requestData.mock.calls.some(([r]) => r.input?.action === 'commit')).toBe(false)
+    } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
+  })
+
+  it('未安装提供官方下载、重新检测和手动退路', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
+      ? { provider: 'mac_ths', platform: 'darwin', available: false, blocking_reason: 'client_missing' }
+      : completeResponse(request.operation))
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+    fireEvent.click(await within(dialog).findByRole('button', { name: '前往官网下载 Mac 版' }))
+    expect(open).toHaveBeenCalledWith('https://download.10jqka.com.cn/free/mac/', '_blank', 'noopener,noreferrer')
+    const before = requestData.mock.calls.length
+    fireEvent(window, new Event('focus'))
+    await waitFor(() => { expect(requestData.mock.calls.length).toBeGreaterThan(before) })
+    fireEvent.click(within(dialog).getByRole('button', { name: '暂不安装，改用手动录入' }))
+    expect(await within(dialog).findByRole('button', { name: '导入持仓' })).toBeTruthy()
+    open.mockRestore()
   })
 
   it('批量导入统一解析选择文件和拖放文件，并阻止错误数据提交', async () => {

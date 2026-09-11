@@ -56,6 +56,22 @@ describe('Electron investment sidecar packaging', () => {
     expect(sizes).toEqual([16, 24, 32, 48, 64, 128, 256])
   })
 
+  it('preserves downloads outside disposable roots and separates targets', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'packaging-cache-'))
+    try {
+      const cache = join(fixture, 'downloads')
+      const first = createPackagingPlan(join(fixture, 'first'), 'darwin', 'arm64', cache)
+      const second = createPackagingPlan(join(fixture, 'second'), 'darwin', 'arm64', cache)
+      const intel = createPackagingPlan(join(fixture, 'third'), 'darwin', 'x64', cache)
+      await mkdir(first.sidecarCacheDir, { recursive: true })
+      await writeFile(join(first.sidecarCacheDir, 'archive'), 'cached download')
+      await mkdir(first.rootDir)
+      await removePackagingRoot(first.rootDir)
+      expect(await readFile(join(second.sidecarCacheDir, 'archive'), 'utf8')).toBe('cached download')
+      expect(intel.sidecarCacheDir).not.toBe(first.sidecarCacheDir)
+    } finally { await rm(fixture, { recursive: true, force: true }) }
+  })
+
   it('uses the Windows command shell only for batch entrypoints', () => {
     expect(commandRequiresShell('pnpm.cmd', 'win32')).toBe(true)
     expect(commandRequiresShell('electron-forge.bat', 'win32')).toBe(true)
