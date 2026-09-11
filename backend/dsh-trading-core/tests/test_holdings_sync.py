@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -49,13 +50,16 @@ def _endpoint(app, path):
 
 class ProviderSnapshotTests(unittest.TestCase):
     def test_manual_source_is_available_without_a_reason(self):
-        with patch.object(holdings_source.settings, "holdings_provider", "manual"):
+        with patch.object(holdings_source.settings, "holdings_provider", "manual"), \
+                patch.object(holdings_source.settings, "holdings_account_mode", "real", create=True):
             snapshot = holdings_source.provider_snapshot()
 
         self.assertEqual(snapshot["provider"], "manual")
         self.assertEqual(snapshot["label"], "手动输入")
         self.assertTrue(snapshot["available"])
         self.assertIsNone(snapshot["reason"])
+        self.assertEqual(snapshot["account_mode"], "real")
+        self.assertEqual(snapshot["supported_account_modes"], ["real"])
 
     def test_unknown_provider_reports_a_reason_instead_of_raising(self):
         with patch.object(holdings_source.settings, "holdings_provider", "nope"):
@@ -69,6 +73,7 @@ class ProviderSnapshotTests(unittest.TestCase):
         provider = FakeProvider(available=False, error=message)
 
         with patch.object(holdings_source.settings, "holdings_provider", "easytrader"), \
+                patch.object(holdings_source.sys, "platform", "win32"), \
                 patch.object(holdings_source, "get_provider", return_value=provider):
             snapshot = holdings_source.provider_snapshot()
 
@@ -91,17 +96,20 @@ class SyncHoldingsTests(unittest.TestCase):
             provider = FakeProvider(items=self._items())
 
             with patch.object(holdings_source, "get_provider", return_value=provider), \
-                    patch.object(holdings_source, "JsonStore", return_value=store):
+                    patch.object(holdings_source, "JsonStore", return_value=store), \
+                    patch.object(holdings_source.settings, "holdings_account_mode", "simulated", create=True):
                 result = holdings_source.sync_holdings()
 
             self.assertEqual(result["saved"], 2)
             self.assertEqual(result["provider"], "easytrader")
+            self.assertEqual(result["account_mode"], "simulated")
+            self.assertEqual(result["account_label"], "模拟操盘")
             self.assertEqual([item["ticker"] for item in result["items"]], ["600519", "000858"])
             self.assertRegex(result["snapshot_id"], r"^[0-9a-f]{32}$")
 
             saved = store.get("holdings", "default")
             self.assertEqual(len(saved), 2)
-            self.assertEqual(store.get("holdings", "snapshots")[0]["source"], "api")
+            self.assertEqual(store.get("holdings", "snapshots")[0]["source"], "broker_simulated")
 
     def test_empty_result_is_refused_and_leaves_the_store_untouched(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -161,6 +169,11 @@ class DetectClientsTests(unittest.TestCase):
     def setUp(self):
         holdings_source.reset_cache()
         self.addCleanup(holdings_source.reset_cache)
+        # 替换被测模块的 sys 引用，避免修改进程级 sys.platform 后让
+        # asyncio 在 macOS 测试进程中误加载 windows_events。
+        platform = patch.object(holdings_source, "sys", SimpleNamespace(platform="win32"))
+        platform.start()
+        self.addCleanup(platform.stop)
 
     def _client(self):
         return DiscoveredClient(

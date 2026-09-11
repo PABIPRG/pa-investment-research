@@ -22,7 +22,7 @@ AppleScript 常量来源：
 前置条件（缺一不可，UI 会逐条提示）：
   * macOS
   * 同花顺 Mac 版已安装并登录券商交易账号
-  * 系统设置 → 隐私与安全性 → 辅助功能：勾选运行本应用的进程
+  * 系统设置 → 隐私与安全性：授予运行本应用的进程自动化与辅助功能权限
   * 客户端窗口停在「交易」模块
 
 局限：
@@ -42,7 +42,7 @@ from typing import Callable
 from ..config import settings
 from ..schemas import HoldingItem
 from ._ths_fields import locate_columns, normalize_ticker
-from .base import HoldingsProvider, ProviderUnavailable
+from .base import HoldingsProvider, ProviderUnavailable, current_account_mode
 
 log = logging.getLogger(__name__)
 
@@ -52,13 +52,30 @@ DEFAULT_APP_NAME = "同花顺"
 # AppleScript 运行器签名：(脚本正文) -> (returncode, stdout, stderr)
 ScriptRunner = Callable[[str], "tuple[int, str, str]"]
 
-# 权限类失败的特征串：TCC 拒绝发送 Apple 事件(-1743) / 未获辅助功能授权(-25211)
-_PERMISSION_MARKERS = ("-1743", "-25211", "Not authorized", "not allowed assistive access", "不允许")
+# TCC 会分别拒绝 Apple Events(-1743) 和辅助功能(-25211)，两者的授权入口不同。
+_AUTOMATION_PERMISSION_MARKERS = (
+    "-1743",
+    "Not authorized to send Apple events",
+    "未获得授权将Apple事件发送给System Events",
+)
+_ACCESSIBILITY_PERMISSION_MARKERS = (
+    "-25211",
+    "not allowed assistive access",
+    "不允许辅助访问",
+)
 
-_PERMISSION_HINT = (
-    "macOS 拒绝脚本控制同花顺。请到「系统设置 → 隐私与安全性 → 辅助功能」中，"
-    "把运行「投研智能体」的应用（或终端）勾选上；若列表里没有，先点「+」手动添加。"
-    "授权后需要重启应用再试。"
+_AUTOMATION_PERMISSION_HINT = (
+    "需要 macOS 自动化授权。请到「系统设置 → 隐私与安全性 → 自动化」中，"
+    "允许运行投研智能体的应用（Codex 或终端）控制“System Events”。"
+    "同花顺可能已打开或切换了部分页面，但未授权时无法完整读取持仓；"
+    "授权后请重启投研智能体再试。"
+)
+
+_ACCESSIBILITY_PERMISSION_HINT = (
+    "需要 macOS 辅助功能授权。请到「系统设置 → 隐私与安全性 → 辅助功能」中，"
+    "把运行投研智能体的应用（Codex 或终端）勾选上；若列表里没有，先点“+”手动添加。"
+    "同花顺可能已打开或切换了部分页面，但未授权时无法完整读取持仓；"
+    "授权后请重启投研智能体再试。"
 )
 
 # 表格定位：在若干 scroll area 中寻找表头含「代码」的持仓表
@@ -75,6 +92,8 @@ end joinList
 
 on run
 	set appName to "__APP__"
+	set accountTab to "__ACCOUNT_TAB__"
+	set navigationPath to "__NAVIGATION_PATH__"
 	tell application "System Events"
 		set appRunning to (exists (processes where name is appName))
 	end tell
@@ -90,12 +109,12 @@ on run
 			try
 				click button 1 of window 1
 				click button 6 of window 1
-				click button "A股" of window 1
+				click button accountTab of window 1
 				click button "股票" of window 1
 				click button "持仓" of window 1
 				delay 0.6
 			on error errMsg
-				return "ERR" & tab & "无法切换到「交易 → A股 → 股票 → 持仓」：" & errMsg
+				return "ERR" & tab & "无法切换到「" & navigationPath & "」：" & errMsg
 			end try
 
 			set targetTable to missing value
@@ -135,13 +154,30 @@ class MacThsScriptError(Exception):
     """脚本已执行但同花顺侧返回了可读的失败原因（原文透出给用户）。"""
 
 
-def apple_script(app_name: str = DEFAULT_APP_NAME) -> str:
+def permission_hint(message: str) -> str | None:
+    """把 AppleScript/TCC 错误映射到对应的 macOS 授权入口。"""
+    if any(marker in message for marker in _AUTOMATION_PERMISSION_MARKERS):
+        return _AUTOMATION_PERMISSION_HINT
+    if any(marker in message for marker in _ACCESSIBILITY_PERMISSION_MARKERS):
+        return _ACCESSIBILITY_PERMISSION_HINT
+    return None
+
+
+def apple_script(app_name: str = DEFAULT_APP_NAME, account_mode: str = "real") -> str:
     """生成读取同花顺 Mac 版持仓的 AppleScript 正文。
 
     返回的是纯 AppleScript 源码，交给 `osascript -e` 直接执行；
     不要在外面再套 `osascript -e '...'`（上游 Go 版就踩了这个坑）。
     """
-    return _APPLESCRIPT_TEMPLATE.replace("__APP__", app_name).strip()
+    account_tab = "模拟" if account_mode == "simulated" else "A股"
+    navigation_path = f"交易 → {account_tab} → 股票 → 持仓"
+    return (
+        _APPLESCRIPT_TEMPLATE
+        .replace("__APP__", app_name)
+        .replace("__ACCOUNT_TAB__", account_tab)
+        .replace("__NAVIGATION_PATH__", navigation_path)
+        .strip()
+    )
 
 
 def default_runner(script: str) -> tuple[int, str, str]:
@@ -284,11 +320,13 @@ class MacThsProvider(HoldingsProvider):
         platform: str | None = None,
         runner: ScriptRunner | None = None,
         app_name: str | None = None,
+        account_mode: str | None = None,
     ) -> None:
         # platform 可注入：让单元测试在非 macOS 上也能覆盖全部分支
         self._platform = platform or sys.platform
         self._runner = runner or default_runner
         self._app_name = app_name or settings.mac_ths_app_name or DEFAULT_APP_NAME
+        self._account_mode = account_mode or current_account_mode()
 
     # ---- HoldingsProvider 接口 ----
 
@@ -318,7 +356,7 @@ class MacThsProvider(HoldingsProvider):
                 f"同花顺 Mac 版未运行：请先启动并登录 {self._app_name} 的券商交易账号，窗口保持打开。"
             )
 
-        script = apple_script(self._app_name)
+        script = apple_script(self._app_name, self._account_mode)
         try:
             code, stdout, stderr = self._runner(script)
         except subprocess.TimeoutExpired as exc:
@@ -331,15 +369,17 @@ class MacThsProvider(HoldingsProvider):
 
         if code != 0:
             message = (stderr or stdout).strip()
-            if any(marker in message for marker in _PERMISSION_MARKERS):
-                raise ProviderUnavailable(_PERMISSION_HINT)
+            hint = permission_hint(message)
+            if hint is not None:
+                raise ProviderUnavailable(hint)
             raise ProviderUnavailable(f"AppleScript 执行失败：{message or '未知错误'}。请确认同花顺已登录券商账号。")
 
         try:
             header, rows = parse_output(stdout)
             items = rows_to_items(header, rows)
         except MacThsScriptError as exc:
-            raise ProviderUnavailable(str(exc)) from exc
+            message = str(exc)
+            raise ProviderUnavailable(permission_hint(message) or message) from exc
 
         log.info("mac_ths(%s) 获取持仓 %d 条", self._app_name, len(items))
         return items

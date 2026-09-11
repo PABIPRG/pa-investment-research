@@ -25,7 +25,7 @@ import time
 
 from .config import settings
 from .holdings_providers import get_provider
-from .holdings_providers.base import ProviderUnavailable
+from .holdings_providers.base import ProviderUnavailable, current_account_mode
 from .holdings_providers.broker_profiles import discover_clients
 from .portfolio_performance import record_holdings_snapshot
 from .store import JsonStore
@@ -40,6 +40,15 @@ _PROVIDER_LABELS = {
     "mac_ths": "同花顺（macOS）",
     "qmt": "QMT 迅投",
     "joinquant": "聚宽（不提供真实持仓）",
+}
+
+_ACCOUNT_LABELS = {"real": "真实操盘", "simulated": "模拟操盘"}
+_ACCOUNT_MODE_SUPPORT = {
+    "manual": ["real"],
+    "joinquant": ["real"],
+    "easytrader": ["real", "simulated"],
+    "mac_ths": ["real", "simulated"],
+    "qmt": ["real", "simulated"],
 }
 
 
@@ -86,7 +95,7 @@ def platform_gate(provider_name: str) -> str | None:
             return (
                 "easytrader 依赖 pywinauto 操控 Win32 控件，仅支持 Windows。"
                 "macOS 请改用 HOLDINGS_PROVIDER=mac_ths"
-                "（同花顺 Mac 版 + AppleScript，需在系统设置中授予辅助功能权限）。"
+                "（同花顺 Mac 版 + AppleScript，需在系统设置中授予自动化与辅助功能权限）。"
             )
         return None
     return (
@@ -106,7 +115,14 @@ def provider_snapshot() -> dict:
         "broker": getattr(settings, "easytrader_broker", "") or "",
         "client_type": getattr(settings, "easytrader_client_type", "") or "",
         "client_path": getattr(settings, "easytrader_client_path", "") or "",
+        "account_mode": str(getattr(settings, "holdings_account_mode", "real") or "real"),
+        "supported_account_modes": _ACCOUNT_MODE_SUPPORT.get(provider_name, ["real"]),
     }
+    try:
+        snapshot["account_mode"] = current_account_mode()
+    except ProviderUnavailable as exc:
+        snapshot["reason"] = str(exc)
+        return snapshot
     gate = platform_gate(settings.holdings_provider)
     if gate is not None:
         snapshot["reason"] = gate
@@ -166,7 +182,7 @@ _WINDOWS_DETECT_HINT = (
 _MAC_DETECT_HINT = (
     "未发现同花顺 Mac 版。macOS 上的持仓自动同步走 AppleScript 读同花顺 Mac 版"
     "（内置 80+ 券商账号登录），请先安装并登录同花顺，再在"
-    "「系统设置 → 隐私与安全性 → 辅助功能」中授权本应用。"
+    "「系统设置 → 隐私与安全性」中授予本应用自动化与辅助功能权限。"
 )
 
 
@@ -193,7 +209,7 @@ def _mac_clients() -> list[dict]:
             "main_dir": "/Applications",
             "running": app_running(app_name),
             "matched": True,
-            "note": "需在系统设置中授予辅助功能权限" if osascript_available() else "未找到 osascript",
+            "note": "需在系统设置中授予自动化与辅助功能权限" if osascript_available() else "未找到 osascript",
         }
     ]
 
@@ -241,7 +257,7 @@ async def detect_clients(force: bool = False) -> dict:
 
 
 def sync_holdings() -> dict:
-    """从数据源拉取真实持仓并整体替换本地 store。
+    """从所选真实/模拟账户拉取持仓并整体替换本地 store。
 
     Raises:
         ProviderUnavailable: 数据源不可用（未配置/未安装/客户端未运行）
@@ -253,6 +269,8 @@ def sync_holdings() -> dict:
 
     provider = get_provider()
     label = _provider_label(provider)
+    account_mode = current_account_mode()
+    account_label = _ACCOUNT_LABELS[account_mode]
     items = provider.get_holdings()
     if not items:
         raise EmptyHoldingsError(
@@ -262,10 +280,12 @@ def sync_holdings() -> dict:
 
     store = JsonStore()
     payload = [item.model_dump() for item in items]
-    snapshot = record_holdings_snapshot(store, payload, "api")
+    snapshot = record_holdings_snapshot(store, payload, f"broker_{account_mode}")
     result = {
         "provider": getattr(provider, "name", settings.holdings_provider),
         "label": label,
+        "account_mode": account_mode,
+        "account_label": account_label,
         "saved": len(items),
         "items": [
             {"ticker": item.ticker, "quantity": item.quantity, "cost_price": item.cost_price}

@@ -13,7 +13,9 @@ from typing import Any, Callable
 from .store import JsonStore
 
 
-SNAPSHOT_SOURCES = frozenset({"manual", "bulk_import", "api", "legacy_seed"})
+SNAPSHOT_SOURCES = frozenset({
+    "manual", "bulk_import", "api", "broker_real", "broker_simulated", "legacy_seed",
+})
 PRICE_WARMUP_DAYS = 31
 
 

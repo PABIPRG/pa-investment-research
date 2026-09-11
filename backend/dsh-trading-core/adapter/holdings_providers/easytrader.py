@@ -23,6 +23,7 @@
   # 方式 B：按内核选（不区分具体券商）
   EASYTRADER_CLIENT_TYPE=thstrader   # thstrader(同花顺) | tdxtrader(通达信)
   EASYTRADER_CLIENT_PATH=C:\\同花顺\\xiadan.exe
+  EASYTRADER_SIM_CLIENT_PATH=          # 模拟窗口使用独立程序时可选
 
 用法：
   HOLDINGS_PROVIDER=easytrader
@@ -39,7 +40,7 @@ from ..config import settings
 from ..schemas import HoldingItem
 from ._ths_fields import extract as _extract
 from ._ths_fields import normalize_ticker as _normalize_ticker
-from .base import HoldingsProvider, ProviderUnavailable
+from .base import HoldingsProvider, ProviderUnavailable, current_account_mode
 from .broker_profiles import GENERIC_THS, BrokerProfile, resolve_profile
 
 log = logging.getLogger(__name__)
@@ -50,11 +51,12 @@ class EasyTraderProvider(HoldingsProvider):
 
     name = "easytrader"
 
-    def __init__(self) -> None:
+    def __init__(self, account_mode: str | None = None) -> None:
         self._imported = False
         self._trader = None
         self.profile: BrokerProfile | None = None
         self._profile_error: str | None = None
+        self._account_mode = account_mode or current_account_mode()
         try:
             import easytrader  # noqa: F401
 
@@ -109,7 +111,7 @@ class EasyTraderProvider(HoldingsProvider):
             return False
         if self.profile is None:
             return False
-        if not settings.easytrader_client_path:
+        if not self._client_path():
             return False
         # 客户端进程检测（best-effort，不阻塞）
         if not self._client_running():
@@ -139,7 +141,8 @@ class EasyTraderProvider(HoldingsProvider):
             )
         if self.profile is None:
             raise ProviderUnavailable(self._profile_error or "券商档案解析失败。")
-        if not settings.easytrader_client_path:
+        client_path = self._client_path()
+        if not client_path:
             raise ProviderUnavailable(
                 "EASYTRADER_CLIENT_PATH 未配置：需指定券商客户端的下单程序路径。"
                 f"可运行 holdings_cli.py detect 自动发现本机已装的客户端（当前档案: {label}）。"
@@ -148,13 +151,15 @@ class EasyTraderProvider(HoldingsProvider):
         if not self._client_running():
             raise ProviderUnavailable(
                 f"券商客户端未运行：请先启动并登录 {label} "
-                f"（{settings.easytrader_client_path}）。窗口需保持打开。"
+                f"（{client_path}）。窗口需保持打开。"
             )
 
         # 连接客户端并查询持仓
         try:
             trader = self._connect()
             raw_positions: list[dict] = trader.position  # type: ignore[attr-defined]
+        except ProviderUnavailable:
+            raise
         except Exception as exc:
             log.error("easytrader 连接/查询失败: %s", exc, exc_info=True)
             raise ProviderUnavailable(
@@ -194,13 +199,17 @@ class EasyTraderProvider(HoldingsProvider):
 
         assert self.profile is not None
         trader = easytrader.use(self.profile.trader_type)
-        trader.connect(settings.easytrader_client_path)
-        self._fix_main_window(trader)
+        trader.connect(self._client_path())
+        if not self._fix_main_window(trader, self._account_mode):
+            raise ProviderUnavailable(
+                "未找到同花顺模拟炒股交易窗口。请在 Windows 同花顺中首次进入"
+                "「交易 → 模拟 → 持仓」，保持交易窗口打开后重试；后续同步会在后台复用该窗口。"
+            )
         self._trader = trader
         return trader
 
     @staticmethod
-    def _fix_main_window(trader) -> None:
+    def _fix_main_window(trader, account_mode: str = "real") -> bool:
         """修正 easytrader 的主窗口选择。
 
         同花顺内核客户端进程里带有隐藏的 IE 内嵌窗口，easytrader 默认取
@@ -209,14 +218,35 @@ class EasyTraderProvider(HoldingsProvider):
         重新锁定可见主窗口；找不到时保持默认行为。
         """
         try:
-            for w in trader._app.windows(enabled_only=True, visible_only=True):
-                if "网上股票交易系统" in (w.window_text() or ""):
+            windows = trader._app.windows(enabled_only=True, visible_only=True)
+            for w in windows:
+                title = w.window_text() or ""
+                is_simulated = "模拟炒股" in title
+                matches = is_simulated if account_mode == "simulated" else (
+                    "网上股票交易系统" in title and not is_simulated
+                )
+                if matches:
                     # easytrader 内部把 _main 当 WindowSpecification 用，
                     # 这里按句柄重新生成规格而非直接赋 wrapper
                     trader._main = trader._app.window(handle=w.handle)
-                    return
+                    return True
         except Exception:
-            pass
+            return account_mode != "simulated"
+        if account_mode == "simulated":
+            return False
+        try:
+            return "模拟炒股" not in (trader._main.window_text() or "")
+        except Exception:
+            return True
+
+    def _client_path(self) -> str:
+        """模拟账户可配置独立交易程序；缺省复用同花顺的同一 xiadan.exe。"""
+        if self._account_mode == "simulated":
+            return (
+                getattr(settings, "easytrader_sim_client_path", "")
+                or settings.easytrader_client_path
+            )
+        return settings.easytrader_client_path
 
     def _client_running(self) -> bool:
         """Best-effort 检测券商客户端进程是否在运行（按档案进程名）。"""

@@ -484,7 +484,7 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
 
     @app.post("/holdings/sync", response_model=dict)
     async def holdings_sync_post():
-        """从数据源拉取真实持仓并整体替换本地持仓（会写入持仓快照）。"""
+        """从所选真实/模拟账户拉取持仓并整体替换本地持仓（会写入持仓快照）。"""
         try:
             return await run_in_threadpool(sync_holdings)
         except ProviderUnavailable as exc:
@@ -516,6 +516,7 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             "backend_env": entries,
             "effective": {
                 "HOLDINGS_PROVIDER": settings.holdings_provider,
+                "HOLDINGS_ACCOUNT_MODE": settings.holdings_account_mode,
             },
         }
 
@@ -536,11 +537,17 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             provider = written["HOLDINGS_PROVIDER"].strip().lower()
             settings.holdings_provider = provider
             os.environ["HOLDINGS_PROVIDER"] = provider
-        restart_required = any(key != "HOLDINGS_PROVIDER" for key in written)
+        if "HOLDINGS_ACCOUNT_MODE" in written:
+            account_mode = written["HOLDINGS_ACCOUNT_MODE"].strip().lower()
+            settings.holdings_account_mode = account_mode
+            os.environ["HOLDINGS_ACCOUNT_MODE"] = account_mode
+        immediate_keys = {"HOLDINGS_PROVIDER", "HOLDINGS_ACCOUNT_MODE"}
+        restart_required = any(key not in immediate_keys for key in written)
         return {
             "written": written,
             "effective": {
                 "HOLDINGS_PROVIDER": settings.holdings_provider,
+                "HOLDINGS_ACCOUNT_MODE": settings.holdings_account_mode,
             },
             "restart_required": restart_required,
             "note": "持仓数据源已在当前窗口生效。" if not restart_required else "其他配置将在重启投研后端后生效。",

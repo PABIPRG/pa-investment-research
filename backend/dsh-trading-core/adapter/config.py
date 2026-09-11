@@ -60,15 +60,18 @@ class Settings:
             self.user_config_dir = self.state_root / "user-config"
         # 持仓数据源（功能3b）
         self.holdings_provider = os.getenv("HOLDINGS_PROVIDER", "manual")
+        self.holdings_account_mode = os.getenv("HOLDINGS_ACCOUNT_MODE", "real").strip().lower()
         # easytrader CLI 接入（通达信/同花顺 GUI 自动化，零券商门槛）
         self.easytrader_broker = os.getenv("EASYTRADER_BROKER", "")  # 券商档案 id（broker_profiles.py），优先于 client_type
         self.easytrader_client_type = os.getenv("EASYTRADER_CLIENT_TYPE", "thstrader")  # thstrader | tdxtrader
         self.easytrader_client_path = os.getenv("EASYTRADER_CLIENT_PATH", "")
+        self.easytrader_sim_client_path = os.getenv("EASYTRADER_SIM_CLIENT_PATH", "")
         # macOS：AppleScript 读同花顺 Mac 版持仓（见 holdings_providers/mac_ths.py）
         self.mac_ths_app_name = os.getenv("MAC_THS_APP_NAME", "")      # 空=默认「同花顺」
         self.mac_ths_timeout = float(os.getenv("MAC_THS_TIMEOUT", "60"))
         # QMT SDK 接入（迅投 miniQMT/xtquant，需券商开通，10万门槛）
         self.qmt_account_id = os.getenv("QMT_ACCOUNT_ID", "")
+        self.qmt_sim_account_id = os.getenv("QMT_SIM_ACCOUNT_ID", "")
         self.qmt_session_id = int(os.getenv("QMT_SESSION_ID", "888888"))
         # 外部推送（功能4）
         self.push_enabled = os.getenv("BRIEF_PUSH_ENABLED", "false").lower() == "true"

@@ -58,6 +58,18 @@ class AppleScriptSourceTests(unittest.TestCase):
     def test_default_app_name_is_the_ths_mac_bundle(self):
         self.assertEqual(DEFAULT_APP_NAME, "同花顺")
 
+    def test_real_account_uses_the_a_share_tab(self):
+        script = apple_script("同花顺", "real")
+
+        self.assertIn('set accountTab to "A股"', script)
+        self.assertIn('click button accountTab of window 1', script)
+
+    def test_simulated_account_uses_the_simulation_tab(self):
+        script = apple_script("同花顺", "simulated")
+
+        self.assertIn('set accountTab to "模拟"', script)
+        self.assertIn('交易 → 模拟 → 股票 → 持仓', script)
+
 
 class ParseOutputTests(unittest.TestCase):
     def test_ok_output_yields_header_and_rows(self):
@@ -187,8 +199,13 @@ class ToFloatTests(unittest.TestCase):
 class MacThsProviderTests(unittest.TestCase):
     """provider 各分支；用注入的 platform/runner 在 Windows 上跑通。"""
 
-    def _provider(self, runner, platform="darwin", app_name="同花顺"):
-        return MacThsProvider(platform=platform, runner=runner, app_name=app_name)
+    def _provider(self, runner, platform="darwin", app_name="同花顺", account_mode="real"):
+        return MacThsProvider(
+            platform=platform,
+            runner=runner,
+            app_name=app_name,
+            account_mode=account_mode,
+        )
 
     def _on_mac(self):
         return patch.multiple(mac_ths, osascript_available=lambda: True, app_running=lambda name: True)
@@ -234,6 +251,18 @@ class MacThsProviderTests(unittest.TestCase):
         # 运行器收到的是脚本正文，不是 shell 命令
         self.assertEqual(script_seen, [apple_script("同花顺")])
 
+    def test_simulated_run_passes_the_simulation_script(self):
+        script_seen = []
+
+        provider = self._provider(
+            lambda script: (script_seen.append(script) or 0, _ok(HOLDINGS_HEADER), ""),
+            account_mode="simulated",
+        )
+        with self._on_mac():
+            provider.get_holdings()
+
+        self.assertEqual(script_seen, [apple_script("同花顺", "simulated")])
+
     def test_err_status_becomes_a_provider_unavailable(self):
         provider = self._provider(lambda script: (0, "ERR\t未在交易窗口找到持仓表格。", ""))
         with self._on_mac():
@@ -245,8 +274,10 @@ class MacThsProviderTests(unittest.TestCase):
     def test_permission_failure_maps_to_the_actionable_hint(self):
         """TCC 拒绝时 osascript 退出码非 0、stderr 带 -1743/-25211，
         必须换成中文可执行指引，而不是把英文原文丢给用户。"""
-        for marker in ("execution error: Not authorized to send Apple events. (-1743)",
-                       "System Events got an error: not allowed assistive access. (-25211)"):
+        for marker, settings_section in (
+            ("execution error: Not authorized to send Apple events. (-1743)", "自动化"),
+            ("System Events got an error: not allowed assistive access. (-25211)", "辅助功能"),
+        ):
             provider = self._provider(lambda script, m=marker: (1, "", m))
             with self._on_mac():
                 with self.assertRaises(ProviderUnavailable) as ctx:
@@ -254,9 +285,43 @@ class MacThsProviderTests(unittest.TestCase):
 
             message = str(ctx.exception)
             self.assertIn("隐私与安全性", message)
-            self.assertIn("辅助功能", message)
+            self.assertIn(settings_section, message)
             self.assertNotIn("-1743", message)
             self.assertNotIn("-25211", message)
+
+    def test_caught_automation_failure_maps_to_the_automation_permission_hint(self):
+        """脚本内捕获的 TCC 错误仍以退出码 0 返回，不能漏过权限分类。"""
+        provider = self._provider(lambda script: (
+            0,
+            "ERR\t无法切换到「交易 → A股 → 股票 → 持仓」："
+            "未获得授权将Apple事件发送给System Events。 (-1743)",
+            "",
+        ))
+        with self._on_mac():
+            with self.assertRaises(ProviderUnavailable) as ctx:
+                provider.get_holdings()
+
+        message = str(ctx.exception)
+        self.assertIn("自动化", message)
+        self.assertIn("System Events", message)
+        self.assertIn("可能已打开或切换了部分页面", message)
+        self.assertNotIn("无法切换到", message)
+        self.assertNotIn("-1743", message)
+
+    def test_caught_accessibility_failure_maps_to_the_accessibility_permission_hint(self):
+        provider = self._provider(lambda script: (
+            0,
+            "ERR\tSystem Events got an error: not allowed assistive access. (-25211)",
+            "",
+        ))
+        with self._on_mac():
+            with self.assertRaises(ProviderUnavailable) as ctx:
+                provider.get_holdings()
+
+        message = str(ctx.exception)
+        self.assertIn("辅助功能", message)
+        self.assertIn("可能已打开或切换了部分页面", message)
+        self.assertNotIn("-25211", message)
 
     def test_generic_failure_surfaces_the_stderr(self):
         provider = self._provider(lambda script: (1, "", "execution error: 同花顺 isn't running. (-600)"))
