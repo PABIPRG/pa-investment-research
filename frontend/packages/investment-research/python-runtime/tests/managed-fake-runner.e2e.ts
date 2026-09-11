@@ -168,6 +168,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_HOLDINGS_NATIVE_TOKEN: holdingsNativeToken,
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
+      DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'trading-core'),
     })
     expect(byModule.get('market_watch.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'market-visible',
@@ -175,9 +176,11 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DEEPSEEK_API_KEY: CANARY,
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
+      DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'market-watch'),
     })
     expect(byModule.get('industry_chain.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'industry-visible',
+      DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'industry-chain'),
     })
     expect(specs.flatMap(spec => spec.argv)).not.toContain(CANARY)
     expect(specs.flatMap(spec => spec.argv)).not.toContain(dataTransferToken)

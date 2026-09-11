@@ -77,6 +77,11 @@ export async function serveStatic(
     await serveIndex()
     return
   }
+  if (extname(target) === '.map') {
+    res.writeHead(404)
+    res.end()
+    return
+  }
   try {
     const body = await readFile(target)
     res.writeHead(200, { 'content-type': MIME[extname(target)] ?? 'application/octet-stream' })

@@ -17,6 +17,36 @@ export const DEFAULT_DSH_HOME_DISPLAY = `~/${DSH_HOME_DIR_NAME}`
 /** Environment variable that overrides the default DeepSeek Harness home. */
 export const DSH_HOME_ENV = 'DSH_HOME'
 
+/** Stable investment backend directory names beneath one Harness home. */
+export const DSH_INVESTMENT_BACKEND_IDS = ['trading-core', 'market-watch', 'industry-chain'] as const
+
+/** One Python backend's writable subtree in the single-instance layout. */
+export interface DshInvestmentBackendLayout {
+  readonly root: string
+  readonly dataDir: string
+  readonly stateDir: string
+  readonly userConfigDir: string
+  readonly cacheDir: string
+  readonly logsDir: string
+}
+
+/** Complete mounted data contract for one Harness instance. */
+export interface DshInstanceLayout {
+  readonly root: string
+  readonly settingsFile: string
+  readonly cordisPatchFile: string
+  readonly profilesDir: string
+  readonly sessionsDir: string
+  readonly attachmentsDir: string
+  readonly storagesDir: string
+  readonly investmentResearch: Readonly<{
+    root: string
+    backupSettingsFile: string
+    backupsDir: string
+    backends: Readonly<Record<typeof DSH_INVESTMENT_BACKEND_IDS[number], DshInvestmentBackendLayout>>
+  }>
+}
+
 /**
  * Give a native filesystem watcher one canonical spelling of a path, even
  * when its final components do not exist yet. The deepest existing ancestor
@@ -88,6 +118,52 @@ export function resolveDshHome(configured?: string, env: Record<string, string |
   const fromEnv = env[DSH_HOME_ENV]
   const selected = configured ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome())
   return resolve(expandHomePath(selected))
+}
+
+/**
+ * Resolve every durable and operational directory owned by one mounted DSH home.
+ * Cache and log directories are identified here so deployment code can mount one
+ * root while logical backup and migration code can exclude them deliberately.
+ * @param configured - explicit Harness-home override.
+ * @param env - environment mapping used to resolve `DSH_HOME`.
+ * @returns the complete single-instance path contract.
+ */
+export function resolveDshInstanceLayout(
+  configured?: string,
+  env: Record<string, string | undefined> = process.env,
+): DshInstanceLayout {
+  const root = resolveDshHome(configured, env)
+  const investmentRoot = join(root, 'investment-research')
+  const backend = (id: typeof DSH_INVESTMENT_BACKEND_IDS[number]): DshInvestmentBackendLayout => {
+    const backendRoot = join(investmentRoot, id)
+    return {
+      root: backendRoot,
+      dataDir: join(backendRoot, 'data'),
+      stateDir: join(backendRoot, 'state'),
+      userConfigDir: join(backendRoot, 'user-config'),
+      cacheDir: join(backendRoot, 'cache'),
+      logsDir: join(backendRoot, 'logs'),
+    }
+  }
+  return {
+    root,
+    settingsFile: join(root, 'settings.yaml'),
+    cordisPatchFile: join(root, 'cordis.patch.yml'),
+    profilesDir: join(root, 'profiles'),
+    sessionsDir: join(root, 'sessions'),
+    attachmentsDir: join(root, 'attachments', 'v1'),
+    storagesDir: join(root, 'storages'),
+    investmentResearch: {
+      root: investmentRoot,
+      backupSettingsFile: join(investmentRoot, 'backup-settings.json'),
+      backupsDir: join(investmentRoot, 'backups'),
+      backends: {
+        'trading-core': backend('trading-core'),
+        'market-watch': backend('market-watch'),
+        'industry-chain': backend('industry-chain'),
+      },
+    },
+  }
 }
 
 /**

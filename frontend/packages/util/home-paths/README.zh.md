@@ -10,6 +10,8 @@ DeepSeek Harness 用户数据的共享文件系统路径辅助工具。
 
 `dshHomePath(...segments)` 使用 Node 的平台路径规则，将子路径段拼接到解析后的主目录下。不传入任何路径段时，返回主目录本身。
 
+`resolveDshInstanceLayout()` 返回可挂载的单实例目录契约，覆盖 Host 设置、profile、会话、附件、JSON/SQLite storage、投研备份，以及三个 Python 后端的 data/state/user-config/cache/logs 子树。调用方复用这一映射，不再各自拼接路径。cache 与 logs 虽位于挂载根内，但与持久迁移清单保持显式分离。
+
 `dshHomeDisplay()` 以符号方式表示当前根目录，用于面向用户的路径：默认主目录表示为 `~/.dsh`，任何已配置的主目录表示为 `$DSH_HOME`。它绝不会泄露机器的绝对路径。
 
 `DSH_HOME_DIR_NAME` 定义默认用户数据目录名：`.dsh`。
@@ -28,3 +30,4 @@ DeepSeek Harness 用户数据的共享文件系统路径辅助工具。
 
 - **展开范围刻意保持狭窄**：只有单独的 `~`、`~/...` 和 `~\...` 使用当前操作系统主目录；`~alice/...` 等指定用户的形式、环境变量和 shell 表达式保持不变。
 - **规范化会读取，但绝不修改**：`canonicalizeWatchPath()` 会执行 `realpath` 探测，并传播除路径不存在以外的错误；调用方仍负责目录创建、权限，以及对结果路径应用信任策略。
+- **目录解析不会初始化存储**：`resolveDshInstanceLayout()` 只做纯路径映射；空根初始化和只复制迁移由投研 Runtime 显式执行。

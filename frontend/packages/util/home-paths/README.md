@@ -10,6 +10,8 @@ Shared filesystem path helpers for DeepSeek Harness user data.
 
 `dshHomePath(...segments)` joins child segments onto that resolved home with Node's platform path rules. With no segments it returns the home itself.
 
+`resolveDshInstanceLayout()` returns the mounted single-instance contract for Host settings, profiles, sessions, attachments, JSON/SQLite storage, investment backups, and the data/state/user-config/cache/logs subtrees of all three Python backends. Callers use this one mapping instead of rebuilding path strings. Cache and log paths remain in the mounted root but are deliberately separate from the durable migration inventory.
+
 `dshHomeDisplay()` names an active root symbolically for user-facing paths: `~/.dsh` for the default home, `$DSH_HOME` for any configured home. It never leaks an absolute machine path.
 
 `DSH_HOME_DIR_NAME` owns the default user-data directory name: `.dsh`.
@@ -28,3 +30,4 @@ This package is intentionally small and harness-dep-free so product packages can
 
 - **Expansion is deliberately narrow** — only bare `~`, `~/...`, and `~\...` use the current operating-system home; named-user forms such as `~alice/...`, environment variables, and shell expressions remain unchanged.
 - **Canonicalization reads but never mutates** — `canonicalizeWatchPath()` performs `realpath` probes and propagates errors other than absence; callers still own directory creation, permissions, and trust policy for the resulting path.
+- **Layout resolution does not initialize storage** — `resolveDshInstanceLayout()` is a pure mapping; the investment Runtime owns explicit empty-root initialization and copy-only migration.

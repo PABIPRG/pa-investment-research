@@ -114,7 +114,11 @@ export class ElectronConnectionService extends Service implements HostConnection
     _options: ConnectionRpcHandlerOptions,
   ): () => Promise<void> {
     assertChannel(channel)
-    const registered: RegisteredChannel = { fetchHandler: connectionRpcFetchHandler(channel, handler) }
+    const registered: RegisteredChannel = {
+      fetchHandler: connectionRpcFetchHandler(channel, handler, (error) => {
+        owner.logger.warn(error instanceof Error ? error : new Error(String(error)))
+      }),
+    }
     return owner.effect(() => {
       if (this.channels.has(channel)) {
         throw new Error(`electron-connection: RPC channel ${JSON.stringify(channel)} is already registered`)
@@ -133,7 +137,9 @@ export class ElectronConnectionService extends Service implements HostConnection
   ): () => Promise<void> {
     const registered: RegisteredInterceptor = {
       matches,
-      fetchHandler: connectionRpcFetchHandler(channel, handler),
+      fetchHandler: connectionRpcFetchHandler(channel, handler, (error) => {
+        owner.logger.warn(error instanceof Error ? error : new Error(String(error)))
+      }),
     }
     return owner.effect(() => {
       if (this.interceptor !== undefined) {

@@ -6,7 +6,7 @@ Status: implemented
 
 ## 问题
 
-投研函数插件需要两个 Python HTTP 服务，但插件激活不能从端口或 PID 安全推断进程归属。产品启动还需要复用现有 Electron renderer 与原生 carrier，而不能复制 Web 组合，也不能把进程逻辑放进纯 patch bundle。[投研包归属决策](2026-08-20-investment-research-package-ownership.md)继续把 HTTP/SSE 映射与模型可见渲染留在业务包；本决策拥有与之并列的生命周期与应用组合。
+投研函数插件需要三个 Python HTTP 服务，但插件激活不能从端口或 PID 安全推断进程归属。产品启动还需要复用现有 Electron renderer 与原生 carrier，而不能复制 Web 组合，也不能把进程逻辑放进纯 patch bundle。[投研包归属决策](2026-08-20-investment-research-package-ownership.md)继续把 HTTP/SSE 映射与模型可见渲染留在业务包；本决策拥有与之并列的生命周期、可写实例目录与应用组合。
 
 ## 决策
 
@@ -18,7 +18,9 @@ Status: implemented
 
 Electron 先选择 profile，再叠加原生特化。`dsh electron --profile investment-research` 把 profile 名传给 main 进程；main 进程为这五层调用 `runProfile`，然后且只再应用现有 `electron.patch.yml`。该 patch 禁用 Web server、静态 Web runtime、Web connection、自适应 directory picker 与 client HMR，再插入原生 connection 与 directory-picker 行。`dsh electron` 继续默认使用 `web`。配置检查保持为独立的非产品命令：`dsh --profile investment-research --dump-default-config`。
 
-源码 checkout 从已安装 Runtime 包向上发现两个 backend 目录。不含该仓库布局的部署必须配置绝对 `backendProjectDir`。虚拟环境缺失时给出平台对应的 `./init.sh` 或 `init.bat` 指引，不执行安装。Python scheduler 与外部 push 配置仍归 backend 所有；股票分析的对话内 push 默认为 false。
+源码 checkout 从已安装 Runtime 包向上发现三个 backend 目录。不含该仓库布局的部署必须配置绝对 `backendProjectDir`。虚拟环境缺失时给出平台对应的 `./init.sh` 或 `init.bat` 指引，不执行安装。每个 owned managed child 都会收到 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，因此源码与 bundled child 共用一个可写契约，独立启动的源码 backend 则保留仓库默认值。Python scheduler 与外部 push 配置仍归 backend 所有；股票分析的对话内 push 默认为 false。
+
+共享 home-path 包从一个挂载根解析 Host 设置、profile、会话、附件、storage、备份与全部 backend 子树。Runtime 初始化会创建带版本的空目录布局。零写入 dry-run 会列出已声明的持久文件、排除项、字节数、复制策略和拒绝原因。迁移使用目标内部 staging、流式校验和、身份复核与版本标记最后发布的顶层事务，因此不会替换已有挂载点。managed profile 依赖和运行期产物会被排除，内部备份路径会被重定位，PAB-14 业务归档语义保持独立；在线 SQLite 使用显式一致性备份，在线 Host 会话和附件则在缺少共同快照屏障时被拒绝。
 
 ## 考虑过的替代方案
 
@@ -32,7 +34,7 @@ Electron 先选择 profile，再叠加原生特化。`dsh electron --profile inv
 
 ## 验证
 
-包级覆盖固定 URL 与路径验证、身份感知健康分类、注册冲突、single-flight、引用计数、owned/attached/external release、受限日志、状态匹配、取消、启动失败与 quiescent dispose。真实 Loader 测试固定 bundle 移除与 external attach；无密钥 replay 固定组装后的二十个投研工具。macOS 与 Windows CI 从包含空格和中文字符的路径运行真实 managed fake backend，手动 engine workflow 则初始化两个 backend 虚拟环境，并检查组合后的二十工具 profile。CLI 与 Electron 测试固定 argv 转发、五层组合包、Web carrier 移除与原生行。
+包级覆盖固定 URL 与路径验证、身份感知健康分类、注册冲突、single-flight、引用计数、owned/attached/external release、受限日志、状态匹配、取消、启动失败与 quiescent dispose。目录与迁移测试固定完整路径映射、零写入规划、来源保留、物理别名与身份变化拒绝、挂载点保留、发布回滚、managed 依赖排除、备份路径重定位、流式校验和、SQLite 文件头识别、全部活动 sidecar，以及在线 Host 快照边界。真实 Loader 测试固定 bundle 移除与 external attach；无密钥 replay 固定组装后的投研 profile。macOS 与 Windows CI 从包含空格和中文字符的路径运行真实 managed fake backend，手动 engine workflow 初始化全部 backend 虚拟环境，并检查组合后的 profile。CLI 与 Electron 测试固定 argv 转发、bundle 层、Web carrier 移除与原生行。
 
 ## 后果
 

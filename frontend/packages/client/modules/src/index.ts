@@ -3,7 +3,8 @@
  * the host Loader's entries for packages declaring `dsh.client`, composes the
  * `window.__DSH_BOOT__` entry graph (wire single source: {@link WebBootEntry}
  * in `./client/manifest.ts`), and provides the `clientModuleHost` service. A
- * composed Web server receives the `/plugins` route and index-manifest tap;
+ * composed Web server receives the authenticated `/plugins` route and,
+ * when configured, the legacy index-manifest tap;
  * desktop carriers read the same graph and bundle paths directly.
  *
  * Scanning is incremental per package — there is no full-rescan code path.
@@ -28,7 +29,12 @@ import { dirname, join } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-host-webserver'
+import {
+  authorizeProtectedWebRequest,
+  assertTrustedAuthority,
+  assertTrustedProxyAddress,
+  type WebRequestAuthorizer,
+} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 import type { WebBootEntry, WebBootGraph } from './client/manifest.ts'
 
@@ -47,10 +53,22 @@ declare module '@deepseek-ai/cordis' {
 export interface Config {
   /** Client packages enrolled without an active Host Loader entry. */
   additionalPackages?: string[]
+  /** Inject the graph into HTML; authenticated Web apps fetch it after login. */
+  injectBootManifest?: boolean
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded browser facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
 }
 
 export const Config: z<Config> = z.object({
   additionalPackages: z.array(String).default([]),
+  injectBootManifest: z.boolean().default(true),
+  trustedHosts: z.array(String).default([]),
+  trustedProxyAddresses: z.array(String).default([]),
+  requireWebAuth: z.boolean().default(false),
 })
 
 /** package.json `dsh.client` declaration fields, validated one by one after reading the file. */
@@ -116,7 +134,6 @@ interface WebPluginRecord {
 }
 
 const BUNDLE_SUFFIX = '/client.js'
-const MAP_SUFFIX = '/client.js.map'
 
 /** One bundle-route file, resolved for whichever carrier serves the graph's URLs. */
 export interface BundleFile {
@@ -228,6 +245,11 @@ export class ClientModuleRegistry extends Service {
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'clientModules')
     this.additionalPackages = new Set(config.additionalPackages ?? [])
+    const trustedHosts = config.trustedHosts ?? []
+    const trustedProxyAddresses = config.trustedProxyAddresses ?? []
+    const requireWebAuth = config.requireWebAuth ?? false
+    for (const authority of trustedHosts) assertTrustedAuthority(authority)
+    for (const address of trustedProxyAddresses) assertTrustedProxyAddress(address)
     // Resolution anchor: the config tree's baseUrl (the cordis.yml directory,
     // whose package declares every composed plugin as a dependency). The
     // modules package's own URL would miss sibling packages under pnpm's
@@ -267,13 +289,33 @@ export class ClientModuleRegistry extends Service {
 
     ctx.inject(['webServer'], (webCtx) => {
       webCtx.effect(
-        () => webCtx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
+        () => webCtx.webServer.register({
+          kind: 'prefix',
+          path: '/plugins',
+          handler: async (req, res) => {
+            const auth = webCtx.get('webAuth') as WebRequestAuthorizer | undefined
+            const decision = authorizeProtectedWebRequest(
+              req, trustedHosts, trustedProxyAddresses, auth, requireWebAuth,
+            )
+            if (!decision.ok) {
+              res.writeHead(decision.status, {
+                'content-type': 'application/json; charset=utf-8',
+                'cache-control': 'no-store',
+              })
+              res.end(JSON.stringify({ code: decision.code }))
+              return
+            }
+            await this.serveBundle(req, res)
+          },
+        }),
         'client-modules: bundle route',
       )
-      webCtx.effect(
-        () => webCtx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
-        'client-modules: boot manifest injection',
-      )
+      if (config.injectBootManifest ?? true) {
+        webCtx.effect(
+          () => webCtx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
+          'client-modules: boot manifest injection',
+        )
+      }
     })
   }
 
@@ -306,14 +348,12 @@ export class ClientModuleRegistry extends Service {
   bundleFile(pathname: string): BundleFile | undefined {
     const prefix = '/plugins/'
     if (!pathname.startsWith(prefix)) return undefined
-    const isSourceMap = pathname.endsWith(MAP_SUFFIX)
-    const suffix = isSourceMap ? MAP_SUFFIX : BUNDLE_SUFFIX
-    if (!pathname.endsWith(suffix)) return undefined
-    const clientPath = this.clientPath(pathname.slice(prefix.length, -suffix.length))
+    if (!pathname.endsWith(BUNDLE_SUFFIX)) return undefined
+    const clientPath = this.clientPath(pathname.slice(prefix.length, -BUNDLE_SUFFIX.length))
     if (clientPath === undefined) return undefined
     return {
-      path: isSourceMap ? `${clientPath}.map` : clientPath,
-      contentType: isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
+      path: clientPath,
+      contentType: 'text/javascript; charset=utf-8',
     }
   }
 

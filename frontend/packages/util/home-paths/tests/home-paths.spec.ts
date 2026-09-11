@@ -10,6 +10,7 @@ import {
   dshHomeDisplay,
   dshHomePath,
   expandHomePath,
+  resolveDshInstanceLayout,
   resolveDshHome,
 } from '@deepseek-ai/dsh-home-paths'
 
@@ -54,6 +55,51 @@ describe('dsh path helpers', () => {
   it('labels a resolved home by whether it is the default root', () => {
     expect(dshHomeDisplay(resolve(defaultDshHome()))).toBe('~/.dsh')
     expect(dshHomeDisplay('/some/other/root')).toBe('$DSH_HOME')
+  })
+
+  it('resolves the complete single-instance persistence contract beneath one root', () => {
+    const root = resolve('/tmp/dsh-instance')
+
+    expect(resolveDshInstanceLayout(root)).toEqual({
+      root,
+      settingsFile: join(root, 'settings.yaml'),
+      cordisPatchFile: join(root, 'cordis.patch.yml'),
+      profilesDir: join(root, 'profiles'),
+      sessionsDir: join(root, 'sessions'),
+      attachmentsDir: join(root, 'attachments', 'v1'),
+      storagesDir: join(root, 'storages'),
+      investmentResearch: {
+        root: join(root, 'investment-research'),
+        backupSettingsFile: join(root, 'investment-research', 'backup-settings.json'),
+        backupsDir: join(root, 'investment-research', 'backups'),
+        backends: {
+          'trading-core': {
+            root: join(root, 'investment-research', 'trading-core'),
+            dataDir: join(root, 'investment-research', 'trading-core', 'data'),
+            stateDir: join(root, 'investment-research', 'trading-core', 'state'),
+            userConfigDir: join(root, 'investment-research', 'trading-core', 'user-config'),
+            cacheDir: join(root, 'investment-research', 'trading-core', 'cache'),
+            logsDir: join(root, 'investment-research', 'trading-core', 'logs'),
+          },
+          'market-watch': {
+            root: join(root, 'investment-research', 'market-watch'),
+            dataDir: join(root, 'investment-research', 'market-watch', 'data'),
+            stateDir: join(root, 'investment-research', 'market-watch', 'state'),
+            userConfigDir: join(root, 'investment-research', 'market-watch', 'user-config'),
+            cacheDir: join(root, 'investment-research', 'market-watch', 'cache'),
+            logsDir: join(root, 'investment-research', 'market-watch', 'logs'),
+          },
+          'industry-chain': {
+            root: join(root, 'investment-research', 'industry-chain'),
+            dataDir: join(root, 'investment-research', 'industry-chain', 'data'),
+            stateDir: join(root, 'investment-research', 'industry-chain', 'state'),
+            userConfigDir: join(root, 'investment-research', 'industry-chain', 'user-config'),
+            cacheDir: join(root, 'investment-research', 'industry-chain', 'cache'),
+            logsDir: join(root, 'investment-research', 'industry-chain', 'logs'),
+          },
+        },
+      },
+    })
   })
 
   it('canonicalizes a watcher ancestor while preserving a missing suffix', async () => {

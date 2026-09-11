@@ -595,7 +595,7 @@ def _merge_edge(agg: dict, src: str, tgt: str, kind: str, share, type_: str, ite
     e["count"] += 1
 
 
-LLM_LINKS_PATH = settings.root / "data" / "a_share_llm_links.json"
+LLM_LINKS_PATH = settings.data_root / "a_share_llm_links.json"
 
 
 @lru_cache(maxsize=1)
