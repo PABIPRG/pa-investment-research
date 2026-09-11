@@ -90,6 +90,9 @@ async function start(): Promise<RestartHarness> {
     on: vi.fn((name: string, listener: (...args: unknown[]) => void) => { handlers.set(name, listener) }),
   }
   const connection = {
+    transport: 'electron',
+    owns: vi.fn(),
+    fetch: vi.fn(),
     openStream: vi.fn(async function *(_kind: string, signal: AbortSignal) {
       events.push('stream-open')
       streamOpened.resolve()
@@ -126,7 +129,7 @@ async function start(): Promise<RestartHarness> {
     protocol: { handle: vi.fn(), registerSchemesAsPrivileged: vi.fn() },
     shell: { openExternal: vi.fn() },
   }))
-  vi.doMock('@deepseek-ai/dsh-app-boot', () => ({ loadLayeredEnv: vi.fn(() => ({ sources: {}, values: {} })) }))
+  vi.doMock('@deepseek-ai/dsh-app-boot', () => ({ healProfilesModuleFallback: vi.fn(), loadLayeredEnv: vi.fn(() => ({ sources: {}, values: {} })) }))
   vi.doMock('@deepseek-ai/dsh/profile-boot', () => ({ runProfile }))
   vi.doMock('../src/index.ts', () => ({ ElectronConnectionService }))
   vi.doMock('../src/protocol.ts', () => ({

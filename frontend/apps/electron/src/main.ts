@@ -3,7 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
 import type { IpcMainEvent, WebContents } from 'electron'
-import { loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
+import { healProfilesModuleFallback, loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
 import { runProfile } from '@deepseek-ai/dsh/profile-boot'
 import type {
   ElectronStreamEvent,
@@ -14,7 +14,8 @@ import { bindHoldingsNative } from './holdings-native.ts'
 import { appIdentity } from './app-identity.ts'
 import { resolveElectronProfile } from './args.ts'
 import { bindDesktopShortcuts } from './desktop-shortcuts.ts'
-import { ElectronConnectionService } from './index.ts'
+import type { ElectronConnectionService } from './index.ts'
+import { isElectronConnectionService } from './connection-provider.ts'
 import { APP_INDEX_URL, APP_SCHEME, createAppProtocolHandler } from './protocol.ts'
 import {
   STREAM_CLOSE_CHANNEL,
@@ -133,6 +134,8 @@ async function runApplication(): Promise<void> {
   try {
     await app.whenReady()
     app.dock?.setIcon(appIdentity.runtimeIconPath)
+    // Add launcher-owned plugins while retaining the CLI as the bundle owner.
+    healProfilesModuleFallback(fileURLToPath(new URL('../package.json', import.meta.url)))
     const { ctx, shutdown } = await runProfile({
       environment: loadLayeredEnv('dsh'),
       profile: PROFILE,
@@ -163,7 +166,7 @@ async function runApplication(): Promise<void> {
     })
     profileShutdown = shutdown
     const connection = ctx.get('connection')
-    if (!(connection instanceof ElectronConnectionService)) {
+    if (!(isElectronConnectionService(connection))) {
       throw new Error('dsh-electron: Electron connection provider did not activate')
     }
     protocol.handle(APP_SCHEME, createAppProtocolHandler({

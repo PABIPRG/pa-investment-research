@@ -33,6 +33,8 @@ interface RegisteredInterceptor extends RegisteredChannel {
 export class ElectronConnectionService extends Service implements HostConnectionHandle {
   static inject = ['apiProxy']
 
+  readonly transport = 'electron' as const
+
   private readonly channels = new Map<string, RegisteredChannel>()
   private interceptor: RegisteredInterceptor | undefined
   private readonly apiHandler: ReturnType<typeof toFetchHandler>
