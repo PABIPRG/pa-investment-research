@@ -2,6 +2,7 @@
 
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
@@ -21,6 +22,40 @@ import {
 } from '../src/packaging.ts'
 
 describe('Electron investment sidecar packaging', () => {
+  it('resolves a valid multi-size ICO through the Windows packager instead of skipping the app icon', async () => {
+    // Exercise the resolver used by the pinned Packager version on any CI host.
+    const require = createRequire(import.meta.url)
+    const { WindowsApp } = require(join(dirname(require.resolve('@electron/packager')), 'win32.js')) as {
+      WindowsApp: new (options: { icon: string }, templatePath: string) => {
+        getIconPath(): Promise<string | undefined>
+      }
+    }
+    const windowsApp = new WindowsApp({ icon: appIdentity.iconPath }, '')
+    const iconPath = await windowsApp.getIconPath()
+    expect(iconPath).toBe(`${appIdentity.iconPath}.ico`)
+    const ico = await readFile(iconPath!)
+    expect(ico.readUInt16LE(0)).toBe(0)
+    expect(ico.readUInt16LE(2)).toBe(1)
+    const count = ico.readUInt16LE(4)
+    expect(count).toBe(7)
+    const sizes: number[] = []
+    for (let index = 0; index < count; index += 1) {
+      const entry = 6 + index * 16
+      const size = ico[entry] || 256
+      expect(ico[entry + 1] || 256).toBe(size)
+      const length = ico.readUInt32LE(entry + 8)
+      const offset = ico.readUInt32LE(entry + 12)
+      expect(offset).toBeGreaterThanOrEqual(6 + count * 16)
+      expect(offset + length).toBeLessThanOrEqual(ico.length)
+      const png = ico.subarray(offset, offset + length)
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      expect(png.readUInt32BE(16)).toBe(size)
+      expect(png.readUInt32BE(20)).toBe(size)
+      sizes.push(size)
+    }
+    expect(sizes).toEqual([16, 24, 32, 48, 64, 128, 256])
+  })
+
   it('uses the Windows command shell only for batch entrypoints', () => {
     expect(commandRequiresShell('pnpm.cmd', 'win32')).toBe(true)
     expect(commandRequiresShell('electron-forge.bat', 'win32')).toBe(true)
@@ -211,6 +246,8 @@ describe('Electron investment sidecar packaging', () => {
         derefSymlinks: false,
         dir: plan.stagingDir,
       }))
+      expect(options.icon).toBe(appIdentity.iconPath)
+      expect(options.icon).toMatch(/app-icon$/)
       expect(options.osxSign).toBeUndefined()
       expect(options.extraResource).toBeUndefined()
       expect(options.afterCopy).toHaveLength(1)

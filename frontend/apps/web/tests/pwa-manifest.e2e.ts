@@ -17,19 +17,35 @@ it('ships install metadata with the built web application', async () => {
     start_url: '/',
     scope: '/',
     display: 'fullscreen',
-    icons: [{
-      src: '/favicon.svg',
-      sizes: 'any',
-      type: 'image/svg+xml',
+    icons: [192, 512].map(size => ({
+      src: `/icons/app-icon-001/icon-${size}.png`,
+      sizes: `${size}x${size}`,
+      type: 'image/png',
       purpose: 'any',
-    }],
+    })),
   })
 })
 
-it('ships a favicon that switches to a light mark under dark color scheme', async () => {
-  const favicon = await readFile(join(DIST_ROOT, 'favicon.svg'), 'utf8')
-  // The light fill must live inside the dark-scheme media query, so the icon
-  // stays black in light mode and only turns white under a dark scheme.
-  expect(favicon).toMatch(/@media \(prefers-color-scheme: dark\)\s*{\s*path\s*{[^}]*fill:\s*#fff/i)
-  expect(favicon).toContain('fill="#000"')
+it('ships icon resources with the required dimensions for browser tabs, touch shortcuts and installation', async () => {
+  const index = await readFile(join(DIST_ROOT, 'index.html'), 'utf8')
+  expect(index).not.toContain('href="/favicon.svg"')
+  expect(index).toContain('href="/icons/app-icon-001/favicon.ico"')
+  expect(index).toContain('rel="apple-touch-icon" sizes="180x180"')
+  for (const [name, size] of [
+    ['favicon-16x16.png', 16],
+    ['favicon-32x32.png', 32],
+    ['favicon-48x48.png', 48],
+    ['apple-touch-icon.png', 180],
+    ['icon-192.png', 192],
+    ['icon-512.png', 512],
+  ] as const) {
+    const png = await readFile(join(DIST_ROOT, 'icons/app-icon-001', name))
+    expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    expect(png.readUInt32BE(16)).toBe(size)
+    expect(png.readUInt32BE(20)).toBe(size)
+  }
+  const ico = await readFile(join(DIST_ROOT, 'icons/app-icon-001/favicon.ico'))
+  expect(ico.readUInt16LE(0)).toBe(0)
+  expect(ico.readUInt16LE(2)).toBe(1)
+  expect(ico.readUInt16LE(4)).toBeGreaterThan(0)
 })
