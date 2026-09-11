@@ -68,6 +68,7 @@ async function fixture() {
     targets: {
       'darwin-arm64': targetLock,
       'darwin-x64': targetLock,
+      'linux-x64': targetLock,
       'win32-x64': { ...targetLock, archiveExecutable: 'python/install/python.exe' },
     },
   }
@@ -217,5 +218,20 @@ describe('investment Python sidecar builder', () => {
       extractArchive,
     })).rejects.toThrow(/unsafe archive entry/u)
     expect(extractArchive).not.toHaveBeenCalled()
+  })
+
+  it('emits the Linux platform identity for the container target', async () => {
+    const setup = await fixture()
+    const target = 'linux-x64'
+    const targetLock = setup.lock.targets[target]
+    const archive = join(setup.cache, `${target}-${basename(new URL(targetLock.archiveUrl).pathname)}`)
+    await writeFile(archive, 'fixture archive')
+    const descriptor = await buildInvestmentPythonSidecar({
+      target, output: setup.output, cache: setup.cache, offline: true,
+    }, setup.dependencies)
+
+    expect(descriptor.python).toEqual({
+      version: '3.10.18', platform: 'linux', arch: 'x64', executable: 'runtime/bin/python3',
+    })
   })
 })

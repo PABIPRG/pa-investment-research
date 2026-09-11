@@ -52,6 +52,9 @@ switch (invocation.mode) {
     const instanceOptions = investmentProduct
       ? {
         instanceMode: 'web' as const,
+        ...(process.env.DSH_CONTAINER_INSTANCE_LEASE_FILE === undefined
+          ? {}
+          : { containerLeaseFile: process.env.DSH_CONTAINER_INSTANCE_LEASE_FILE }),
         onInstanceConflict: (await import('./investment-instance-prompt.ts')).confirmInvestmentInstanceReplacement,
       }
       : {}
