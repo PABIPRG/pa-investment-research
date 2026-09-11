@@ -16,6 +16,8 @@ Deployment authority is declared by `@deepseek-ai/dsh-host-deployment-capabiliti
 
 ## Cloud Web boundary
 
+The production investment container declares `DSH_DEPLOYMENT_SURFACE=cloud-web` in Compose. Its entrypoint accepts only that exact value before starting the CLI and explicitly passes the validated declaration to the child process. Starting the image without the declaration, or overriding it with another deployment mode, fails before application state or network services are opened.
+
 Cloud Web retains manual holdings entry, bulk browser import, backup creation, authenticated backup download, browser upload, import preview, explicit import, and reset. Backup storage is presented as managed storage; no server directory is shown or selectable. Managed storage always uses the instance-owned default and ignores a custom directory saved by an earlier local deployment without overwriting that setting.
 
 The Host rejects directory listing/creation/picking, path opening, custom session working directories, workspace adoption by path, settings-document opening, agent-preset directory opening, and local broker/native-holdings operations. Session and Workspace projections omit canonical Host paths. These checks are server-side and remain effective if a caller bypasses the UI.

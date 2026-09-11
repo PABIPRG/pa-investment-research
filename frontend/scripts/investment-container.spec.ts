@@ -23,7 +23,11 @@ afterEach(async () => {
 
 interface EntrypointModule {
   acquireInstanceLock(root: string): Promise<{ release(): Promise<void> }>
-  validateConfiguration(environment: Record<string, string | undefined>): { port: number; timezone: string }
+  validateConfiguration(environment: Record<string, string | undefined>): {
+    deploymentSurface: 'cloud-web'
+    port: number
+    timezone: string
+  }
 }
 
 interface HealthcheckModule {
@@ -136,6 +140,7 @@ describe('investment container delivery contract', () => {
     expect(service.init).toBe(true)
     expect(service.environment).toEqual(expect.objectContaining({
       DSH_HOME: '/var/lib/dsh',
+      DSH_DEPLOYMENT_SURFACE: 'cloud-web',
       DSH_WEB_AUTH: 'required',
       DSH_WEB_INSECURE_COOKIES: '0',
     }))
@@ -170,10 +175,11 @@ describe('investment container delivery contract', () => {
     expect(workflow).not.toMatch(/(?:^|\s)--push(?:\s|$)/mu)
   })
 
-  it('fails closed for inconsistent timezone or missing remote-auth inputs', async () => {
+  it('fails closed for an invalid deployment surface, timezone, or remote-auth input', async () => {
     const entrypoint = await containerModule<EntrypointModule>('investment-entrypoint.mjs')
     const valid = {
       DSH_HOME: '/var/lib/dsh',
+      DSH_DEPLOYMENT_SURFACE: 'cloud-web',
       DSH_WEB_ADMIN_PASSWORD_HASH_SOURCE_FILE: '/run/secrets/web-admin-password-hash',
       DSH_WEB_ADMIN_USERNAME: 'admin',
       DSH_WEB_AUTH: 'required',
@@ -184,11 +190,28 @@ describe('investment container delivery contract', () => {
       TZ: 'Asia/Shanghai',
     }
 
-    expect(entrypoint.validateConfiguration(valid)).toEqual(expect.objectContaining({ port: 3080, timezone: 'Asia/Shanghai' }))
+    expect(entrypoint.validateConfiguration(valid)).toEqual(expect.objectContaining({
+      deploymentSurface: 'cloud-web',
+      port: 3080,
+      timezone: 'Asia/Shanghai',
+    }))
+    expect(() => entrypoint.validateConfiguration({ ...valid, DSH_DEPLOYMENT_SURFACE: undefined }))
+      .toThrow(/DSH_DEPLOYMENT_SURFACE must be exactly cloud-web/u)
+    expect(() => entrypoint.validateConfiguration({ ...valid, DSH_DEPLOYMENT_SURFACE: 'local-web' }))
+      .toThrow(/DSH_DEPLOYMENT_SURFACE must be exactly cloud-web/u)
+    expect(() => entrypoint.validateConfiguration({ ...valid, DSH_DEPLOYMENT_SURFACE: ' cloud-web ' }))
+      .toThrow(/DSH_DEPLOYMENT_SURFACE must be exactly cloud-web/u)
     expect(() => entrypoint.validateConfiguration({ ...valid, TIMEZONE: 'UTC' })).toThrow(/TZ and TIMEZONE/u)
     expect(() => entrypoint.validateConfiguration({ ...valid, TZ: 'Mars/Olympus', TIMEZONE: 'Mars/Olympus' })).toThrow(/IANA/u)
     expect(() => entrypoint.validateConfiguration({ ...valid, DSH_WEB_AUTH: 'optional' })).toThrow(/DSH_WEB_AUTH/u)
     expect(() => entrypoint.validateConfiguration({ ...valid, DSH_WEB_TRUSTED_PROXIES: '' })).toThrow(/DSH_WEB_TRUSTED_PROXIES/u)
+
+    const entrypointSource = await readFile(join(repoRoot, 'containers', 'investment-entrypoint.mjs'), 'utf8')
+    expect(entrypointSource.indexOf('validateConfiguration(process.env)'))
+      .toBeLessThan(entrypointSource.indexOf('acquireInstanceLock(join(configuration.dshHome'))
+    expect(entrypointSource).toMatch(
+      /env:\s*\{\s*\.\.\.process\.env,\s*DSH_DEPLOYMENT_SURFACE: configuration\.deploymentSurface,/u,
+    )
   })
 
   it('never mounts profile-file HMR inside the container runtime', () => {

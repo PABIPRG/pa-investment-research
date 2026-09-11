@@ -17,6 +17,7 @@ services:
       - no-new-privileges:true
     environment:
       DSH_HOME: /var/lib/dsh
+      DSH_DEPLOYMENT_SURFACE: cloud-web
       DSH_WEB_AUTH: required
       DSH_WEB_INSECURE_COOKIES: "0"
       DSH_WEB_ADMIN_USERNAME: ${DSH_WEB_ADMIN_USERNAME:?set DSH_WEB_ADMIN_USERNAME}
