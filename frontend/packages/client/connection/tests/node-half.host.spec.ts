@@ -77,7 +77,7 @@ function fakeResponse(): { response: ServerResponse; state: { status?: number; b
     writableEnded: false,
     writeHead(value: number, headers?: Record<string, unknown>) {
       state.status = value
-      state.headers = headers
+      if (headers !== undefined) state.headers = headers
       return this
     },
     write(value: string | Uint8Array) { chunks.push(Buffer.from(value)); return true },
