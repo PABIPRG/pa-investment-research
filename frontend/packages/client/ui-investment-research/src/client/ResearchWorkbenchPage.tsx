@@ -829,6 +829,7 @@ export function ResearchWorkbenchPage({
               const title = text(card.title, '市场事件').trim()
               const summary = text(card.summary, '').trim()
               const showSummary = summary !== '' && comparableCopy(summary) !== comparableCopy(title)
+              const riskNote = text(cardRisk.note, '').trim()
               return (
                 <ImpressionArticle
                   className={css.dashboardEvent}
@@ -850,7 +851,6 @@ export function ResearchWorkbenchPage({
                       {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}
                       <span>{text(card.source, '来源未知')}</span>
                     </div>
-                    {showSummary && <p>{summary}</p>}
                     {reasons.length > 0 && (
                       <div className={css.dashboardReasons}>
                         {reasons.map((reason) => {
@@ -869,7 +869,12 @@ export function ResearchWorkbenchPage({
                         })}
                       </div>
                     )}
-                    {text(cardRisk.note, '') !== '' && <small className={css.dashboardRiskNote}>{text(cardRisk.note)}</small>}
+                    {(showSummary || riskNote !== '') && (
+                      <div className={css.dashboardEventDescription}>
+                        {showSummary && <p>{summary}</p>}
+                        {riskNote !== '' && <small className={css.dashboardRiskNote}>{riskNote}</small>}
+                      </div>
+                    )}
                   </div>
                   <div className={css.dashboardEventControls} role="group" aria-label="事件操作">
                     <div className={css.dashboardEventActions} role="group" aria-label="快捷操作">

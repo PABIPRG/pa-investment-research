@@ -565,7 +565,17 @@ describe('研究工作台', () => {
     expect((within(dialog).getByRole('radio', { name: /时间加权收益率/ }) as HTMLInputElement).checked).toBe(true)
     expect(within(dialog).getByText('+3.57%')).toBeTruthy()
     expect(within(dialog).getByText('历史记录始于 2026-08-01')).toBeTruthy()
-    expect(within(dialog).getByRole('img', { name: /组合收益曲线/ })).toBeTruthy()
+    const chart = within(dialog).getByRole('group', { name: /组合收益曲线/ })
+    const chartGraphic = within(chart).getByRole('img', { name: /左右方向键逐点查看估值明细/ })
+    expect(within(chart).getByText('总资产估值')).toBeTruthy()
+    expect(within(chart).getByText('2 个估值日')).toBeTruthy()
+    expect(within(chart).getByText('最新估值 · 2026-09-09')).toBeTruthy()
+    expect(within(chart).getByText('悬停节点查看明细；键盘聚焦图表后，可用左右方向键切换估值日。')).toBeTruthy()
+    fireEvent.focus(chartGraphic)
+    fireEvent.keyDown(chartGraphic, { key: 'ArrowLeft' })
+    const selectedPoint = within(chart).getByText('2026-08-01').parentElement
+    expect(selectedPoint?.textContent).toContain('总资产 ¥14.0 万')
+    expect(selectedPoint?.textContent).toContain('累计盈亏 ¥0')
     const contributionTable = within(dialog).getByRole('table', { name: '标的区间盈亏贡献明细' })
     const contributionRow = within(contributionTable).getByRole('row', { name: /贵州茅台600519/ })
     expect(within(contributionTable).getByRole('columnheader', { name: '期末成本价' })).toBeTruthy()
@@ -714,7 +724,7 @@ describe('研究工作台', () => {
 
     expect(controls?.nextElementSibling).toBe(content)
     expect(content.className).toContain(css.performanceContent)
-    expect(within(content).getByRole('img', { name: /组合收益曲线/ })).toBeTruthy()
+    expect(within(content).getByRole('group', { name: /组合收益曲线/ })).toBeTruthy()
   })
 
   it('历史估值点不足时不伪造零收益，并以实时行情展示当前成本盈亏', async () => {
