@@ -66,21 +66,16 @@ class ProviderSnapshotTests(unittest.TestCase):
             snapshot = holdings_source.provider_snapshot()
 
         self.assertFalse(snapshot["available"])
-        self.assertIn("未知 HOLDINGS_PROVIDER", snapshot["reason"])
+        self.assertEqual(snapshot["blocking_reason"], "provider_unavailable")
 
-    def test_unavailable_source_surfaces_the_provider_message(self):
-        message = "券商客户端未运行：请先启动并登录 平安证券（同花顺版）。"
-        provider = FakeProvider(available=False, error=message)
-
-        with patch.object(holdings_source.settings, "holdings_provider", "easytrader"), \
-                patch.object(holdings_source.sys, "platform", "win32"), \
-                patch.object(holdings_source, "get_provider", return_value=provider):
+    def test_snapshot_never_calls_holdings_reader(self):
+        provider = FakeProvider(available=False, error="must not read")
+        with patch.object(holdings_source.settings, "holdings_provider", "qmt"), \
+             patch.object(holdings_source, "get_provider", return_value=provider), \
+             patch.object(provider, "get_holdings") as reader:
             snapshot = holdings_source.provider_snapshot()
-
-        self.assertEqual(snapshot["provider"], "easytrader")
-        self.assertEqual(snapshot["label"], provider.profile.label)
-        self.assertFalse(snapshot["available"])
-        self.assertEqual(snapshot["reason"], message)
+        self.assertEqual(snapshot["blocking_reason"], "provider_unavailable")
+        reader.assert_not_called()
 
 
 class SyncHoldingsTests(unittest.TestCase):
@@ -145,24 +140,23 @@ class SyncRouteTests(unittest.TestCase):
         self.app = adapter_app.create_app()
         self.endpoint = _endpoint(self.app, "/holdings/sync")
 
-    def test_provider_unavailable_maps_to_503_with_the_provider_message(self):
-        def raise_unavailable():
-            raise ProviderUnavailable("券商客户端未运行：请先启动并登录。")
+    def test_provider_unavailable_returns_stable_code(self):
+        with patch.object(adapter_app, "preview_holdings", side_effect=ProviderUnavailable("先登录", "login_required")):
+            result = asyncio.run(self.endpoint())
+        self.assertEqual(result["blocking_reason"], "login_required")
 
-        with patch.object(adapter_app, "sync_holdings", side_effect=raise_unavailable):
+    def test_empty_preview_is_blocked(self):
+        with patch.object(adapter_app, "preview_holdings", side_effect=EmptyHoldingsError("空结果")):
+            result = asyncio.run(self.endpoint())
+        self.assertEqual(result["blocking_reason"], "empty_result")
+
+    def test_native_route_requires_private_host_token(self):
+        from adapter.schemas import HoldingsNativeRequest
+        endpoint = _endpoint(self.app, "/holdings/native")
+        with patch.dict(os.environ, {"DSH_HOLDINGS_NATIVE_TOKEN": "private"}):
             with self.assertRaises(HTTPException) as caught:
-                asyncio.run(self.endpoint())
-
-        self.assertEqual(caught.exception.status_code, 503)
-        self.assertEqual(caught.exception.detail, "券商客户端未运行：请先启动并登录。")
-
-    def test_empty_result_maps_to_409(self):
-        with patch.object(adapter_app, "sync_holdings", side_effect=EmptyHoldingsError("未读回任何持仓。")):
-            with self.assertRaises(HTTPException) as caught:
-                asyncio.run(self.endpoint())
-
-        self.assertEqual(caught.exception.status_code, 409)
-        self.assertIn("未读回任何持仓", caught.exception.detail)
+                asyncio.run(endpoint(HoldingsNativeRequest(action="read", account_mode="real"), "wrong"))
+        self.assertEqual(caught.exception.status_code, 403)
 
 
 class DetectClientsTests(unittest.TestCase):

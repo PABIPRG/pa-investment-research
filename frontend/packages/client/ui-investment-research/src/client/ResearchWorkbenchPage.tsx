@@ -648,8 +648,9 @@ export function ResearchWorkbenchPage({
     if (alive.current) refreshDashboard()
   }, [refreshDashboard, requestData])
 
-  const syncHoldings = useCallback(async (): Promise<readonly WorkbenchHoldingInput[]> => {
-    const value = asRecord(await requestData({ operation: 'trading-core.holdings-sync' }))
+  const syncHoldings = useCallback(async (token: string): Promise<readonly WorkbenchHoldingInput[]> => {
+    const value = asRecord(await requestData({ operation: 'trading-core.holdings-sync', input: { action: 'commit', preview_token: token } }))
+    if (typeof value.saved !== 'number') throw new Error(text(value.reason, '持仓保存未完成，请重新读取。'))
     if (alive.current) refreshDashboard()
     const items: WorkbenchHoldingInput[] = []
     for (const row of records(value.items)) {

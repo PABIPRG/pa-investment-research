@@ -24,6 +24,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "assets",
     "lib/*.js",
     "lib/*.cjs",
     "lib/types/**/*.d.ts",

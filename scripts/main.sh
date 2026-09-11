@@ -14,6 +14,7 @@ SCRIPTS=(
   "init|初始化项目（前端依赖/构建 + 投研 Python 环境）|scripts/init.sh"
   "investment-web|构建并启动 Web 版投研（自动托管并清理后台）|scripts/run-investment-web.sh"
   "investment-electron|构建并启动 Electron 版投研（自动托管并清理后台）|scripts/run-investment-electron.sh"
+  "investment-package|构建可独立运行的桌面包（内置 Python，输出 ZIP）|scripts/package-investment-electron.sh"
   "backend-start|手动启动常驻投研后台（独立调试）|scripts/start-investment-backends.sh"
   "backend-stop|停止手动常驻投研后台|scripts/stop-investment-backends.sh"
   "sync-upstream|同步上游 deepseek-harness 到 frontend/|scripts/sync-upstream.sh"

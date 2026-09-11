@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 
 from ..config import settings
@@ -119,6 +120,52 @@ class EasyTraderProvider(HoldingsProvider):
         return True
 
     def get_holdings(self) -> list[HoldingItem]:
+        """普通调用仅被动读取已暴露的持仓表格。"""
+        return self.read_holdings()
+
+    def read_holdings(self, *, foreground: bool = False) -> list[HoldingItem]:
+        if not foreground:
+            return self._read_visible_table()
+        import ctypes
+        from ctypes import wintypes
+        ctypes.windll.user32.GetForegroundWindow.restype = wintypes.HWND
+        ctypes.windll.user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        previous = ctypes.windll.user32.GetForegroundWindow()
+        try:
+            return self._read_with_navigation()
+        finally:
+            if previous:
+                ctypes.windll.user32.SetForegroundWindow(previous)
+
+    def _read_visible_table(self) -> list[HoldingItem]:
+        """读取明确账户窗口的 ListView；不连接 easytrader、不设置焦点。"""
+        if sys.platform != "win32":
+            raise ProviderUnavailable("此数据源仅支持 Windows。", "unsupported_platform")
+        try:
+            from pywinauto import Desktop
+            from .mac_ths import rows_to_items
+            account = self._account_mode
+            windows = Desktop(backend="win32").windows(visible_only=True)
+            for window in windows:
+                title = window.window_text() or ""
+                matches = "模拟炒股" in title if account == "simulated" else (
+                    "网上股票交易系统" in title and "模拟炒股" not in title)
+                if not matches:
+                    continue
+                for table in window.descendants(class_name="SysListView32"):
+                    headers = [column["text"] for column in table.columns()]
+                    if not any("代码" in header for header in headers):
+                        continue
+                    rows = [[table.get_item(row, column).text() for column in range(len(headers))]
+                            for row in range(table.item_count())]
+                    return rows_to_items(headers, rows)
+        except ProviderUnavailable:
+            raise
+        except Exception as exc:
+            raise ProviderUnavailable("无法被动读取窗口，请进入持仓页或使用桌面端引导。", "navigation_required") from exc
+        raise ProviderUnavailable("请进入所选账户的持仓页。", "navigation_required")
+
+    def _read_with_navigation(self) -> list[HoldingItem]:
         """从券商客户端读取当前持仓。
 
         Returns:
@@ -172,17 +219,20 @@ class EasyTraderProvider(HoldingsProvider):
         for pos in raw_positions:
             ticker = _normalize_ticker(_extract(pos, "ticker"))
             if not ticker:
-                continue
+                raise ProviderUnavailable("部分持仓代码无法识别，已取消替换。", "partial_read")
             quantity_raw = _extract(pos, "quantity")
             cost_price_raw = _extract(pos, "cost_price")
             try:
                 quantity = float(quantity_raw) if quantity_raw else 0.0
                 cost_price = float(cost_price_raw) if cost_price_raw else 0.0
             except (ValueError, TypeError):
-                log.warning("easytrader 持仓字段转换失败，跳过: %s", pos)
+                raise ProviderUnavailable("部分持仓数值无法识别，未覆盖本地持仓。", "partial_read")
+            if quantity_raw is None or str(quantity_raw).strip() in ("", "--", "-", "—"):
+                raise ProviderUnavailable("部分持仓数量缺失，已取消替换。", "partial_read")
+            if quantity == 0:
                 continue
-            if quantity <= 0 or cost_price <= 0:
-                continue
+            if not math.isfinite(quantity) or not math.isfinite(cost_price) or quantity < 0 or cost_price <= 0:
+                raise ProviderUnavailable("部分持仓数值缺失，已取消替换。", "partial_read")
             items.append(HoldingItem(ticker=ticker, quantity=quantity, cost_price=cost_price))
 
         log.info("easytrader(%s) 获取持仓 %d 条", self.profile.broker_id, len(items))
@@ -202,8 +252,7 @@ class EasyTraderProvider(HoldingsProvider):
         trader.connect(self._client_path())
         if not self._fix_main_window(trader, self._account_mode):
             raise ProviderUnavailable(
-                "未找到同花顺模拟炒股交易窗口。请在 Windows 同花顺中首次进入"
-                "「交易 → 模拟 → 持仓」，保持交易窗口打开后重试；后续同步会在后台复用该窗口。"
+                "未找到所选账户的交易窗口，请登录并进入对应持仓页。", "navigation_required"
             )
         self._trader = trader
         return trader
@@ -231,13 +280,8 @@ class EasyTraderProvider(HoldingsProvider):
                     trader._main = trader._app.window(handle=w.handle)
                     return True
         except Exception:
-            return account_mode != "simulated"
-        if account_mode == "simulated":
             return False
-        try:
-            return "模拟炒股" not in (trader._main.window_text() or "")
-        except Exception:
-            return True
+        return False
 
     def _client_path(self) -> str:
         """模拟账户可配置独立交易程序；缺省复用同花顺的同一 xiadan.exe。"""

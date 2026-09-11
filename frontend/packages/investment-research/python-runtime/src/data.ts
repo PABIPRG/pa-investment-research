@@ -542,7 +542,17 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       return force === undefined ? {} : { force }
     },
   },
-  'trading-core.holdings-sync': noInputPost('/holdings/sync', 'trading-core'),
+   'trading-core.holdings-sync': {
+    backendId: 'trading-core', method: 'POST', localOnly: true,
+    path: () => '/holdings/sync',
+    body: (input) => {
+      knownKeys(input, ['action', 'preview_token'])
+      const action = oneOf(input, 'action', ['preview', 'commit']) ?? 'preview'
+      const token = optionalString(input, 'preview_token')
+      if (action === 'commit' && token === undefined) throw new TypeError('preview_token is required')
+      return { action, ...(token === undefined ? {} : { preview_token: token }) }
+    },
+  },
   'trading-core.holdings-user-config': noInput('/holdings/user-config', 'trading-core'),
   'trading-core.holdings-user-config-update': {
     backendId: 'trading-core',

@@ -45,3 +45,10 @@ apscheduler
 # redis        # Redis 缓存（TA_CACHE_STRATEGY=file 时不需要）
 # jqdatasdk    # 聚宽持仓源（仅演示，恒不可用）
 # xtquant      # QMT 持仓源
+
+# macOS AX 读取：权限属于实际读取进程。
+pyobjc-framework-ApplicationServices; sys_platform == 'darwin'
+pyobjc-framework-Cocoa; sys_platform == 'darwin'
+easytrader==0.23.7; sys_platform == 'win32'
+pywinauto==0.6.6; sys_platform == 'win32'
+pywin32; sys_platform == 'win32'

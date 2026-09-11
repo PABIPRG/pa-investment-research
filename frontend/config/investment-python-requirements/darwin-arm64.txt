@@ -103,6 +103,11 @@ pydantic-settings==2.15.0
 pydantic==2.13.4
 pydantic_core==2.46.4
 Pygments==2.21.0
+pyobjc-core==12.2.2
+pyobjc-framework-ApplicationServices==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-CoreText==12.2.2
+pyobjc-framework-Quartz==12.2.2
 PyPika==0.51.1
 pyproject_hooks==1.2.0
 python-dateutil==2.9.0.post0

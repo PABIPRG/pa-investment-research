@@ -49,3 +49,5 @@ Business pages do not create model requests, so they do not affect the KV cache.
 - Pages render backend responses defensively without duplicating strategy, shadow, or evolution policy in the browser.
 - Host errors remain visible and retryable; the UI never falls back to prototype data.
 - Superseded responses can be ignored but Host requests cannot yet be cancelled. A task that exceeds the UI wait window continues in the backend and can later be found in the report center.
+
+Holdings onboarding defaults to the simulated account and preserves later choices. The dialog separates client preparation, read-only preview, and confirmed replacement; Web guides manual navigation while Electron requires consent for each foreground read.
