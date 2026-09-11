@@ -97,7 +97,7 @@ jobs:
               exit 1
             fi
           fi
-          existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
+          existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" --jq ".[] | select(.ref == \"refs/tags/$RELEASE_TAG\") | .object.sha")
           if [ -n "$existing_sha" ] && [ "$existing_sha" != "$RELEASE_SHA" ]; then
             echo "Tag $RELEASE_TAG already points to $existing_sha, not $RELEASE_SHA." >&2
             exit 1
@@ -281,7 +281,7 @@ jobs:
             fi
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$existing_id"
           fi
-          existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
+          existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$RELEASE_TAG" --jq ".[] | select(.ref == \"refs/tags/$RELEASE_TAG\") | .object.sha")
           if [ -z "$existing_sha" ]; then
             gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/$RELEASE_TAG" \
