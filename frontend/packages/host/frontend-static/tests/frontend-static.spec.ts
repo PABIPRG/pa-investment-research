@@ -105,7 +105,10 @@ describe('real Loader composition', () => {
     await writeFile(join(root!, 'dist', 'app.js'), 'export const rebuilt = true')
     expect(await request(port, '/app.js')).toMatchObject({ status: 200, body: 'export const rebuilt = true' })
 
-    for (const [path, type, body] of [['/icon.png', 'image/png', 'PNG'], ['/favicon.ico', 'image/x-icon', 'ICO']]) {
+    for (const [path, type, body] of [
+      ['/icon.png', 'image/png', 'PNG'],
+      ['/favicon.ico', 'image/x-icon', 'ICO'],
+    ] as const) {
       expect(await request(port, path)).toMatchObject({ status: 200, type, body })
       expect(await request(port, path, { method: 'HEAD' })).toMatchObject({ status: 200, type, body: '' })
     }
