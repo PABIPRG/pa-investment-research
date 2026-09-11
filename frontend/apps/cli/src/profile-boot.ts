@@ -209,6 +209,13 @@ export interface RunProfileOptions {
   ) => Promise<InvestmentInstanceConflictDecision> | InvestmentInstanceConflictDecision
 }
 
+/** Keep profile-file HMR out of container-owned runtimes that cannot expose Node internals safely. */
+export function shouldWatchProfilePatches(
+  options: Pick<RunProfileOptions, 'containerLeaseFile' | 'watchPatches'>,
+): boolean {
+  return options.containerLeaseFile === undefined && (options.watchPatches ?? true)
+}
+
 /**
  * Re-throw a watcher-setup failure unless a shutdown already owns the tree:
  * a signal aborted this invocation, or an app requested exit (`ctx.appExit`
@@ -315,7 +322,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
     // landed mid-setup. Long-lived profile launches watch by default; runtimes
     // without the Node loader internals required by Cordis HMR opt out. A
     // one-shot exits through bounded shutdown, which disposes the watchers.
-    if ((options.watchPatches ?? true)
+    if (shouldWatchProfilePatches(options)
       && !signalShutdown.signal.aborted
       && ctx.fiber.state === FiberState.ACTIVE
       && ctx.get('loader') !== undefined) {

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { load } from 'js-yaml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { shouldWatchProfilePatches } from '../apps/cli/src/profile-boot.ts'
 import {
   assertConfiguredPluginResolution,
   configuredPluginNames,
@@ -188,6 +189,16 @@ describe('investment container delivery contract', () => {
     expect(() => entrypoint.validateConfiguration({ ...valid, TZ: 'Mars/Olympus', TIMEZONE: 'Mars/Olympus' })).toThrow(/IANA/u)
     expect(() => entrypoint.validateConfiguration({ ...valid, DSH_WEB_AUTH: 'optional' })).toThrow(/DSH_WEB_AUTH/u)
     expect(() => entrypoint.validateConfiguration({ ...valid, DSH_WEB_TRUSTED_PROXIES: '' })).toThrow(/DSH_WEB_TRUSTED_PROXIES/u)
+  })
+
+  it('never mounts profile-file HMR inside the container runtime', () => {
+    expect(shouldWatchProfilePatches({ containerLeaseFile: '/state/.container-instance.lock/owner.json' })).toBe(false)
+    expect(shouldWatchProfilePatches({
+      containerLeaseFile: '/state/.container-instance.lock/owner.json',
+      watchPatches: true,
+    })).toBe(false)
+    expect(shouldWatchProfilePatches({})).toBe(true)
+    expect(shouldWatchProfilePatches({ watchPatches: false })).toBe(false)
   })
 
   it('allows only one live owner for a persistent volume lock', async () => {
