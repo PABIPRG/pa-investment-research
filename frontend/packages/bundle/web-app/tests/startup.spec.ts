@@ -11,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
 
 /** What one fixture boot observed. */
@@ -24,6 +24,7 @@ interface Observed {
 const disposers: (() => Promise<void>)[] = []
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   for (const dispose of disposers.splice(0)) await dispose()
   internals.stdout = process.stdout
   internals.stderr = process.stderr
@@ -58,6 +59,11 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     "    host: !!js ctx.webStartup.host ?? '127.0.0.1'",
     '    port: !!js ctx.webStartup.port ?? 3080',
     '    trustedHosts: !!js ctx.webStartup.trustedHosts',
+    '    trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses',
+    '    authMode: !!js ctx.webStartup.authMode',
+    '    authUsername: !!js ctx.webStartup.authUsername',
+    '    authPasswordHashFile: !!js ctx.webStartup.authPasswordHashFile',
+    '    secureCookies: !!js ctx.webStartup.secureCookies',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
     '',
@@ -92,11 +98,15 @@ describe('web command-line provider', () => {
       '--port', '8080',
       '--trusted-host', 'lab.internal', 'lab-2.internal',
       '--trusted-host', '10.0.0.9',
+      '--trusted-proxy', '127.0.0.1', '10.0.0.10',
     ])
     expect(values).toEqual({
       host: '127.0.0.1',
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
+      trustedProxyAddresses: ['127.0.0.1', '10.0.0.10'],
+      authMode: 'disabled',
+      secureCookies: true,
     })
     expect(observed.readerConfig).toEqual(values)
     expect(observed.exits).toEqual([])
@@ -104,11 +114,14 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ trustedHosts: [] })
+    expect(values).toEqual({ trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true })
     expect(observed.readerConfig).toEqual({
       host: '127.0.0.1',
       port: 3080,
       trustedHosts: [],
+      trustedProxyAddresses: [],
+      authMode: 'disabled',
+      secureCookies: true,
     })
   })
 
@@ -116,6 +129,7 @@ describe('web command-line provider', () => {
     const { values, observed } = await bootProvider(['--help'])
     expect(observed.out).toContain('dsh --profile web')
     expect(observed.out).toContain('--trusted-host')
+    expect(observed.out).toContain('--trusted-proxy')
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([0])
@@ -129,11 +143,28 @@ describe('web command-line provider', () => {
     expect(observed.exits).toEqual([1])
   })
 
-  it('rejects the intentionally unsupported all-interfaces host before the consumer activates', async () => {
+  it('rejects all-interfaces binding until required authentication is configured', async () => {
     const { values, observed } = await bootProvider(['--host', '0.0.0.0'])
-    expect(observed.out).toContain('--host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
+    expect(observed.out).toContain('--host 0.0.0.0 requires required authentication, --trusted-host, and --trusted-proxy')
     expect(values).toBeUndefined()
     expect(observed.readerConfig).toBeUndefined()
     expect(observed.exits).toEqual([1])
+  })
+
+  it('allows all-interfaces binding only with a closed auth configuration', async () => {
+    vi.stubEnv('DSH_WEB_AUTH', 'required')
+    vi.stubEnv('DSH_WEB_ADMIN_USERNAME', 'admin')
+    vi.stubEnv('DSH_WEB_ADMIN_PASSWORD_HASH_FILE', '/run/secrets/dsh-web-password')
+    const { values, observed } = await bootProvider([
+      '--host', '0.0.0.0',
+      '--trusted-host', 'harness.internal',
+      '--trusted-proxy', '127.0.0.1',
+    ])
+    expect(values).toMatchObject({
+      host: '0.0.0.0', authMode: 'required', authUsername: 'admin',
+      authPasswordHashFile: '/run/secrets/dsh-web-password', secureCookies: true,
+      trustedHosts: ['harness.internal'], trustedProxyAddresses: ['127.0.0.1'],
+    })
+    expect(observed.exits).toEqual([])
   })
 })

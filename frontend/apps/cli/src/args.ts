@@ -51,8 +51,11 @@ interface ElectronInvocation {
   profile: string
 }
 
+/** Read a password from stdin and emit a versioned hash without placing the secret in argv. */
+interface WebPasswordHashInvocation { mode: 'web-password-hash' }
+
 /** The resolved `dsh` invocation. Help, version, and errors exit inside {@link parseDshArgs}. */
-export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInvocation | ElectronInvocation
+export type DshInvocation = ProfileInvocation | DumpConfigInvocation | PluginInvocation | ElectronInvocation | WebPasswordHashInvocation
 
 /** Launcher flags shared by the default command and profile aliases. */
 interface BootOptions {
@@ -211,6 +214,14 @@ export function parseDshArgs(argv: readonly string[], version: string): DshInvoc
       if (options.profile === '') program.error('error: --profile needs a name')
       if (args.length === 0) program.error('error: plugin needs pnpm arguments to forward (e.g. add <package>)')
       resolved = { mode: 'plugin', profile: options.profile, args }
+    })
+
+  program.command('web-password-hash')
+    .description('read a Web administrator password from stdin and print a versioned scrypt hash')
+    .allowExcessArguments(false)
+    .action(() => {
+      rejectParentOptions('web-password-hash')
+      resolved = { mode: 'web-password-hash' }
     })
 
   try {

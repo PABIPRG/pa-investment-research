@@ -33,6 +33,7 @@ describe('parseDshArgs', () => {
     expect(parse(['electron'])).toEqual({ mode: 'electron', profile: 'web' })
     expect(parse(['electron', '--profile', 'investment-research']))
       .toEqual({ mode: 'electron', profile: 'investment-research' })
+    expect(parse(['web-password-hash'])).toEqual({ mode: 'web-password-hash' })
   })
 
   it('ends the launcher flags at the first token it does not own', () => {

@@ -36,6 +36,11 @@ function investmentConflictOwner(error: unknown): { mode: 'web' | 'electron'; pi
 }
 
 switch (invocation.mode) {
+  case 'web-password-hash': {
+    const { runWebPasswordHash } = await import('./web-password-hash.ts')
+    process.exit(await runWebPasswordHash())
+    break
+  }
   case 'electron': {
     const { runElectronApplication } = await import('./electron.ts')
     process.exit(await runElectronApplication({ profile: invocation.profile }))

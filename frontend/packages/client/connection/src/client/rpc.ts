@@ -7,6 +7,7 @@ import {
 } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { ClientConnectionRpc } from '../rpc.ts'
 import { randomUuid } from './random-uuid.ts'
+import { authenticatedInit, observeAuthResponse } from './web-auth.ts'
 
 const INTERNAL_BASE = 'http://dsh.internal'
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
@@ -20,7 +21,8 @@ const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
  * @returns caller that owns request correlation and response-envelope validation.
  */
 export function createWebConnectionRpc(): ClientConnectionRpc {
-  return createConnectionRpc((input, init) => globalThis.fetch(input, init))
+  return createConnectionRpc(async (input, init) =>
+    observeAuthResponse(await globalThis.fetch(input, authenticatedInit(init))))
 }
 
 function createConnectionRpc(fetcher: (input: URL, init?: RequestInit) => Promise<Response>): ClientConnectionRpc {

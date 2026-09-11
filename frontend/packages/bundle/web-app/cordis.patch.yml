@@ -124,7 +124,7 @@
     # frontend-static fallback owner, registers the web-surface prompt
     # section and the bash runtime variable, and prints the URL line. The
     # webStartup provider supplies invocation-only values; after the server
-    # binds, this row samples LAN trust once and provides `webRuntime`. A
+    # binds, this row provides explicit authority trust as `webRuntime`. A
     # complete agent-preset persona suppresses the prompt section for that
     # agent while retaining the host-owned shell variable.
     - id: web-runtime
@@ -135,12 +135,33 @@
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
 
+    # Single-administrator browser boundary. Disabled preserves the historical
+    # loopback profile; required mode fails closed when its hash file is absent.
+    - id: web-auth
+      name: '@deepseek-ai/dsh-api-web-auth'
+      inject: [webStartup, webRuntime]
+      config:
+        mode: !!js ctx.webStartup.authMode
+        username: !!js ctx.webStartup.authUsername
+        passwordHashFile: !!js ctx.webStartup.authPasswordHashFile
+        secureCookies: !!js ctx.webStartup.secureCookies
+        trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
+
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
     # is a row rather than a child of web-runtime because its node half is a
-    # client-side package, which a host-side bundle cannot import.
+    # client-side package, which a host-side bundle cannot import. Its exact
+    # SSE route must carry the same trust and authentication boundary as the
+    # /plugins prefix because exact routes win during dispatch.
     - id: client-hmr
       name: '@deepseek-ai/dsh-client-hmr'
+      inject: [webStartup, webRuntime, webAuth]
+      config:
+        trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
+        requireWebAuth: true
+        maxSseConnections: 64
 
     # ── browser plugin roster (dsh.client rows; node halves are layer-2 hosts) ──
 
@@ -150,17 +171,22 @@
     # entry by the kernel, never fetched).
     - id: modules
       name: '@deepseek-ai/dsh-client-modules'
+      inject: [webStartup, webRuntime, webAuth]
+      config:
+        injectBootManifest: false
+        trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
+        requireWebAuth: true
 
     # Owns both ends of the web transport: node half binds the gateway to the
     # webserver under /api; browser half is the fetch/SSE client.
     - id: connection
       name: '@deepseek-ai/dsh-client-connection'
-      inject: [webRuntime]
+      inject: [webStartup, webRuntime, webAuth]
       config:
-        # LAN literals derived from the active bind plus --trusted-host extras.
-        # A deployment adding authorities keeps this expression and concatenates
-        # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
+        # Exact public authorities explicitly supplied with --trusted-host.
         trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
 
     - id: api-remotes
       name: '@deepseek-ai/dsh-api-remotes'

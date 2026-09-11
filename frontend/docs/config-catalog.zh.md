@@ -320,6 +320,43 @@ export interface Config {
 
 来源：[`packages/core/agent-tool-presentation/src/index.ts:38`](../packages/core/agent-tool-presentation/src/index.ts)
 
+<a id="deepseek-aidsh-api-web-auth"></a>
+
+## `@deepseek-ai/dsh-api-web-auth`
+
+需要：`webServer`
+
+```ts config-catalog
+export interface WebAuthConfig {
+  /** Whether browser administrator authentication is disabled or required. */
+  mode: 'disabled' | 'required'
+  /** Administrator account name accepted by the login endpoint. */
+  username?: string
+  /** Protected file containing the versioned scrypt password record. */
+  passwordHashFile?: string
+  /** Whether session cookies require an HTTPS browser transport. */
+  secureCookies?: boolean
+  /** Public hostnames accepted for non-loopback browser requests. */
+  trustedHosts?: string[]
+  /** Direct reverse-proxy addresses allowed to supply forwarding headers. */
+  trustedProxyAddresses?: string[]
+  /** Maximum inactive time before a browser session expires. */
+  idleTimeoutMs?: number
+  /** Maximum total lifetime of a browser session. */
+  absoluteTimeoutMs?: number
+  /** Rolling time window used by the login attempt limiter. */
+  loginWindowMs?: number
+  /** Maximum login attempts allowed within one limiter window. */
+  loginMaxAttempts?: number
+  /** Maximum number of client-address limiter entries retained in memory. */
+  loginMaxTrackedAddresses?: number
+  /** Maximum password verifications allowed to run concurrently; excess work is not queued. */
+  loginMaxConcurrentVerifications?: number
+}
+```
+
+来源：[`packages/api/web-auth/src/index.ts:29`](../packages/api/web-auth/src/index.ts)
+
 <a id="deepseek-aidsh-attachment-local"></a>
 
 ## `@deepseek-ai/dsh-attachment-local`
@@ -403,16 +440,18 @@ export interface ConnectionConfig {
    * port-less `host` matching any port. The /api trust fence refuses any
    * request whose Host is neither loopback nor listed here, so a
    * non-loopback (`0.0.0.0`) deployment must declare the names it is reached
-   * by (the dsh CLI derives the machine's LAN IP literals itself). An entry
+   * by explicitly. An entry
    * that is not a bare, canonical authority fails the plugin load.
    */
   trustedHosts?: string[]
+  /** Exact socket addresses of reverse proxies whose forwarding headers are trusted. */
+  trustedProxyAddresses?: string[]
   /** Maximum buffered JSON body for every `/api` request. */
   maxRequestBodyBytes?: number
 }
 ```
 
-来源：[`packages/client/connection/src/index.ts:50`](../packages/client/connection/src/index.ts)
+来源：[`packages/client/connection/src/index.ts:56`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
@@ -425,10 +464,18 @@ export interface ConnectionConfig {
 export interface Config {
   /** Bundle stat-poll interval in milliseconds (default 500, the build-side watcher's polling default). */
   pollIntervalMs?: number
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded client and transport facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
+  /** Maximum number of simultaneously open HMR event streams. */
+  maxSseConnections?: number
 }
 ```
 
-来源：[`packages/client/hmr/src/index.ts:31`](../packages/client/hmr/src/index.ts)
+来源：[`packages/client/hmr/src/index.ts:36`](../packages/client/hmr/src/index.ts)
 
 <a id="deepseek-aidsh-client-modules"></a>
 
@@ -441,10 +488,18 @@ export interface Config {
 export interface Config {
   /** Client packages enrolled without an active Host Loader entry. */
   additionalPackages?: string[]
+  /** Inject the graph into HTML; authenticated Web apps fetch it after login. */
+  injectBootManifest?: boolean
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded browser facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
 }
 ```
 
-来源：[`packages/client/modules/src/index.ts:47`](../packages/client/modules/src/index.ts)
+来源：[`packages/client/modules/src/index.ts:53`](../packages/client/modules/src/index.ts)
 
 <a id="deepseek-aidsh-code-runtime-worker-thread"></a>
 
@@ -817,7 +872,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/host/webserver/src/index.ts:45`](../packages/host/webserver/src/index.ts)
+来源：[`packages/host/webserver/src/index.ts:60`](../packages/host/webserver/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 
@@ -837,6 +892,26 @@ export interface Config {
 
 来源：[`packages/runtime-diagnostics/invariants/src/index.ts:15`](../packages/runtime-diagnostics/invariants/src/index.ts)
 
+<a id="deepseek-aidsh-investment-industry-chain"></a>
+
+## `@deepseek-ai/dsh-investment-industry-chain`
+
+需要：`investmentPythonRuntime`
+
+```ts config-catalog
+/** Industry-chain backend connection settings. */
+export interface Config {
+  /** Runtime ownership mode. Defaults to managed. */
+  backendMode?: 'managed' | 'external'
+  /** Backend origin verified by the Runtime. Defaults to `http://127.0.0.1:8200`. */
+  backendBaseUrl?: string
+  /** Explicit absolute industry-chain checkout when repository discovery is unavailable. */
+  backendProjectDir?: string
+}
+```
+
+来源：[`packages/investment-research/industry-chain/src/index.ts:13`](../packages/investment-research/industry-chain/src/index.ts)
+
 <a id="deepseek-aidsh-investment-market-watch"></a>
 
 ## `@deepseek-ai/dsh-investment-market-watch`
@@ -855,13 +930,13 @@ export interface Config {
 }
 ```
 
-来源：[`packages/investment-research/market-watch/src/index.ts:41`](../packages/investment-research/market-watch/src/index.ts)
+来源：[`packages/investment-research/market-watch/src/index.ts:42`](../packages/investment-research/market-watch/src/index.ts)
 
 <a id="deepseek-aidsh-investment-python-runtime"></a>
 
 ## `@deepseek-ai/dsh-investment-python-runtime`
 
-需要：`subprocess`
+需要：`credentials` · `subprocess`
 
 ```ts config-catalog
 /** Investment Python Runtime deployment configuration. */
@@ -872,6 +947,10 @@ export interface Config {
   startupTimeoutMs?: number
   /** Delay between managed health probes in milliseconds. */
   healthPollMs?: number
+  /** Duration that one successful active-backend health probe remains reusable. */
+  healthFreshnessMs?: number
+  /** Maximum duration of one backend health request in milliseconds. */
+  healthTimeoutMs?: number
   /** Grace period before process-tree termination escalates. */
   shutdownGraceMs?: number
   /** Maximum in-memory diagnostic log tail in bytes. */
@@ -881,13 +960,13 @@ export interface Config {
 }
 ```
 
-来源：[`packages/investment-research/python-runtime/src/types.ts:46`](../packages/investment-research/python-runtime/src/types.ts)
+来源：[`packages/investment-research/python-runtime/src/types.ts:268`](../packages/investment-research/python-runtime/src/types.ts)
 
 <a id="deepseek-aidsh-investment-stock-analysis"></a>
 
 ## `@deepseek-ai/dsh-investment-stock-analysis`
 
-需要：`tools` · `agents` · `investmentPythonRuntime`
+需要：`tools` · `agents` · `investmentPythonRuntime` · `systemPrompt`
 
 ```ts config-catalog
 /** Stock-analysis adapter, streaming, and optional in-chat brief settings. */
@@ -898,6 +977,8 @@ export interface Config {
   backendBaseUrl?: string
   /** Explicit absolute trading-core checkout when repository discovery is unavailable. */
   backendProjectDir?: string
+  /** Trading backend implementation selected explicitly for managed startup. Defaults to engine. */
+  backendRunner?: 'engine' | 'fake'
   /** Maximum SSE task duration in milliseconds. Defaults to 600000. */
   streamTimeoutMs?: number
   /** Enable periodic brief delivery to root agent sessions. Defaults to false. */
@@ -909,7 +990,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/investment-research/stock-analysis/src/index.ts:47`](../packages/investment-research/stock-analysis/src/index.ts)
+来源：[`packages/investment-research/stock-analysis/src/index.ts:57`](../packages/investment-research/stock-analysis/src/index.ts)
 
 <a id="deepseek-aidsh-jobs-local"></a>
 
@@ -2979,7 +3060,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/bundle/web-app/src/index.ts:38`](../packages/bundle/web-app/src/index.ts)
+来源：[`packages/bundle/web-app/src/index.ts:37`](../packages/bundle/web-app/src/index.ts)
 
 <a id="deepseek-aidsh-web-fetch-http"></a>
 
@@ -3120,6 +3201,7 @@ export interface Config {
 - `@deepseek-ai/dsh-agent`（[`packages/core/agent/src/index.ts`](../packages/core/agent/src/index.ts)）
 - `@deepseek-ai/dsh-api-gateway` — 需要 `typert`（[`packages/api/gateway/src/index.ts`](../packages/api/gateway/src/index.ts)）
 - `@deepseek-ai/dsh-api-remotes`（[`packages/api/remotes/src/index.ts`](../packages/api/remotes/src/index.ts)）
+- `@deepseek-ai/dsh-client-investment-research-runtime`（[`packages/client/investment-research-runtime/src/index.ts`](../packages/client/investment-research-runtime/src/index.ts)）
 - `@deepseek-ai/dsh-client-locale`（[`packages/client/locale/src/index.ts`](../packages/client/locale/src/index.ts)）
 - `@deepseek-ai/dsh-client-runtime`（[`packages/client/runtime/src/index.ts`](../packages/client/runtime/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-agent-preset`（[`packages/client/ui-agent-preset/src/index.ts`](../packages/client/ui-agent-preset/src/index.ts)）
@@ -3132,6 +3214,7 @@ export interface Config {
 - `@deepseek-ai/dsh-client-ui-directory-picker-native`（[`packages/client/ui-directory-picker-native/src/index.ts`](../packages/client/ui-directory-picker-native/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-goal`（[`packages/client/ui-goal/src/index.ts`](../packages/client/ui-goal/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-input-trigger`（[`packages/client/ui-input-trigger/src/index.ts`](../packages/client/ui-input-trigger/src/index.ts)）
+- `@deepseek-ai/dsh-client-ui-investment-research`（[`packages/client/ui-investment-research/src/index.ts`](../packages/client/ui-investment-research/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-jobs`（[`packages/client/ui-jobs/src/index.ts`](../packages/client/ui-jobs/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-layout`（[`packages/client/ui-layout/src/index.ts`](../packages/client/ui-layout/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-message-feedback`（[`packages/client/ui-message-feedback/src/index.ts`](../packages/client/ui-message-feedback/src/index.ts)）
@@ -3140,6 +3223,7 @@ export interface Config {
 - `@deepseek-ai/dsh-client-ui-plan`（[`packages/client/ui-plan/src/index.ts`](../packages/client/ui-plan/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-settings`（[`packages/client/ui-settings/src/index.ts`](../packages/client/ui-settings/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-settings-general`（[`packages/client/ui-settings-general/src/index.ts`](../packages/client/ui-settings-general/src/index.ts)）
+- `@deepseek-ai/dsh-client-ui-settings-investment-research`（[`packages/client/ui-settings-investment-research/src/index.ts`](../packages/client/ui-settings-investment-research/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-settings-models`（[`packages/client/ui-settings-models/src/index.ts`](../packages/client/ui-settings-models/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-settings-plugin-inventory`（[`packages/client/ui-settings-plugin-inventory/src/index.ts`](../packages/client/ui-settings-plugin-inventory/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-settings-plugins`（[`packages/client/ui-settings-plugins/src/index.ts`](../packages/client/ui-settings-plugins/src/index.ts)）
@@ -3223,6 +3307,7 @@ export interface Config {
 - `@deepseek-ai/dsh-cmdline`（[`packages/boot/cmdline/src/index.ts`](../packages/boot/cmdline/src/index.ts)）
 - `@deepseek-ai/dsh-home-paths`（[`packages/util/home-paths/src/index.ts`](../packages/util/home-paths/src/index.ts)）
 - `@deepseek-ai/dsh-hook-protocol`（[`packages/hooks/hook-protocol/src/index.ts`](../packages/hooks/hook-protocol/src/index.ts)）
+- `@deepseek-ai/dsh-investment-industry-chain-bundle`（[`packages/bundle/investment-industry-chain/src/index.ts`](../packages/bundle/investment-industry-chain/src/index.ts)）
 - `@deepseek-ai/dsh-investment-market-watch-bundle`（[`packages/bundle/investment-market-watch/src/index.ts`](../packages/bundle/investment-market-watch/src/index.ts)）
 - `@deepseek-ai/dsh-investment-runtime-bundle`（[`packages/bundle/investment-runtime/src/index.ts`](../packages/bundle/investment-runtime/src/index.ts)）
 - `@deepseek-ai/dsh-investment-stock-analysis-bundle`（[`packages/bundle/investment-stock-analysis/src/index.ts`](../packages/bundle/investment-stock-analysis/src/index.ts)）

@@ -57,6 +57,7 @@
     "lib/types/**/*.d.ts"
   ],
   "peerDependencies": {
+    "@deepseek-ai/dsh-host-webserver": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/cordis": "workspace:^"
   }

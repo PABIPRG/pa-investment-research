@@ -2,25 +2,19 @@
  * Web runtime glue behavior: dist resolution through the bundle's own hook,
  * the frontend-static child claiming the fallback seat, the web-surface
  * prompt section and bash runtime variables, and URL-line printing with the
- * runtime's bind-dependent LAN snapshot.
+ * explicit HTTPS authority.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import * as yaml from 'js-yaml'
 import { apply, Config, internals } from '../src/index.ts'
-
-vi.mock('node:os', async importOriginal => ({
-  ...await importOriginal<typeof import('node:os')>(),
-  networkInterfaces: () => ({
-    lo0: [{ family: 'IPv4', internal: true, address: '127.0.0.1' }],
-    en0: [{ family: 'IPv4', internal: false, address: '192.168.1.5' }],
-  }),
-}))
 
 let dist: string | undefined
 
@@ -32,6 +26,13 @@ afterEach(() => {
 })
 
 const originalResolve = internals.resolveDistIndex
+const root = fileURLToPath(new URL('..', import.meta.url))
+const loaderSchema = yaml.DEFAULT_SCHEMA.extend([
+  new yaml.Type('tag:yaml.org,2002:js', {
+    kind: 'scalar',
+    construct: (expression: unknown): unknown => expression,
+  }),
+])
 
 /** Stage a dist fixture and point the bundle's resolver at it. */
 function stageDist(): string {
@@ -70,7 +71,35 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
-  it('mounts dist serving, prompt section, bash variables, and prints the URL with the LAN snapshot', async () => {
+  it('injects the HMR and plugin bundle routes with the Web trust and authentication authorities', () => {
+    const patch = yaml.load(readFileSync(resolve(root, 'cordis.patch.yml'), 'utf8'), { schema: loaderSchema })
+    if (!Array.isArray(patch)) throw new TypeError('web-app patch must be a patch list')
+    const rows = patch.flatMap((entry): Record<string, unknown>[] =>
+      typeof entry === 'object' && entry !== null
+        ? (entry as { insert?: Record<string, unknown>[] }).insert ?? []
+        : [])
+    const hmr = rows.find(row => row.id === 'client-hmr')
+    expect(hmr).toMatchObject({
+      inject: ['webStartup', 'webRuntime', 'webAuth'],
+      config: {
+        trustedHosts: 'ctx.webRuntime.trustedHosts',
+        trustedProxyAddresses: 'ctx.webStartup.trustedProxyAddresses',
+        requireWebAuth: true,
+        maxSseConnections: 64,
+      },
+    })
+    expect(rows.find(row => row.id === 'modules')).toMatchObject({
+      inject: ['webStartup', 'webRuntime', 'webAuth'],
+      config: {
+        injectBootManifest: false,
+        trustedHosts: 'ctx.webRuntime.trustedHosts',
+        trustedProxyAddresses: 'ctx.webStartup.trustedProxyAddresses',
+        requireWebAuth: true,
+      },
+    })
+  })
+
+  it('mounts dist serving, prompt section, bash variables, and prints the trusted HTTPS URL', async () => {
     stageDist()
     const ctx = new Context()
     const { server, seat } = fakeHttpServer('0.0.0.0')
@@ -91,19 +120,18 @@ describe('web-app runtime glue', () => {
 
     expect(seat()).toBeDefined() // frontend-static claimed the fallback
     expect(ctx.get('webRuntime')).toEqual({
-      lanAddresses: ['192.168.1.5'],
-      trustedHosts: ['192.168.1.5', 'lab.internal'],
+      trustedHosts: ['lab.internal'],
     })
-    expect(log).toHaveBeenCalledWith('dsh web: http://127.0.0.1:4567 (LAN: http://192.168.1.5:4567)')
+    expect(log).toHaveBeenCalledWith('dsh web: https://lab.internal')
     const assembly = await ctx.systemPrompt.assemble()
     expect(assembly.sections.find(entry => entry.name === 'harness:source')?.text).toContain('DeepSeek Harness implementation checkout')
     const section = assembly.sections.find(entry => entry.name === 'app:web-surface')
-    expect(section?.text).toContain('http://127.0.0.1:4567')
+    expect(section?.text).toContain('https://lab.internal')
     // The single update contract: the receiver is always on; no-refresh
     // reloads additionally need the rebuild watcher.
     expect(section?.text).toContain('pnpm run dev:web')
     const webRuntime = contributions.find(contribution => contribution.name === 'web-runtime')
-    expect(webRuntime?.resolve()).toEqual({ DSH_WEB_URL: 'http://127.0.0.1:4567' })
+    expect(webRuntime?.resolve()).toEqual({ DSH_WEB_URL: 'https://lab.internal' })
     await ctx.fiber.dispose()
   })
 
