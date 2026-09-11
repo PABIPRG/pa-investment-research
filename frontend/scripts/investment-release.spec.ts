@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -139,7 +140,7 @@ describe('investment release workflow', () => {
     expect(JSON.stringify(planStep)).not.toContain('--expected-version "${{ inputs.expected_version }}"')
     expect(JSON.stringify(planStep)).not.toContain('--channel "${{ inputs.channel }}"')
     expect(preflightSteps).toContain('gh release view')
-    expect(preflightSteps).toContain('git/ref/tags/')
+    expect(preflightSteps).toContain('git/matching-refs/tags/')
     expect(build.strategy).toMatchObject({
       'fail-fast': false,
       matrix: {
@@ -178,5 +179,41 @@ describe('investment release workflow', () => {
     const workflow = loadWorkflow('investment-sidecar.yml')
     expect(JSON.stringify(workflow)).toContain('short_sha')
     expect(JSON.stringify(workflow)).toContain('${{ steps.commit.outputs.short_sha }}')
+  })
+})
+
+// Execute the exact workflow lookup with a local gh stub; no GitHub state is changed.
+describe.skipIf(process.platform === 'win32')('release tag lookup shell behavior', () => {
+  it.each([
+    ['absent', [], false, 0],
+    ['same', [{ ref: 'refs/tags/investment-v0.1.0-rc.11', object: { sha: 'expected' } }], false, 0],
+    ['conflicting', [{ ref: 'refs/tags/investment-v0.1.0-rc.11', object: { sha: 'different' } }], false, 9],
+    ['prefix-only', [{ ref: 'refs/tags/investment-v0.1.0-rc.110', object: { sha: 'different' } }], false, 0],
+    ['API failure', [], true, 1],
+  ])('%s preserves release guard behavior', (_name, refs, denied, expectedStatus) => {
+    const source = readFileSync(resolve(repositoryRoot, '.github/workflows/investment-release.yml'), 'utf8')
+    const lookups = source.split('\n').filter(line => line.trimStart().startsWith('existing_sha='))
+    expect(lookups).toHaveLength(2)
+    for (const lookup of lookups) {
+      const result = spawnSync('bash', ['-c', `
+set -euo pipefail
+gh() {
+  if [ "$DENIED" = true ]; then
+    echo '{"message":"Forbidden"}'
+    return 1
+  fi
+  case "$2" in
+    */git/matching-refs/tags/*) printf '%s' "$REFS" | jq -r "$4" ;;
+    *) echo '{"message":"Not Found"}'; return 1 ;;
+  esac
+}
+${lookup}
+if [ -n "$existing_sha" ] && [ "$existing_sha" != "$RELEASE_SHA" ]; then exit 9; fi
+`], {
+        encoding: 'utf8',
+        env: { ...process.env, GITHUB_REPOSITORY: 'test/repo', RELEASE_TAG: 'investment-v0.1.0-rc.11', RELEASE_SHA: 'expected', REFS: JSON.stringify(refs), DENIED: String(denied) },
+      })
+      expect(result.status, result.stderr).toBe(expectedStatus)
+    }
   })
 })
