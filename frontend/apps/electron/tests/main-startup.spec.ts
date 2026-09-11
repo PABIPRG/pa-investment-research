@@ -91,6 +91,7 @@ describe('Electron main startup', () => {
       watchPatches: false,
       instanceMode: 'electron',
     })
+    expect(startupOptions).not.toHaveProperty('installAnchor')
     expect(startupOptions?.restart).toEqual(expect.any(Function))
     await expect(startupOptions?.onInstanceConflict?.({ mode: 'web', pid: 123 })).resolves.toBe('replace')
     expect(mocks.showMessageBox).toHaveBeenCalledWith(expect.objectContaining({

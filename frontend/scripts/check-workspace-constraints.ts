@@ -57,6 +57,7 @@ const appPackageFiles: Readonly<Record<string, readonly string[]>> = {
   // what the payload policy forbids, so the bundle ships without them.
   '@deepseek-ai/dsh-web-frontend': ['dist', '!dist/**/*.map'],
   '@deepseek-ai/dsh-electron': [
+    'assets',
     'lib/*.js',
     'lib/*.cjs',
     'lib/types/**/*.d.ts',

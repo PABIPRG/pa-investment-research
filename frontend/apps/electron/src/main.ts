@@ -10,6 +10,7 @@ import type {
   ElectronStreamKind,
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
+import { bindHoldingsNative } from './holdings-native.ts'
 import { appIdentity } from './app-identity.ts'
 import { resolveElectronProfile } from './args.ts'
 import { bindDesktopShortcuts } from './desktop-shortcuts.ts'
@@ -21,11 +22,10 @@ import {
   STREAM_OPEN_CHANNEL,
 } from './ipc.ts'
 
-const APP_MANIFEST = fileURLToPath(new URL('../package.json', import.meta.url))
 const ELECTRON_PATCH = fileURLToPath(new URL('../electron.patch.yml', import.meta.url))
 const RENDERER_DIR = fileURLToPath(new URL('../renderer/', import.meta.url))
 const PRELOAD = fileURLToPath(new URL('./preload.cjs', import.meta.url))
-const PROFILE = resolveElectronProfile()
+const PROFILE = resolveElectronProfile(process.argv, app.isPackaged ? 'investment-research' : 'web')
 
 interface StreamOpenRequest {
   kind: ElectronStreamKind
@@ -138,7 +138,7 @@ async function runApplication(): Promise<void> {
       profile: PROFILE,
       patchFiles: [ELECTRON_PATCH],
       args: [],
-      installAnchor: APP_MANIFEST,
+      // Resolve built-in bundles from their owning CLI package, including in pnpm deployments.
       restart: requestRestart,
       watchPatches: false,
       ...(PROFILE === 'investment-research'
@@ -188,10 +188,13 @@ async function runApplication(): Promise<void> {
         webSecurity: true,
       },
     })
+    const holdingsRuntime = ctx.get('investmentPythonRuntime')
+    const disposeHoldings = holdingsRuntime === undefined ? () => {} : bindHoldingsNative(window, request => holdingsRuntime.nativeHoldings(request))
     const streamIpc = bindIpc(window.webContents, connection)
     const desktopShortcuts = bindDesktopShortcuts(window, ipcMain, ctx)
     ipc = {
       async dispose(): Promise<void> {
+        await disposeHoldings()
         desktopShortcuts.dispose()
         await streamIpc.dispose()
       },
@@ -213,6 +216,7 @@ async function runApplication(): Promise<void> {
       app.quit()
       return
     }
+    process.stderr.write(`${startupFailureMessage(error)}\n${error instanceof Error ? error.message : String(error)}\n`)
     await dialog.showMessageBox({
       type: 'error',
       title: '投研智能体启动失败',

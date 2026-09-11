@@ -1313,7 +1313,7 @@
 .workbenchSingleImport { display: grid; gap: 12px; }
 .workbenchSingleImport .workbenchHoldingForm { margin-bottom: 0; }
 .workbenchImportPanel { display: grid; gap: 12px; }
-.workbenchSyncPanel { display: grid; gap: 12px; }
+.workbenchSyncPanel { display: grid; gap: 20px; min-width: 0; }
 .workbenchSyncPanel .workbenchImportHeader, .workbenchSyncPanel .sourceFacts { margin: 0; }
 .workbenchAccountMode { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
 .workbenchAccountMode > div:first-child { display: grid; gap: 3px; min-width: 0; }
@@ -2569,3 +2569,46 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .assistantToolbar .assistantReturnAction { width: auto; min-width: 112px; padding-inline: 9px; color: var(--investment-primary); font-size: 0.7857rem; }
   .assistantToolbar button .actionIcon { color: var(--dsw-alias-label-secondary); }
 }
+
+.workbenchSyncPreparation {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  min-width: 0;
+  background: var(--dsw-alias-bg-base);
+  border-top: 1px solid var(--dsw-alias-border-l2);
+}
+
+.workbenchSyncPreparation p { margin: 0; }
+.workbenchSyncPreparation ol { margin: 0; padding-left: 24px; line-height: 1.5; }
+.workbenchSyncPreparation > div { max-width: 100%; }
+@media (max-width: 768px) {
+  .workbenchSyncPreparation { align-items: stretch; }
+}
+
+@media (max-width: 390px) {
+  .detailBackdrop:has(.workbenchSyncPanel) { padding: 0; }
+  .detailDialogWide:has(.workbenchSyncPanel) {
+    width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+}
+
+/* 持仓同步：紧凑任务弹层，检测与授权保持清晰的操作层级。 */
+.detailDialogWide:has(.workbenchSyncPanel) { width: min(720px, 100%); }
+.workbenchSyncPanel .workbenchAccountMode { border: 0; padding: 0; background: transparent; }
+.workbenchSyncPanel .workbenchSyncPreparation { padding: 16px 0 0; align-items: stretch; }
+.workbenchSyncPanel .workbenchSyncPreparation > button { align-self: flex-start; }
+.syncStatusList { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 12px 0; border-block: 1px solid var(--dsw-alias-border-l1); }
+.syncStatusList > span { display: grid; gap: 4px; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.syncStatusList strong { color: var(--dsw-alias-label-primary); font-weight: 600; }
+.syncPermissionGuide { display: grid; gap: 12px; padding: 16px; border-radius: 12px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-size: 0.8571rem; line-height: 1.5; }
+.syncPermissionGuide > span, .syncHint { color: var(--dsw-alias-label-secondary); }
+.syncActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.syncHelpButton { justify-self: start; border: 0; padding: 4px 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; text-decoration: underline; cursor: pointer; }
+.syncHelpButton:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: 4px; }
+@media (max-width: 768px) { .syncActions > button { flex: 1 1 auto; } }

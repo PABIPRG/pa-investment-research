@@ -19,6 +19,8 @@ export type ElectronStreamEvent =
 
 /** Narrow API exposed by the sandboxed preload script. */
 export interface ElectronRendererBridge {
+  /** Request a fixed holdings action; foreground actions require a main-process dialog. */
+  holdingsAction?(input: { action: 'read' | 'launch' | 'select_client' | 'download' | 'accessibility' | 'automation'; account_mode: 'real' | 'simulated' }): Promise<unknown>
   readonly version: 1
   /** Operating system reported by the sandboxed Electron preload. */
   readonly platform: 'darwin' | 'win32' | 'linux'

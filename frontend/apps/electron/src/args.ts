@@ -3,9 +3,9 @@
 /**
  * Resolve the unique `--profile <name>` pair in Electron argv.
  * Electron's executable and application-directory arguments, plus unrelated
- * runtime switches, are ignored. Absence preserves the desktop `web` default.
+ * runtime switches, are ignored. The caller supplies the packaged app default.
  */
-export function resolveElectronProfile(argv: readonly string[] = process.argv): string {
+export function resolveElectronProfile(argv: readonly string[] = process.argv, defaultProfile = 'web'): string {
   let profile: string | undefined
   for (let index = 0; index < argv.length; index += 1) {
     if (argv[index] !== '--profile') continue
@@ -18,5 +18,5 @@ export function resolveElectronProfile(argv: readonly string[] = process.argv): 
     profile = value
     index += 1
   }
-  return profile ?? 'web'
+  return profile ?? defaultProfile
 }

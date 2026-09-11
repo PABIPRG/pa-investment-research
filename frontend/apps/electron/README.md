@@ -80,3 +80,5 @@ The desktop carrier does not change model-visible content; it runs the same Web 
 #### KV Cache effect
 
 None; the Electron layer only changes local transport and application packaging.
+
+Holdings foreground reads require consent in the main process on every invocation and return focus after completion. The preload accepts only fixed actions; executable selection uses the native picker and is limited to xiadan.exe.

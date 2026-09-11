@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Path as ApiPath, Query
+from fastapi import FastAPI, HTTPException, Path as ApiPath, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
@@ -32,7 +32,7 @@ from .holdings_source import (
     EmptyHoldingsError,
     detect_clients,
     provider_snapshot,
-    sync_holdings,
+    preview_holdings, commit_holdings, PreviewConflict,
 )
 from .report_store import ReportStore, ReportValidationError
 from .portfolio_performance import (
@@ -50,7 +50,7 @@ from .schemas import (
     AnalyzeRequest,
     BacktestRunRequest,
     BriefRequest,
-    HoldingsDetectRequest,
+    HoldingsDetectRequest, HoldingsSyncRequest, HoldingsNativeRequest,
     HoldingsRequest,
     HoldingsSaveRequest,
     HoldingsUserConfigRequest,
@@ -482,15 +482,37 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         """扫描本机已装券商客户端；默认走 TTL 缓存，force=true 强制重扫。"""
         return await detect_clients(force=bool(req and req.force))
 
-    @app.post("/holdings/sync", response_model=dict)
-    async def holdings_sync_post():
-        """从所选真实/模拟账户拉取持仓并整体替换本地持仓（会写入持仓快照）。"""
+    def sync_result(call):
         try:
-            return await run_in_threadpool(sync_holdings)
+            return call()
         except ProviderUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            return {"readiness": "partial" if exc.code == "partial_read" else "blocked",
+                    "blocking_reason": exc.code, "reason": str(exc),
+                    "automation": "required" if exc.code == "automation_required" else "not_requested",
+                    "available_actions": ["manual", "recheck"]}
         except EmptyHoldingsError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {"readiness": "blocked", "blocking_reason": "empty_result", "reason": str(exc)}
+        except PreviewConflict as exc:
+            return {"readiness": "blocked", "blocking_reason": "preview_conflict", "reason": str(exc)}
+        except Exception:
+            return {"readiness": "failed", "blocking_reason": "read_failed", "reason": "操作未完成，请重新检查客户端或改用手动录入。"}
+
+    @app.post("/holdings/sync", response_model=dict)
+    async def holdings_sync_post(req: Optional[HoldingsSyncRequest] = None):
+        """读取只返回预览；显式 commit 才保存，旧无参数请求不再写入。"""
+        request = req or HoldingsSyncRequest()
+        return await run_in_threadpool(sync_result, lambda: commit_holdings(request.preview_token)
+                                       if request.action == "commit" else preview_holdings())
+
+    @app.post("/holdings/native", response_model=dict)
+    async def holdings_native_post(req: HoldingsNativeRequest, x_holdings_native: str = Header(default="")):
+        """此凭证只存在宿主与其子进程，不通过通用 RPC 或 renderer 下发。"""
+        import secrets
+        token = os.environ.get("DSH_HOLDINGS_NATIVE_TOKEN", "")
+        if not token or not secrets.compare_digest(token, x_holdings_native):
+            raise HTTPException(status_code=403, detail="原生动作需要桌面宿主授权。")
+        from .holdings_source import native_action
+        return await run_in_threadpool(sync_result, lambda: native_action(req.action, req.account_mode, req.client_path))
 
     @app.get("/holdings/user-config", response_model=dict)
     async def holdings_user_config_get():
@@ -527,31 +549,37 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         import dotenv
         from .config import settings
 
-        env_path = settings.user_config_dir / "backend.env"
-        env_path.parent.mkdir(parents=True, exist_ok=True)
-        written: dict[str, str] = {}
-        for key, value in req.entries.items():
-            dotenv.set_key(str(env_path), key, value, encoding="utf-8")
-            written[key] = value
-        if "HOLDINGS_PROVIDER" in written:
-            provider = written["HOLDINGS_PROVIDER"].strip().lower()
-            settings.holdings_provider = provider
-            os.environ["HOLDINGS_PROVIDER"] = provider
-        if "HOLDINGS_ACCOUNT_MODE" in written:
-            account_mode = written["HOLDINGS_ACCOUNT_MODE"].strip().lower()
-            settings.holdings_account_mode = account_mode
-            os.environ["HOLDINGS_ACCOUNT_MODE"] = account_mode
-        immediate_keys = {"HOLDINGS_PROVIDER", "HOLDINGS_ACCOUNT_MODE"}
-        restart_required = any(key not in immediate_keys for key in written)
-        return {
-            "written": written,
-            "effective": {
-                "HOLDINGS_PROVIDER": settings.holdings_provider,
-                "HOLDINGS_ACCOUNT_MODE": settings.holdings_account_mode,
-            },
-            "restart_required": restart_required,
-            "note": "持仓数据源已在当前窗口生效。" if not restart_required else "其他配置将在重启投研后端后生效。",
-        }
+        from .holdings_source import _READ_LOCK
+        if not _READ_LOCK.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail="持仓读取或保存中，请稍后切换账户。")
+        try:
+            env_path = settings.user_config_dir / "backend.env"
+            env_path.parent.mkdir(parents=True, exist_ok=True)
+            written: dict[str, str] = {}
+            for key, value in req.entries.items():
+                dotenv.set_key(str(env_path), key, value, encoding="utf-8")
+                written[key] = value
+            if "HOLDINGS_PROVIDER" in written:
+                provider = written["HOLDINGS_PROVIDER"].strip().lower()
+                settings.holdings_provider = provider
+                os.environ["HOLDINGS_PROVIDER"] = provider
+            if "HOLDINGS_ACCOUNT_MODE" in written:
+                account_mode = written["HOLDINGS_ACCOUNT_MODE"].strip().lower()
+                settings.holdings_account_mode = account_mode
+                os.environ["HOLDINGS_ACCOUNT_MODE"] = account_mode
+            immediate_keys = {"HOLDINGS_PROVIDER", "HOLDINGS_ACCOUNT_MODE"}
+            restart_required = any(key not in immediate_keys for key in written)
+            return {
+                "written": written,
+                "effective": {
+                    "HOLDINGS_PROVIDER": settings.holdings_provider,
+                    "HOLDINGS_ACCOUNT_MODE": settings.holdings_account_mode,
+                },
+                "restart_required": restart_required,
+                "note": "持仓数据源已在当前窗口生效。" if not restart_required else "其他配置将在重启投研后端后生效。",
+            }
+        finally:
+            _READ_LOCK.release()
 
     @app.get("/portfolio/performance", response_model=dict)
     async def portfolio_performance_get(

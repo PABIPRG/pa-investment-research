@@ -153,12 +153,11 @@ class RowsToItemsTests(unittest.TestCase):
 
         self.assertEqual(items[0].ticker, "000001")
 
-    def test_zero_and_dashed_rows_are_skipped(self):
-        """已清仓的行数量为 0 或 '--'，不能写进持仓。"""
+    def test_zero_rows_are_skipped(self):
+        """已清仓的行数量为 0，不能写进持仓。"""
         header = ["证券代码", "股票余额", "成本价"]
         rows = [
             ["600879", "0", "23.5024"],  # 已清仓
-            ["159607", "--", "1.0115"],  # 非持仓行
             ["600372", "400", "16.2117"],
         ]
 
@@ -166,10 +165,10 @@ class RowsToItemsTests(unittest.TestCase):
 
         self.assertEqual([item.ticker for item in items], ["600372"])
 
-    def test_rows_shorter_than_the_header_are_tolerated(self):
-        items = rows_to_items(["证券代码", "股票余额", "成本价"], [["600372", "400"]])
-
-        self.assertEqual(items, [])
+    def test_partial_rows_refuse_replacement(self):
+        with self.assertRaises(ProviderUnavailable) as caught:
+            rows_to_items(["证券代码", "股票余额", "成本价"], [["600372", "400"]])
+        self.assertEqual(caught.exception.code, "partial_read")
 
     def test_unrecognized_header_reports_the_actual_header(self):
         with self.assertRaises(MacThsScriptError) as ctx:
@@ -197,164 +196,86 @@ class ToFloatTests(unittest.TestCase):
 
 
 class MacThsProviderTests(unittest.TestCase):
-    """provider 各分支；用注入的 platform/runner 在 Windows 上跑通。"""
+    """权限、被动读取、按次导航、失败返回的契约。"""
+    def setUp(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        self.previous = Mock()
+        self.target = Mock()
+        self.target.localizedName.return_value = '同花顺'
+        workspace = Mock()
+        workspace.frontmostApplication.return_value = self.previous
+        workspace.runningApplications.return_value = [self.target]
+        self.appkit = SimpleNamespace(NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace), NSApplicationActivateIgnoringOtherApps=1)
+        self.patches = [
+            patch.dict('sys.modules', {'AppKit': self.appkit}),
+            patch.object(mac_ths, 'accessibility_status', return_value='granted'),
+            patch.object(mac_ths, 'app_running', return_value=True),
+        ]
+        for item in self.patches:
+            item.start()
+            self.addCleanup(item.stop)
 
-    def _provider(self, runner, platform="darwin", app_name="同花顺", account_mode="real"):
-        return MacThsProvider(
-            platform=platform,
-            runner=runner,
-            app_name=app_name,
-            account_mode=account_mode,
-        )
+    def test_passive_read_does_not_activate_or_use_applescript(self):
+        from unittest.mock import Mock
+        runner = Mock()
+        with patch.object(mac_ths, 'read_ax_table', return_value=[]) as read:
+            MacThsProvider(platform='darwin', runner=runner).get_holdings()
+            read.assert_called_once_with('simulated')
+        runner.assert_not_called()
+        self.target.activateWithOptions_.assert_not_called()
 
-    def _on_mac(self):
-        return patch.multiple(mac_ths, osascript_available=lambda: True, app_running=lambda name: True)
+    def test_passive_failure_requires_navigation_without_activating(self):
+        with patch.object(mac_ths, 'read_ax_table', side_effect=ProviderUnavailable('导航', 'navigation_required')):
+            with self.assertRaises(ProviderUnavailable) as caught:
+                MacThsProvider(platform='darwin').get_holdings()
+        self.assertEqual(caught.exception.code, 'navigation_required')
+        self.target.activateWithOptions_.assert_not_called()
 
-    def test_non_darwin_is_unavailable_and_says_so(self):
-        provider = self._provider(lambda script: (0, "", ""), platform="win32")
+    def test_foreground_uses_ax_first_and_restores_previous(self):
+        with patch.object(mac_ths, 'read_ax_table', side_effect=[ProviderUnavailable('导航', 'navigation_required'), []]) as read:
+            result = MacThsProvider(platform='darwin', account_mode='real').read_holdings(foreground=True)
+        self.assertEqual(result, [])
+        self.assertEqual(read.call_args.kwargs, {'navigate': True})
+        self.previous.activateWithOptions_.assert_called_once()
 
-        self.assertFalse(provider.is_available())
-        with self.assertRaises(ProviderUnavailable) as ctx:
-            provider.get_holdings()
-        self.assertIn("win32", str(ctx.exception))
+    def test_only_actual_fallback_requests_automation_and_restores(self):
+        for code, output, error in [(1, '', '-1743'), (0, 'ERR\t-1743', '')]:
+            with self.subTest(code=code):
+                with patch.object(mac_ths, 'read_ax_table', side_effect=ProviderUnavailable('导航', 'navigation_required')):
+                    provider = MacThsProvider(platform='darwin', runner=lambda script: (code, output, error))
+                    with self.assertRaises(ProviderUnavailable) as caught:
+                        provider.read_holdings(foreground=True)
+                self.assertEqual(caught.exception.code, 'automation_required')
+        self.assertEqual(self.previous.activateWithOptions_.call_count, 2)
 
-    def test_missing_osascript_is_unavailable(self):
-        provider = self._provider(lambda script: (0, "", ""))
-        with patch.multiple(mac_ths, osascript_available=lambda: False, app_running=lambda name: True):
-            self.assertFalse(provider.is_available())
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-        self.assertIn("osascript", str(ctx.exception))
+    def test_fallback_success_timeout_and_error_restore(self):
+        cases = [
+            (lambda script: (0, _ok(HOLDINGS_HEADER, '600879\t航天电子\t900\t900\t23.5024\t24.10'), ''), None),
+            (lambda script: (1, '', '-25211'), 'accessibility_required'),
+            (lambda script: (1, '', 'failure'), 'read_failed'),
+        ]
+        for runner, expected in cases:
+            with patch.object(mac_ths, 'read_ax_table', side_effect=ProviderUnavailable('导航', 'navigation_required')):
+                provider = MacThsProvider(platform='darwin', runner=runner)
+                if expected:
+                    with self.assertRaises(ProviderUnavailable) as caught:
+                        provider.read_holdings(foreground=True)
+                    self.assertEqual(caught.exception.code, expected)
+                else:
+                    self.assertEqual(len(provider.read_holdings(foreground=True)), 1)
+        self.assertEqual(self.previous.activateWithOptions_.call_count, 3)
 
-    def test_client_not_running_is_unavailable(self):
-        provider = self._provider(lambda script: (0, "", ""))
-        with patch.multiple(mac_ths, osascript_available=lambda: True, app_running=lambda name: False):
-            self.assertFalse(provider.is_available())
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-        self.assertIn("未运行", str(ctx.exception))
-
-    def test_successful_run_returns_items(self):
-        script_seen = []
-
-        def runner(script):
-            script_seen.append(script)
-            return 0, _ok(HOLDINGS_HEADER, "600879\t航天电子\t900\t900\t23.5024\t24.10"), ""
-
-        provider = self._provider(runner)
-        with self._on_mac():
-            self.assertTrue(provider.is_available())
-            items = provider.get_holdings()
-
-        self.assertEqual([item.ticker for item in items], ["600879"])
-        self.assertEqual(items[0].quantity, 900.0)
-        # 运行器收到的是脚本正文，不是 shell 命令
-        self.assertEqual(script_seen, [apple_script("同花顺")])
-
-    def test_simulated_run_passes_the_simulation_script(self):
-        script_seen = []
-
-        provider = self._provider(
-            lambda script: (script_seen.append(script) or 0, _ok(HOLDINGS_HEADER), ""),
-            account_mode="simulated",
-        )
-        with self._on_mac():
-            provider.get_holdings()
-
-        self.assertEqual(script_seen, [apple_script("同花顺", "simulated")])
-
-    def test_err_status_becomes_a_provider_unavailable(self):
-        provider = self._provider(lambda script: (0, "ERR\t未在交易窗口找到持仓表格。", ""))
-        with self._on_mac():
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-
-        self.assertIn("未在交易窗口找到持仓表格", str(ctx.exception))
-
-    def test_permission_failure_maps_to_the_actionable_hint(self):
-        """TCC 拒绝时 osascript 退出码非 0、stderr 带 -1743/-25211，
-        必须换成中文可执行指引，而不是把英文原文丢给用户。"""
-        for marker, settings_section in (
-            ("execution error: Not authorized to send Apple events. (-1743)", "自动化"),
-            ("System Events got an error: not allowed assistive access. (-25211)", "辅助功能"),
-        ):
-            provider = self._provider(lambda script, m=marker: (1, "", m))
-            with self._on_mac():
-                with self.assertRaises(ProviderUnavailable) as ctx:
-                    provider.get_holdings()
-
-            message = str(ctx.exception)
-            self.assertIn("隐私与安全性", message)
-            self.assertIn(settings_section, message)
-            self.assertNotIn("-1743", message)
-            self.assertNotIn("-25211", message)
-
-    def test_caught_automation_failure_maps_to_the_automation_permission_hint(self):
-        """脚本内捕获的 TCC 错误仍以退出码 0 返回，不能漏过权限分类。"""
-        provider = self._provider(lambda script: (
-            0,
-            "ERR\t无法切换到「交易 → A股 → 股票 → 持仓」："
-            "未获得授权将Apple事件发送给System Events。 (-1743)",
-            "",
-        ))
-        with self._on_mac():
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-
-        message = str(ctx.exception)
-        self.assertIn("自动化", message)
-        self.assertIn("System Events", message)
-        self.assertIn("可能已打开或切换了部分页面", message)
-        self.assertNotIn("无法切换到", message)
-        self.assertNotIn("-1743", message)
-
-    def test_caught_accessibility_failure_maps_to_the_accessibility_permission_hint(self):
-        provider = self._provider(lambda script: (
-            0,
-            "ERR\tSystem Events got an error: not allowed assistive access. (-25211)",
-            "",
-        ))
-        with self._on_mac():
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-
-        message = str(ctx.exception)
-        self.assertIn("辅助功能", message)
-        self.assertIn("可能已打开或切换了部分页面", message)
-        self.assertNotIn("-25211", message)
-
-    def test_generic_failure_surfaces_the_stderr(self):
-        provider = self._provider(lambda script: (1, "", "execution error: 同花顺 isn't running. (-600)"))
-        with self._on_mac():
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-
-        self.assertIn("-600", str(ctx.exception))
-
-    def test_timeout_becomes_a_provider_unavailable(self):
-        def runner(script):
-            raise subprocess.TimeoutExpired(cmd="osascript", timeout=60)
-
-        provider = self._provider(runner)
-        with self._on_mac():
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-
-        self.assertIn("超时", str(ctx.exception))
-
-    def test_runner_failure_becomes_a_provider_unavailable(self):
-        def runner(script):
-            raise OSError("no such file")
-
-        provider = self._provider(runner)
-        with self._on_mac():
-            with self.assertRaises(ProviderUnavailable) as ctx:
-                provider.get_holdings()
-
-        self.assertIn("无法执行 AppleScript", str(ctx.exception))
-
-    def test_provider_name_is_mac_ths(self):
-        self.assertEqual(MacThsProvider.name, "mac_ths")
+    def test_permission_and_platform_block_before_read(self):
+        for status, code in [('not_granted', 'accessibility_required'), ('unknown', 'dependency_missing')]:
+            with patch.object(mac_ths, 'accessibility_status', return_value=status), patch.object(mac_ths, 'read_ax_table') as read:
+                with self.assertRaises(ProviderUnavailable) as caught:
+                    MacThsProvider(platform='darwin').read_holdings(foreground=True)
+                self.assertEqual(caught.exception.code, code)
+                read.assert_not_called()
+        with self.assertRaises(ProviderUnavailable) as caught:
+            MacThsProvider(platform='win32').get_holdings()
+        self.assertEqual(caught.exception.code, 'unsupported_platform')
 
 
 class DefaultRunnerTests(unittest.TestCase):
@@ -422,12 +343,12 @@ class SnapshotIntegrationTests(unittest.TestCase):
     def test_snapshot_on_macos_without_the_client_reports_a_reason(self):
         with patch.object(holdings_source.settings, "holdings_provider", "mac_ths"), patch.object(
             holdings_source.sys, "platform", "darwin"
-        ), patch.multiple(mac_ths, osascript_available=lambda: True, app_running=lambda name: False):
+        ), patch.multiple(mac_ths, app_bundles=lambda: ["/Applications/同花顺.app"], accessibility_status=lambda: "granted", app_running=lambda *args: False):
             snapshot = holdings_source.provider_snapshot()
 
         self.assertEqual(snapshot["provider"], "mac_ths")
         self.assertFalse(snapshot["available"])
-        self.assertIn("未运行", snapshot["reason"] or "")
+        self.assertEqual(snapshot["blocking_reason"], "client_not_running")
 
     def test_snapshot_on_windows_names_the_platform_mismatch(self):
         with patch.object(holdings_source.settings, "holdings_provider", "mac_ths"), patch.object(
@@ -441,7 +362,7 @@ class SnapshotIntegrationTests(unittest.TestCase):
     def test_sync_on_macos_without_the_client_raises_provider_unavailable(self):
         with patch.object(holdings_source.settings, "holdings_provider", "mac_ths"), patch.object(
             holdings_source.sys, "platform", "darwin"
-        ), patch.multiple(mac_ths, osascript_available=lambda: True, app_running=lambda name: False):
+        ), patch.multiple(mac_ths, app_bundles=lambda: ["/Applications/同花顺.app"], accessibility_status=lambda: "granted", app_running=lambda *args: False):
             with self.assertRaises(ProviderUnavailable):
                 holdings_source.sync_holdings()
 

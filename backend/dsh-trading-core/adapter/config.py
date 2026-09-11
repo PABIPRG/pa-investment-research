@@ -60,7 +60,7 @@ class Settings:
             self.user_config_dir = self.state_root / "user-config"
         # 持仓数据源（功能3b）
         self.holdings_provider = os.getenv("HOLDINGS_PROVIDER", "manual")
-        self.holdings_account_mode = os.getenv("HOLDINGS_ACCOUNT_MODE", "real").strip().lower()
+        self.holdings_account_mode = os.getenv("HOLDINGS_ACCOUNT_MODE", "simulated").strip().lower()
         # easytrader CLI 接入（通达信/同花顺 GUI 自动化，零券商门槛）
         self.easytrader_broker = os.getenv("EASYTRADER_BROKER", "")  # 券商档案 id（broker_profiles.py），优先于 client_type
         self.easytrader_client_type = os.getenv("EASYTRADER_CLIENT_TYPE", "thstrader")  # thstrader | tdxtrader

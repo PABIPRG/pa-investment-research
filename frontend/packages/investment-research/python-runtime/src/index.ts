@@ -100,6 +100,7 @@ export class InvestmentPythonRuntime extends Service {
   })
 
   private readonly manager: InvestmentBackendManager
+  private readonly holdingsNativeToken = randomBytes(32).toString('base64url')
   private readonly backups: BackupService
 
   /**
@@ -119,6 +120,7 @@ export class InvestmentPythonRuntime extends Service {
       describeCredential: ctx.credentials.describe.bind(ctx.credentials),
       dataTransferEnvironment: {
         'trading-core': {
+          DSH_HOLDINGS_NATIVE_TOKEN: this.holdingsNativeToken,
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
         },
@@ -227,6 +229,29 @@ export class InvestmentPythonRuntime extends Service {
   @Remote('request-data')
   requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue> {
     return requestInvestmentData(request, id => this.manager.acquire(id))
+  }
+
+  /**
+   * Run one native holdings operation after the Electron main process obtained consent.
+   * This method is deliberately absent from the Remote registry.
+   * @param input - fixed action and account; client path comes only from the native picker.
+   * @returns backend readiness or a read-only preview.
+   */
+  async nativeHoldings(input: { action: 'read' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; client_path?: string }): Promise<unknown> {
+    const lease = await this.manager.acquire('trading-core')
+    try {
+      if (lease.ownership !== 'owned') throw new Error('原生持仓操作需要本应用管理的本机后台。')
+      const response = await fetch(new URL('/holdings/native', lease.baseUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Holdings-Native': this.holdingsNativeToken },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(240_000),
+      })
+      if (!response.ok) throw new Error('本机操作失败，请重新检查客户端。')
+      return await response.json()
+    } finally {
+      await lease.release()
+    }
   }
 
   /**
