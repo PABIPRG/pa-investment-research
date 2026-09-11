@@ -8,7 +8,7 @@
 
 | 键 | 默认值 | 含义 |
 |---|---|---|
-| `dshHome` | `$DSH_HOME`，否则 `~/.dsh` | 仅所有者可读写的日志与 runtime state（运行时状态）根目录。 |
+| `dshHome` | `$DSH_HOME`，否则 `~/.dsh` | Host 数据、投研 backend 状态、备份与诊断共用的挂载根目录。 |
 | `startupTimeoutMs` | `30000` | managed 启动的最长等待时间。 |
 | `healthPollMs` | `250` | 启动期间两次健康探测之间的间隔。 |
 | `healthFreshnessMs` | `5000` | 活动 backend 成功健康探测的复用窗口；设为 `0` 可禁用复用。 |
@@ -43,7 +43,15 @@ trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程
 
 每个 backend 写入 `$DSH_HOME/investment-research/<id>/backend.log`，超出上限的文件会在下次打开时轮转为 `backend.previous.log`。owned 进程元数据以私有权限原子写入 `runtime.json`，并且仅在其仍与内存中的精确 owned 进程匹配时删除。启动诊断会遮蔽显式转发的环境值。
 
-打包应用资源只读。Host 为 owned bundled child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，backend 的 data、cache、logs、state 和用户配置均从该可写目录派生；其中 industry-chain 种子数据位于 `$DSH_HOME/investment-research/industry-chain/data/seed`。源码模式未设置该变量时保留既有仓库内默认值。
+Host 会为每个 owned managed child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，不区分源码与 bundled 形态。各 backend 的 data、cache、logs、state 和用户配置都从该可写目录派生；industry-chain 的研报、A 股 universe、研报 overlay 与生成的 LLM links 也位于其 `data` 目录。独立启动的源码 backend 在没有该变量时仍保留仓库内默认值。打包应用资源保持只读。
+
+## 实例初始化与迁移
+
+`initializeDshInstance()` 使用私有目录和带版本标记创建完整的空挂载布局。`dryRunDshInstanceMigration()` 以零写入方式返回文件、主动排除项、字节数、复制策略、发布策略和阻塞原因。`migrateDshInstance()` 只把该清单复制到目标内部的 staging 目录，以流式 SHA-256 校验普通文件，再按顶层条目事务发布，并最后发布版本标记。已有空挂载点保留 inode，同时把权限收紧到 `0700`。来源和目标会按规范化后的物理路径判定，并在关键动作前重复核验身份；目标非空、不安全别名、符号链接、特殊文件、不兼容目录版本、输入变化或复制／发布失败都不能授权跨出所选目录，也不会改变来源。
+
+持久清单包含 Host 设置、profile 配置、home patch、成对的会话与附件、JSON/SQLite storage、备份设置和 `.pabackup` 文件，以及每个 backend 的 `data`、`state` 与 `user-config`。可重建的 managed `profiles/**/node_modules` 依赖会被排除。若绝对备份目录的物理位置在来源实例内，配置会改写到目标中的对应位置；外部目录保持原值，必须另行迁移。凭据、日志、缓存、runtime 进程状态、锁、传输事务日志和未完成上传不在清单内。PAB-14 的业务导入导出继续拥有按分类合并、预检、事务提交与回滚语义；实例迁移不会把 `.pabackup` 误解释为完整系统镜像。
+
+静默迁移可以复制已经关闭的 SQLite。在线迁移会按扩展名或文件头识别 SQLite，调用方必须提供 `backupSqlite`，并通过 SQLite backup API 或等价一致性快照实现；活动 WAL、SHM 与 rollback-journal sidecar 会被排除。在线 Host 会话与附件需要共同的静默点或快照屏障，不能逐文件复制，因此迁移器会明确拒绝。应用回滚负责选择兼容的可执行文件或镜像，数据回滚则要求停止应用并恢复迁移前目录快照，两者都不会隐式代替对方。
 
 sidecar 不重新分发 industry-chain 种子数据，应用启动也绝不下载。`industry-chain.data-status` 在不联网的情况下读取本地 `missing`、`downloading`、`ready` 或 `error` 状态；只有用户显式触发 `industry-chain.data-bootstrap` 才会下载固定五文件。backend 会限制文件大小，在临时目录校验 JSON 与最低结构，仅在完整数据集全部通过后发布，并清理失败的临时数据；并发 bootstrap 请求复用同一次下载。
 
@@ -69,5 +77,6 @@ Host 的 `request-data` Remote 只接受编译期列举的 operation（操作）
 - **依赖分发文件哈希属于后续加固**：目标文件已经固定所有安装版本且自身受哈希保护；逐个 wheel／sdist 哈希留给后续发布供应链门禁。
 - **状态只用于诊断，不是恢复授权**：重启后的 dsh 实例会报告 stale state（过期状态），但绝不会采用或终止磁盘记录的 PID；独立监管的服务应使用 `external`。
 - **只保留一个活动日志和一个历史日志**：轮转仅在打开时按大小触发；长时间运行的子进程不会在运行中轮转。
+- **在线 SQLite 备份由部署层提供**：迁移原语会强制使用一致性回调，但不假定具体 SQLite 可执行文件；容器与原生 launcher 必须绑定当前环境可用的备份实现。
 
 持仓同步默认返回五分钟有效的只读预览，commit 必须携带预览 token；账户、数据源或本地持仓变化会拒绝替换。原生动作使用仅宿主可见的凭证和非 Remote 方法，只支持自管本机后台。

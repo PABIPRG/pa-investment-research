@@ -13,7 +13,7 @@ import json
 
 from .config import settings
 
-OVERLAY_PATH = settings.root / "data" / "reports" / "overlay.json"
+OVERLAY_PATH = settings.reports_dir / "overlay.json"
 
 
 def load_overlay() -> dict:

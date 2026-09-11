@@ -1,7 +1,7 @@
 import { access } from 'node:fs/promises'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type { CredentialInfo, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
-import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { resolveDshHome, resolveDshInstanceLayout } from '@deepseek-ai/dsh-home-paths'
 import { checkBackendHealth as defaultCheckHealth } from './health.ts'
 import { BackendLog, backendLogPaths, safeErrorMessage } from './log.ts'
 import type { BackendLogPaths } from './log.ts'
@@ -73,7 +73,7 @@ type EnvironmentKeyNormalizer = (key: string) => string
 type LogPathResolver = (dshHome: string, id: InvestmentBackendId) => BackendLogPaths
 
 const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
-const BUNDLED_ENVIRONMENT_KEYS = [
+const RUNTIME_ENVIRONMENT_KEYS = [
   'PYTHONPATH',
   'DSH_INVESTMENT_STATE_DIR',
   'PYTHONDONTWRITEBYTECODE',
@@ -164,10 +164,10 @@ function normalizeCredentialEnv(
   normalizeEnvironmentKey: EnvironmentKeyNormalizer,
 ): readonly ManagedCredentialEnv[] | undefined {
   const managed = new Set(Object.keys(definition.managedEnv ?? {}).map(normalizeEnvironmentKey))
-  const reserved = new Set(BUNDLED_ENVIRONMENT_KEYS.map(normalizeEnvironmentKey))
+  const reserved = new Set(RUNTIME_ENVIRONMENT_KEYS.map(normalizeEnvironmentKey))
   const reservedManaged = [...managed].find(key => reserved.has(key))
   if (reservedManaged !== undefined) {
-    throw new Error(`investment Python backend "${definition.id}" managed environment "${reservedManaged}" is reserved by the bundled Runtime`)
+    throw new Error(`investment Python backend "${definition.id}" managed environment "${reservedManaged}" is reserved by the managed Runtime`)
   }
   if (definition.credentialEnv === undefined) return undefined
   const targets = new Set<string>()
@@ -177,7 +177,7 @@ function normalizeCredentialEnv(
     }
     const env = normalizeEnvironmentKey(credential.env)
     if (reserved.has(env)) {
-      throw new Error(`investment Python backend "${definition.id}" credential environment "${env}" is reserved by the bundled Runtime`)
+      throw new Error(`investment Python backend "${definition.id}" credential environment "${env}" is reserved by the managed Runtime`)
     }
     if (targets.has(env)) {
       throw new Error(`investment Python backend "${definition.id}" has duplicate credential environment "${env}"`)
@@ -696,19 +696,14 @@ export class InvestmentBackendManager {
     signal.throwIfAborted()
     const credentialEnv = resolvedCredentials.environment
     const dataTransferEnvironment = this.dataTransferEnvironment?.[definition.id]
+    const instanceLayout = resolveDshInstanceLayout(this.config.dshHome)
+    const managedStateEnv = {
+      DSH_INVESTMENT_STATE_DIR: instanceLayout.investmentResearch.backends[definition.id].root,
+    }
     const bundledEnv = paths.source === 'bundled'
-      ? {
-        PYTHONPATH: paths.sitePackages,
-        DSH_INVESTMENT_STATE_DIR: paths.stateDir,
-        PYTHONDONTWRITEBYTECODE: '1',
-      }
-      : undefined
-    const spawnEnv = definition.managedEnv === undefined
-      && credentialEnv === undefined
-      && bundledEnv === undefined
-      && dataTransferEnvironment === undefined
-      ? undefined
-      : { ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...dataTransferEnvironment }
+      ? { ...managedStateEnv, PYTHONPATH: paths.sitePackages, PYTHONDONTWRITEBYTECODE: '1' }
+      : managedStateEnv
+    const spawnEnv = { ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...dataTransferEnvironment }
     const redactors = {
       stdout: new CredentialOutputRedactor({ ...credentialEnv, ...dataTransferEnvironment }),
       stderr: new CredentialOutputRedactor({ ...credentialEnv, ...dataTransferEnvironment }),
@@ -725,7 +720,7 @@ export class InvestmentBackendManager {
         },
         graceMs: this.config.shutdownGraceMs,
         signal,
-        ...(spawnEnv === undefined ? {} : { env: spawnEnv }),
+        env: spawnEnv,
       })
     } catch (error) {
       throw new Error(`investment Python backend "${definition.id}" spawn failed: ${safeErrorMessage(error, spawnEnv)}`)

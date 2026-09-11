@@ -31,12 +31,19 @@ class Settings:
         self.host = os.getenv("IC_HOST", "127.0.0.1")
         self.port = int(os.getenv("IC_PORT", "8200"))
         self.state_root = _investment_state_root()
-        # 打包 Runtime 的源码树只读，种子数据必须写入宿主提供的状态目录。
-        # 源码模式保留项目内 data/seed，并兼容开发者显式配置 IC_DATA_DIR。
+        # Host 托管模式把全部生成数据写入同一后端状态根；独立源码启动
+        # 仍保留项目内 data，并兼容开发者显式配置种子目录。
         if self.state_root is None:
-            self.data_dir = Path(os.getenv("IC_DATA_DIR", str(ROOT / "data" / "seed")))
+            self.data_root = ROOT / "data"
+            self.data_dir = Path(os.getenv("IC_DATA_DIR", str(self.data_root / "seed")))
         else:
-            self.data_dir = self.state_root / "data" / "seed"
+            self.data_root = self.state_root / "data"
+            self.data_dir = self.data_root / "seed"
+        self.reports_dir = self.data_root / "reports"
+        self.state_dir = self.state_root / "state" if self.state_root is not None else ROOT
+        self.user_config_dir = self.state_root / "user-config" if self.state_root is not None else ROOT / "config"
+        self.cache_dir = self.state_root / "cache" if self.state_root is not None else self.data_root / "cache"
+        self.logs_dir = self.state_root / "logs" if self.state_root is not None else ROOT / "logs"
         # fetch_seed_data.py 下载源
         self.seed_base_url = os.getenv(
             "IC_SEED_BASE_URL", "https://villadora.github.io/iducsite/data"

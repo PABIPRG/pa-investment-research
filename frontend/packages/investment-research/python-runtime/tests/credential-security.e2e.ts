@@ -76,6 +76,7 @@ describe('investment credential negative scan', () => {
       ADAPTER_RUNNER: 'fake',
       DEEPSEEK_API_KEY: CANARY,
       OPENAI_API_KEY: CANARY,
+      DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'trading-core'),
     })
     expect(specs[0]?.argv).not.toContain(CANARY)
 
