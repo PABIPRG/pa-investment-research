@@ -16,10 +16,6 @@ jobs:
     name: ${{ matrix.target }} packaged smoke
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
-    env:
-      INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
-      PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
-      ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
     defaults:
       run:
         working-directory: frontend
@@ -82,6 +78,10 @@ jobs:
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - name: Build test application and sidecar (macOS)
+        env:
+          INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
+          PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
+          ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -89,6 +89,10 @@ jobs:
           pnpm run make:electron
 
       - name: Build test application and sidecar (Windows)
+        env:
+          INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
+          PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
+          ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
         if: runner.os == 'Windows'
         run: pnpm run make:electron
 
