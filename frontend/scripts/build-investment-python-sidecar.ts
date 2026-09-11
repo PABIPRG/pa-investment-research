@@ -11,11 +11,12 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
+import { backendPathAllowed, scanPackagedBackends } from './investment-backend-package-policy.ts'
+
 const execFileAsync = promisify(execFile)
 const TARGETS = ['darwin-arm64', 'darwin-x64', 'win32-x64'] as const
 const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
-const EXCLUDED_SEGMENTS = new Set(['.git', '__pycache__', 'data', 'env', 'logs', 'node_modules', 'tests'])
 
 export type InvestmentSidecarTarget = typeof TARGETS[number]
 
@@ -173,22 +174,13 @@ async function defaultExtractArchive(archive: string, destination: string): Prom
   if (exitCode !== 0) throw new Error(`tar extraction failed with exit code ${exitCode}`)
 }
 
-function shouldExclude(relativePath: string): boolean {
-  const segments = relativePath.split(/[\\/]/u)
-  const name = segments.at(-1)?.toLowerCase() ?? ''
-  return segments.some(segment => EXCLUDED_SEGMENTS.has(segment.toLowerCase()))
-    || name === '.env'
-    || name.endsWith('.pyc')
-    || name.endsWith('.log')
-}
-
 async function copyBackend(source: string, destination: string): Promise<void> {
   await cp(source, destination, {
     recursive: true,
     dereference: false,
-    filter: (candidate) => {
+    filter: async (candidate) => {
       const rel = relative(source, candidate)
-      return rel === '' || !shouldExclude(rel)
+      return rel === '' || backendPathAllowed(basename(source), rel, (await lstat(candidate)).isDirectory())
     },
   })
   const pending = [destination]
@@ -325,6 +317,7 @@ export async function buildInvestmentPythonSidecar(
     for (const backend of BACKENDS) {
       await copyBackend(join(repoRoot, 'backend', backend), join(staging, 'backends', backend))
     }
+    await scanPackagedBackends(staging)
     await removeBytecodeCaches(staging)
     const [platform, arch] = target.split('-') as ['darwin' | 'win32', 'arm64' | 'x64']
     const descriptor: RuntimeDescriptor = {

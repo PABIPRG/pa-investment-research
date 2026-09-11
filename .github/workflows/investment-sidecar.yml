@@ -50,6 +50,13 @@ jobs:
       - name: Install frontend
         run: pnpm install --frozen-lockfile
 
+      - name: Test backend package privacy gates
+        run: >-
+          pnpm exec vitest run
+          scripts/investment-backend-package-policy.spec.ts
+          scripts/build-investment-python-sidecar.spec.ts
+          scripts/smoke-investment-python-sidecar.spec.ts
+
       - name: Verify shared application version
         id: app_version
         shell: bash

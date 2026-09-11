@@ -43,6 +43,11 @@ async function fixture() {
   await write(join(root, 'backend/dsh-trading-core/tests/test_app.py'), 'SECRET_CANARY')
   await write(join(root, 'backend/market-watch/market_watch/__pycache__/app.pyc'), 'SECRET_CANARY')
   await write(join(root, 'backend/market-watch/logs/runtime.log'), 'SECRET_CANARY')
+  for (const path of [
+    'docs/private.MD', '.env.production', 'config/models.json', 'config/backend.env',
+    'adapter/.env.local', 'adapter/credentials.json', 'adapter/id_rsa',
+    'adapter/holdings.pabackup', 'adapter/app.py.bak', 'adapter/private.pem',
+  ]) await write(join(root, 'backend/dsh-trading-core', path), 'SECRET_CANARY')
   const archiveValue = Buffer.from('fixture archive')
   const archiveUrl = 'https://fixtures.invalid/python.tar.gz'
   const requirementsLockPath = `frontend/config/investment-python-requirements/${TARGET}.txt`
@@ -133,6 +138,15 @@ describe('investment Python sidecar builder', () => {
       'site-packages/native-extension.so',
     ]))
     expect(firstJson).not.toContain('SECRET_CANARY')
+    const backendFiles = first.files.filter(entry => entry.path.startsWith('backends/'))
+    expect(backendFiles.map(entry => entry.path)).toEqual([
+      'backends/dsh-trading-core/adapter/app.py',
+      'backends/industry-chain/industry_chain/app.py',
+      'backends/market-watch/market_watch/app.py',
+    ])
+    for (const file of backendFiles) {
+      expect(await readFile(join(setup.output, file.path), 'utf8')).not.toContain('SECRET_CANARY')
+    }
     expect(first.files.some(
       entry => /(?:^|\/)(?:env|data|logs|node_modules|tests|__pycache__)(?:\/|$)|\.env$|\.pyc$|\.log$/u.test(entry.path),
     )).toBe(false)
@@ -145,6 +159,16 @@ describe('investment Python sidecar builder', () => {
     expect(setup.runCommand.mock.calls[0]?.[1]).not.toContain('--only-binary=:all:')
     expect(descriptorFileSha256).toHaveBeenCalled()
     expect(peakHashes).toBe(1)
+  })
+
+  it('does not replace the previous output when runtime code contains a credential', async () => {
+    const setup = await fixture()
+    const options = { target: TARGET, output: setup.output, cache: setup.cache, offline: true }
+    await buildInvestmentPythonSidecar(options, setup.dependencies)
+    const previous = await readFile(join(setup.output, 'runtime.json'), 'utf8')
+    await write(join(setup.root, 'backend/dsh-trading-core/adapter/app.py'), 'api_key = "private-canary-123"')
+    await expect(buildInvestmentPythonSidecar(options, setup.dependencies)).rejects.toThrow(/credential-literal/)
+    expect(await readFile(join(setup.output, 'runtime.json'), 'utf8')).toBe(previous)
   })
 
   it('fails closed for missing targets, cache/hash failures, requirements drift, and traversal', async () => {
