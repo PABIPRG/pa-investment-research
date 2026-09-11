@@ -201,6 +201,8 @@ export interface RunProfileOptions {
   watchPatches?: boolean
   /** Cross-surface ownership for the investment product; omitted by non-product profiles and tests. */
   instanceMode?: InvestmentInstanceMode
+  /** Outer container lease record that disambiguates PIDs across container namespaces. */
+  containerLeaseFile?: string
   /** User-facing decision when the other investment surface already owns the product runtime. */
   onInstanceConflict?: (
     owner: InvestmentInstanceOwner,
@@ -234,6 +236,7 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
     ? undefined
     : await coordinateInvestmentInstance({
       mode: options.instanceMode,
+      ...(options.containerLeaseFile === undefined ? {} : { containerLeaseFile: options.containerLeaseFile }),
       ...(options.onInstanceConflict === undefined ? {} : { onConflict: options.onInstanceConflict }),
     })
   let composed: ComposedProfile

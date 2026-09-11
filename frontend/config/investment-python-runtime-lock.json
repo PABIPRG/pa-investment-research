@@ -24,6 +24,15 @@
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-x64.txt",
       "requirementsSha256": "3160ac807bfe822f7a02540ce21a6aebaa713980e4741dca0f3d09fe03a18e7f"
     },
+    "linux-x64": {
+      "pythonVersion": "3.10.20",
+      "archiveUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-x86_64-unknown-linux-gnu-install_only.tar.gz",
+      "archiveSha256": "9c28d8017eeaf692f24dbaf26fd4679ce496c7f58e48b897d278739661794e37",
+      "archiveRuntimeRoot": "python",
+      "archiveExecutable": "python/bin/python3",
+      "requirementsLock": "frontend/config/investment-python-requirements/linux-x64.txt",
+      "requirementsSha256": "eb340ca64f897c6d61c97f06fa05f30908ddf1d22c5c4946bbaecb94e507ff58"
+    },
     "win32-x64": {
       "pythonVersion": "3.10.20",
       "archiveUrl": "https://github.com/astral-sh/python-build-standalone/releases/download/20260718/cpython-3.10.20%2B20260718-x86_64-pc-windows-msvc-install_only.tar.gz",

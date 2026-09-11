@@ -14,7 +14,7 @@ import { promisify } from 'node:util'
 import { backendPathAllowed, scanPackagedBackends } from './investment-backend-package-policy.ts'
 
 const execFileAsync = promisify(execFile)
-const TARGETS = ['darwin-arm64', 'darwin-x64', 'win32-x64'] as const
+const TARGETS = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'] as const
 const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 
@@ -57,7 +57,7 @@ interface RuntimeDescriptor {
   readonly schemaVersion: 1
   readonly python: {
     readonly version: string
-    readonly platform: 'darwin' | 'win32'
+    readonly platform: 'darwin' | 'linux' | 'win32'
     readonly arch: 'arm64' | 'x64'
     readonly executable: string
   }
@@ -325,7 +325,7 @@ export async function buildInvestmentPythonSidecar(
     }
     await scanPackagedBackends(staging)
     await removeBytecodeCaches(staging)
-    const [platform, arch] = target.split('-') as ['darwin' | 'win32', 'arm64' | 'x64']
+    const [platform, arch] = target.split('-') as ['darwin' | 'linux' | 'win32', 'arm64' | 'x64']
     const descriptor: RuntimeDescriptor = {
       schemaVersion: 1,
       python: {

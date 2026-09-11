@@ -1,0 +1,160 @@
+name: Investment container image
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  image-smoke:
+    name: linux-x64 image and compose smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Test container contracts
+        working-directory: frontend
+        run: >-
+          pnpm exec vitest run
+          apps/cli/tests/investment-instance.spec.ts
+          packages/api/web-auth/tests/web-auth.spec.ts
+          scripts/investment-container.spec.ts
+          scripts/build-investment-python-sidecar.spec.ts
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the commit image without pushing
+        env:
+          IMAGE: pa-investment-research:${{ github.sha }}
+        run: >-
+          docker buildx build
+          --platform linux/amd64
+          --load
+          --tag "$IMAGE"
+          --build-arg "VCS_REF=${GITHUB_SHA}"
+          --metadata-file "${RUNNER_TEMP}/investment-container-build.json"
+          --cache-from type=gha
+          --cache-to type=gha,mode=max
+          .
+
+      - name: Assert image boundary
+        env:
+          IMAGE: pa-investment-research:${{ github.sha }}
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' "$IMAGE")" = dsh
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{json .Config.ExposedPorts}}' "$IMAGE")" = '{"3080/tcp":{}}'
+          test -z "$(docker run --rm --entrypoint sh "$IMAGE" -c 'find -L /opt/dsh /opt/investment-python -type l -print -quit')"
+          docker image inspect --format '{{.Id}}' "$IMAGE" > "${RUNNER_TEMP}/investment-container.image-id"
+
+      - name: Start the exact image with Compose
+        env:
+          DSH_IMAGE: pa-investment-research:${{ github.sha }}
+          PORT: '39080'
+          TZ: Asia/Shanghai
+          TIMEZONE: Asia/Shanghai
+          DSH_WEB_ADMIN_USERNAME: ci-admin
+          DSH_WEB_ADMIN_PASSWORD_HASH_FILE: ${{ runner.temp }}/web-admin-password.hash
+          DSH_WEB_TRUSTED_HOSTS: investment.test:39080
+          # TEST-NET-1 keeps loopback health requests direct; this smoke has no TLS proxy.
+          DSH_WEB_TRUSTED_PROXIES: 192.0.2.1
+        run: |
+          printf '%s\n' 'ci-container-password' \
+            | docker run --rm -i --entrypoint node "$DSH_IMAGE" /opt/dsh/lib/bin.js web-password-hash \
+            > "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
+          sudo chown 10001:10001 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
+          sudo chmod 0400 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
+          docker compose up -d --no-build
+          container_id=$(docker compose ps -q investment)
+          test -n "$container_id"
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" = true
+          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = dsh
+          for attempt in $(seq 1 90); do
+            health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id")
+            if test "$health" = healthy; then break; fi
+            if test "$health" = unhealthy; then docker compose logs; exit 1; fi
+            sleep 2
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
+          curl --fail --silent --show-error -H 'Host: investment.test:39080' http://127.0.0.1:39080/healthz
+          test "$(docker compose ps -q investment | wc -l | tr -d ' ')" = 1
+
+      - name: Verify graceful stop
+        env:
+          DSH_IMAGE: pa-investment-research:${{ github.sha }}
+          PORT: '39080'
+          TZ: Asia/Shanghai
+          TIMEZONE: Asia/Shanghai
+          DSH_WEB_ADMIN_USERNAME: ci-admin
+          DSH_WEB_ADMIN_PASSWORD_HASH_FILE: ${{ runner.temp }}/web-admin-password.hash
+          DSH_WEB_TRUSTED_HOSTS: investment.test:39080
+          # TEST-NET-1 keeps loopback health requests direct; this smoke has no TLS proxy.
+          DSH_WEB_TRUSTED_PROXIES: 192.0.2.1
+        run: |
+          container_id=$(docker compose ps -q investment)
+          docker compose stop --timeout 30 investment
+          test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = false
+          exit_code=$(docker inspect --format '{{.State.ExitCode}}' "$container_id")
+          test "$exit_code" = 0
+          test -z "$(docker logs "$container_id" 2>&1 | grep 'graceful shutdown timed out' || true)"
+          docker run --rm --volume pa-investment-research_dsh-data:/state --entrypoint sh "$DSH_IMAGE" -c \
+            'test ! -e /state/investment-research/.container-instance.lock && test ! -e /state/investment-research/application.lock'
+
+      - name: Clean up Compose
+        if: always()
+        env:
+          DSH_IMAGE: pa-investment-research:${{ github.sha }}
+          PORT: '39080'
+          TZ: Asia/Shanghai
+          TIMEZONE: Asia/Shanghai
+          DSH_WEB_ADMIN_USERNAME: ci-admin
+          DSH_WEB_ADMIN_PASSWORD_HASH_FILE: ${{ runner.temp }}/web-admin-password.hash
+          DSH_WEB_TRUSTED_HOSTS: investment.test:39080
+          # TEST-NET-1 keeps loopback health requests direct; this smoke has no TLS proxy.
+          DSH_WEB_TRUSTED_PROXIES: 192.0.2.1
+        run: |
+          docker compose logs
+          docker compose down --timeout 30
+
+      - name: Export the verified image
+        env:
+          IMAGE: pa-investment-research:${{ github.sha }}
+        run: |
+          docker save "$IMAGE" | gzip -1 > "${RUNNER_TEMP}/investment-container.tar.gz"
+          cd "$RUNNER_TEMP"
+          sha256sum investment-container.tar.gz > investment-container.tar.gz.sha256
+
+      - name: Upload commit-addressed image delivery
+        uses: actions/upload-artifact@v4
+        with:
+          name: investment-container-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/investment-container.tar.gz
+            ${{ runner.temp }}/investment-container.tar.gz.sha256
+            ${{ runner.temp }}/investment-container.image-id
+            ${{ runner.temp }}/investment-container-build.json
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

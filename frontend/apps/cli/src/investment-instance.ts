@@ -3,7 +3,7 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 export type InvestmentInstanceMode = 'web' | 'electron'
@@ -21,6 +21,7 @@ export interface InvestmentInstanceOwner {
 interface InvestmentInstanceRecord extends InvestmentInstanceOwner {
   readonly controlPort: number
   readonly controlToken: string
+  readonly containerLeaseToken?: string
 }
 
 export interface InvestmentInstanceLease {
@@ -36,6 +37,8 @@ export interface CoordinateInvestmentInstanceOptions {
   readonly pid?: number
   readonly stopTimeoutMs?: number
   readonly pollMs?: number
+  /** Exact outer container lease record; omitted for ordinary Web and Electron launches. */
+  readonly containerLeaseFile?: string
   readonly onConflict?: (
     owner: InvestmentInstanceOwner,
   ) => Promise<InvestmentInstanceConflictDecision> | InvestmentInstanceConflictDecision
@@ -103,6 +106,8 @@ function isOwner(value: unknown): value is InvestmentInstanceRecord {
     && value.controlPort <= 65_535
     && typeof value.controlToken === 'string'
     && value.controlToken.length >= 32
+    && (value.containerLeaseToken === undefined
+      || (typeof value.containerLeaseToken === 'string' && value.containerLeaseToken.length >= 16))
 }
 
 function processIsAlive(pid: number): boolean {
@@ -136,6 +141,35 @@ async function readOwner(lockDir: string): Promise<InvestmentInstanceRecord | un
     throw new Error(`investment-research: invalid application instance record at ${lockDir}`)
   }
   return value
+}
+
+async function readContainerLeaseToken(dshHome: string, leaseFile: string | undefined): Promise<string | undefined> {
+  if (leaseFile === undefined) return undefined
+  const expected = join(dshHome, 'investment-research', '.container-instance.lock', OWNER_FILENAME)
+  if (resolve(leaseFile) !== resolve(expected)) {
+    throw new Error(`investment-research: container lease must be ${expected}`)
+  }
+  let value: unknown
+  try {
+    value = JSON.parse(await readFile(expected, 'utf8')) as unknown
+  } catch {
+    throw new Error(`investment-research: container lease is unavailable at ${expected}`)
+  }
+  const token = isRecord(value) ? value.token : undefined
+  if (!isRecord(value) || value.version !== 1 || typeof token !== 'string' || token.length < 16) {
+    throw new Error(`investment-research: container lease is invalid at ${expected}`)
+  }
+  return token
+}
+
+/** Whether the outer lease proves that an inner PID belongs to an expired container namespace. */
+export function containerLeaseSupersedesOwner(
+  owner: Readonly<{ containerLeaseToken?: string }>,
+  containerLeaseToken: string | undefined,
+): boolean {
+  return containerLeaseToken !== undefined
+    && owner.containerLeaseToken !== undefined
+    && owner.containerLeaseToken !== containerLeaseToken
 }
 
 async function readSettledOwner(lockDir: string, pollMs: number): Promise<InvestmentInstanceRecord | undefined> {
@@ -269,6 +303,7 @@ async function tryClaim(options: CoordinateInvestmentInstanceOptions, pollMs: nu
   const lockDir = investmentInstanceLockDirectory(dshHome)
   const instanceRoot = join(dshHome, 'investment-research')
   await mkdir(instanceRoot, { recursive: true, mode: 0o700 })
+  const containerLeaseToken = await readContainerLeaseToken(dshHome, options.containerLeaseFile)
   const control = await createControlServer()
   try {
     for (;;) {
@@ -279,6 +314,10 @@ async function tryClaim(options: CoordinateInvestmentInstanceOptions, pollMs: nu
         const owner = await readSettledOwner(lockDir, pollMs)
         if (owner === undefined) {
           throw new Error(`investment-research: incomplete application instance record at ${lockDir}`)
+        }
+        if (containerLeaseSupersedesOwner(owner, containerLeaseToken)) {
+          if (!await quarantineStaleLock(lockDir)) continue
+          continue
         }
         if (processIsAlive(owner.pid)) {
           await closeServer(control.server)
@@ -297,6 +336,7 @@ async function tryClaim(options: CoordinateInvestmentInstanceOptions, pollMs: nu
         projectDir: options.projectDir ?? process.cwd(),
         controlPort: control.port,
         controlToken: control.token,
+        ...(containerLeaseToken === undefined ? {} : { containerLeaseToken }),
       })
       try {
         await writeOwner(lockDir, owner)

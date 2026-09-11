@@ -28,7 +28,7 @@ jobs:
           GOBIN: ${{ runner.temp }}/actionlint-bin
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          "$GOBIN/actionlint" -shellcheck= -pyflakes= .github/workflows/investment-ci.yml .github/workflows/investment-release.yml .github/workflows/investment-sidecar.yml
+          "$GOBIN/actionlint" -shellcheck= -pyflakes= .github/workflows/investment-ci.yml .github/workflows/investment-container.yml .github/workflows/investment-release.yml .github/workflows/investment-sidecar.yml
 
       - uses: pnpm/action-setup@v4
         with:
