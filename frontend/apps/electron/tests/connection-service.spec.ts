@@ -3,7 +3,8 @@
 import { Context } from '@deepseek-ai/cordis'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
 import { RpcId, type ClientRequest } from '@deepseek-ai/dsh-host-apiproxy'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { isElectronConnectionService } from '../src/connection-provider.ts'
 import { ElectronConnectionService } from '../src/index.ts'
 
 function apiProxy(): ApiProxy {
@@ -20,6 +21,21 @@ function apiProxy(): ApiProxy {
 }
 
 describe('Electron Connection service', () => {
+  it('accepts an active provider from another module copy and rejects other transports', async () => {
+    vi.resetModules()
+    const copy = await import('../src/index.ts')
+    const ctx = new Context()
+    ctx.provide('apiProxy', apiProxy())
+    const service = new copy.ElectronConnectionService(ctx)
+    expect(service instanceof ElectronConnectionService).toBe(false)
+    expect(isElectronConnectionService(service)).toBe(true)
+    expect(service.owns('/api/test')).toBe(true)
+    expect(isElectronConnectionService(undefined)).toBe(false)
+    expect(isElectronConnectionService({ transport: 'electron' })).toBe(false)
+    expect(isElectronConnectionService({ transport: 'web', owns() {}, fetch() {}, openStream() {} })).toBe(false)
+    await ctx.fiber.dispose()
+  })
+
   it('dispatches generic RPC registrations and withdraws them', async () => {
     const ctx = new Context()
     ctx.provide('apiProxy', apiProxy())

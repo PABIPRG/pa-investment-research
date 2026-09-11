@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
   const ready = Promise.withResolvers<undefined>()
   return {
     ready,
+    healProfilesModuleFallback: vi.fn(),
     requestSingleInstanceLock: vi.fn(() => true),
     registerSchemesAsPrivileged: vi.fn(),
     showMessageBox: vi.fn(async () => ({ response: 0 })),
@@ -53,6 +54,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
+  healProfilesModuleFallback: mocks.healProfilesModuleFallback,
   loadLayeredEnv: vi.fn(() => ({ values: {}, sources: {} })),
 }))
 
@@ -84,6 +86,7 @@ describe('Electron main startup', () => {
     mocks.ready.resolve(undefined)
 
     await vi.waitFor(() => { expect(mocks.runProfile).toHaveBeenCalledOnce() })
+    expect(mocks.healProfilesModuleFallback).toHaveBeenCalledWith(expect.stringMatching(/electron[\/]package\.json$/u))
     const startupOptions = mocks.runProfile.mock.calls[0]?.[0]
     expect(startupOptions).toMatchObject({
       profile: 'investment-research',
