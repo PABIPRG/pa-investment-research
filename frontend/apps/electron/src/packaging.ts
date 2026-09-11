@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readlink, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
 import type { Options as PackagerOptions } from '@electron/packager'
-import { appIdentity, electronAppDir } from './app-identity.ts'
+import { appIdentity, electronAppDir, packagerIconPath } from './app-identity.ts'
 
 const appDir = electronAppDir
 const workspaceDir = resolve(appDir, '../..')
@@ -436,7 +436,7 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
       NSAppleEventsUsageDescription:
         '「投研智能体」需要控制同花顺，以读取你账户中的真实持仓。数据只在本机使用，不会上传。',
     },
-    icon: appIdentity.iconPath,
+    icon: packagerIconPath(input.platform),
     afterCopy: [((buildPath, _electronVersion, _platform, _arch, callback) => {
       const destination = join(dirname(buildPath), basename(input.sidecarDir))
       copySidecarTree(input.sidecarDir, destination).then(
@@ -449,6 +449,55 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     overwrite: true,
     platform: input.platform,
     prune: false,
+  }
+}
+
+const packagerIconWarning = /Could not find icon|skipping this app icon format/iu
+
+/** Reject a missing concrete icon before starting the expensive application assembly. */
+export async function validatePackagerIcon(options: PackagerOptions): Promise<string> {
+  if (typeof options.icon !== 'string') {
+    throw new TypeError('Electron Packager requires one concrete icon path for this target')
+  }
+  const icon = await stat(options.icon).catch(() => undefined)
+  if (icon?.isFile() !== true) {
+    throw new Error(`Electron Packager target icon is missing: ${options.icon}`)
+  }
+  return options.icon
+}
+
+/**
+ * Run Electron Packager while turning required-format icon warnings into failures.
+ * Packager 18 probes Apple's optional `.icon` format before copying a valid
+ * `.icns`; suppress only that probe so a real `.icns`/`.ico` miss still fails.
+ */
+export async function packagerWithIconWarningGuard(
+  options: PackagerOptions,
+  assemble: (packagerOptions: PackagerOptions) => Promise<string[]> = packager,
+): Promise<string[]> {
+  const originalWarn = console.warn
+  let requiredIconWarning: string | undefined
+  console.warn = (...args: unknown[]) => {
+    const message = args.map(String).join(' ')
+    const optionalIconComposerProbe = options.platform === 'darwin'
+      && typeof options.icon === 'string'
+      && options.icon.endsWith('.icns')
+      && message.includes('extension ".icon"')
+    if (optionalIconComposerProbe) return
+    if (packagerIconWarning.test(message)) {
+      requiredIconWarning ??= message
+      return
+    }
+    originalWarn(...args)
+  }
+  try {
+    const appPaths = await assemble(options)
+    if (requiredIconWarning !== undefined) {
+      throw new Error(`Electron Packager rejected the target icon: ${requiredIconWarning}`)
+    }
+    return appPaths
+  } finally {
+    console.warn = originalWarn
   }
 }
 
@@ -638,7 +687,7 @@ async function packageApplication(): Promise<void> {
       version: electronVersion,
       ...(process.env.ELECTRON_CACHE ? { cacheRoot: process.env.ELECTRON_CACHE } : {}),
     }))
-    const appPaths = await timed('application assembly', () => packager(createPackagerOptions({
+    const packagerOptions = createPackagerOptions({
       arch: process.arch,
       electronVersion,
       electronZipDir: dirname(electronZip),
@@ -646,7 +695,9 @@ async function packageApplication(): Promise<void> {
       sidecarDir: plan.sidecarDir,
       stagingDir: packagingStagingDir,
       outDir: join(appDir, 'out'),
-    })))
+    })
+    await validatePackagerIcon(packagerOptions)
+    const appPaths = await timed('application assembly', () => packagerWithIconWarningGuard(packagerOptions))
     for (const packagePath of appPaths) {
       const resources = process.platform === 'darwin'
         ? join(packagePath, `${appIdentity.name}.app`, 'Contents', 'Resources')

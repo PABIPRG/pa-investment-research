@@ -37,3 +37,13 @@ export const appIdentity = Object.freeze({
     required(manifest.desktopIdentity?.runtimeIcon, 'desktopIdentity.runtimeIcon'),
   ),
 })
+
+/** Select the concrete icon format consumed by Electron Packager on each target. */
+export function packagerIconPath(platform: string | string[]): string {
+  if (Array.isArray(platform)) {
+    throw new TypeError('Electron Packager icon selection requires one target platform')
+  }
+  if (platform === 'win32') return `${appIdentity.iconPath}.ico`
+  if (platform === 'darwin' || platform === 'mas') return `${appIdentity.iconPath}.icns`
+  return appIdentity.runtimeIconPath
+}

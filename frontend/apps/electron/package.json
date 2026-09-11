@@ -42,7 +42,7 @@
   },
   "desktopIdentity": {
     "appBundleId": "com.pa.investmentresearch",
-    "icon": "assets/app-icon.icns",
+    "icon": "assets/app-icon",
     "runtimeIcon": "assets/app-icon.png"
   },
   "dependencies": {

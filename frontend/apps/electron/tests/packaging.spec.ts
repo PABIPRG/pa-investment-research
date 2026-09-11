@@ -2,25 +2,147 @@
 
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
-import { appIdentity } from '../src/app-identity.ts'
+import { appIdentity, packagerIconPath } from '../src/app-identity.ts'
 import {
   commandRequiresShell,
   copyPortablePackageTree,
   createPackagerOptions,
   createPackagingPlan,
   materializePackagingWorkspaceLinks,
+  packagerWithIconWarningGuard,
   packagingDirectoryLinkTarget,
   refreshPackagedSidecarDescriptor,
   removePackagingRoot,
   signPackagedMacApplications,
   signPackagedElectronHelpers,
   signPackagedSidecarMachO,
+  validatePackagerIcon,
 } from '../src/packaging.ts'
 
 describe('Electron investment sidecar packaging', () => {
+  it.each([
+    { arch: 'arm64', extension: '.icns', platform: 'darwin', resolver: 'mac.js' },
+    { arch: 'x64', extension: '.icns', platform: 'darwin', resolver: 'mac.js' },
+    { arch: 'x64', extension: '.ico', platform: 'win32', resolver: 'win32.js' },
+  ] as const)(
+    'passes an existing $extension icon through the real $platform-$arch Packager resolver',
+    async ({ arch, extension, platform, resolver }) => {
+      const plan = createPackagingPlan(`/tmp/dsh-electron-${platform}-${arch}-icon-test`, platform, arch)
+      const options = createPackagerOptions({
+        arch,
+        electronVersion: '43.2.0',
+        electronZipDir: '/tmp/electron',
+        outDir: '/tmp/out',
+        platform,
+        sidecarDir: plan.sidecarDir,
+        stagingDir: plan.stagingDir,
+      })
+
+      expect(options.icon).toBe(`${appIdentity.iconPath}${extension}`)
+      const require = createRequire(import.meta.url)
+      const packagerModule = require(join(dirname(require.resolve('@electron/packager')), resolver)) as {
+        App: new (packagerOptions: { icon: string }, templatePath: string) => {
+          normalizeIconExtension(targetExtension: string): Promise<string | undefined>
+        }
+      }
+      const platformApp = new packagerModule.App(options as { icon: string }, '')
+      await expect(platformApp.normalizeIconExtension(extension)).resolves.toBe(options.icon)
+    },
+  )
+
+  it('resolves a valid multi-size ICO through the Windows packager instead of skipping the app icon', async () => {
+    // Exercise the resolver used by the pinned Packager version on any CI host.
+    const require = createRequire(import.meta.url)
+    const { WindowsApp } = require(join(dirname(require.resolve('@electron/packager')), 'win32.js')) as {
+      WindowsApp: new (options: { icon: string }, templatePath: string) => {
+        getIconPath(): Promise<string | undefined>
+      }
+    }
+    const windowsApp = new WindowsApp({ icon: packagerIconPath('win32') }, '')
+    const iconPath = await windowsApp.getIconPath()
+    expect(iconPath).toBe(packagerIconPath('win32'))
+    const ico = await readFile(iconPath!)
+    expect(ico.readUInt16LE(0)).toBe(0)
+    expect(ico.readUInt16LE(2)).toBe(1)
+    const count = ico.readUInt16LE(4)
+    expect(count).toBe(7)
+    const sizes: number[] = []
+    for (let index = 0; index < count; index += 1) {
+      const entry = 6 + index * 16
+      const size = ico[entry] || 256
+      expect(ico[entry + 1] || 256).toBe(size)
+      const length = ico.readUInt32LE(entry + 8)
+      const offset = ico.readUInt32LE(entry + 12)
+      expect(offset).toBeGreaterThanOrEqual(6 + count * 16)
+      expect(offset + length).toBeLessThanOrEqual(ico.length)
+      const png = ico.subarray(offset, offset + length)
+      expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      expect(png.readUInt32BE(16)).toBe(size)
+      expect(png.readUInt32BE(20)).toBe(size)
+      sizes.push(size)
+    }
+    expect(sizes).toEqual([16, 24, 32, 48, 64, 128, 256])
+  })
+
+  it('rejects a missing target icon before Electron Packager can skip it', async () => {
+    const plan = createPackagingPlan('/tmp/dsh-electron-missing-icon-test', 'win32', 'x64')
+    const options = createPackagerOptions({
+      arch: 'x64',
+      electronVersion: '43.2.0',
+      electronZipDir: '/tmp/electron',
+      outDir: '/tmp/out',
+      platform: 'win32',
+      sidecarDir: plan.sidecarDir,
+      stagingDir: plan.stagingDir,
+    })
+    options.icon = join(tmpdir(), 'pab22-icon-does-not-exist.ico')
+
+    await expect(validatePackagerIcon(options)).rejects.toThrow('target icon is missing')
+  })
+
+  it.each([
+    { arch: 'arm64', extension: '.icns', platform: 'darwin' },
+    { arch: 'x64', extension: '.ico', platform: 'win32' },
+  ] as const)('fails $platform assembly when Packager warns that the required $extension icon was skipped', async ({ arch, extension, platform }) => {
+    const plan = createPackagingPlan(`/tmp/dsh-electron-${platform}-icon-warning-test`, platform, arch)
+    const options = createPackagerOptions({
+      arch,
+      electronVersion: '43.2.0',
+      electronZipDir: '/tmp/electron',
+      outDir: '/tmp/out',
+      platform,
+      sidecarDir: plan.sidecarDir,
+      stagingDir: plan.stagingDir,
+    })
+
+    await expect(packagerWithIconWarningGuard(options, async () => {
+      console.warn(`WARNING: Could not find icon "app-icon${extension}", with extension "${extension}", skipping this app icon format`)
+      return []
+    })).rejects.toThrow('Packager rejected the target icon')
+  })
+
+  it('ignores only Packager 18\'s optional Apple icon-composer probe for a validated ICNS', async () => {
+    const plan = createPackagingPlan('/tmp/dsh-electron-icon-probe-test', 'darwin', 'arm64')
+    const options = createPackagerOptions({
+      arch: 'arm64',
+      electronVersion: '43.2.0',
+      electronZipDir: '/tmp/electron',
+      outDir: '/tmp/out',
+      platform: 'darwin',
+      sidecarDir: plan.sidecarDir,
+      stagingDir: plan.stagingDir,
+    })
+
+    await expect(packagerWithIconWarningGuard(options, async () => {
+      console.warn(`WARNING: Could not find icon "${String(options.icon)}" with extension ".icon", skipping this app icon format`)
+      return ['/tmp/packaged']
+    })).resolves.toEqual(['/tmp/packaged'])
+  })
+
   it('preserves downloads outside disposable roots and separates targets', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'packaging-cache-'))
     try {
@@ -227,6 +349,8 @@ describe('Electron investment sidecar packaging', () => {
         derefSymlinks: false,
         dir: plan.stagingDir,
       }))
+      expect(options.icon).toBe(packagerIconPath('darwin'))
+      expect(options.icon).toMatch(/app-icon\.icns$/)
       expect(options.osxSign).toBeUndefined()
       expect(options.extraResource).toBeUndefined()
       expect(options.afterCopy).toHaveLength(1)

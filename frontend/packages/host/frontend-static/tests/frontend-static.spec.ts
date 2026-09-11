@@ -37,6 +37,8 @@ async function loadComposition(): Promise<Context> {
   await writeFile(join(dist, 'app.js'), 'export {}')
   await writeFile(join(dist, 'app.js.map'), '{"sources":["src/private.ts"]}')
   await writeFile(join(dist, 'blob.bin'), 'BLOB')
+  await writeFile(join(dist, 'icon.png'), 'PNG')
+  await writeFile(join(dist, 'favicon.ico'), 'ICO')
   await writeFile(join(dist, 'manifest.webmanifest'), '{}')
   const configPath = join(root, 'cordis.yml')
   await writeFile(configPath, [
@@ -104,6 +106,14 @@ describe('real Loader composition', () => {
     })
     await writeFile(join(root!, 'dist', 'app.js'), 'export const rebuilt = true')
     expect(await request(port, '/app.js')).toMatchObject({ status: 200, body: 'export const rebuilt = true' })
+
+    for (const [path, type, body] of [
+      ['/icon.png', 'image/png', 'PNG'],
+      ['/favicon.ico', 'image/x-icon', 'ICO'],
+    ] as const) {
+      expect(await request(port, path)).toMatchObject({ status: 200, type, body })
+      expect(await request(port, path, { method: 'HEAD' })).toMatchObject({ status: 200, type, body: '' })
+    }
 
     // Unknown extension ships as octet-stream.
     expect(await request(port, '/blob.bin')).toMatchObject({ status: 200, type: 'application/octet-stream', body: 'BLOB' })

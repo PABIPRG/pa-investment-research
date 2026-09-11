@@ -212,6 +212,20 @@ describe('investment release workflow', () => {
     expect(JSON.stringify(workflow)).toContain('short_sha')
     expect(JSON.stringify(workflow)).toContain('${{ steps.commit.outputs.short_sha }}')
   })
+
+  it.each(['investment-sidecar.yml', 'investment-release.yml'])(
+    '%s verifies the native icon embedded in macOS and Windows packages',
+    (name) => {
+      const workflow = loadWorkflow(name)
+      const serialized = JSON.stringify(workflow)
+      expect(serialized).toContain('Verify packaged application icon (macOS)')
+      expect(serialized).toContain('CFBundleIconFile')
+      expect(serialized).toContain('cmp apps/electron/assets/app-icon.icns')
+      expect(serialized).toContain('Verify packaged application icon (Windows)')
+      expect(serialized).toContain('ExtractAssociatedIcon')
+      expect(serialized).toContain('packaged Electron icon differs')
+    },
+  )
 })
 
 // Execute the exact workflow lookup with a local gh stub; no GitHub state is changed.
