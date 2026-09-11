@@ -8,7 +8,7 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 
 | Key | Default | Meaning |
 |---|---|---|
-| `dshHome` | `$DSH_HOME`, else `~/.dsh` | Root for owner-only logs and runtime state. |
+| `dshHome` | `$DSH_HOME`, else `~/.dsh` | Mounted root for Host data, investment backend state, backups, and diagnostics. |
 | `startupTimeoutMs` | `30000` | Maximum managed startup duration. |
 | `healthPollMs` | `250` | Delay between startup health probes. |
 | `healthFreshnessMs` | `5000` | Reuse window for a successful active-backend health probe; `0` disables reuse. |
@@ -43,7 +43,15 @@ The trading backend forwards an explicitly set `ADAPTER_RUNNER` to its owned chi
 
 Each backend writes `$DSH_HOME/investment-research/<id>/backend.log`, rotating an oversized file to `backend.previous.log`. Owned process metadata is atomically written to `runtime.json` with private permissions and removed only when it still matches the exact in-memory owned process. Startup diagnostics redact explicitly forwarded environment values.
 
-Bundled application resources are read-only. For an owned bundled child, the Host sets `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>` and derives backend data, cache, logs, state, and user configuration from that writable directory. In particular, industry-chain seed data lives at `$DSH_HOME/investment-research/industry-chain/data/seed`. Source mode keeps the existing repository-local defaults when that variable is absent.
+For every owned managed child, source or bundled, the Host sets `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`. Each backend derives data, cache, logs, state, and user configuration from that writable directory; industry-chain also keeps reports, the A-share universe, report overlays, and generated LLM links below its `data` directory. An independently started source backend still keeps repository-local defaults when the variable is absent. Bundled application resources remain read-only.
+
+## Instance initialization and migration
+
+`initializeDshInstance()` creates the complete empty mounted layout with private directories and a versioned marker. `dryRunDshInstanceMigration()` performs a zero-write inventory and reports files, deliberate exclusions, byte counts, copy strategies, publication policy, and blocking rejections. `migrateDshInstance()` copies only that inventory into target-internal staging, verifies ordinary files with streaming SHA-256, then transactionally publishes top-level entries with the version marker last. An existing empty mount point keeps its inode and is tightened to mode `0700`. Source and target are compared by canonical physical paths and their identities are rechecked before critical operations. Non-empty targets, unsafe aliases, symlinks, special files, incompatible layout markers, changed inputs, and partial-copy or publication failures never authorize copying outside the selected trees or changing the source.
+
+The durable inventory includes Host settings, profile configuration, home patch, sessions together with attachments, JSON/SQLite storage, backup settings and `.pabackup` archives, plus each backend's `data`, `state`, and `user-config`. Managed `profiles/**/node_modules` dependencies are rebuildable and excluded. An absolute backup directory physically inside the source instance is rebased to the matching target location; an external directory is preserved and must be migrated separately. Credentials, logs, caches, runtime ownership state, locks, transfer journals, and incomplete uploads are excluded. PAB-14 business import/export remains the owner of category-aware merge, preview, transaction, and rollback semantics; instance migration does not reinterpret a `.pabackup` archive as a complete system image.
+
+Quiesced migration copies closed SQLite databases. Online migration recognizes SQLite by extension or file header and refuses each database unless the caller provides `backupSqlite`, which must use SQLite's backup API or an equivalent consistent snapshot; live WAL, SHM, and rollback-journal sidecars are excluded. Online Host sessions and attachments are rejected because they need one common quiescence or snapshot barrier rather than per-file copies. Application rollback selects a compatible executable or image, while data rollback stops the application and restores the pre-migration directory snapshot. Neither operation silently performs the other.
 
 The sidecar does not redistribute industry-chain seed data and startup never downloads it. `industry-chain.data-status` reads the local `missing`, `downloading`, `ready`, or `error` state without network access. Only an explicit, user-initiated `industry-chain.data-bootstrap` starts the fixed five-file download. The backend bounds file sizes, validates JSON and minimum structure in a temporary directory, publishes only the complete dataset, cleans failed staging data, and deduplicates concurrent bootstrap requests.
 
@@ -69,5 +77,6 @@ None; business plugins own every model-visible contribution after their backend 
 - **Dependency distribution hashes are deferred hardening** — target files pin every installed version and are themselves hashed, while individual wheel/sdist hashes remain a follow-up release-supply-chain gate.
 - **State is diagnostic, not recovery authority** — a restarted dsh instance reports stale state but never adopts or kills a PID from disk; use `external` for independently supervised services.
 - **One active and one previous log** — rotation is size-based at open time; long-running children do not rotate mid-process.
+- **Online SQLite backup is deployment-supplied** — the migration primitive enforces use of a consistency callback but does not assume a particular SQLite executable; container and native launchers must bind an available backup implementation.
 
 Holdings sync returns a read-only preview valid for five minutes; commit requires its token and rejects changed accounts, providers, or local holdings. Native actions use a host-private credential and a non-Remote method restricted to owned local backends.

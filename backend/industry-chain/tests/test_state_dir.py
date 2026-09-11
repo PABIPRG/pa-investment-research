@@ -26,8 +26,24 @@ class StateDirectoryTests(unittest.TestCase):
             })
             script = r'''
 from industry_chain.config import settings
+from industry_chain import graph, merge, reports, universe
 assert settings.state_root.is_absolute()
+assert settings.data_root == settings.state_root / "data"
 assert settings.data_dir == settings.state_root / "data" / "seed"
+assert settings.reports_dir == settings.state_root / "data" / "reports"
+assert reports.REPORTS_DIR == settings.reports_dir
+assert merge.OVERLAY_PATH == settings.reports_dir / "overlay.json"
+assert universe.UNIVERSE_PATH == settings.data_root / "a_share_universe.json"
+assert graph.LLM_LINKS_PATH == settings.data_root / "a_share_llm_links.json"
+merge.save_overlay({"000001": {"materials": [], "products": [], "related": [], "metrics": []}})
+universe.UNIVERSE_PATH.write_text("[]", encoding="utf-8")
+graph.LLM_LINKS_PATH.write_text('{"links": []}', encoding="utf-8")
+(reports.REPORTS_DIR / "000001").mkdir(parents=True, exist_ok=True)
+(reports.REPORTS_DIR / "000001" / "meta.json").write_text("[]", encoding="utf-8")
+assert (settings.data_root / "reports" / "overlay.json").is_file()
+assert (settings.data_root / "reports" / "000001" / "meta.json").is_file()
+assert (settings.data_root / "a_share_universe.json").is_file()
+assert (settings.data_root / "a_share_llm_links.json").is_file()
 '''
             completed = subprocess.run(
                 [str(PYTHON), "-c", script], env=env,
@@ -43,7 +59,9 @@ assert settings.data_dir == settings.state_root / "data" / "seed"
         script = r'''
 from industry_chain.config import settings
 assert settings.state_root is None
+assert settings.data_root == settings.root / "data"
 assert settings.data_dir == settings.root / "data" / "seed"
+assert settings.reports_dir == settings.root / "data" / "reports"
 '''
         completed = subprocess.run(
             [str(PYTHON), "-c", script], env=env,
