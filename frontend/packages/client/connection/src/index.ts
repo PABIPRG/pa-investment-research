@@ -4,6 +4,7 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-attachment'
 // Activates the webServer Context merge used below.
 import type { WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
+import type { WebAuthDecision } from '@deepseek-ai/dsh-api-web-auth'
 import { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
 import { API_PATH, HOST_EVENTS_PATH, MUX_EVENTS_PATH } from './api-path.ts'
 import { bridge, DEFAULT_MAX_REQUEST_BODY_BYTES } from './http-bridge.ts'
@@ -167,6 +168,13 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
         res.end('forbidden')
         return
       }
+      const auth = ctx.get('webAuth')
+      const decision: WebAuthDecision | undefined = auth?.authorize(req)
+      if (decision !== undefined && !decision.ok) {
+        res.writeHead(decision.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ code: decision.code }))
+        return
+      }
       await bridge(req, res, fetchHandler, maxRequestBodyBytes)
     },
   }
@@ -183,6 +191,11 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
         handler: (req, socket, head) => {
           if (!isTrustedApiRequest(req, trustedHosts)) {
             rejectWebSocketUpgrade(socket)
+            return
+          }
+          const auth = apiCtx.get('webAuth')
+          if (auth !== undefined && !auth.trackSocket(req, socket)) {
+            rejectWebSocketUpgrade(socket, 401)
             return
           }
           return handle(req, socket, head)

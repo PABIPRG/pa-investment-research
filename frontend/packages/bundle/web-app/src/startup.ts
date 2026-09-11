@@ -9,6 +9,7 @@
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
+import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-startup'
@@ -27,6 +28,14 @@ export interface WebStartupValues {
   port?: number
   /** Explicit `--trusted-host` authorities, in argument order. */
   trustedHosts: string[]
+  /** Whether the Web transport must authenticate one configured administrator. */
+  authMode: 'disabled' | 'required'
+  /** Administrator identifier, never a secret. */
+  authUsername?: string
+  /** Path to the protected versioned password-hash file. */
+  authPasswordHashFile?: string
+  /** Secure cookie policy; false is an explicit loopback-only development concession. */
+  secureCookies: boolean
 }
 
 /** The web flag family, as commander parsed it. */
@@ -66,8 +75,21 @@ export function apply(ctx: Context): void {
   const program = webCommand()
   program.action(() => {
     const options = program.opts<WebOptions>()
-    if (options.host === '0.0.0.0') {
-      program.error('error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead')
+    const environment = launchEnvironmentOf(ctx)
+    const authRaw = environment.get('DSH_WEB_AUTH')?.value
+    if (authRaw !== undefined && authRaw !== '' && authRaw !== 'disabled' && authRaw !== 'required') {
+      program.error(`error: DSH_WEB_AUTH must be disabled or required, got ${JSON.stringify(authRaw)}`)
+    }
+    const authMode = authRaw === 'required' ? 'required' : 'disabled'
+    const authUsername = environment.get('DSH_WEB_ADMIN_USERNAME')?.value
+    const authPasswordHashFile = environment.get('DSH_WEB_ADMIN_PASSWORD_HASH_FILE')?.value
+    if (options.host === '0.0.0.0'
+      && (authMode !== 'required' || authUsername === undefined || authUsername === ''
+        || authPasswordHashFile === undefined || authPasswordHashFile === '')) {
+      program.error('error: --host 0.0.0.0 requires DSH_WEB_AUTH=required plus DSH_WEB_ADMIN_USERNAME and DSH_WEB_ADMIN_PASSWORD_HASH_FILE')
+    }
+    if (options.host === '0.0.0.0' && environment.get('DSH_WEB_INSECURE_COOKIES')?.value === '1') {
+      program.error('error: DSH_WEB_INSECURE_COOKIES=1 is allowed only with the loopback Web server')
     }
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {
       program.error(`error: --port must be a number, got ${JSON.stringify(options.port)}`)
@@ -76,6 +98,10 @@ export function apply(ctx: Context): void {
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
+      authMode,
+      ...authUsername !== undefined && { authUsername },
+      ...authPasswordHashFile !== undefined && { authPasswordHashFile },
+      secureCookies: environment.get('DSH_WEB_INSECURE_COOKIES')?.value !== '1',
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

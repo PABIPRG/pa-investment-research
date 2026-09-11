@@ -134,6 +134,7 @@
     { "path": "./packages/typert/protocol" },
     { "path": "./packages/typert/registry" },
     { "path": "./packages/api/gateway/tsconfig.host.json" },
+    { "path": "./packages/api/web-auth" },
     { "path": "./packages/api/remotes/tsconfig.host.json" },
     { "path": "./packages/typert/loader" },
     { "path": "./packages/session/session-persistence" },

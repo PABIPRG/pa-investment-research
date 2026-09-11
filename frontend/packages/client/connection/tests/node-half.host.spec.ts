@@ -74,7 +74,10 @@ function fakeResponse(): { response: ServerResponse; state: { status?: number; b
   return { response, state }
 }
 
-async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+async function mounted(config?: { trustedHosts?: string[] }, webAuth?: {
+  authorize(request: IncomingMessage): { ok: true } | { ok: false; status: 401; code: 'auth-required' }
+  trackSocket(request: IncomingMessage, socket: PassThrough): boolean
+}): Promise<{
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
   dispose: () => Promise<void>
@@ -84,6 +87,7 @@ async function mounted(config?: { trustedHosts?: string[] }): Promise<{
   const upgrades: WebUpgradeRoute[] = []
   ctx.provide('webServer', fakeHttpServer(routes, upgrades) as WebServer)
   ctx.provide('apiProxy', {} as unknown as ApiProxy)
+  if (webAuth !== undefined) ctx.provide('webAuth', webAuth as never)
   const fiber = ctx.plugin({ inject: [...inject], apply }, config)
   await fiber.await()
   return { routes, upgrades, dispose: () => fiber.dispose() }
@@ -158,6 +162,27 @@ describe('connection node half', () => {
     }), response)
     expect(state.status).toBe(403)
     expect(state.body).toBe('forbidden')
+    await dispose()
+  })
+
+  it('rejects unauthenticated HTTP and WebSocket traffic before business dispatch', async () => {
+    const auth = {
+      authorize: () => ({ ok: false as const, status: 401 as const, code: 'auth-required' as const }),
+      trackSocket: () => false,
+    }
+    const { routes, upgrades, dispose } = await mounted(undefined, auth)
+    const { response, state } = fakeResponse()
+    await routes[0]!.handler(fakeRequest({ host: '127.0.0.1:3080' }), response)
+    expect(state.status).toBe(401)
+    expect(state.body).toContain('auth-required')
+
+    const socket = new PassThrough()
+    const chunks: Buffer[] = []
+    socket.on('data', (chunk: Buffer) => { chunks.push(chunk) })
+    const ended = once(socket, 'end')
+    await upgrades[0]!.handler(fakeRequest({ host: '127.0.0.1:3080' }, MUX_EVENTS_PATH), socket, Buffer.alloc(0))
+    await ended
+    expect(Buffer.concat(chunks).toString()).toContain('HTTP/1.1 401 Unauthorized')
     await dispose()
   })
 

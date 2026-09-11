@@ -135,6 +135,18 @@
         surfaceContext: true
         trustedHosts: !!js ctx.webStartup.trustedHosts
 
+    # Single-administrator browser boundary. Disabled preserves the historical
+    # loopback profile; required mode fails closed when its hash file is absent.
+    - id: web-auth
+      name: '@deepseek-ai/dsh-api-web-auth'
+      inject: [webStartup, webRuntime]
+      config:
+        mode: !!js ctx.webStartup.authMode
+        username: !!js ctx.webStartup.authUsername
+        passwordHashFile: !!js ctx.webStartup.authPasswordHashFile
+        secureCookies: !!js ctx.webStartup.secureCookies
+        trustedHosts: !!js ctx.webRuntime.trustedHosts
+
     # The client-plugin reload chain, always mounted: it is idle until a
     # rebuild watcher (pnpm run dev:web) actually rewrites client bundles. It
     # is a row rather than a child of web-runtime because its node half is a
@@ -155,7 +167,7 @@
     # webserver under /api; browser half is the fetch/SSE client.
     - id: connection
       name: '@deepseek-ai/dsh-client-connection'
-      inject: [webRuntime]
+      inject: [webRuntime, webAuth]
       config:
         # LAN literals derived from the active bind plus --trusted-host extras.
         # A deployment adding authorities keeps this expression and concatenates
