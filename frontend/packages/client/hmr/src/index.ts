@@ -11,10 +11,15 @@
 import { statSync } from 'node:fs'
 import type { ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
+import {
+  authorizeProtectedWebRequest,
+  assertTrustedAuthority,
+  assertTrustedProxyAddress,
+  type WebRequestAuthorizer,
+} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 // Empty type imports carry the clientModuleHost/webServer Context merges.
 import type {} from '@deepseek-ai/dsh-client-modules'
-import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { PluginsEventFrame } from './events.ts'
 import { EVENTS_ENDPOINT } from './events.ts'
 
@@ -31,10 +36,22 @@ export const inject = ['clientModules', 'webServer']
 export interface Config {
   /** Bundle stat-poll interval in milliseconds (default 500, the build-side watcher's polling default). */
   pollIntervalMs?: number
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded client and transport facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
+  /** Maximum number of simultaneously open HMR event streams. */
+  maxSseConnections?: number
 }
 
 export const Config: z<Config> = z.object({
   pollIntervalMs: z.number().step(1).min(1).default(500),
+  trustedHosts: z.array(String).default([]),
+  trustedProxyAddresses: z.array(String).default([]),
+  requireWebAuth: z.boolean().default(false),
+  maxSseConnections: z.natural().min(1).max(1_024).default(64),
 })
 
 /** Serialize one frame as an SSE data line. */
@@ -49,6 +66,23 @@ interface WatchedBundle {
   dirty: boolean
 }
 
+const SSE_HEADERS = {
+  'content-type': 'text/event-stream',
+  'cache-control': 'no-store',
+  'connection': 'keep-alive',
+  'x-content-type-options': 'nosniff',
+} as const
+
+function writeJsonError(res: ServerResponse, status: number, code: string, extraHeaders: Record<string, string> = {}): void {
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    ...extraHeaders,
+  })
+  res.end(JSON.stringify({ code }))
+}
+
 /**
  * Mount the dev chain: bundle watches, rebuilt reporting, and the SSE channel.
  * @param ctx - host plugin context carrying clientModuleHost and webServer.
@@ -57,6 +91,12 @@ interface WatchedBundle {
 export function apply(ctx: Context, config: Config): void {
   // schemastery's .default() guarantees the field is set after validation.
   const pollIntervalMs = config.pollIntervalMs as number
+  const trustedHosts = config.trustedHosts ?? []
+  const trustedProxyAddresses = config.trustedProxyAddresses ?? []
+  const requireWebAuth = config.requireWebAuth ?? false
+  const maxSseConnections = config.maxSseConnections ?? 64
+  for (const authority of trustedHosts) assertTrustedAuthority(authority)
+  for (const address of trustedProxyAddresses) assertTrustedProxyAddress(address)
 
   // --- bundle watch: one HMR-owned stat poll ------------------------------
   const watched = new Map<string, WatchedBundle>()
@@ -149,17 +189,21 @@ export function apply(ctx: Context, config: Config): void {
   const connections = new Set<ServerResponse>()
 
   const connect = (res: ServerResponse): void => {
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      'connection': 'keep-alive',
-    })
-    // Comment line on open so clients/proxies see a live channel even when
-    // no rebuild ever happens; EventSource frame parsing skips it naturally.
-    res.write(': connected\n\n')
-    res.write(sseData({ type: 'graph', graph: ctx.clientModules.graph() }))
     connections.add(res)
-    res.on('close', () => { connections.delete(res) })
+    const release = (): void => { connections.delete(res) }
+    res.once('close', release)
+    res.once('error', release)
+    try {
+      res.writeHead(200, SSE_HEADERS)
+      // Comment line on open so clients/proxies see a live channel even when
+      // no rebuild ever happens; EventSource frame parsing skips it naturally.
+      const openWritable = res.write(': connected\n\n')
+      const graphWritable = res.write(sseData({ type: 'graph', graph: ctx.clientModules.graph() }))
+      if (!openWritable || !graphWritable) res.destroy()
+    } catch {
+      release()
+      res.destroy()
+    }
   }
 
   ctx.effect(() => {
@@ -167,11 +211,28 @@ export function apply(ctx: Context, config: Config): void {
       kind: 'exact',
       path: EVENTS_ENDPOINT,
       handler: (req, res) => {
+        const auth = ctx.get('webAuth') as WebRequestAuthorizer | undefined
+        const decision = authorizeProtectedWebRequest(
+          req, trustedHosts, trustedProxyAddresses, auth, requireWebAuth,
+        )
+        if (!decision.ok) {
+          writeJsonError(res, decision.status, decision.code)
+          return
+        }
         // Named routes match ahead of the carrier's method gate; keep the old
         // global 405 semantics for non-GET hits on this endpoint.
         if (req.method !== 'GET' && req.method !== 'HEAD') {
-          res.writeHead(405)
+          res.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store' })
           res.end()
+          return
+        }
+        if (req.method === 'HEAD') {
+          res.writeHead(200, SSE_HEADERS)
+          res.end()
+          return
+        }
+        if (connections.size >= maxSseConnections) {
+          writeJsonError(res, 429, 'sse-capacity-exhausted', { 'retry-after': '5' })
           return
         }
         connect(res)
@@ -179,7 +240,18 @@ export function apply(ctx: Context, config: Config): void {
     })
     const unsubscribe = ctx.clientModules.onRebuilt((id, rev) => {
       const line = sseData({ type: 'rebuilt', id, rev })
-      for (const res of connections) res.write(line)
+      for (const res of connections) {
+        if (res.destroyed) {
+          connections.delete(res)
+          continue
+        }
+        try {
+          if (!res.write(line)) res.destroy()
+        } catch {
+          connections.delete(res)
+          res.destroy()
+        }
+      }
     })
     return () => {
       unsubscribe()

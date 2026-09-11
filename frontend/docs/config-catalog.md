@@ -348,10 +348,12 @@ export interface WebAuthConfig {
   loginMaxAttempts?: number
   /** Maximum number of client-address limiter entries retained in memory. */
   loginMaxTrackedAddresses?: number
+  /** Maximum password verifications allowed to run concurrently; excess work is not queued. */
+  loginMaxConcurrentVerifications?: number
 }
 ```
 
-Source: [`packages/api/web-auth/src/index.ts:28`](../packages/api/web-auth/src/index.ts)
+Source: [`packages/api/web-auth/src/index.ts:29`](../packages/api/web-auth/src/index.ts)
 
 <a id="deepseek-aidsh-attachment-local"></a>
 
@@ -460,10 +462,18 @@ Requires: `clientModules` · `webServer`
 export interface Config {
   /** Bundle stat-poll interval in milliseconds (default 500, the build-side watcher's polling default). */
   pollIntervalMs?: number
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded client and transport facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
+  /** Maximum number of simultaneously open HMR event streams. */
+  maxSseConnections?: number
 }
 ```
 
-Source: [`packages/client/hmr/src/index.ts:31`](../packages/client/hmr/src/index.ts)
+Source: [`packages/client/hmr/src/index.ts:36`](../packages/client/hmr/src/index.ts)
 
 <a id="deepseek-aidsh-client-modules"></a>
 
@@ -478,10 +488,16 @@ export interface Config {
   additionalPackages?: string[]
   /** Inject the graph into HTML; authenticated Web apps fetch it after login. */
   injectBootManifest?: boolean
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded browser facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
 }
 ```
 
-Source: [`packages/client/modules/src/index.ts:48`](../packages/client/modules/src/index.ts)
+Source: [`packages/client/modules/src/index.ts:53`](../packages/client/modules/src/index.ts)
 
 <a id="deepseek-aidsh-code-runtime-worker-thread"></a>
 
@@ -854,7 +870,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/webserver/src/index.ts:57`](../packages/host/webserver/src/index.ts)
+Source: [`packages/host/webserver/src/index.ts:60`](../packages/host/webserver/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 

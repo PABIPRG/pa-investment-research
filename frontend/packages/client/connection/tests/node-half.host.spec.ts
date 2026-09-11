@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -231,6 +231,35 @@ describe('connection node half', () => {
     await dispose()
   })
 
+  it('never grants local privilege from forwarded loopback claims, including a loopback proxy', async () => {
+    for (const proxyAddress of ['10.0.0.10', '127.0.0.1']) {
+      const { routes, dispose } = await mounted({
+        trustedHosts: ['harness.example'],
+        trustedProxyAddresses: [proxyAddress],
+      })
+      const denied = fakeResponse()
+      await routes[0]!.handler(fakeRequest({
+        host: 'harness.example',
+        'x-forwarded-for': '127.0.0.2',
+        'x-forwarded-proto': 'https',
+      }, `${API_PATH}/settings.describe`, proxyAddress), denied.response)
+      expect(denied.state.status).toBe(403)
+      expect(denied.state.body).toBe('forbidden')
+      await dispose()
+    }
+  })
+
+  it('keeps privileged methods available to a real direct loopback socket', async () => {
+    const { routes, dispose } = await mounted()
+    const allowed = fakeResponse()
+    await routes[0]!.handler(fakeRequest(
+      { host: '127.0.0.1:3080' },
+      `${API_PATH}/settings.describe`,
+    ), allowed.response)
+    expect(allowed.state.status).toBe(404)
+    await dispose()
+  })
+
   it('passes loopback and declared-authority requests through to the bridge', async () => {
     const { routes, dispose } = await mounted({ trustedHosts: ['harness.example:3080', '192.168.1.5'] })
     // Loopback, no browser markers (curl shape): the fence passes; the carrier
@@ -331,7 +360,7 @@ describe('connection node half', () => {
     await route.handler(fakePost({ host: '127.0.0.1:3080' }, '/rpc/write', body), anonymous.response)
     expect(anonymous.state).toMatchObject({ status: 401 })
 
-    const login = auth.login('admin', 'correct horse battery staple', fakeRequest({ host: '127.0.0.1:3080' }))
+    const login = await auth.login('admin', 'correct horse battery staple', fakeRequest({ host: '127.0.0.1:3080' }))
     expect(login.ok).toBe(true)
     if (!login.ok || login.cookieName === undefined || login.token === undefined || login.session === undefined) return
     const cookie = `${login.cookieName}=${login.token}`
@@ -443,6 +472,7 @@ describe('connection node half', () => {
     const fiber = ctx.plugin({ inject: [...inject], apply }, { trustedHosts: ['harness.example'] })
     await fiber.await()
     const connection = ctx.get('connection') as HostConnectionHandle
+    const warn = vi.spyOn(ctx.logger, 'warn').mockImplementation(() => {})
     const remove = connection.rpc.handle('/rpc', async (endpoint) => {
       if (endpoint === 'fail') throw new Error('handler broke')
       return { ok: true, value: null }
@@ -494,7 +524,16 @@ describe('connection node half', () => {
     await route.handler(fakePost({ host: 'harness.example' }, '/rpc/fail', {
       type: 'client-request', rpcId: 'rpc-fail', method: 'fail', payload: {},
     }), failed.response)
-    expect(failed.state).toMatchObject({ status: 500, body: 'handler failure: Error: handler broke' })
+    expect(failed.state.status).toBe(500)
+    expect(JSON.parse(String(failed.state.body))).toMatchObject({
+      rpcId: 'rpc-fail',
+      result: {
+        ok: false,
+        error: { code: 'internal', message: 'request handler failed', details: {} },
+      },
+    })
+    expect(String(failed.state.body)).not.toContain('handler broke')
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ message: 'handler broke' }))
 
     expect(() => connection.rpc.handle('/api', async () => ({ ok: true, value: null }), {
       authority: 'loopback',

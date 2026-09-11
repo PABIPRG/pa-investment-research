@@ -18,6 +18,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 
 export {
+  authorizeProtectedWebRequest,
   assertTrustedAuthority,
   assertTrustedProxyAddress,
   isLoopbackRequestPeer,
@@ -25,6 +26,8 @@ export {
   isTrustedForwardedHttps,
   requestClientAddress,
   type BrowserTrustRequest,
+  type WebRequestAuthorizer,
+  type WebRequestAuthorizationDecision,
 } from './request-trust.ts'
 
 declare module '@deepseek-ai/cordis' {

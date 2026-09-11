@@ -3,8 +3,11 @@
  * report through clientModuleHost.rebuilt, and everything dies with the fiber.
  */
 import { mkdtempSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebBootGraph, ClientModuleRegistry } from '@deepseek-ai/dsh-client-modules'
@@ -70,19 +73,194 @@ function fakeHttpServer(routes: WebRoute[]): WebServer {
   return fake as WebServer
 }
 
-async function mount(clientModuleHost: FakeHost, webServer: WebServer) {
+interface WebAuthStub {
+  authorize(request: IncomingMessage):
+    | { ok: true }
+    | { ok: false; status: 401 | 403 | 429 | 503; code: string }
+}
+
+async function mount(
+  clientModuleHost: FakeHost,
+  webServer: WebServer,
+  config: Partial<Config> = {},
+  webAuth?: WebAuthStub,
+) {
   const ctx = new Context()
   ctx.provide('clientModules', clientModuleHost)
   ctx.provide('webServer', webServer)
+  if (webAuth !== undefined) ctx.provide('webAuth', webAuth as never)
   const fiber = ctx.plugin(
     { inject: [...inject], Config, apply },
-    { pollIntervalMs: POLL_MS },
+    { pollIntervalMs: POLL_MS, ...config },
   )
   await fiber.await()
   return fiber
 }
 
+function routeRequest(
+  headers: Record<string, string>,
+  method = 'GET',
+  remoteAddress = '127.0.0.1',
+): IncomingMessage {
+  const request = Readable.from([]) as unknown as IncomingMessage
+  Object.assign(request, { url: EVENTS_ENDPOINT, method, headers, socket: { remoteAddress } })
+  return request
+}
+
+interface ResponseState {
+  status: number | undefined
+  headers: Record<string, string>
+  body: string
+  ended: boolean
+  destroyed: boolean
+}
+
+function routeResponse(): { response: ServerResponse; state: ResponseState } {
+  const state: ResponseState = { status: undefined, headers: {}, body: '', ended: false, destroyed: false }
+  const emitter = new EventEmitter()
+  const response = Object.assign(emitter, {
+    destroyed: false,
+    writeHead(status: number, headers: Record<string, string> = {}) {
+      state.status = status
+      state.headers = headers
+      return this
+    },
+    write(value: string | Uint8Array) {
+      state.body += Buffer.from(value).toString('utf8')
+      return true
+    },
+    end(value?: string | Uint8Array) {
+      if (value !== undefined) state.body += Buffer.from(value).toString('utf8')
+      state.ended = true
+      return this
+    },
+    destroy() {
+      if (state.destroyed) return this
+      state.destroyed = true
+      Object.assign(emitter, { destroyed: true })
+      emitter.emit('close')
+      return this
+    },
+  }) as unknown as ServerResponse
+  return { response, state }
+}
+
 describe('hmr node half', () => {
+  it('keeps the exact events route behind request trust and WebAuth instead of bypassing the /plugins prefix', async () => {
+    const privateGraphMarker = 'PRIVATE_GRAPH_MARKER'
+    const clientModuleHost = fakeClientModuleHost(new Map([[privateGraphMarker, join(dir, 'private.js')]]))
+    const routes: WebRoute[] = []
+    const authorize = vi.fn<WebAuthStub['authorize']>(request => request.headers.cookie === 'session=valid'
+      ? { ok: true }
+      : { ok: false, status: 401, code: 'auth-required' })
+    const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
+      trustedHosts: ['harness.internal'],
+      trustedProxyAddresses: ['127.0.0.1'],
+      requireWebAuth: true,
+    }, { authorize })
+    const route = routes[0]!
+
+    const untrusted = routeResponse()
+    await route.handler(routeRequest({ host: 'evil.example' }), untrusted.response)
+    expect(untrusted.state).toMatchObject({ status: 403, ended: true })
+    expect(untrusted.state.body).not.toContain(privateGraphMarker)
+    expect(authorize).not.toHaveBeenCalled()
+
+    const anonymous = routeResponse()
+    await route.handler(routeRequest({
+      host: 'harness.internal',
+      origin: 'https://harness.internal',
+      'x-forwarded-for': '10.0.0.8',
+      'x-forwarded-proto': 'https',
+    }), anonymous.response)
+    expect(anonymous.state).toMatchObject({ status: 401, ended: true })
+    expect(anonymous.state.body).toContain('auth-required')
+    expect(anonymous.state.body).not.toContain(privateGraphMarker)
+    expect(authorize).toHaveBeenCalledOnce()
+
+    const authenticated = routeResponse()
+    await route.handler(routeRequest({
+      host: 'harness.internal',
+      origin: 'https://harness.internal',
+      'x-forwarded-for': '10.0.0.8',
+      'x-forwarded-proto': 'https',
+      cookie: 'session=valid',
+    }), authenticated.response)
+    expect(authenticated.state.status).toBe(200)
+    expect(authenticated.state.body).toContain(privateGraphMarker)
+
+    await fiber.dispose()
+  })
+
+  it('fails closed without the required authority and rejects non-HTTPS public requests', async () => {
+    const clientModuleHost = fakeClientModuleHost(new Map())
+    const missingRoutes: WebRoute[] = []
+    const missing = await mount(clientModuleHost, fakeHttpServer(missingRoutes), {
+      trustedHosts: ['harness.internal'],
+      requireWebAuth: true,
+    })
+    const unavailable = routeResponse()
+    await missingRoutes[0]!.handler(routeRequest({ host: 'harness.internal' }), unavailable.response)
+    expect(unavailable.state).toMatchObject({ status: 503, ended: true })
+    expect(unavailable.state.body).toContain('auth-unavailable')
+    await missing.dispose()
+
+    const routes: WebRoute[] = []
+    const authorize = vi.fn<WebAuthStub['authorize']>(request => request.headers['x-forwarded-proto'] === 'https'
+      ? { ok: true }
+      : { ok: false, status: 403, code: 'secure-transport-required' })
+    const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
+      trustedHosts: ['harness.internal'],
+      trustedProxyAddresses: ['127.0.0.1'],
+      requireWebAuth: true,
+    }, { authorize })
+    const insecure = routeResponse()
+    await routes[0]!.handler(routeRequest({
+      host: 'harness.internal',
+      origin: 'https://harness.internal',
+      'x-forwarded-for': '10.0.0.8',
+      'x-forwarded-proto': 'http',
+    }), insecure.response)
+    expect(insecure.state).toMatchObject({ status: 403, ended: true })
+    expect(insecure.state.body).toContain('secure-transport-required')
+    await fiber.dispose()
+  })
+
+  it('bounds authorized SSE connections and releases capacity on close, error, and disposal', async () => {
+    const clientModuleHost = fakeClientModuleHost(new Map([['pkg-private', join(dir, 'private.js')]]))
+    const routes: WebRoute[] = []
+    const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
+      maxSseConnections: 1,
+      requireWebAuth: true,
+    }, { authorize: () => ({ ok: true }) })
+    const route = routes[0]!
+    const request = routeRequest({ host: '127.0.0.1:3080' })
+
+    const first = routeResponse()
+    await route.handler(request, first.response)
+    expect(first.state.status).toBe(200)
+    expect(first.state.body).toContain('pkg-private')
+
+    const exhausted = routeResponse()
+    await route.handler(request, exhausted.response)
+    expect(exhausted.state).toMatchObject({ status: 429, ended: true })
+    expect(exhausted.state.headers['retry-after']).toBe('5')
+    expect(exhausted.state.body).toContain('sse-capacity-exhausted')
+
+    first.response.emit('close')
+    const afterClose = routeResponse()
+    await route.handler(request, afterClose.response)
+    expect(afterClose.state.status).toBe(200)
+
+    afterClose.response.emit('error', new Error('client reset'))
+    const afterError = routeResponse()
+    await route.handler(request, afterError.response)
+    expect(afterError.state.status).toBe(200)
+
+    await fiber.dispose()
+    expect(afterError.state.destroyed).toBe(true)
+  })
+
   it('watches graph bundles, reports stat changes, and unwatches on dispose', async () => {
     const bundle = join(dir, 'a.js')
     writeFileSync(bundle, 'v1')

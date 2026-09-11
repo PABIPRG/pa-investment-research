@@ -96,7 +96,9 @@ export class HostConnectionService extends Service implements HostConnectionHand
   ): () => Promise<void> {
     assertChannel(channel)
     const trustedHosts = options.authority === 'loopback' ? [] : this.trustedHosts
-    const fetchHandler = connectionRpcFetchHandler(channel, handler)
+    const fetchHandler = connectionRpcFetchHandler(channel, handler, (error) => {
+      owner.logger.warn(error instanceof Error ? error : new Error(String(error)))
+    })
     const route: WebRoute = {
       kind: 'prefix',
       path: channel,
@@ -133,7 +135,9 @@ export class HostConnectionService extends Service implements HostConnectionHand
     }
     const interceptor: ConnectionRpcInterceptor = {
       matches,
-      fetchHandler: connectionRpcFetchHandler(channel, handler),
+      fetchHandler: connectionRpcFetchHandler(channel, handler, (error) => {
+        owner.logger.warn(error instanceof Error ? error : new Error(String(error)))
+      }),
       options,
     }
     return owner.effect(() => {
@@ -166,6 +170,7 @@ export class HostConnectionService extends Service implements HostConnectionHand
 export function connectionRpcFetchHandler(
   channel: string,
   handler: ConnectionRpcHandler,
+  reportHandlerError: (error: unknown) => void = () => {},
 ): FetchHandler {
   return {
     async fetch(request: Request): Promise<Response> {
@@ -203,7 +208,12 @@ export function connectionRpcFetchHandler(
         const result = await handler(endpoint, message.payload, request.signal)
         return fullResponse(message.rpcId, result)
       } catch (error) {
-        return new Response(`handler failure: ${String(error)}`, { status: 500 })
+        reportHandlerError(error)
+        return errorResponse(message.rpcId, {
+          code: 'internal',
+          message: 'request handler failed',
+          details: {},
+        }, { status: 500 })
       }
     },
   }
@@ -230,13 +240,13 @@ function endpointFromPath(channel: string, pathname: string): string | undefined
   return endpoint
 }
 
-function errorResponse(rpcId: RpcIdType, error: RpcError): Response {
-  return fullResponse(rpcId, { ok: false, error })
+function errorResponse(rpcId: RpcIdType, error: RpcError, init?: ResponseInit): Response {
+  return fullResponse(rpcId, { ok: false, error }, init)
 }
 
-function fullResponse(rpcId: RpcIdType, result: RpcServerResponse['result']): Response {
+function fullResponse(rpcId: RpcIdType, result: RpcServerResponse['result'], init?: ResponseInit): Response {
   const body: RpcServerResponse = { type: 'server-response', rpcId, result }
-  return Response.json(body)
+  return Response.json(body, init)
 }
 
 function assertChannel(channel: string): void {

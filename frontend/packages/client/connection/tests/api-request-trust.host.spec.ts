@@ -49,6 +49,18 @@ describe('isTrustedApiRequest', () => {
     expect(isLoopbackRequestPeer(forwarded, proxy)).toBe(false)
     expect(isTrustedForwardedHttps(forwarded, proxy)).toBe(true)
     expect(isTrustedApiRequest(forwarded, ['harness.internal'], proxy)).toBe(true)
+    expect(isTrustedApiRequest(request({
+      host: 'harness.internal',
+      origin: 'http://harness.internal',
+      'x-forwarded-for': '10.0.0.8',
+      'x-forwarded-proto': 'https',
+    }), ['harness.internal'], proxy)).toBe(false)
+    expect(isTrustedApiRequest(request({
+      host: 'harness.internal',
+      origin: 'ftp://harness.internal',
+      'x-forwarded-for': '10.0.0.8',
+      'x-forwarded-proto': 'https',
+    }), ['harness.internal'], proxy)).toBe(false)
 
     const spoofed = request({
       host: '127.0.0.1:3080',
@@ -58,6 +70,15 @@ describe('isTrustedApiRequest', () => {
     expect(requestClientAddress(spoofed, proxy)).toBe('10.0.0.9')
     expect(isTrustedForwardedHttps(spoofed, proxy)).toBe(false)
     expect(isTrustedApiRequest(spoofed, [], proxy)).toBe(false)
+
+    const forgedLoopback = request({
+      host: 'harness.internal',
+      'x-forwarded-for': '127.0.0.1',
+      'x-forwarded-proto': 'https',
+    }, '10.0.0.10')
+    expect(requestClientAddress(forgedLoopback, ['10.0.0.10'])).toBe('127.0.0.1')
+    expect(isLoopbackRequestPeer(forgedLoopback, ['10.0.0.10'])).toBe(false)
+    expect(isLoopbackRequestPeer(request({ host: '127.0.0.1' }))).toBe(true)
   })
 
   it('fails closed on malformed proxy configuration and forwarding chains', () => {

@@ -5,13 +5,15 @@
  * explicit HTTPS authority.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import * as yaml from 'js-yaml'
 import { apply, Config, internals } from '../src/index.ts'
 
 let dist: string | undefined
@@ -24,6 +26,13 @@ afterEach(() => {
 })
 
 const originalResolve = internals.resolveDistIndex
+const root = fileURLToPath(new URL('..', import.meta.url))
+const loaderSchema = yaml.DEFAULT_SCHEMA.extend([
+  new yaml.Type('tag:yaml.org,2002:js', {
+    kind: 'scalar',
+    construct: (expression: unknown): unknown => expression,
+  }),
+])
 
 /** Stage a dist fixture and point the bundle's resolver at it. */
 function stageDist(): string {
@@ -62,6 +71,34 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it('injects the HMR and plugin bundle routes with the Web trust and authentication authorities', () => {
+    const patch = yaml.load(readFileSync(resolve(root, 'cordis.patch.yml'), 'utf8'), { schema: loaderSchema })
+    if (!Array.isArray(patch)) throw new TypeError('web-app patch must be a patch list')
+    const rows = patch.flatMap((entry): Record<string, unknown>[] =>
+      typeof entry === 'object' && entry !== null
+        ? (entry as { insert?: Record<string, unknown>[] }).insert ?? []
+        : [])
+    const hmr = rows.find(row => row.id === 'client-hmr')
+    expect(hmr).toMatchObject({
+      inject: ['webStartup', 'webRuntime', 'webAuth'],
+      config: {
+        trustedHosts: 'ctx.webRuntime.trustedHosts',
+        trustedProxyAddresses: 'ctx.webStartup.trustedProxyAddresses',
+        requireWebAuth: true,
+        maxSseConnections: 64,
+      },
+    })
+    expect(rows.find(row => row.id === 'modules')).toMatchObject({
+      inject: ['webStartup', 'webRuntime', 'webAuth'],
+      config: {
+        injectBootManifest: false,
+        trustedHosts: 'ctx.webRuntime.trustedHosts',
+        trustedProxyAddresses: 'ctx.webStartup.trustedProxyAddresses',
+        requireWebAuth: true,
+      },
+    })
+  })
+
   it('mounts dist serving, prompt section, bash variables, and prints the trusted HTTPS URL', async () => {
     stageDist()
     const ctx = new Context()

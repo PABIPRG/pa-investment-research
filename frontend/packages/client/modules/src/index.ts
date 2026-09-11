@@ -29,7 +29,12 @@ import { dirname, join } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import type {} from '@deepseek-ai/dsh-host-webserver'
+import {
+  authorizeProtectedWebRequest,
+  assertTrustedAuthority,
+  assertTrustedProxyAddress,
+  type WebRequestAuthorizer,
+} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 import type { WebBootEntry, WebBootGraph } from './client/manifest.ts'
 
@@ -50,11 +55,20 @@ export interface Config {
   additionalPackages?: string[]
   /** Inject the graph into HTML; authenticated Web apps fetch it after login. */
   injectBootManifest?: boolean
+  /** Exact public authorities accepted by the shared browser request trust fence. */
+  trustedHosts?: string[]
+  /** Direct proxy socket addresses allowed to supply forwarded browser facts. */
+  trustedProxyAddresses?: string[]
+  /** Fail closed when the composing Web product expects the WebAuth service. */
+  requireWebAuth?: boolean
 }
 
 export const Config: z<Config> = z.object({
   additionalPackages: z.array(String).default([]),
   injectBootManifest: z.boolean().default(true),
+  trustedHosts: z.array(String).default([]),
+  trustedProxyAddresses: z.array(String).default([]),
+  requireWebAuth: z.boolean().default(false),
 })
 
 /** package.json `dsh.client` declaration fields, validated one by one after reading the file. */
@@ -231,6 +245,11 @@ export class ClientModuleRegistry extends Service {
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'clientModules')
     this.additionalPackages = new Set(config.additionalPackages ?? [])
+    const trustedHosts = config.trustedHosts ?? []
+    const trustedProxyAddresses = config.trustedProxyAddresses ?? []
+    const requireWebAuth = config.requireWebAuth ?? false
+    for (const authority of trustedHosts) assertTrustedAuthority(authority)
+    for (const address of trustedProxyAddresses) assertTrustedProxyAddress(address)
     // Resolution anchor: the config tree's baseUrl (the cordis.yml directory,
     // whose package declares every composed plugin as a dependency). The
     // modules package's own URL would miss sibling packages under pnpm's
@@ -274,11 +293,11 @@ export class ClientModuleRegistry extends Service {
           kind: 'prefix',
           path: '/plugins',
           handler: async (req, res) => {
-            const auth = webCtx.get('webAuth') as
-              | { authorize(request: IncomingMessage): { ok: true } | { ok: false; status: number; code: string } }
-              | undefined
-            const decision = auth?.authorize(req)
-            if (decision !== undefined && !decision.ok) {
+            const auth = webCtx.get('webAuth') as WebRequestAuthorizer | undefined
+            const decision = authorizeProtectedWebRequest(
+              req, trustedHosts, trustedProxyAddresses, auth, requireWebAuth,
+            )
+            if (!decision.ok) {
               res.writeHead(decision.status, {
                 'content-type': 'application/json; charset=utf-8',
                 'cache-control': 'no-store',

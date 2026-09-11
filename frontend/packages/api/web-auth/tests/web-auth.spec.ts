@@ -88,6 +88,9 @@ describe('password hashing', () => {
     expect(verifyPassword('wrong', encoded)).toBe(false)
     expect(verifyPassword('long-enough-secret', 'not-a-record')).toBe(false)
     expect(() => hashPassword('too-short')).toThrow(/at least 12 characters/)
+    expect(() => hashPassword('            ')).toThrow(/password strength/)
+    expect(() => hashPassword('aaaaaaaaaaaa')).toThrow(/password strength/)
+    expect(() => hashPassword('🔒'.repeat(12))).toThrow(/password strength/)
   })
 })
 
@@ -116,16 +119,16 @@ describe('WebAuthService', () => {
       .toEqual({ state: 'unavailable', reason: 'configuration' })
   })
 
-  it('accepts a rotated hash only after a fresh authority starts', () => {
+  it('accepts a rotated hash only after a fresh authority starts', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'dsh-web-auth-rotate-'))
     const passwordHashFile = join(directory, 'password.hash')
     writeFileSync(passwordHashFile, hashPassword('old-password'), { mode: 0o600 })
     const first = service({ mode: 'required', username: 'admin', passwordHashFile, secureCookies: false })
-    expect(first.login('admin', 'old-password', facts()).ok).toBe(true)
+    expect((await first.login('admin', 'old-password', facts())).ok).toBe(true)
     writeFileSync(passwordHashFile, hashPassword('new-password'), { mode: 0o600 })
     const rotated = service({ mode: 'required', username: 'admin', passwordHashFile, secureCookies: false })
-    expect(rotated.login('admin', 'old-password', facts())).toMatchObject({ ok: false, status: 401 })
-    expect(rotated.login('admin', 'new-password', facts()).ok).toBe(true)
+    expect(await rotated.login('admin', 'old-password', facts())).toMatchObject({ ok: false, status: 401 })
+    expect((await rotated.login('admin', 'new-password', facts())).ok).toBe(true)
   })
 
   it.skipIf(process.platform === 'win32')('rejects readable-by-group password files without exposing their contents', () => {
@@ -136,9 +139,9 @@ describe('WebAuthService', () => {
       .toEqual({ state: 'unavailable', reason: 'configuration' })
   })
 
-  it('creates a server-side session, requires CSRF for mutations, and revokes it on logout', () => {
+  it('creates a server-side session, requires CSRF for mutations, and revokes it on logout', async () => {
     const auth = service(configured())
-    const login = auth.login('admin', 'correct horse battery staple', facts())
+    const login = await auth.login('admin', 'correct horse battery staple', facts())
     expect(login.ok).toBe(true)
     if (!login.ok || login.session === undefined || login.cookieName === undefined || login.token === undefined) return
     const cookie = `${login.cookieName}=${login.token}`
@@ -160,32 +163,32 @@ describe('WebAuthService', () => {
     expect(auth.authorize(facts('127.0.0.1', { cookie }, 'GET')).ok).toBe(false)
   })
 
-  it('rate limits repeated login failures without revealing which field was wrong', () => {
+  it('rate limits repeated login failures without revealing which field was wrong', async () => {
     const auth = service(configured({
       secureCookies: true,
       trustedProxyAddresses: ['127.0.0.1'],
       loginMaxAttempts: 2,
     }))
-    expect(auth.login('admin', 'bad', forwarded('10.0.0.2'))).toMatchObject({ ok: false, status: 401, code: 'invalid-credentials' })
-    expect(auth.login('unknown', 'bad', forwarded('10.0.0.2'))).toMatchObject({ ok: false, status: 401, code: 'invalid-credentials' })
-    expect(auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2'))).toMatchObject({
+    expect(await auth.login('admin', 'bad', forwarded('10.0.0.2'))).toMatchObject({ ok: false, status: 401, code: 'invalid-credentials' })
+    expect(await auth.login('unknown', 'bad', forwarded('10.0.0.2'))).toMatchObject({ ok: false, status: 401, code: 'invalid-credentials' })
+    expect(await auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2'))).toMatchObject({
       ok: false,
       status: 429,
       code: 'rate-limited',
     })
   })
 
-  it('trusts forwarded transport and client identity only from an explicit proxy', () => {
+  it('trusts forwarded transport and client identity only from an explicit proxy', async () => {
     const auth = service(configured({ secureCookies: true, trustedProxyAddresses: ['127.0.0.1'] }))
-    expect(auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2')).ok).toBe(true)
-    expect(auth.login('admin', 'correct horse battery staple', facts('10.0.0.9', {
+    expect((await auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2'))).ok).toBe(true)
+    expect(await auth.login('admin', 'correct horse battery staple', facts('10.0.0.9', {
       host: 'harness.internal',
       'x-forwarded-for': '127.0.0.1',
       'x-forwarded-proto': 'https',
     }))).toMatchObject({ ok: false, status: 403, code: 'secure-transport-required' })
   })
 
-  it('bounds tracked limiter addresses and frees expired entries', () => {
+  it('bounds tracked limiter addresses and frees expired entries', async () => {
     vi.useFakeTimers()
     const auth = service(configured({
       secureCookies: true,
@@ -193,17 +196,43 @@ describe('WebAuthService', () => {
       loginMaxAttempts: 10,
       loginMaxTrackedAddresses: 2,
     }))
-    expect(auth.login('admin', 'bad', forwarded('10.0.0.1'))).toMatchObject({ status: 401 })
-    expect(auth.login('admin', 'bad', forwarded('10.0.0.2'))).toMatchObject({ status: 401 })
-    expect(auth.login('admin', 'bad', forwarded('10.0.0.3'))).toMatchObject({ status: 429, code: 'rate-limited' })
+    expect(await auth.login('admin', 'bad', forwarded('10.0.0.1'))).toMatchObject({ status: 401 })
+    expect(await auth.login('admin', 'bad', forwarded('10.0.0.2'))).toMatchObject({ status: 401 })
+    expect(await auth.login('admin', 'bad', forwarded('10.0.0.3'))).toMatchObject({ status: 429, code: 'rate-limited' })
     vi.advanceTimersByTime(60_001)
-    expect(auth.login('admin', 'bad', forwarded('10.0.0.3'))).toMatchObject({ status: 401, code: 'invalid-credentials' })
+    expect(await auth.login('admin', 'bad', forwarded('10.0.0.3'))).toMatchObject({ status: 401, code: 'invalid-credentials' })
   })
 
-  it('expires idle sessions and destroys their tracked sockets', () => {
+  it('lets a valid administrator recover after failures from many other addresses', async () => {
+    const auth = service(configured({
+      secureCookies: true,
+      trustedProxyAddresses: ['127.0.0.1'],
+      loginMaxAttempts: 1,
+    }))
+    for (let index = 1; index <= 10; index += 1) {
+      expect(await auth.login('admin', 'bad', forwarded(`10.0.0.${String(index)}`)))
+        .toMatchObject({ status: 401, code: 'invalid-credentials' })
+    }
+    expect((await auth.login('admin', 'correct horse battery staple', forwarded('10.0.1.1'))).ok).toBe(true)
+  })
+
+  it('rejects excess password verification work without building an unbounded queue', async () => {
+    const auth = service(configured({
+      secureCookies: true,
+      trustedProxyAddresses: ['127.0.0.1'],
+      loginMaxConcurrentVerifications: 1,
+    }))
+    const inFlight = auth.login('admin', 'bad', forwarded('10.0.0.1'))
+    expect(await auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2')))
+      .toMatchObject({ status: 429, code: 'rate-limited' })
+    expect(await inFlight).toMatchObject({ status: 401, code: 'invalid-credentials' })
+    expect((await auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2'))).ok).toBe(true)
+  })
+
+  it('expires idle sessions and destroys their tracked sockets', async () => {
     vi.useFakeTimers()
     const auth = service(configured({ idleTimeoutMs: 1_000, absoluteTimeoutMs: 5_000 }))
-    const login = auth.login('admin', 'correct horse battery staple', facts())
+    const login = await auth.login('admin', 'correct horse battery staple', facts())
     expect(login.ok).toBe(true)
     if (!login.ok || login.cookieName === undefined || login.token === undefined) return
     const socket = { destroy: vi.fn(), once: vi.fn() }
@@ -214,10 +243,10 @@ describe('WebAuthService', () => {
     expect(auth.authorize(facts('127.0.0.1', { cookie }, 'GET')).ok).toBe(false)
   })
 
-  it('enforces the absolute lifetime even when activity keeps extending the idle deadline', () => {
+  it('enforces the absolute lifetime even when activity keeps extending the idle deadline', async () => {
     vi.useFakeTimers()
     const auth = service(configured({ idleTimeoutMs: 1_000, absoluteTimeoutMs: 2_000 }))
-    const login = auth.login('admin', 'correct horse battery staple', facts())
+    const login = await auth.login('admin', 'correct horse battery staple', facts())
     expect(login.ok).toBe(true)
     if (!login.ok || login.cookieName === undefined || login.token === undefined) return
     const socket = { destroy: vi.fn(), once: vi.fn() }
@@ -252,7 +281,7 @@ describe('Web auth HTTP boundary', () => {
     expect(anonymous.state.body).not.toContain('PRIVATE_GRAPH_MARKER')
 
     const auth = ctx.get('webAuth')!
-    const login = auth.login('admin', 'correct horse battery staple', facts())
+    const login = await auth.login('admin', 'correct horse battery staple', facts())
     expect(login.ok).toBe(true)
     if (!login.ok || login.cookieName === undefined || login.token === undefined) return
     const authorized = routeResponse()

@@ -43,7 +43,10 @@ async function constructWithRoute(
   additionalPackages: string[] = [],
   options: {
     injectBootManifest?: boolean
-    authorize?: () => { ok: true } | { ok: false; status: number; code: string }
+    authorize?: (request: IncomingMessage) => { ok: true } | { ok: false; status: number; code: string }
+    trustedHosts?: string[]
+    trustedProxyAddresses?: string[]
+    requireWebAuth?: boolean
   } = {},
 ): Promise<{ service: ClientModuleRegistry; route: WebRoute; tapped: boolean }> {
   const ctx = new Context()
@@ -75,6 +78,9 @@ async function constructWithRoute(
       service = new ClientModuleRegistry(pluginCtx, {
         additionalPackages,
         ...(options.injectBootManifest === undefined ? {} : { injectBootManifest: options.injectBootManifest }),
+        ...(options.trustedHosts === undefined ? {} : { trustedHosts: options.trustedHosts }),
+        ...(options.trustedProxyAddresses === undefined ? {} : { trustedProxyAddresses: options.trustedProxyAddresses }),
+        ...(options.requireWebAuth === undefined ? {} : { requireWebAuth: options.requireWebAuth }),
       })
     },
   })
@@ -176,6 +182,8 @@ describe('client bundle activation', () => {
     await route.handler({
       method: 'GET',
       url: `/plugins/${packageName}/client.js.map`,
+      headers: { host: '127.0.0.1:3080' },
+      socket: { remoteAddress: '127.0.0.1' },
     } as IncomingMessage, response)
 
     expect(status).toBe(404)
@@ -202,11 +210,63 @@ describe('client bundle activation', () => {
       },
     } as unknown as ServerResponse
 
-    await route.handler({ method: 'GET', url: `/plugins/${packageName}/client.js` } as IncomingMessage, response)
+    await route.handler({
+      method: 'GET',
+      url: `/plugins/${packageName}/client.js`,
+      headers: { host: '127.0.0.1:3080' },
+      socket: { remoteAddress: '127.0.0.1' },
+    } as IncomingMessage, response)
 
     expect(status).toBe(401)
     expect(body).toContain('auth-required')
     expect(body).not.toContain('PRIVATE_PLUGIN_MARKER')
     expect(tapped).toBe(false)
+  })
+
+  it('rejects untrusted bundle requests and fails closed when the Web composition requires a missing authority', async () => {
+    const packageName = '@fixture/trust-guarded-bundle'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'PRIVATE_PLUGIN_MARKER\n')
+    const { route } = await constructWithRoute([packageName], [], {
+      trustedHosts: ['harness.internal'],
+      trustedProxyAddresses: ['127.0.0.1'],
+      requireWebAuth: true,
+    })
+    const invoke = async (headers: Record<string, string>, remoteAddress = '127.0.0.1') => {
+      let status = 0
+      let body = ''
+      const response = {
+        writeHead(nextStatus: number) { status = nextStatus; return response },
+        end(chunk?: string | Uint8Array) {
+          body = chunk === undefined ? '' : Buffer.from(chunk).toString('utf8')
+          return response
+        },
+      } as unknown as ServerResponse
+      await route.handler({
+        method: 'GET',
+        url: `/plugins/${packageName}/client.js`,
+        headers,
+        socket: { remoteAddress },
+      } as IncomingMessage, response)
+      return { status, body }
+    }
+
+    expect(await invoke({ host: 'evil.example' })).toMatchObject({ status: 403 })
+    expect(await invoke({
+      host: 'harness.internal',
+      origin: 'https://evil.example',
+    })).toMatchObject({ status: 403 })
+    expect(await invoke({
+      host: 'harness.internal',
+      'sec-fetch-site': 'cross-site',
+    })).toMatchObject({ status: 403 })
+    const unavailable = await invoke({
+      host: 'harness.internal',
+      origin: 'https://harness.internal',
+    })
+    expect(unavailable).toMatchObject({ status: 503 })
+    expect(unavailable.body).toContain('auth-unavailable')
+    expect(unavailable.body).not.toContain('PRIVATE_PLUGIN_MARKER')
   })
 })

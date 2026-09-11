@@ -3,7 +3,20 @@ import { isIP } from 'node:net'
 
 export interface BrowserTrustRequest {
   headers: IncomingHttpHeaders | Headers | Record<string, string | undefined>
+  method?: string | undefined
   socket?: { remoteAddress?: string | undefined }
+}
+
+/** Structural authentication authority accepted by protected Web routes. */
+export interface WebRequestAuthorizer {
+  authorize(request: BrowserTrustRequest): WebRequestAuthorizationDecision
+}
+
+/** Stable allow/reject shape shared by protected static, SSE, and API routes. */
+export type WebRequestAuthorizationDecision = { ok: true } | {
+  ok: false
+  status: 401 | 403 | 429 | 503
+  code: string
 }
 
 function header(headers: BrowserTrustRequest['headers'], name: string): string | undefined {
@@ -74,13 +87,17 @@ export function requestClientAddress(
   return index >= 0 ? chain[index] : undefined
 }
 
-/** Whether the effective client, after trusted-proxy resolution, is loopback. */
+/**
+ * Whether the raw socket is a direct loopback client rather than a configured
+ * proxy. Forwarded headers never grant local-machine privilege.
+ */
 export function isLoopbackRequestPeer(
   request: BrowserTrustRequest,
   trustedProxyAddresses: readonly string[] = [],
 ): boolean {
-  const address = requestClientAddress(request, trustedProxyAddresses)
-  return address !== undefined && isLoopbackHostname(address)
+  const peer = socketPeerAddress(request)
+  return peer !== undefined && isLoopbackHostname(peer)
+    && !trustedProxyAddresses.some(address => normalizeIpAddress(address) === peer)
 }
 
 /** Accept HTTPS forwarding only from an explicitly trusted direct proxy. */
@@ -121,12 +138,37 @@ export function isTrustedApiRequest(
   if (host === undefined) return false
   const hostUrl = parseAuthority(host)
   if (hostUrl === undefined) return false
-  const hostAccepted = isLoopbackHostname(hostUrl.hostname)
+  const loopbackAuthority = isLoopbackHostname(hostUrl.hostname)
+  const hostAccepted = loopbackAuthority
     ? isLoopbackRequestPeer(request, trustedProxyAddresses)
     : isTrustedAuthority(hostUrl, trustedHosts)
   if (!hostAccepted) return false
   if (header(request.headers, 'sec-fetch-site') === 'cross-site') return false
   const origin = header(request.headers, 'origin')
   if (origin === undefined) return true
-  try { return new URL(origin).host === hostUrl.host } catch { return false }
+  try {
+    const originUrl = new URL(origin)
+    if (!['http:', 'https:'].includes(originUrl.protocol) || originUrl.host !== hostUrl.host) return false
+    return loopbackAuthority || !isTrustedForwardedHttps(request, trustedProxyAddresses)
+      || originUrl.protocol === 'https:'
+  } catch { return false }
+}
+
+/** Apply shared browser request trust and an optional/required auth authority. */
+export function authorizeProtectedWebRequest(
+  request: BrowserTrustRequest,
+  trustedHosts: readonly string[],
+  trustedProxyAddresses: readonly string[],
+  authorizer: WebRequestAuthorizer | undefined,
+  requireAuthorizer: boolean,
+): WebRequestAuthorizationDecision {
+  if (!isTrustedApiRequest(request, trustedHosts, trustedProxyAddresses)) {
+    return { ok: false, status: 403, code: 'request-untrusted' }
+  }
+  if (authorizer === undefined) {
+    return requireAuthorizer
+      ? { ok: false, status: 503, code: 'auth-unavailable' }
+      : { ok: true }
+  }
+  return authorizer.authorize(request)
 }

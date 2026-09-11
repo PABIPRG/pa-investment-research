@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto'
 import { closeSync, constants, fstatSync, openSync, readFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -23,7 +23,6 @@ const SCRYPT_COST = 16_384
 const SCRYPT_BLOCK_SIZE = 8
 const SCRYPT_PARALLELISM = 1
 const SCRYPT_KEY_BYTES = 32
-const GLOBAL_ATTEMPT_KEY = '__global__'
 
 export interface WebAuthConfig {
   /** Whether browser administrator authentication is disabled or required. */
@@ -48,6 +47,8 @@ export interface WebAuthConfig {
   loginMaxAttempts?: number
   /** Maximum number of client-address limiter entries retained in memory. */
   loginMaxTrackedAddresses?: number
+  /** Maximum password verifications allowed to run concurrently; excess work is not queued. */
+  loginMaxConcurrentVerifications?: number
 }
 
 export const Config: z<WebAuthConfig> = z.object({
@@ -62,6 +63,7 @@ export const Config: z<WebAuthConfig> = z.object({
   loginWindowMs: z.natural().min(1_000).default(60_000),
   loginMaxAttempts: z.natural().min(1).default(5),
   loginMaxTrackedAddresses: z.natural().min(1).default(1_024),
+  loginMaxConcurrentVerifications: z.natural().min(1).max(32).default(4),
 })
 
 interface RequestFacts {
@@ -105,9 +107,13 @@ export type WebAuthLoginResult = WebAuthDecision & Partial<{
 
 /** Produce a salted, versioned password record suitable for a protected file. */
 export function hashPassword(password: string): string {
-  const characterCount = Array.from(password).length
+  const characters = Array.from(password)
+  const characterCount = characters.length
   if (characterCount < MIN_PASSWORD_CHARACTERS) {
     throw new Error(`web-auth: password must contain at least ${String(MIN_PASSWORD_CHARACTERS)} characters`)
+  }
+  if (password.trim() === '' || new Set(characters).size === 1) {
+    throw new Error('web-auth: password strength rejects blank or single-character repetition')
   }
   const salt = randomBytes(16)
   const derived = scryptSync(password, salt, SCRYPT_KEY_BYTES, {
@@ -124,6 +130,22 @@ export function verifyPassword(password: string, encoded: string): boolean {
   try {
     const actual = scryptSync(password, parsed.salt, parsed.expected.length, {
       N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELISM, maxmem: 64 * 1024 * 1024,
+    })
+    return timingSafeEqual(actual, parsed.expected) && Array.from(password).length === parsed.characterCount
+  } catch { return false }
+}
+
+async function verifyPasswordWithoutBlocking(password: string, encoded: string): Promise<boolean> {
+  const parsed = parsePasswordRecord(encoded)
+  if (parsed === undefined) return false
+  try {
+    const actual = await new Promise<Buffer>((resolve, reject) => {
+      scrypt(password, parsed.salt, parsed.expected.length, {
+        N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELISM, maxmem: 64 * 1024 * 1024,
+      }, (error, derived) => {
+        if (error === null) resolve(derived)
+        else reject(error)
+      })
     })
     return timingSafeEqual(actual, parsed.expected) && Array.from(password).length === parsed.characterCount
   } catch { return false }
@@ -190,9 +212,11 @@ export class WebAuthService extends Service {
   private readonly loginWindowMs: number
   private readonly loginMaxAttempts: number
   private readonly loginMaxTrackedAddresses: number
+  private readonly loginMaxConcurrentVerifications: number
   private readonly trustedProxyAddresses: readonly string[]
   private readonly sessions = new Map<string, SessionRecord>()
   private readonly attempts = new Map<string, number[]>()
+  private activePasswordVerifications = 0
   private readonly attemptCleanup: ReturnType<typeof setInterval>
 
   constructor(ctx: Context, config: WebAuthConfig) {
@@ -206,6 +230,7 @@ export class WebAuthService extends Service {
     this.loginWindowMs = config.loginWindowMs ?? 60_000
     this.loginMaxAttempts = config.loginMaxAttempts ?? 5
     this.loginMaxTrackedAddresses = config.loginMaxTrackedAddresses ?? 1_024
+    this.loginMaxConcurrentVerifications = config.loginMaxConcurrentVerifications ?? 4
     this.trustedProxyAddresses = config.trustedProxyAddresses ?? []
     for (const address of this.trustedProxyAddresses) assertTrustedProxyAddress(address)
     const loaded = this.enabled && config.passwordHashFile !== undefined
@@ -266,7 +291,7 @@ export class WebAuthService extends Service {
    * @param address - transport source used by the per-address limiter.
    * @returns a rejection or the new opaque token and public session view.
    */
-  login(username: string, password: string, facts: BrowserTrustRequest): WebAuthLoginResult {
+  async login(username: string, password: string, facts: BrowserTrustRequest): Promise<WebAuthLoginResult> {
     if (!this.enabled) return { ok: true }
     if (!this.available) return { ok: false, status: 503, code: 'auth-unavailable' }
     if (!this.isAllowedTransport(facts)) {
@@ -277,10 +302,21 @@ export class WebAuthService extends Service {
       return { ok: false, status: 429, code: 'rate-limited' }
     }
     if (this.rateLimited(address)) return { ok: false, status: 429, code: 'rate-limited' }
+    if (this.activePasswordVerifications >= this.loginMaxConcurrentVerifications) {
+      return { ok: false, status: 429, code: 'rate-limited' }
+    }
     // Always pay the password-verification cost so a remote caller cannot use
-    // response timing to distinguish a valid administrator identifier.
+    // response timing to distinguish a valid administrator identifier. The
+    // asynchronous KDF is capped above and excess work is rejected, never
+    // queued without bound or run synchronously on the event loop.
     const usernameMatches = safeEqual(username, this.username as string)
-    const passwordMatches = verifyPassword(password, this.passwordHash as string)
+    this.activePasswordVerifications += 1
+    let passwordMatches: boolean
+    try {
+      passwordMatches = await verifyPasswordWithoutBlocking(password, this.passwordHash as string)
+    } finally {
+      this.activePasswordVerifications -= 1
+    }
     if (!usernameMatches || !passwordMatches) {
       this.recordFailure(address)
       return { ok: false, status: 401, code: 'invalid-credentials' }
@@ -388,18 +424,14 @@ export class WebAuthService extends Service {
     for (const address of [...this.attempts.keys()]) this.recent(address)
   }
   private addressCapacityReached(address: string): boolean {
-    if (address === GLOBAL_ATTEMPT_KEY || this.attempts.has(address)) return false
-    return [...this.attempts.keys()].filter(key => key !== GLOBAL_ATTEMPT_KEY).length
-      >= this.loginMaxTrackedAddresses
+    if (this.attempts.has(address)) return false
+    return this.attempts.size >= this.loginMaxTrackedAddresses
   }
   private rateLimited(address: string): boolean {
     return this.recent(address).length >= this.loginMaxAttempts
-      || this.recent(GLOBAL_ATTEMPT_KEY).length >= this.loginMaxAttempts * 10
   }
   private recordFailure(address: string): void {
-    const now = Date.now()
-    this.attempts.set(address, [...this.recent(address), now])
-    this.attempts.set(GLOBAL_ATTEMPT_KEY, [...this.recent(GLOBAL_ATTEMPT_KEY), now])
+    this.attempts.set(address, [...this.recent(address), Date.now()])
   }
   private isAllowedTransport(facts: BrowserTrustRequest): boolean {
     return this.secureCookies
@@ -467,7 +499,7 @@ export function apply(ctx: Context, config: WebAuthConfig): void {
     }
     const body = await readLoginBody(req)
     if (body === undefined) { writeJson(res, 400, { code: 'invalid-request' }); return }
-    const result = auth.login(body.username, body.password, req)
+    const result = await auth.login(body.username, body.password, req)
     if (!result.ok) { writeJson(res, result.status, { code: result.code }); return }
     if (result.session === undefined || result.token === undefined) { writeJson(res, 200, { state: 'disabled' }); return }
     writeJson(res, 200, { state: 'signed-in', ...result.session }, { 'set-cookie': auth.cookieHeader(result.token) })
