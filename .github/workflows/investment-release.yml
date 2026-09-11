@@ -1,0 +1,314 @@
+name: Release investment desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: Version already committed in frontend/package.json
+        required: true
+        type: string
+      channel:
+        description: GitHub Release channel
+        required: true
+        default: prerelease
+        type: choice
+        options:
+          - prerelease
+          - stable
+
+concurrency:
+  group: investment-desktop-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: Validate and lock release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    outputs:
+      channel: ${{ steps.release_plan.outputs.channel }}
+      prerelease: ${{ steps.release_plan.outputs.prerelease }}
+      sha: ${{ steps.release_plan.outputs.sha }}
+      short_sha: ${{ steps.release_plan.outputs.short_sha }}
+      tag: ${{ steps.release_plan.outputs.tag }}
+      version: ${{ steps.release_plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate version and lock commit
+        id: release_plan
+        env:
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: >-
+          pnpm exec tsx scripts/investment-release.ts preflight
+          --expected-version "$EXPECTED_VERSION"
+          --channel "$RELEASE_CHANNEL"
+          --ref-name "$RELEASE_REF_NAME"
+          --sha "$RELEASE_SHA"
+
+      - name: Verify shared application version
+        run: pnpm run constraints
+
+      - name: Reject an existing public release or conflicting tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.release_plan.outputs.sha }}
+          RELEASE_TAG: ${{ steps.release_plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_marker="<!-- investment-release-workflow sha=$RELEASE_SHA -->"
+          release_info=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json body,isDraft,targetCommitish 2>/dev/null || true)
+          if [ -n "$release_info" ]; then
+            is_draft=$(jq -r '.isDraft' <<<"$release_info")
+            release_target=$(jq -r '.targetCommitish' <<<"$release_info")
+            release_body=$(jq -r '.body // ""' <<<"$release_info")
+            if [ "$is_draft" != "true" ]; then
+              echo "Published Release $RELEASE_TAG already exists and will not be overwritten." >&2
+              exit 1
+            fi
+            if [ "$release_target" != "$RELEASE_SHA" ] || [[ "$release_body" != *"$release_marker"* ]]; then
+              echo "Draft Release $RELEASE_TAG is not owned by this workflow run and will not be changed." >&2
+              exit 1
+            fi
+          fi
+          existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
+          if [ -n "$existing_sha" ] && [ "$existing_sha" != "$RELEASE_SHA" ]; then
+            echo "Tag $RELEASE_TAG already points to $existing_sha, not $RELEASE_SHA." >&2
+            exit 1
+          fi
+
+  build:
+    name: ${{ matrix.target }} release package
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-x64
+          - runner: windows-latest
+            target: win32-x64
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: frontend/package.json
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Verify native target
+        shell: bash
+        run: test "$(node -p "process.platform+'-'+process.arch")" = "${{ matrix.target }}"
+
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build release application and sidecar (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ulimit -n 10240
+          pnpm run make:electron
+
+      - name: Build release application and sidecar (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm run make:electron
+
+      - name: Smoke packaged sidecar (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          descriptor=$(find apps/electron/out -path '*/Resources/investment-python/runtime.json' -print -quit)
+          test -n "$descriptor"
+          app="${descriptor%%/Contents/Resources/*}"
+          test -d "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          node scripts/smoke-investment-python-sidecar.ts --root "${descriptor%/runtime.json}"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+      - name: Smoke packaged sidecar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $descriptor = Get-ChildItem apps/electron/out -Filter runtime.json -Recurse |
+            Where-Object { $_.FullName -match 'resources[\\/]investment-python[\\/]runtime.json$' } |
+            Select-Object -First 1
+          if ($null -eq $descriptor) { throw 'packaged investment sidecar not found' }
+          node scripts/smoke-investment-python-sidecar.ts --root $descriptor.Directory.FullName
+
+      - name: Stage immutable release asset
+        run: >-
+          pnpm exec tsx scripts/investment-release.ts stage
+          --version "${{ needs.preflight.outputs.version }}"
+          --target "${{ matrix.target }}"
+          --source-root apps/electron/out/make
+          --destination-root release-assets
+
+      - name: Upload release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: investment-release-${{ matrix.target }}
+          path: frontend/release-assets/*.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - preflight
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: github-release
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Require configured release protections
+        shell: bash
+        env:
+          RELEASE_GUARDS_READY: ${{ vars.INVESTMENT_RELEASE_GUARDS_READY }}
+        run: |
+          if [ "$RELEASE_GUARDS_READY" != "true" ]; then
+            echo "Configure the github-release Environment, enable immutable releases, then set INVESTMENT_RELEASE_GUARDS_READY=true in that Environment." >&2
+            exit 1
+          fi
+
+      - name: Download release candidates
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: investment-release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release set and write checksums
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "investment-agent-$RELEASE_VERSION-darwin-arm64.zip"
+            "investment-agent-$RELEASE_VERSION-darwin-x64.zip"
+            "investment-agent-$RELEASE_VERSION-win32-x64.zip"
+          )
+          for asset in "${expected[@]}"; do
+            test -f "release-assets/$asset"
+          done
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l | tr -d ' ')" = "${#expected[@]}"
+          (cd release-assets && sha256sum "${expected[@]}" > SHA256SUMS && sha256sum -c SHA256SUMS)
+
+      - name: Attest release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-assets/*
+
+      - name: Create immutable tag and GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PRERELEASE: ${{ needs.preflight.outputs.prerelease }}
+          RELEASE_SHA: ${{ needs.preflight.outputs.sha }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          release_marker="<!-- investment-release-workflow sha=$RELEASE_SHA -->"
+          mapfile -t matching_releases < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"$RELEASE_TAG\") | [.id, .draft, (.target_commitish // \"\"), (.body // \"\")] | @base64"
+          )
+          if [ "${#matching_releases[@]}" -gt 1 ]; then
+            echo "More than one GitHub Release uses $RELEASE_TAG; refusing to guess." >&2
+            exit 1
+          fi
+          if [ "${#matching_releases[@]}" -eq 1 ]; then
+            existing_release=$(printf '%s' "${matching_releases[0]}" | base64 --decode)
+            existing_id=$(jq -r '.[0]' <<<"$existing_release")
+            existing_draft=$(jq -r '.[1]' <<<"$existing_release")
+            existing_target=$(jq -r '.[2]' <<<"$existing_release")
+            existing_body=$(jq -r '.[3]' <<<"$existing_release")
+            if [ "$existing_draft" != "true" ]; then
+              echo "Published Release $RELEASE_TAG already exists and will not be overwritten." >&2
+              exit 1
+            fi
+            if [ "$existing_target" != "$RELEASE_SHA" ] || [[ "$existing_body" != *"$release_marker"* ]]; then
+              echo "Draft Release $RELEASE_TAG is not owned by this workflow run and will not be changed." >&2
+              exit 1
+            fi
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$existing_id"
+          fi
+          existing_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null || true)
+          if [ -z "$existing_sha" ]; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$RELEASE_TAG" \
+              -f sha="$RELEASE_SHA" >/dev/null
+          elif [ "$existing_sha" != "$RELEASE_SHA" ]; then
+            echo "Tag $RELEASE_TAG already points to $existing_sha, not $RELEASE_SHA." >&2
+            exit 1
+          fi
+          draft_release=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$RELEASE_TAG" \
+            -f target_commitish="$RELEASE_SHA" \
+            -f name="Investment Agent $RELEASE_VERSION" \
+            -f body="$release_marker" \
+            -F draft=true \
+            -F prerelease="$RELEASE_PRERELEASE" \
+            -F generate_release_notes=true)
+          draft_id=$(jq -r '.id' <<<"$draft_release")
+          upload_url=$(jq -r '.upload_url | sub("\\{.*$"; "")' <<<"$draft_release")
+          for asset in release-assets/*; do
+            asset_name=$(basename "$asset")
+            curl --fail-with-body --silent --show-error --location \
+              --request POST \
+              --header "Accept: application/vnd.github+json" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2026-03-10" \
+              --header "Content-Type: application/octet-stream" \
+              --data-binary "@$asset" \
+              "$upload_url?name=$asset_name" >/dev/null
+          done
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$draft_id" -F draft=false >/dev/null
