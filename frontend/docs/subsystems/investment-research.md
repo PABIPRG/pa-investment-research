@@ -299,5 +299,5 @@ async nativeHoldings(input: { action: 'read' | 'launch' | 'select_client'; accou
 invariantSnapshot(): ReturnType<InvestmentBackendManager['invariantSnapshot']>
 ```
 
-Source: [`packages/investment-research/python-runtime/src/index.ts:99`](../../packages/investment-research/python-runtime/src/index.ts)
+Source: [`packages/investment-research/python-runtime/src/index.ts:119`](../../packages/investment-research/python-runtime/src/index.ts)
 <!-- END GENERATED cordis-surface -->

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/investment-research.md
-investment-research.md: 5b139ec7ed65a8a6d989e792341dc46b35ceda94
-investment-research.zh.md: 1cd5e077c4f69a5f9ecd0255552a85c84f4aaac6
+investment-research.md: 944808784185c3957bd37a23597bfa03383ff7a0
+investment-research.zh.md: 48aa9fc5865007d4bfa5441963513633d1ab9828
