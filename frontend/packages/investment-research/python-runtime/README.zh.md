@@ -47,11 +47,11 @@ Host 会为每个 owned managed child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME
 
 ## 实例初始化与迁移
 
-`initializeDshInstance()` 使用私有目录和带版本标记创建完整的空挂载布局。`migrateDshInstance()` 只把声明的持久清单复制到同级 staging 目录，对普通文件执行 SHA-256 校验，再原子发布目标。目标非空、根目录互相嵌套、符号链接、特殊文件、不兼容目录版本或中途复制失败都会在不改变来源的前提下拒绝迁移。
+`initializeDshInstance()` 使用私有目录和带版本标记创建完整的空挂载布局。`dryRunDshInstanceMigration()` 以零写入方式返回文件、主动排除项、字节数、复制策略、发布策略和阻塞原因。`migrateDshInstance()` 只把该清单复制到目标内部的 staging 目录，以流式 SHA-256 校验普通文件，再按顶层条目事务发布，并最后发布版本标记。已有空挂载点保留 inode，同时把权限收紧到 `0700`。来源和目标会按规范化后的物理路径判定，并在关键动作前重复核验身份；目标非空、不安全别名、符号链接、特殊文件、不兼容目录版本、输入变化或复制／发布失败都不能授权跨出所选目录，也不会改变来源。
 
-持久清单包含 Host 设置、profile、home patch、成对的会话与附件、JSON/SQLite storage、备份设置和 `.pabackup` 文件，以及每个 backend 的 `data`、`state` 与 `user-config`。凭据、日志、缓存、runtime 进程状态、锁、传输事务日志和未完成上传不在清单内。PAB-14 的业务导入导出继续拥有按分类合并、预检、事务提交与回滚语义；实例迁移不会把 `.pabackup` 误解释为完整系统镜像。
+持久清单包含 Host 设置、profile 配置、home patch、成对的会话与附件、JSON/SQLite storage、备份设置和 `.pabackup` 文件，以及每个 backend 的 `data`、`state` 与 `user-config`。可重建的 managed `profiles/**/node_modules` 依赖会被排除。若绝对备份目录的物理位置在来源实例内，配置会改写到目标中的对应位置；外部目录保持原值，必须另行迁移。凭据、日志、缓存、runtime 进程状态、锁、传输事务日志和未完成上传不在清单内。PAB-14 的业务导入导出继续拥有按分类合并、预检、事务提交与回滚语义；实例迁移不会把 `.pabackup` 误解释为完整系统镜像。
 
-静默迁移可以复制已经关闭的 SQLite。在线迁移遇到 SQLite 时必须由调用方提供 `backupSqlite`，并通过 SQLite backup API 或等价一致性快照实现；完成该操作后不会复制活动 WAL 与 SHM sidecar。应用回滚负责选择兼容的可执行文件或镜像，数据回滚则要求停止应用并恢复迁移前目录快照，两者都不会隐式代替对方。
+静默迁移可以复制已经关闭的 SQLite。在线迁移会按扩展名或文件头识别 SQLite，调用方必须提供 `backupSqlite`，并通过 SQLite backup API 或等价一致性快照实现；活动 WAL、SHM 与 rollback-journal sidecar 会被排除。在线 Host 会话与附件需要共同的静默点或快照屏障，不能逐文件复制，因此迁移器会明确拒绝。应用回滚负责选择兼容的可执行文件或镜像，数据回滚则要求停止应用并恢复迁移前目录快照，两者都不会隐式代替对方。
 
 sidecar 不重新分发 industry-chain 种子数据，应用启动也绝不下载。`industry-chain.data-status` 在不联网的情况下读取本地 `missing`、`downloading`、`ready` 或 `error` 状态；只有用户显式触发 `industry-chain.data-bootstrap` 才会下载固定五文件。backend 会限制文件大小，在临时目录校验 JSON 与最低结构，仅在完整数据集全部通过后发布，并清理失败的临时数据；并发 bootstrap 请求复用同一次下载。
 

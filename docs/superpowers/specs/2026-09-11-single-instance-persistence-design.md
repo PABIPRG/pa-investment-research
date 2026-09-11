@@ -42,9 +42,9 @@ PAB-14 继续拥有分类预览、冲突处理、事务提交、回滚和业务 
 
 ## 初始化和迁移
 
-`initializeDshInstance()` 只接受不存在或空的绝对目标，建立私有目录和版本标记，不创建虚构用户数据。`migrateDshInstance()` 接受明确的来源副本与目标，按固定白名单递归复制到目标同级 staging 目录，拒绝符号链接与特殊文件，校验普通文件 SHA-256，最后以 rename 原子发布。目标非空、版本不兼容、复制或校验失败时不发布目标，来源始终只读。
+`initializeDshInstance()` 只接受不存在或空的绝对目标，建立私有目录和版本标记，不创建虚构用户数据。`dryRunDshInstanceMigration()` 只读返回固定白名单中的文件、主动排除项、大小、复制策略、发布策略和阻塞原因。`migrateDshInstance()` 在规范化物理路径并重复核验来源／目标身份后，把同一清单复制到目标内部 staging，流式校验普通文件 SHA-256，再按顶层条目事务发布，`.dsh-instance.json` 最后发布。已有空挂载点不会被替换，并收紧为 `0700`；发布失败会回滚已移动条目，回滚不完整时保留事务日志和 staging 现场。目标非空、路径别名重叠、版本不兼容、输入变化、复制或校验失败时均不进入可用状态，来源始终只读。
 
-运行模式分为 `quiesced` 与 `online`。`quiesced` 要求 Host 和三个后端已停止，可复制关闭后的 SQLite。`online` 遇到 `.db`、`.sqlite` 或 `.sqlite3` 必须由调用方提供 `backupSqlite`，实现使用 SQLite backup API、`VACUUM INTO` 或等价一致性快照；完成后不复制 live WAL/SHM sidecar。没有一致性操作时迁移失败。
+运行模式分为 `quiesced` 与 `online`。`quiesced` 要求 Host 和三个后端已停止，可复制关闭后的 SQLite。`online` 按扩展名或文件头识别 SQLite，并要求调用方提供使用 SQLite backup API、`VACUUM INTO` 或等价一致性快照的 `backupSqlite`；完成后不复制 live WAL、SHM 与 rollback journal。在线 Host `sessions/` 与 `attachments/v1/` 无法逐文件保持共同一致性，因此没有整体 quiescence 或快照屏障时直接拒绝。managed `profiles/**/node_modules` 作为可重建依赖排除；`backup-settings.json` 内部绝对目录重定位到目标，外部目录原样保留并由部署方单独迁移。
 
 ## 恢复和回滚
 

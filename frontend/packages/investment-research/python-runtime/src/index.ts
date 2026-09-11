@@ -31,11 +31,15 @@ const BACKUP_CREATED_BY_APP_VERSION = packageManifest.version
 export { checkBackendHealth } from './health.ts'
 export type { BackendHealthOptions } from './health.ts'
 export { resolveBackendAddress, resolveBackendPaths } from './path.ts'
-export { initializeDshInstance, migrateDshInstance } from './instance-migration.ts'
+export { dryRunDshInstanceMigration, initializeDshInstance, migrateDshInstance } from './instance-migration.ts'
 export type {
+  DshInstanceMigrationPlan,
+  ExcludedInstanceEntry,
+  InstanceMigrationRejection,
   MigrateDshInstanceOptions,
   MigrateDshInstanceResult,
   MigratedInstanceFile,
+  PlannedInstanceFile,
   SqliteBackup,
 } from './instance-migration.ts'
 export { verifyInvestmentRuntimeDescriptor } from './descriptor.ts'
