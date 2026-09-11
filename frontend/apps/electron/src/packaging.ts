@@ -633,6 +633,15 @@ async function packageApplication(): Promise<void> {
       stagingDir: packagingStagingDir,
       outDir: join(appDir, 'out'),
     }))
+    for (const packagePath of appPaths) {
+      const resources = process.platform === 'darwin'
+        ? join(packagePath, `${appIdentity.name}.app`, 'Contents', 'Resources')
+        : join(packagePath, 'resources')
+      await run(process.execPath, [
+        join(workspaceDir, 'scripts', 'investment-backend-package-policy.ts'),
+        '--root', join(resources, 'investment-python'),
+      ], workspaceDir)
+    }
     await signPackagedMacApplications(appPaths, process.platform)
   } finally {
     await removePackagingRoot(plan.rootDir)

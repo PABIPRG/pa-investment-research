@@ -47,6 +47,18 @@ async function fixture() {
 }
 
 describe('investment Python sidecar smoke', () => {
+  it('rejects privacy contamination even when its descriptor hash is valid', async () => {
+    const { root, descriptor } = await fixture()
+    const path = 'backends/dsh-trading-core/adapter/app.py'
+    const content = 'api_key = "private-canary-123"'
+    await writeFile(join(root, path), content)
+    descriptor.files.find(file => file.path === path)!.sha256 = createHash('sha256').update(content).digest('hex')
+    await writeFile(join(root, 'runtime.json'), JSON.stringify(descriptor))
+    const runCommand = vi.fn(async () => 0)
+    await expect(smokeInvestmentPythonSidecar(root, { runCommand })).rejects.toThrow(/credential-literal/)
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
   it('uses the sidecar interpreter to verify all health routes and the industry data lifecycle routes', async () => {
     const { root } = await fixture()
     let observedEnv: Readonly<Record<string, string>> | undefined
