@@ -9,6 +9,7 @@ import {
   isTrustedForwardedHttps,
   requestClientAddress,
   type BrowserTrustRequest,
+  type WebRequestLifecycleResource,
 } from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 
@@ -71,18 +72,13 @@ interface RequestFacts {
   method?: string | undefined
 }
 
-interface SocketLike {
-  destroy(): void
-  once(event: 'close', listener: () => void): unknown
-}
-
 interface SessionRecord {
   username: string
   csrfToken: string
   createdAt: number
   lastSeenAt: number
   timer: ReturnType<typeof setTimeout>
-  sockets: Set<SocketLike>
+  resources: Set<WebRequestLifecycleResource>
 }
 
 interface SessionView { username: string; csrfToken: string; expiresAt: number }
@@ -93,7 +89,10 @@ export type WebAuthSessionState =
   | { state: 'signed-out' }
   | ({ state: 'signed-in' } & SessionView)
 
-export type WebAuthDecision = { ok: true; sessionId?: string } | {
+export type WebAuthDecision = {
+  ok: true
+  bindLifecycle?: (resource: WebRequestLifecycleResource) => boolean
+} | {
   ok: false
   status: 401 | 403 | 429 | 503
   code: 'auth-required' | 'auth-unavailable' | 'secure-transport-required' | 'csrf-invalid' | 'invalid-credentials' | 'rate-limited'
@@ -268,7 +267,7 @@ export class WebAuthService extends Service {
    * @returns an allow decision or a stable HTTP rejection.
    */
   authorize(facts: RequestFacts): WebAuthDecision {
-    if (!this.enabled) return { ok: true }
+    if (!this.enabled) return { ok: true, bindLifecycle: () => true }
     if (!this.available) return { ok: false, status: 503, code: 'auth-unavailable' }
     if (!this.isAllowedTransport(facts)) {
       return { ok: false, status: 403, code: 'secure-transport-required' }
@@ -281,7 +280,7 @@ export class WebAuthService extends Service {
         return { ok: false, status: 403, code: 'csrf-invalid' }
       }
     }
-    return { ok: true, sessionId: found.id }
+    return { ok: true, bindLifecycle: resource => this.bindLifecycle(found.id, resource) }
   }
 
   /**
@@ -327,7 +326,7 @@ export class WebAuthService extends Service {
     const now = Date.now()
     const record: SessionRecord = {
       username, csrfToken: randomBytes(32).toString('base64url'), createdAt: now, lastSeenAt: now,
-      timer: undefined as unknown as ReturnType<typeof setTimeout>, sockets: new Set(),
+      timer: undefined as unknown as ReturnType<typeof setTimeout>, resources: new Set(),
     }
     this.sessions.set(id, record)
     this.schedule(id, record)
@@ -341,8 +340,10 @@ export class WebAuthService extends Service {
    */
   logout(facts: RequestFacts): WebAuthDecision {
     const decision = this.authorize(facts)
-    if (!decision.ok || decision.sessionId === undefined) return decision
-    this.revoke(decision.sessionId)
+    if (!decision.ok || !this.enabled) return decision
+    const found = this.find(facts, false)
+    if (found === undefined) return { ok: false, status: 401, code: 'auth-required' }
+    this.revoke(found.id)
     return { ok: true }
   }
 
@@ -352,14 +353,17 @@ export class WebAuthService extends Service {
    * @param socket - accepted transport socket to close when the session ends.
    * @returns whether the upgrade may continue.
    */
-  trackSocket(facts: RequestFacts, socket: SocketLike): boolean {
+  trackSocket(facts: RequestFacts, socket: WebRequestLifecycleResource): boolean {
     const decision = this.authorize(facts)
     if (!decision.ok) return false
-    if (decision.sessionId === undefined) return true
-    const record = this.sessions.get(decision.sessionId)
+    return decision.bindLifecycle?.(socket) ?? false
+  }
+
+  private bindLifecycle(id: string, resource: WebRequestLifecycleResource): boolean {
+    const record = this.sessions.get(id)
     if (record === undefined) return false
-    record.sockets.add(socket)
-    socket.once('close', () => { record.sockets.delete(socket) })
+    record.resources.add(resource)
+    resource.once('close', () => { record.resources.delete(resource) })
     return true
   }
 
@@ -410,8 +414,8 @@ export class WebAuthService extends Service {
     const record = this.sessions.get(id)
     if (record === undefined) return
     this.sessions.delete(id); clearTimeout(record.timer)
-    for (const socket of record.sockets) socket.destroy()
-    record.sockets.clear()
+    for (const resource of record.resources) resource.destroy()
+    record.resources.clear()
   }
 
   private recent(address: string): number[] {

@@ -7,6 +7,8 @@ export {
   isTrustedApiRequest,
   isTrustedForwardedHttps,
   requestClientAddress,
+  type ProtectedWebRequestAuthorizationDecision,
   type WebRequestAuthorizer,
   type WebRequestAuthorizationDecision,
+  type WebRequestLifecycleResource,
 } from '@deepseek-ai/dsh-host-webserver'

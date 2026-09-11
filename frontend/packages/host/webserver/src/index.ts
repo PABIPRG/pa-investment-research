@@ -26,8 +26,10 @@ export {
   isTrustedForwardedHttps,
   requestClientAddress,
   type BrowserTrustRequest,
+  type ProtectedWebRequestAuthorizationDecision,
   type WebRequestAuthorizer,
   type WebRequestAuthorizationDecision,
+  type WebRequestLifecycleResource,
 } from './request-trust.ts'
 
 declare module '@deepseek-ai/cordis' {

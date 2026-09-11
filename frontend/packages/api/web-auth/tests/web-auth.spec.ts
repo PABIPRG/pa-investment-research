@@ -98,7 +98,10 @@ describe('WebAuthService', () => {
   it('keeps the compatibility mode open without manufacturing a session', () => {
     const auth = service({ mode: 'disabled' })
     expect(auth.sessionState()).toEqual({ state: 'disabled' })
-    expect(auth.authorize({ headers: {}, method: 'POST' })).toEqual({ ok: true })
+    const decision = auth.authorize({ headers: {}, method: 'POST' })
+    expect(decision.ok).toBe(true)
+    if (!decision.ok) return
+    expect(decision.bindLifecycle?.({ destroy() {}, once() {} })).toBe(true)
   })
 
   it('fails closed when required credentials are missing', () => {
@@ -146,7 +149,9 @@ describe('WebAuthService', () => {
     if (!login.ok || login.session === undefined || login.cookieName === undefined || login.token === undefined) return
     const cookie = `${login.cookieName}=${login.token}`
     const socket = { destroy: vi.fn(), once: vi.fn() }
-    expect(auth.authorize(facts('127.0.0.1', { cookie }, 'GET')).ok).toBe(true)
+    const authorized = auth.authorize(facts('127.0.0.1', { cookie }, 'GET'))
+    expect(authorized.ok).toBe(true)
+    if (!authorized.ok) return
     expect(auth.authorize(facts('127.0.0.1', { cookie }, 'POST'))).toEqual({
       ok: false,
       status: 403,
@@ -155,7 +160,7 @@ describe('WebAuthService', () => {
     expect(auth.authorize(facts('127.0.0.1', {
       cookie, 'x-dsh-csrf': login.session.csrfToken,
     }, 'POST')).ok).toBe(true)
-    expect(auth.trackSocket(facts('127.0.0.1', { cookie }, 'GET'), socket)).toBe(true)
+    expect(authorized.bindLifecycle?.(socket)).toBe(true)
     expect(auth.logout(facts('127.0.0.1', {
       cookie, 'x-dsh-csrf': login.session.csrfToken,
     }, 'POST')).ok).toBe(true)
@@ -229,7 +234,7 @@ describe('WebAuthService', () => {
     expect((await auth.login('admin', 'correct horse battery staple', forwarded('10.0.0.2'))).ok).toBe(true)
   })
 
-  it('expires idle sessions and destroys their tracked sockets', async () => {
+  it('expires idle sessions and destroys their bound lifecycle resources', async () => {
     vi.useFakeTimers()
     const auth = service(configured({ idleTimeoutMs: 1_000, absoluteTimeoutMs: 5_000 }))
     const login = await auth.login('admin', 'correct horse battery staple', facts())
@@ -237,7 +242,10 @@ describe('WebAuthService', () => {
     if (!login.ok || login.cookieName === undefined || login.token === undefined) return
     const socket = { destroy: vi.fn(), once: vi.fn() }
     const cookie = `${login.cookieName}=${login.token}`
-    expect(auth.trackSocket(facts('127.0.0.1', { cookie }, 'GET'), socket)).toBe(true)
+    const authorized = auth.authorize(facts('127.0.0.1', { cookie }, 'GET'))
+    expect(authorized.ok).toBe(true)
+    if (!authorized.ok) return
+    expect(authorized.bindLifecycle?.(socket)).toBe(true)
     vi.advanceTimersByTime(1_001)
     expect(socket.destroy).toHaveBeenCalledOnce()
     expect(auth.authorize(facts('127.0.0.1', { cookie }, 'GET')).ok).toBe(false)
@@ -251,7 +259,10 @@ describe('WebAuthService', () => {
     if (!login.ok || login.cookieName === undefined || login.token === undefined) return
     const socket = { destroy: vi.fn(), once: vi.fn() }
     const requestFacts = facts('127.0.0.1', { cookie: `${login.cookieName}=${login.token}` }, 'GET')
-    expect(auth.trackSocket(requestFacts, socket)).toBe(true)
+    const authorized = auth.authorize(requestFacts)
+    expect(authorized.ok).toBe(true)
+    if (!authorized.ok) return
+    expect(authorized.bindLifecycle?.(socket)).toBe(true)
     vi.advanceTimersByTime(800)
     expect(auth.authorize(requestFacts).ok).toBe(true)
     vi.advanceTimersByTime(800)

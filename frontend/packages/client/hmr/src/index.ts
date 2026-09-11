@@ -16,6 +16,7 @@ import {
   assertTrustedAuthority,
   assertTrustedProxyAddress,
   type WebRequestAuthorizer,
+  type WebRequestLifecycleResource,
 } from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 // Empty type imports carry the clientModuleHost/webServer Context merges.
@@ -188,7 +189,11 @@ export function apply(ctx: Context, config: Config): void {
   // --- /plugins/events SSE channel ----------------------------------------
   const connections = new Set<ServerResponse>()
 
-  const connect = (res: ServerResponse): void => {
+  const connect = (
+    res: ServerResponse,
+    bindLifecycle: (resource: WebRequestLifecycleResource) => boolean,
+  ): boolean => {
+    if (!bindLifecycle(res)) return false
     connections.add(res)
     const release = (): void => { connections.delete(res) }
     res.once('close', release)
@@ -204,6 +209,7 @@ export function apply(ctx: Context, config: Config): void {
       release()
       res.destroy()
     }
+    return true
   }
 
   ctx.effect(() => {
@@ -235,7 +241,9 @@ export function apply(ctx: Context, config: Config): void {
           writeJsonError(res, 429, 'sse-capacity-exhausted', { 'retry-after': '5' })
           return
         }
-        connect(res)
+        if (!connect(res, decision.bindLifecycle)) {
+          writeJsonError(res, 401, 'auth-required')
+        }
       },
     })
     const unsubscribe = ctx.clientModules.onRebuilt((id, rev) => {

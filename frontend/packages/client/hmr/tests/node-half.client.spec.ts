@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { WebAuthService, hashPassword } from '@deepseek-ai/dsh-api-web-auth'
 import type { WebBootGraph, ClientModuleRegistry } from '@deepseek-ai/dsh-client-modules'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
 import { apply, Config, EVENTS_ENDPOINT, inject } from '../src/index.ts'
@@ -17,16 +18,25 @@ import { apply, Config, EVENTS_ENDPOINT, inject } from '../src/index.ts'
 const POLL_MS = 20
 
 let dir: string
+const authContexts: Context[] = []
 
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'dsh-hmr-')) })
-afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => {
+  for (const ctx of authContexts.splice(0)) await ctx.fiber.dispose()
+  vi.useRealTimers()
+  rmSync(dir, { recursive: true, force: true })
+})
 
 /**
  * Controllable clientModuleHost fake over a mutable id → bundle-path table.
  * Structural (Pick+cast): the plugin only touches the read/notify surface;
  * the service class carries private scan state a literal need not reproduce.
  */
-type FakeHost = ClientModuleRegistry & { rebuiltCalls: string[]; fireGraphChanged(): void }
+type FakeHost = ClientModuleRegistry & {
+  rebuiltCalls: string[]
+  fireGraphChanged(): void
+  fireRebuilt(id: string, rev: string): void
+}
 interface FakeHostOptions {
   beforeGraphRead?: () => void
   rebuilt?: (id: string) => string | undefined
@@ -34,10 +44,12 @@ interface FakeHostOptions {
 
 function fakeClientModuleHost(rows: Map<string, string>, options: FakeHostOptions = {}): FakeHost {
   const graphListeners = new Set<() => void>()
+  const rebuiltListeners = new Set<(id: string, rev: string) => void>()
   const rebuiltCalls: string[] = []
-  const fake: Pick<FakeHost, 'graph' | 'clientPath' | 'rebuilt' | 'onRebuilt' | 'onGraphChanged' | 'rebuiltCalls' | 'fireGraphChanged'> = {
+  const fake: Pick<FakeHost, 'graph' | 'clientPath' | 'rebuilt' | 'onRebuilt' | 'onGraphChanged' | 'rebuiltCalls' | 'fireGraphChanged' | 'fireRebuilt'> = {
     rebuiltCalls,
     fireGraphChanged: () => { for (const l of graphListeners) l() },
+    fireRebuilt: (id, rev) => { for (const listener of rebuiltListeners) listener(id, rev) },
     graph: (): WebBootGraph => {
       options.beforeGraphRead?.()
       return {
@@ -50,7 +62,10 @@ function fakeClientModuleHost(rows: Map<string, string>, options: FakeHostOption
       rebuiltCalls.push(id)
       return options.rebuilt?.(id) ?? 'r2'
     },
-    onRebuilt: () => () => {},
+    onRebuilt: (listener) => {
+      rebuiltListeners.add(listener)
+      return () => { rebuiltListeners.delete(listener) }
+    },
     onGraphChanged: (listener) => {
       graphListeners.add(listener)
       return () => { graphListeners.delete(listener) }
@@ -75,7 +90,7 @@ function fakeHttpServer(routes: WebRoute[]): WebServer {
 
 interface WebAuthStub {
   authorize(request: IncomingMessage):
-    | { ok: true }
+    | { ok: true; bindLifecycle?: (resource: ServerResponse) => boolean }
     | { ok: false; status: 401 | 403 | 429 | 503; code: string }
 }
 
@@ -151,7 +166,7 @@ describe('hmr node half', () => {
     const clientModuleHost = fakeClientModuleHost(new Map([[privateGraphMarker, join(dir, 'private.js')]]))
     const routes: WebRoute[] = []
     const authorize = vi.fn<WebAuthStub['authorize']>(request => request.headers.cookie === 'session=valid'
-      ? { ok: true }
+      ? { ok: true, bindLifecycle: () => true }
       : { ok: false, status: 401, code: 'auth-required' })
     const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
       trustedHosts: ['harness.internal'],
@@ -207,7 +222,7 @@ describe('hmr node half', () => {
 
     const routes: WebRoute[] = []
     const authorize = vi.fn<WebAuthStub['authorize']>(request => request.headers['x-forwarded-proto'] === 'https'
-      ? { ok: true }
+      ? { ok: true, bindLifecycle: () => true }
       : { ok: false, status: 403, code: 'secure-transport-required' })
     const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
       trustedHosts: ['harness.internal'],
@@ -232,7 +247,7 @@ describe('hmr node half', () => {
     const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
       maxSseConnections: 1,
       requireWebAuth: true,
-    }, { authorize: () => ({ ok: true }) })
+    }, { authorize: () => ({ ok: true, bindLifecycle: () => true }) })
     const route = routes[0]!
     const request = routeRequest({ host: '127.0.0.1:3080' })
 
@@ -260,6 +275,75 @@ describe('hmr node half', () => {
     await fiber.dispose()
     expect(afterError.state.destroyed).toBe(true)
   })
+
+  it.each(['logout', 'idle timeout', 'absolute timeout'] as const)(
+    'ends an authenticated stream on %s, stops rebuilt delivery, and releases its capacity slot',
+    async (reason) => {
+      const clientModuleHost = fakeClientModuleHost(new Map([['pkg-private', join(dir, 'private.js')]]))
+      const routes: WebRoute[] = []
+      const passwordHashFile = join(dir, 'password.hash')
+      writeFileSync(passwordHashFile, hashPassword('correct horse battery staple'), { mode: 0o600 })
+      if (reason !== 'logout') vi.useFakeTimers()
+      const authContext = new Context()
+      authContexts.push(authContext)
+      const webAuth = new WebAuthService(authContext, {
+        mode: 'required',
+        username: 'admin',
+        passwordHashFile,
+        secureCookies: false,
+        idleTimeoutMs: 1_000,
+        absoluteTimeoutMs: reason === 'absolute timeout' ? 2_000 : 5_000,
+      })
+      const fiber = await mount(clientModuleHost, fakeHttpServer(routes), {
+        maxSseConnections: 1,
+        requireWebAuth: true,
+      }, webAuth)
+      const route = routes[0]!
+
+      const firstLogin = await webAuth.login('admin', 'correct horse battery staple', routeRequest({}))
+      expect(firstLogin.ok).toBe(true)
+      if (!firstLogin.ok || firstLogin.token === undefined || firstLogin.cookieName === undefined
+        || firstLogin.session === undefined) return
+      const firstCookie = `${firstLogin.cookieName}=${firstLogin.token}`
+
+      const first = routeResponse()
+      await route.handler(routeRequest({ host: '127.0.0.1:3080', cookie: firstCookie }), first.response)
+      expect(first.state.status).toBe(200)
+      clientModuleHost.fireRebuilt('pkg-private', 'r2')
+      expect(first.state.body).toContain('"type":"rebuilt"')
+
+      if (reason === 'logout') {
+        expect(webAuth.logout(routeRequest({
+          cookie: firstCookie,
+          'x-dsh-csrf': firstLogin.session.csrfToken,
+        }, 'POST')).ok).toBe(true)
+      } else if (reason === 'idle timeout') {
+        vi.advanceTimersByTime(1_001)
+      } else {
+        vi.advanceTimersByTime(800)
+        expect(webAuth.authorize(routeRequest({ cookie: firstCookie })).ok).toBe(true)
+        vi.advanceTimersByTime(800)
+        expect(webAuth.authorize(routeRequest({ cookie: firstCookie })).ok).toBe(true)
+        vi.advanceTimersByTime(401)
+      }
+      const bodyAfterRevocation = first.state.body
+      expect(first.state.destroyed).toBe(true)
+      clientModuleHost.fireRebuilt('pkg-private', 'r3')
+      expect(first.state.body).toBe(bodyAfterRevocation)
+
+      const replacementLogin = await webAuth.login('admin', 'correct horse battery staple', routeRequest({}))
+      expect(replacementLogin.ok).toBe(true)
+      if (!replacementLogin.ok || replacementLogin.token === undefined || replacementLogin.cookieName === undefined) return
+      const replacement = routeResponse()
+      await route.handler(routeRequest({
+        host: '127.0.0.1:3080',
+        cookie: `${replacementLogin.cookieName}=${replacementLogin.token}`,
+      }), replacement.response)
+      expect(replacement.state.status).toBe(200)
+      expect(replacement.state.body).not.toContain('sse-capacity-exhausted')
+      await fiber.dispose()
+    },
+  )
 
   it('watches graph bundles, reports stat changes, and unwatches on dispose', async () => {
     const bundle = join(dir, 'a.js')

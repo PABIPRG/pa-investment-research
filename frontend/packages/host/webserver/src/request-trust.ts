@@ -7,17 +7,33 @@ export interface BrowserTrustRequest {
   socket?: { remoteAddress?: string | undefined }
 }
 
+/** Server-side transport resource whose lifetime can be bound to a Web session. */
+export interface WebRequestLifecycleResource {
+  destroy(): void
+  once(event: 'close', listener: () => void): unknown
+}
+
 /** Structural authentication authority accepted by protected Web routes. */
 export interface WebRequestAuthorizer {
   authorize(request: BrowserTrustRequest): WebRequestAuthorizationDecision
 }
 
 /** Stable allow/reject shape shared by protected static, SSE, and API routes. */
-export type WebRequestAuthorizationDecision = { ok: true } | {
+export type WebRequestAuthorizationDecision = {
+  ok: true
+  /** Bind a server-side transport to the authorized session without exposing its credential. */
+  bindLifecycle?: (resource: WebRequestLifecycleResource) => boolean
+} | {
   ok: false
   status: 401 | 403 | 429 | 503
   code: string
 }
+
+/** Normalized protected-route result; success always carries a lifecycle binder. */
+export type ProtectedWebRequestAuthorizationDecision = {
+  ok: true
+  bindLifecycle: (resource: WebRequestLifecycleResource) => boolean
+} | Exclude<WebRequestAuthorizationDecision, { ok: true }>
 
 function header(headers: BrowserTrustRequest['headers'], name: string): string | undefined {
   if (headers instanceof Headers) return headers.get(name) ?? undefined
@@ -161,14 +177,19 @@ export function authorizeProtectedWebRequest(
   trustedProxyAddresses: readonly string[],
   authorizer: WebRequestAuthorizer | undefined,
   requireAuthorizer: boolean,
-): WebRequestAuthorizationDecision {
+): ProtectedWebRequestAuthorizationDecision {
   if (!isTrustedApiRequest(request, trustedHosts, trustedProxyAddresses)) {
     return { ok: false, status: 403, code: 'request-untrusted' }
   }
   if (authorizer === undefined) {
     return requireAuthorizer
       ? { ok: false, status: 503, code: 'auth-unavailable' }
-      : { ok: true }
+      : { ok: true, bindLifecycle: () => true }
   }
-  return authorizer.authorize(request)
+  const decision = authorizer.authorize(request)
+  if (!decision.ok) return decision
+  // A legacy/custom authority that cannot bind a long-lived resource may
+  // authorize ordinary finite requests, but an SSE/WebSocket carrier can
+  // fail closed by observing the false lifecycle result.
+  return { ok: true, bindLifecycle: decision.bindLifecycle ?? (() => false) }
 }

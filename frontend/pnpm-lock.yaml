@@ -1703,6 +1703,9 @@ importers:
       '@deepseek-ai/cordis-plugin-loader':
         specifier: workspace:^
         version: link:../../../vendor/loader
+      '@deepseek-ai/dsh-api-web-auth':
+        specifier: workspace:^
+        version: link:../../api/web-auth
       '@deepseek-ai/dsh-client-modules':
         specifier: workspace:^
         version: link:../modules
