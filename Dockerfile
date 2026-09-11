@@ -43,9 +43,8 @@ RUN apt-get update \
 COPY --from=build --chown=root:root /opt/dsh /opt/dsh
 COPY --from=build --chown=root:root /opt/investment-python /opt/investment-python
 COPY --chown=root:root containers/ /opt/container/
-RUN chmod 0555 /opt/container/*.mjs \
-    && ln -s /opt/container/investment-entrypoint.mjs /usr/local/bin/dsh-investment-entrypoint
+RUN chmod 0555 /opt/container/*.mjs
 
 EXPOSE 3080
 USER dsh
-ENTRYPOINT ["/usr/local/bin/dsh-investment-entrypoint"]
+ENTRYPOINT ["/opt/container/investment-entrypoint.mjs"]
