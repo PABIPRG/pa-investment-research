@@ -209,6 +209,12 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     : value.bySession[String(currentSession)]?.status)
   const fileInput = useRef<HTMLInputElement>(null)
   const transferAbort = useRef<AbortController>()
+  const previewAbort = useRef<AbortController>()
+  const activePreview = useRef<BackupPreview>()
+  const cancelPreview = useRef(props.backupPreviewCancel)
+  const transferTrigger = useRef<HTMLButtonElement>()
+  const restoreTransferFocus = useRef(false)
+  cancelPreview.current = props.backupPreviewCancel
   const [directory, setDirectory] = useState('')
   const [managedStorage, setManagedStorage] = useState(false)
   const [items, setItems] = useState<BackupListItem[]>([])
@@ -268,7 +274,18 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   useEffect(() => () => {
     transferAbort.current?.abort()
     transferAbort.current = undefined
+    previewAbort.current?.abort()
+    previewAbort.current = undefined
+    const current = activePreview.current
+    activePreview.current = undefined
+    if (current !== undefined) void cancelPreview.current?.(current.id)
   }, [])
+
+  useEffect(() => {
+    if (progress !== undefined || busy || !restoreTransferFocus.current) return
+    restoreTransferFocus.current = false
+    transferTrigger.current?.focus({ preventScroll: true })
+  }, [busy, progress])
 
   const run = (operation: () => Promise<void>): void => {
     if (busy) return
@@ -280,16 +297,43 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   }
 
   const openPreview = (value: BackupPreview): void => {
+    const current = activePreview.current
+    if (current !== undefined && current.id !== value.id) void cancelPreview.current?.(current.id)
     const defaults: Partial<Record<BackupCategory, BackupConflictRule>> = {}
     for (const domain of Object.values(value.domains)) {
       for (const [category, summary] of Object.entries(domain.categories)) {
         defaults[category as BackupCategory] = summary.defaultRule
       }
     }
+    activePreview.current = value
     setPreview(value)
     setRules(defaults)
     setBackupBefore(true)
     setDialog('import')
+  }
+
+  const releasePreview = (value: BackupPreview): void => {
+    if (activePreview.current?.id === value.id) activePreview.current = undefined
+    void cancelPreview.current?.(value.id)
+  }
+
+  const previewStored = (filename: string): void => {
+    previewAbort.current?.abort()
+    const controller = new AbortController()
+    previewAbort.current = controller
+    run(async () => {
+      try {
+        const value = await props.backupPreviewStored(filename, controller.signal)
+        if (previewAbort.current !== controller || controller.signal.aborted) {
+          void cancelPreview.current?.(value.id)
+          return
+        }
+        openPreview(value)
+      }
+      finally {
+        if (previewAbort.current === controller) previewAbort.current = undefined
+      }
+    })
   }
 
   const chooseDirectory = (): void => {
@@ -326,7 +370,12 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     void (async () => {
       setProgress(0)
       try {
-        openPreview(await uploadBackup(file, props, setProgress, controller.signal))
+        const value = await uploadBackup(file, props, setProgress, controller.signal)
+        if (transferAbort.current !== controller || controller.signal.aborted) {
+          void cancelPreview.current?.(value.id)
+          return
+        }
+        openPreview(value)
       }
       catch (error) {
         setFeedback(controller.signal.aborted
@@ -336,12 +385,12 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       finally {
         setProgress(undefined)
         setBusy(false)
-        transferAbort.current = undefined
+        if (transferAbort.current === controller) transferAbort.current = undefined
       }
     })()
   }
 
-  const download = (filename: string): void => {
+  const download = (filename: string, trigger: HTMLButtonElement): void => {
     const beginDownload = props.backupDownloadBegin
     const readDownloadChunk = props.backupDownloadChunk
     const cancelDownload = props.backupDownloadCancel
@@ -354,6 +403,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       backupDownloadCancel: (id: string) => cancelDownload(id),
     }
     transferAbort.current?.abort()
+    transferTrigger.current = trigger
     const controller = new AbortController()
     transferAbort.current = controller
     setTransferKind('download')
@@ -375,7 +425,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       }
       finally {
         setProgress(undefined)
-        transferAbort.current = undefined
+        if (transferAbort.current === controller) transferAbort.current = undefined
       }
       setFeedback(controller.signal.aborted ? props.t('backupTransferCanceled') : props.t('backupDownloaded'))
     })
@@ -386,15 +436,17 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     run(async () => {
       try {
         await props.backupImport({ previewId: preview.id, rules, backupBefore })
+        activePreview.current = undefined
         setDialog(null)
         setPreview(undefined)
         setFeedback(props.t('backupImportSucceeded'))
         props.reloadPage()
       }
       catch (error) {
+        releasePreview(preview)
+        setDialog(null)
+        setPreview(undefined)
         if (error instanceof Error && error.message.includes('预览已失效')) {
-          setDialog(null)
-          setPreview(undefined)
           setFeedback(props.t('backupPreviewExpired'))
           return
         }
@@ -436,21 +488,27 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
           setSelected(ALL_CATEGORIES)
           setDialog('create')
         }}>{props.t('backupCreate')}</button>
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => {
+        <button type="button" className={css.secondaryButton} disabled={busy} onClick={(event) => {
+          transferTrigger.current = event.currentTarget
           fileInput.current?.click()
         }}>{props.t('backupImport')}</button>
         <input ref={fileInput} className={css.fileInput} type="file" accept=".pabackup,application/zip" onChange={selectFile} />
       </div>
     </header>
 
-    {progress !== undefined && <div className={css.progress} aria-live="polite">
+    {progress !== undefined && <div className={css.progress} role="status" aria-live="polite">
+      <strong id="backup-transfer-status">{props.t(transferKind === 'upload' ? 'backupUploading' : 'backupDownloading')}</strong>
       <progress
         value={progress}
         max={1}
+        aria-describedby="backup-transfer-status"
         aria-label={`${props.t(transferKind === 'upload' ? 'backupUploading' : 'backupDownloading')} ${Math.round(progress * 100)}%`}
       />
-      <small>{props.t(transferKind === 'upload' ? 'backupUploading' : 'backupDownloading')} {Math.round(progress * 100)}%</small>
-      {transferAbort.current !== undefined && <button type="button" className={css.textButton} onClick={() => { transferAbort.current?.abort() }}>{props.t('backupCancel')}</button>}
+      <small>{Math.round(progress * 100)}%</small>
+      {transferAbort.current !== undefined && <button type="button" className={css.textButton} onClick={() => {
+        restoreTransferFocus.current = true
+        transferAbort.current?.abort()
+      }}>{props.t('backupCancel')}</button>}
     </div>}
     <p className={css.feedback} aria-live="polite">{feedback}</p>
 
@@ -497,11 +555,9 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
                 <small>{formatTime(item.manifest?.createdAt ?? item.modifiedAt)}{item.problem ? ` · ${item.problem}` : ''}</small>
               </div>
               <div className={css.rowActions}>
-                {item.status === 'ready' && props.backupDownloadBegin !== undefined && <button type="button" className={css.textButton} disabled={busy} onClick={() => { download(item.filename) }}>{props.t('backupDownload')}</button>}
+                {item.status === 'ready' && props.backupDownloadBegin !== undefined && <button type="button" className={css.textButton} disabled={busy} onClick={(event) => { download(item.filename, event.currentTarget) }}>{props.t('backupDownload')}</button>}
                 {item.status === 'ready' && <button type="button" className={css.textButton} disabled={busy} onClick={() => {
-                  run(async () => {
-                    openPreview(await props.backupPreviewStored(item.filename))
-                  })
+                  previewStored(item.filename)
                 }}>{props.t('backupImport')}</button>}
                 <button type="button" className={css.deleteTextButton} disabled={busy} onClick={() => {
                   setDeleteTarget(item.filename)
@@ -542,7 +598,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     {dialog === 'import' && preview && <Modal t={props.t} title={props.t('backupImportDialogTitle')} busy={busy} confirmLabel={props.t('backupConfirmImport')} onCancel={() => {
       setDialog(null)
       setPreview(undefined)
-      void props.backupPreviewCancel?.(preview.id)
+      releasePreview(preview)
     }} onConfirm={importData}>
       <div className={css.importSource}><strong>{preview.filename}</strong><span>{formatTime(preview.manifest.createdAt)} · {preview.manifest.scope.map(category => categoryLabel(category, props.t)).join('、')}</span></div>
       <p>{props.t('backupImportImmutable')}</p>

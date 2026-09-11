@@ -8,6 +8,7 @@ import Include from '@deepseek-ai/cordis-plugin-include'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import InvestmentPythonRuntime from '@deepseek-ai/dsh-investment-python-runtime'
 import * as MarketWatch from '../src/index.ts'
 
@@ -38,6 +39,9 @@ async function loadComposition(): Promise<Context> {
   await writeFile(configPath, [
     "- name: '@deepseek-ai/dsh-system-prompt'",
     "- name: '@deepseek-ai/dsh-tools'",
+    "- name: '@deepseek-ai/dsh-host-deployment-capabilities'",
+    '  config:',
+    '    surface: local-web',
     "- name: '@test/subprocess'",
     "- name: '@test/credentials'",
     "- name: '@deepseek-ai/dsh-investment-python-runtime'",
@@ -59,6 +63,7 @@ async function loadComposition(): Promise<Context> {
   const modules = new Map<string, unknown>([
     ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
     ['@deepseek-ai/dsh-tools', ToolRuntime],
+    ['@deepseek-ai/dsh-host-deployment-capabilities', DeploymentCapabilities],
     ['@test/subprocess', StubSubprocessRuntime],
     ['@test/credentials', StubCredentials],
     ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],

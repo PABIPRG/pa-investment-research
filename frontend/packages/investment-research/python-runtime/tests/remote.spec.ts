@@ -1,13 +1,18 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
-import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol'
+import { remoteMethods, TypertRemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
 import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import InvestmentPythonRuntime from '../src/index.ts'
 import type { InvestmentRestartResult, PythonBackendDefinition } from '../src/types.ts'
 
 const SECRET = 'sentinel-investment-remote-secret-must-never-leak'
+const contexts: Context[] = []
+const roots: string[] = []
 
 class StubCredentials extends CredentialProvider {
   resolve(_ref: CredentialRef): Promise<ResolvedCredential | undefined> { return Promise.resolve(undefined) }
@@ -31,6 +36,7 @@ const externalBackend: PythonBackendDefinition = {
 
 function runtimeWith(appRestart?: () => void): InvestmentPythonRuntime {
   const ctx = new Context()
+  contexts.push(ctx)
   new StubCredentials(ctx)
   new DeploymentCapabilities(ctx, { surface: 'cli' })
   ctx.provide('subprocess', {} as never)
@@ -38,16 +44,19 @@ function runtimeWith(appRestart?: () => void): InvestmentPythonRuntime {
   return new InvestmentPythonRuntime(ctx)
 }
 
-function cloudRuntime(): InvestmentPythonRuntime {
+function cloudRuntime(dshHome?: string): InvestmentPythonRuntime {
   const ctx = new Context()
+  contexts.push(ctx)
   new StubCredentials(ctx)
   new DeploymentCapabilities(ctx, { surface: 'cloud-web' })
   ctx.provide('subprocess', {} as never)
-  return new InvestmentPythonRuntime(ctx)
+  return new InvestmentPythonRuntime(ctx, dshHome === undefined ? {} : { dshHome })
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllGlobals()
+  await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
 describe('InvestmentPythonRuntime Remote', () => {
@@ -58,8 +67,30 @@ describe('InvestmentPythonRuntime Remote', () => {
     await expect(runtime.backupDescribe()).resolves.toEqual({
       location: { kind: 'managed' }, format: 'pabackup', scheduledBackup: false,
     })
-    await expect(runtime.backupSetDirectory('/server/secret')).rejects.toThrow(/托管备份存储/)
+    const directoryError = await runtime.backupSetDirectory('/server/secret').catch((reason: unknown) => reason)
+    expect(directoryError).toBeInstanceOf(TypertRemoteFailure)
+    expect((directoryError as TypertRemoteFailure<{ message: string }>).failure.message).toMatch(/托管备份存储/)
     await expect(runtime.nativeHoldings({ action: 'read', account_mode: 'simulated' })).rejects.toThrow(/不提供原生/)
+  })
+
+  it('maps a cloud storage failure to a stable safe Remote error without exposing its Host path', async () => {
+    const dshHome = await mkdtemp(join(tmpdir(), 'investment-cloud-error-'))
+    roots.push(dshHome)
+    await mkdir(join(dshHome, 'investment-research'), { recursive: true })
+    const blockedPath = join(dshHome, 'investment-research', 'backups')
+    await writeFile(blockedPath, 'not a directory')
+    const runtime = cloudRuntime(dshHome)
+
+    const error = await runtime.backupList().catch((reason: unknown) => reason)
+    expect(error).toBeInstanceOf(TypertRemoteFailure)
+    const failure = (error as TypertRemoteFailure<{ code: string; message: string }>).failure
+    expect(failure).toEqual({
+      code: 'internal',
+      message: '无法读取备份列表，请稍后重试。',
+      details: {},
+    })
+    expect(JSON.stringify(failure)).not.toContain(dshHome)
+    expect(JSON.stringify(failure)).not.toContain(blockedPath)
   })
 
   it('binds the investment Runtime namespace and exports only the allow-listed aliases', () => {

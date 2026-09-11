@@ -285,6 +285,28 @@ describe('investment research Runtime Client facade', () => {
     expect(b.backup).toHaveBeenCalledTimes(16)
   })
 
+  it('preserves a safe resource code and message through the generated Remote facade', async () => {
+    const b = await controlledBench()
+    await b.mount()
+    const result = b.ctx.investmentResearchRuntimeClient.backupUploadBegin({
+      filename: '外部.pabackup',
+      size: 64 * 1024 * 1024,
+    })
+    expect(b.calls).toHaveLength(1)
+    b.calls[0]!.resolve({
+      ok: false,
+      error: {
+        code: 'resource-exhausted',
+        message: '已有过多上传，请先完成或取消当前上传',
+        details: {},
+      },
+    })
+
+    await expect(result).rejects.toThrow(
+      'investment Runtime Client: backup-upload-begin failed: resource-exhausted: 已有过多上传，请先完成或取消当前上传',
+    )
+  })
+
   it('loads on first subscription and refreshes only for the DeepSeek credential and reconnects', async () => {
     const b = await bench()
     await b.mount()

@@ -12,6 +12,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import { composeEntries, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import InvestmentPythonRuntime from '../src/index.ts'
 import * as StockAnalysis from '../../stock-analysis/src/index.ts'
@@ -66,6 +67,7 @@ describe.skipIf(!enabled)('managed investment engines', () => {
       { id: 'agent', name: '@deepseek-ai/dsh-agent' },
       { id: 'system-prompt', name: '@deepseek-ai/dsh-system-prompt' },
       { id: 'tools', name: '@deepseek-ai/dsh-tools' },
+      { id: 'deployment-capabilities', name: '@deepseek-ai/dsh-host-deployment-capabilities', config: { surface: 'local-web' } },
       { id: 'credentials', name: 'smoke-credentials' },
       { id: 'subprocess', name: '@deepseek-ai/dsh-subprocess-local' },
     ] }]
@@ -113,6 +115,7 @@ describe.skipIf(!enabled)('managed investment engines', () => {
       ['@deepseek-ai/dsh-agent', AgentRegistry],
       ['@deepseek-ai/dsh-system-prompt', SystemPrompt],
       ['@deepseek-ai/dsh-tools', ToolRuntime],
+      ['@deepseek-ai/dsh-host-deployment-capabilities', DeploymentCapabilities],
       ['smoke-credentials', SmokeCredentials],
       ['@deepseek-ai/dsh-subprocess-local', LocalSubprocessRuntime],
       ['@deepseek-ai/dsh-investment-python-runtime', InvestmentPythonRuntime],

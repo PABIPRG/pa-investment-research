@@ -8,8 +8,8 @@ import packageManifest from '@deepseek-ai/dsh-investment-python-runtime/package.
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type { DeploymentCapabilitySnapshot } from '@deepseek-ai/dsh-host-deployment-capabilities'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
-import { bindTypertRemote, Remote } from '@deepseek-ai/dsh-typert-protocol'
-import { BackupService } from './backup-service.ts'
+import { bindTypertRemote, Remote, TypertRemoteFailure, type RemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
+import { BackupPublicError, BackupService } from './backup-service.ts'
 import { InvestmentBackendManager } from './runtime.ts'
 import { requestInvestmentData } from './data.ts'
 import type {
@@ -29,6 +29,26 @@ import type { BackupCategory, BackupManifest, BackupReason } from './backup-arch
 import type { BackupConflictRule, BackupListItem, BackupPreview } from './backup-service.ts'
 
 const BACKUP_CREATED_BY_APP_VERSION = packageManifest.version
+
+function backupRemoteFailure(error: unknown, fallback: string): TypertRemoteFailure<RemoteFailure> {
+  if (error instanceof BackupPublicError) {
+    return new TypertRemoteFailure({ code: error.code, message: error.message, details: {} }, error)
+  }
+  return new TypertRemoteFailure({ code: 'internal', message: fallback, details: {} }, error)
+}
+
+function backupRemote<T>(operation: () => T, fallback: string): T {
+  try {
+    const result = operation()
+    if (result instanceof Promise) {
+      return result.catch((error: unknown) => { throw backupRemoteFailure(error, fallback) }) as T
+    }
+    return result
+  }
+  catch (error) {
+    throw backupRemoteFailure(error, fallback)
+  }
+}
 
 export { checkBackendHealth } from './health.ts'
 export type { BackendHealthOptions } from './health.ts'
@@ -157,6 +177,7 @@ export class InvestmentPythonRuntime extends Service {
     this.backups = new BackupService({
       dshHome,
       appVersion: BACKUP_CREATED_BY_APP_VERSION,
+      managedStorage: this.deploymentSnapshot.surface === 'cloud-web',
       request: async (backend, operation, input, signal) => {
         const lease = await this.manager.acquire(backend, signal)
         try {
@@ -197,7 +218,7 @@ export class InvestmentPythonRuntime extends Service {
     })
     ctx.on('credentials/updated', (ref) => { this.manager.credentialUpdated(ref) })
     ctx.effect(() => async () => {
-      this.backups.dispose()
+      await this.backups.dispose()
       await this.manager.dispose()
     }, 'investment Python runtime teardown')
   }
@@ -303,7 +324,7 @@ export class InvestmentPythonRuntime extends Service {
     if (!this.deployment().hostDirectories) {
       return { location: { kind: 'managed' }, format: 'pabackup', scheduledBackup: false }
     }
-    const value = await this.backups.describe()
+    const value = await backupRemote(() => this.backups.describe(), '无法读取备份设置，请稍后重试。')
     return { directory: value.directory, location: { kind: 'local', directory: value.directory }, format: value.format, scheduledBackup: value.scheduledBackup }
   }
 
@@ -315,9 +336,12 @@ export class InvestmentPythonRuntime extends Service {
   @Remote('backup-set-directory')
   backupSetDirectory(directory: string): Promise<{ directory: string }> {
     if (!this.deployment().hostDirectories) {
-      return Promise.reject(new Error('云端 Web 使用托管备份存储，不能更改服务器目录。'))
+      return backupRemote(
+        () => Promise.reject(new BackupPublicError('remote-rejected', '云端 Web 使用托管备份存储，不能更改服务器目录。')),
+        '无法更新备份位置，请稍后重试。',
+      )
     }
-    return this.backups.setDirectory(directory)
+    return backupRemote(() => this.backups.setDirectory(directory), '无法更新备份位置，请检查目录后重试。')
   }
 
   /**
@@ -328,7 +352,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-download-begin')
   backupDownloadBegin(filename: string, signal: AbortSignal): Promise<{ id: string; filename: string; size: number; chunkSize: number }> {
-    return this.backups.beginDownload(filename, signal)
+    return backupRemote(() => this.backups.beginDownload(filename, signal), '无法开始下载，请刷新备份列表后重试。')
   }
 
   /**
@@ -339,7 +363,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-download-chunk')
   backupDownloadChunk(input: { id: string; offset: number }, signal: AbortSignal): { base64: string; nextOffset: number; done: boolean } {
-    return this.backups.downloadChunk(input, signal)
+    return backupRemote(() => this.backups.downloadChunk(input, signal), '下载中断，请重新下载。')
   }
 
   /**
@@ -347,7 +371,9 @@ export class InvestmentPythonRuntime extends Service {
    * @param id - Opaque download id allocated by {@link backupDownloadBegin}.
    */
   @Remote('backup-download-cancel')
-  backupDownloadCancel(id: string): void { this.backups.cancelDownload(id) }
+  backupDownloadCancel(id: string): void {
+    backupRemote(() => this.backups.cancelDownload(id), '无法取消下载，请稍后重试。')
+  }
 
   /**
    * Create a manual or pre-danger backup and return only client-safe metadata.
@@ -359,7 +385,7 @@ export class InvestmentPythonRuntime extends Service {
     filename: string
     manifest: BackupManifest
   }> {
-    const { filename, manifest } = await this.backups.create(input)
+    const { filename, manifest } = await backupRemote(() => this.backups.create(input), '无法创建备份，请稍后重试。')
     return { filename, manifest }
   }
 
@@ -369,7 +395,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-list')
   backupList(): Promise<BackupListItem[]> {
-    return this.backups.list()
+    return backupRemote(() => this.backups.list(), '无法读取备份列表，请稍后重试。')
   }
 
   /**
@@ -378,7 +404,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-delete')
   backupDelete(filename: string): Promise<void> {
-    return this.backups.delete(filename)
+    return backupRemote(() => this.backups.delete(filename), '无法删除备份，请刷新列表后重试。')
   }
 
   /**
@@ -389,7 +415,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-preview-stored')
   backupPreviewStored(filename: string, signal: AbortSignal): Promise<BackupPreview> {
-    return this.backups.previewStored(filename, signal)
+    return backupRemote(() => this.backups.previewStored(filename, signal), '无法读取备份预览，请重新选择备份。')
   }
 
   /**
@@ -400,7 +426,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-upload-begin')
   backupUploadBegin(input: { filename: string; size: number }, signal: AbortSignal): Promise<{ id: string; chunkSize: number }> {
-    return this.backups.beginUpload(input, signal)
+    return backupRemote(() => this.backups.beginUpload(input, signal), '无法开始上传，请稍后重试。')
   }
 
   /**
@@ -411,7 +437,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-upload-chunk')
   backupUploadChunk(input: { id: string; offset: number; base64: string }, signal: AbortSignal): Promise<{ received: number }> {
-    return this.backups.appendUploadChunk(input, signal)
+    return backupRemote(() => this.backups.appendUploadChunk(input, signal), '上传中断，请重新选择文件。')
   }
 
   /**
@@ -422,7 +448,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-upload-inspect')
   backupUploadInspect(id: string, signal: AbortSignal): Promise<BackupPreview> {
-    return this.backups.inspectUpload(id, signal)
+    return backupRemote(() => this.backups.inspectUpload(id, signal), '无法读取上传的备份，请重新选择文件。')
   }
 
   /**
@@ -431,7 +457,7 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-upload-cancel')
   backupUploadCancel(id: string): Promise<void> {
-    return this.backups.cancelUpload(id)
+    return backupRemote(() => this.backups.cancelUpload(id), '无法取消上传，请稍后重试。')
   }
 
   /**
@@ -439,7 +465,9 @@ export class InvestmentPythonRuntime extends Service {
    * @param id - Opaque preview id returned by a stored or uploaded inspection.
    */
   @Remote('backup-preview-cancel')
-  backupPreviewCancel(id: string): void { this.backups.cancelPreview(id) }
+  backupPreviewCancel(id: string): void {
+    backupRemote(() => this.backups.cancelPreview(id), '无法取消导入预览，请稍后重试。')
+  }
 
   /**
    * Apply a preview with user-selected conflict rules; the source remains untouched.
@@ -452,7 +480,10 @@ export class InvestmentPythonRuntime extends Service {
     rules: Partial<Record<BackupCategory, BackupConflictRule>>
     backupBefore: boolean
   }): Promise<{ status: 'applied'; categories: BackupCategory[] }> {
-    return this.backups.importPreview(input.previewId, input.rules, input.backupBefore)
+    return backupRemote(
+      () => this.backups.importPreview(input.previewId, input.rules, input.backupBefore),
+      '无法导入备份；当前数据保持不变，请稍后重试。',
+    )
   }
 
   /**
@@ -465,7 +496,7 @@ export class InvestmentPythonRuntime extends Service {
     status: 'reset'
     categories: BackupCategory[]
   }> {
-    return this.backups.reset(input)
+    return backupRemote(() => this.backups.reset(input), '无法清空投研数据；当前数据保持不变，请稍后重试。')
   }
 
   /**

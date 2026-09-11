@@ -10,6 +10,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import InvestmentPythonRuntime, { backendLogPaths, ownedBackendStatePath } from '../src/index.ts'
 import type { PythonBackendDefinition } from '../src/index.ts'
 
@@ -81,6 +82,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     const ctx = new Context()
     contexts.push(ctx)
     new FakeCredentials(ctx)
+    new DeploymentCapabilities(ctx, { surface: 'local-web' })
     const { default: LocalSubprocessRuntime } = await importLocalRuntime()
     await ctx.plugin(LocalSubprocessRuntime)
     const specs: SubprocessSpawnSpec[] = []

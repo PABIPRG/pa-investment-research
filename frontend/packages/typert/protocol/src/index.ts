@@ -37,6 +37,23 @@ export class TypertLookupFailure<Failure = unknown> extends Error {
   }
 }
 
+/** A business rejection whose already-redacted payload is safe for the Remote caller. */
+export class TypertRemoteFailure<Failure = unknown> extends Error {
+  /** Business-owned failure returned to the caller. */
+  readonly failure: Failure
+
+  /**
+   * Wrap one caller-safe failure while retaining an optional Host-only cause.
+   * @param failure - redacted failure owned by the invoked business service.
+   * @param cause - optional internal cause retained outside the wire payload.
+   */
+  constructor(failure: Failure, cause?: unknown) {
+    super('Typert Remote operation was rejected', cause === undefined ? undefined : { cause })
+    this.name = 'TypertRemoteFailure'
+    this.failure = failure
+  }
+}
+
 export type {
   InvocationDescriptor,
   InvocationParameterDescriptor,

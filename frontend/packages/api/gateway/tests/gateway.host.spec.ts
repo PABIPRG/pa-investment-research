@@ -10,6 +10,7 @@ import {
   Remote,
   RemoteScope,
   TypertLookupFailure,
+  TypertRemoteFailure,
   type InvocationDescriptor,
   type TypertContext,
   type TypertLookup,
@@ -990,7 +991,7 @@ describe('TypertGatewayService', () => {
       error: { code: 'internal' },
     })
     if (invalid.ok) throw new Error('invalid Remote payload unexpectedly succeeded')
-    expect(invalid.error.message).toMatch(/exactly one plain-object args field/)
+    expect(invalid.error.message).toBe('Remote operation failed')
 
     await expect(handler('goals/maybe', { args: {} }, signal)).resolves.toEqual({
       ok: true,
@@ -1005,13 +1006,13 @@ describe('TypertGatewayService', () => {
       const result = await handler(endpoint, { args: {} }, signal)
       expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
       if (result.ok) throw new Error('invalid Remote endpoint unexpectedly succeeded')
-      expect(result.error.message).toContain('invalid Remote endpoint')
+      expect(result.error.message).toBe('Remote operation failed')
     }
     for (const payload of [null, [], { args: {}, extra: true }, { only: true }, { args: null }, { args: [] }]) {
       const result = await handler('goals/create', payload, signal)
       expect(result).toMatchObject({ ok: false, error: { code: 'internal' } })
       if (result.ok) throw new Error('invalid Remote payload unexpectedly succeeded')
-      expect(result.error.message).toContain('plain-object args field')
+      expect(result.error.message).toBe('Remote operation failed')
     }
 
     service.businessError = 'non-error failure' as unknown as Error
@@ -1021,7 +1022,25 @@ describe('TypertGatewayService', () => {
       new AbortController().signal,
     )).resolves.toEqual({
       ok: false,
-      error: { code: 'internal', message: 'non-error failure', details: {} },
+      error: { code: 'internal', message: 'Remote operation failed', details: {} },
+    })
+
+    service.businessError = new TypertRemoteFailure({
+      code: 'resource-exhausted',
+      message: '已有过多上传，请先完成或取消当前上传',
+      details: {},
+    }, new Error('/private/server/backup-uploads'))
+    await expect(handler(
+      'goals/fail',
+      { args: { request: null } },
+      new AbortController().signal,
+    )).resolves.toEqual({
+      ok: false,
+      error: {
+        code: 'resource-exhausted',
+        message: '已有过多上传，请先完成或取消当前上传',
+        details: {},
+      },
     })
 
     // A business rejection observed while the carrier signal is already aborted
@@ -1129,6 +1148,7 @@ describe('TypertGatewayService', () => {
         }),
       })
       expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('no-store')
       await expect(response.json()).resolves.toEqual({
         type: 'server-response',
         rpcId: 'rpc-http',
@@ -1158,7 +1178,7 @@ describe('TypertGatewayService', () => {
           error: { code: 'internal' },
         },
       })
-      expect(JSON.stringify(invalidBody)).toContain('plain-object args field')
+      expect(JSON.stringify(invalidBody)).toContain('Remote operation failed')
 
       await removeStrict()
       strictActive = false
@@ -1182,7 +1202,7 @@ describe('TypertGatewayService', () => {
           error: { code: 'internal' },
         },
       })
-      expect(JSON.stringify(withdrawnBody)).toContain('strict definition was withdrawn')
+      expect(JSON.stringify(withdrawnBody)).toContain('Remote operation failed')
 
       const unclaimed = await fetch(`${server.origin}/api/legacy/list`, { method: 'POST' })
       expect(unclaimed.status).toBe(404)

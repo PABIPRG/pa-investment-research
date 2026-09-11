@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-11-deployment-capabilities-and-web-file-transfer.md
-2026-09-11-deployment-capabilities-and-web-file-transfer.md: a707173947b386d29e623cde8bc65854e0a3ec72
-2026-09-11-deployment-capabilities-and-web-file-transfer.zh.md: 6b2c7d21755634821b80d4e2712ec25e00c93153
+2026-09-11-deployment-capabilities-and-web-file-transfer.md: 84e73d33d9aa1fe003ff6bf401a7a3808abe273d
+2026-09-11-deployment-capabilities-and-web-file-transfer.zh.md: 984c8e3544dfa03f5e7c29fb6736060fee9b9008
