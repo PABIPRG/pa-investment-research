@@ -87,8 +87,24 @@ jobs:
           sudo chown 10001:10001 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
           sudo chmod 0400 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
           docker compose up -d --no-build
-          container_id=$(docker compose ps -q investment)
+          diagnose_startup() {
+            docker compose ps -a
+            failed_container_id=$(docker compose ps -aq investment)
+            if test -n "$failed_container_id"; then
+              docker inspect --format \
+                'status={{.State.Status}} exitCode={{.State.ExitCode}} error={{json .State.Error}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                "$failed_container_id"
+              docker logs "$failed_container_id"
+            fi
+            docker run --rm \
+              --mount source=pa-investment-research_dsh-data,target=/state,readonly \
+              --entrypoint sh "$DSH_IMAGE" -c \
+              'if test -e /state/investment-research/.container-instance.lock; then echo container-lock=present; else echo container-lock=absent; fi; if test -e /state/investment-research/application.lock; then echo application-lock=present; else echo application-lock=absent; fi'
+          }
+          trap diagnose_startup ERR
+          container_id=$(docker compose ps -aq investment)
           test -n "$container_id"
+          test "$(docker inspect --format '{{.State.Status}}' "$container_id")" = running
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" = true
           test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = dsh
           for attempt in $(seq 1 90); do
@@ -100,6 +116,7 @@ jobs:
           test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = healthy
           curl --fail --silent --show-error -H 'Host: investment.test:39080' http://127.0.0.1:39080/healthz
           test "$(docker compose ps -q investment | wc -l | tr -d ' ')" = 1
+          trap - ERR
 
       - name: Verify graceful stop
         env:
@@ -135,6 +152,7 @@ jobs:
           # TEST-NET-1 keeps loopback health requests direct; this smoke has no TLS proxy.
           DSH_WEB_TRUSTED_PROXIES: 192.0.2.1
         run: |
+          docker compose ps -a
           docker compose logs
           docker compose down --timeout 30
 
