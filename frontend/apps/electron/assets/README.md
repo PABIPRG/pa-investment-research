@@ -6,6 +6,8 @@ PAB-22 / APP-ICON-001：0.2.0 新版应用图标。原包保存在 `../icon-sour
 
 `app-icon.icns` 由 macOS `sips` 生成 16、32、128、256、512 像素的 1x/2x iconset 后经 `iconutil -c icns` 转换。`app-icon.ico` 包含 16、24、32、48、64、128、256 像素 PNG 帧；运行时使用 1024 像素 PNG。打包配置按目标平台显式传入 `.icns`、`.ico` 或 PNG 路径；组装前检查目标文件存在，并把必需格式被跳过的 Packager warning 升级为失败。
 
+0.2.0-alpha.2 的发布与 UAT 矩阵仅覆盖 macOS arm64/x64、Windows x64、Web/PWA 与移动触屏安装；Linux `.desktop` / hicolor 安装资源不属于本里程碑目标，本次不扩展 Linux installer。此处“跨平台”仅指上述已列目标，不代表 Linux 原生安装集成已验收。
+
 Web 复用原包的 favicon、触屏图标和 192/512 像素资源，路径为 `apps/web/public/icons/app-icon-001/`，以新路径隔离旧图标缓存。保留原 manifest 的应用名称、启动路径与显示模式。未声明 maskable：原包同名资源与普通图标相同，安全裁切尚未通过验收。
 
 验收应覆盖浏览器页签、触屏入口、macOS Dock/Finder、Windows 可执行文件及任务栏，以及安装升级后的系统图标缓存。
