@@ -1,4 +1,5 @@
 import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
@@ -75,7 +76,7 @@ export type {
 
 /** Services required by the profile-scoped investment shell. */
 export const inject = [
-  'slots', 'sessions', 'workspaces', 'layout', 'theme', 'conversation', 'investmentResearchRuntimeClient',
+  'slots', 'sessions', 'workspaces', 'layout', 'theme', 'conversation', 'connection', 'investmentResearchRuntimeClient',
 ]
 
 function assistantModuleForIntent(intent: AssistantIntent): AssistantModule {
@@ -98,6 +99,7 @@ function navigationModule(route: InvestmentRoute): InvestmentNavigationModule {
 
 /** Mount the investment navigation and workbench without replacing the shared conversation surface. */
 export function apply(ctx: ClientContext): void {
+  const connection = ctx.get('connection') as ConnectionHandle
   const state = new InvestmentUiState()
   const requestData: InvestmentShellInjected['requestData'] = request => (
     ctx.investmentResearchRuntimeClient.requestData(request)
@@ -469,6 +471,7 @@ export function apply(ctx: ClientContext): void {
 
   const shared = {
     hooks: { investmentUi: state },
+    hostDescription: connection.hostDescription,
     navigate,
   }
 

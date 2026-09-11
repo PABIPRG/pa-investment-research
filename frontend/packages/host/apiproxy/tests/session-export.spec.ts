@@ -14,7 +14,8 @@ import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionLineageNode } from '@deepseek-ai/dsh-session-query'
 import type { SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
-import ApiProxyService, { createApiProxy, toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
+import ApiProxyService, { toFetchHandler } from '@deepseek-ai/dsh-host-apiproxy'
+import { createApiProxy } from './create-api-proxy.ts'
 
 const sid = (id: string): SessionId => id as SessionId
 

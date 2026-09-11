@@ -353,7 +353,7 @@ export interface WebAuthConfig {
 }
 ```
 
-Source: [`packages/api/web-auth/src/index.ts:29`](../packages/api/web-auth/src/index.ts)
+Source: [`packages/api/web-auth/src/index.ts:28`](../packages/api/web-auth/src/index.ts)
 
 <a id="deepseek-aidsh-attachment-local"></a>
 
@@ -473,7 +473,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/client/hmr/src/index.ts:36`](../packages/client/hmr/src/index.ts)
+Source: [`packages/client/hmr/src/index.ts:37`](../packages/client/hmr/src/index.ts)
 
 <a id="deepseek-aidsh-client-modules"></a>
 
@@ -796,7 +796,7 @@ Source: [`packages/hooks/hooks-codex/src/index.ts:44`](../packages/hooks/hooks-c
 
 ## `@deepseek-ai/dsh-host-apiproxy`
 
-Requires: `agentDefaultModel` · `agents` · `attachments` · `directoryPicker` · `llm` · `sessions` · `subagents` · `sessionQuery` · `tools` · `userQuestions` · `workspaceRegistry`
+Requires: `agentDefaultModel` · `agents` · `attachments` · `deploymentCapabilities` · `llm` · `sessions` · `subagents` · `sessionQuery` · `tools` · `userQuestions` · `workspaceRegistry`
 
 ```ts config-catalog
 /** Gateway plugin configuration. */
@@ -824,7 +824,22 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/apiproxy/src/index.ts:41`](../packages/host/apiproxy/src/index.ts)
+Source: [`packages/host/apiproxy/src/index.ts:42`](../packages/host/apiproxy/src/index.ts)
+
+<a id="deepseek-aidsh-host-deployment-capabilities"></a>
+
+## `@deepseek-ai/dsh-host-deployment-capabilities`
+
+```ts config-catalog
+export interface Config {
+  /** Host-owned deployment classification fixed during process composition. */
+  surface?: DeploymentSurface
+}
+
+export type DeploymentSurface = 'cli' | 'local-web' | 'electron' | 'cloud-web'
+```
+
+Source: [`packages/host/deployment-capabilities/src/index.ts:19`](../packages/host/deployment-capabilities/src/index.ts)
 
 <a id="deepseek-aidsh-host-directory-picker-browse"></a>
 
@@ -870,7 +885,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/webserver/src/index.ts:60`](../packages/host/webserver/src/index.ts)
+Source: [`packages/host/webserver/src/index.ts:62`](../packages/host/webserver/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 
@@ -934,7 +949,7 @@ Source: [`packages/investment-research/market-watch/src/index.ts:42`](../package
 
 ## `@deepseek-ai/dsh-investment-python-runtime`
 
-Requires: `credentials` · `subprocess`
+Requires: `credentials` · `deploymentCapabilities` · `subprocess`
 
 ```ts config-catalog
 /** Investment Python Runtime deployment configuration. */
@@ -958,7 +973,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/investment-research/python-runtime/src/types.ts:268`](../packages/investment-research/python-runtime/src/types.ts)
+Source: [`packages/investment-research/python-runtime/src/types.ts:283`](../packages/investment-research/python-runtime/src/types.ts)
 
 <a id="deepseek-aidsh-investment-stock-analysis"></a>
 
@@ -3242,7 +3257,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-fs-e2b` — requires `e2b` ([`packages/e2b/fs-e2b/src/index.ts`](../packages/e2b/fs-e2b/src/index.ts))
 - `@deepseek-ai/dsh-fs-observation-policy` ([`packages/fs/fs-observation-policy/src/index.ts`](../packages/fs/fs-observation-policy/src/index.ts))
 - `@deepseek-ai/dsh-goal-round-driver` — requires `agents` · `goals` · `sessions` ([`packages/goal/goal-round-driver/src/index.ts`](../packages/goal/goal-round-driver/src/index.ts))
-- `@deepseek-ai/dsh-host-directory-picker-auto` — requires `webServer` · `loader` ([`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts))
+- `@deepseek-ai/dsh-host-directory-picker-auto` — requires `webServer` · `loader` · `deploymentCapabilities` ([`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts))
 - `@deepseek-ai/dsh-host-directory-picker-native` ([`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts))
 - `@deepseek-ai/dsh-host-plugin-inventory` — requires `loader` ([`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts))
 - `@deepseek-ai/dsh-llm` ([`packages/llm/llm/src/index.ts`](../packages/llm/llm/src/index.ts))

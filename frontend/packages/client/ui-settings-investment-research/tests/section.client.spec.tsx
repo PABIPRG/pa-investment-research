@@ -6,6 +6,7 @@ import {
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import type { BackupCategory, BackupListItem, BackupPreview } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { InvestmentReadinessSection } from '../src/client/InvestmentReadinessSection.tsx'
 import type {
@@ -15,6 +16,8 @@ import { createInvestmentReadinessStore } from '../src/client/store.ts'
 import type { InvestmentReadinessSnapshot, InvestmentRestartResult } from '../src/client/store.ts'
 import { en, zh } from '../src/client/locales.ts'
 import type { InvestmentReadinessKey } from '../src/client/locales.ts'
+
+type HostDescriptionSource = ConnectionHandle['hostDescription']
 
 afterEach(cleanup)
 
@@ -111,11 +114,15 @@ function mount(
     loadProjectModels?: () => Promise<ProjectModelSettings>
     saveProjectModel?: InvestmentReadinessSectionInjected['saveProjectModel']
     backupList?: () => Promise<BackupListItem[]>
+    backupDownloadBegin?: InvestmentReadinessSectionInjected['backupDownloadBegin']
+    backupDownloadChunk?: InvestmentReadinessSectionInjected['backupDownloadChunk']
+    backupDownloadCancel?: InvestmentReadinessSectionInjected['backupDownloadCancel']
     backupPreviewStored?: (filename: string) => Promise<BackupPreview>
     backupReset?: InvestmentReadinessSectionInjected['backupReset']
     pickBackupDirectory?: () => Promise<string | null>
     reloadPage?: () => void
     requestData?: InvestmentReadinessSectionInjected['requestData']
+    cloud?: boolean
   } = {},
 ) {
   const readiness = createSnapshotStore(snapshot)
@@ -135,7 +142,9 @@ function mount(
   })))
   const dictionary = overrides.locale === 'en' ? en : zh
   const backup = {
-    backupDescribe: vi.fn(async () => ({ directory: '/Users/example/投研备份', format: 'pabackup' as const, scheduledBackup: false as const })),
+    backupDescribe: vi.fn(async () => overrides.cloud === true
+      ? ({ location: { kind: 'managed' as const }, format: 'pabackup' as const, scheduledBackup: false as const })
+      : ({ directory: '/Users/example/投研备份', location: { kind: 'local' as const, directory: '/Users/example/投研备份' }, format: 'pabackup' as const, scheduledBackup: false as const })),
     backupSetDirectory: vi.fn(async (directory: string) => ({ directory })),
     backupCreate: vi.fn(async () => ({
       filename: '投研备份-全量数据-2026-09-07_14-35-20.pabackup',
@@ -143,6 +152,9 @@ function mount(
     })),
     backupList: vi.fn(overrides.backupList ?? (async () => [])),
     backupDelete: vi.fn(async () => {}),
+    backupDownloadBegin: vi.fn(overrides.backupDownloadBegin ?? (async (filename: string) => ({ id: 'download-1', filename, size: 4, chunkSize: 4 }))),
+    backupDownloadChunk: vi.fn(overrides.backupDownloadChunk ?? (async () => ({ base64: 'dGVzdA==', nextOffset: 4, done: true }))),
+    backupDownloadCancel: vi.fn(overrides.backupDownloadCancel ?? (async () => {})),
     backupPreviewStored: vi.fn(overrides.backupPreviewStored),
     backupUploadBegin: vi.fn(),
     backupUploadChunk: vi.fn(),
@@ -154,6 +166,21 @@ function mount(
     openBackupDirectory: vi.fn(async () => {}),
     reloadPage: vi.fn(overrides.reloadPage),
   }
+  const requestData = vi.fn(overrides.requestData ?? (async () => ({
+    backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' },
+  })))
+  const cloudDescription = {
+    version: 'test', attachedSessions: 0, canOpenPath: false,
+    deployment: {
+      surface: 'cloud-web' as const, browserFileTransfer: true, hostDirectories: false,
+      openHostPath: false, brokerSync: false, nativeHoldings: false,
+      holdingsProviders: ['manual' as const],
+    },
+  }
+  const hostDescription: HostDescriptionSource | undefined = overrides.cloud === true ? {
+    subscribe: () => () => {},
+    getSnapshot: () => cloudDescription,
+  } : undefined
   const unusedHook = (() => { throw new Error('unused standing hook') }) as never
   const view = render(<InvestmentReadinessSection
     close={() => {}}
@@ -169,9 +196,8 @@ function mount(
     refresh={refresh}
     loadProjectModels={loadProjectModels}
     saveProjectModel={saveProjectModel}
-    requestData={vi.fn(overrides.requestData ?? (async () => ({
-      backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' },
-    })))}
+    requestData={requestData}
+    {...hostDescription === undefined ? {} : { hostDescription }}
     {...backup}
     t={key => dictionary[key as InvestmentReadinessKey]}
   />)
@@ -187,6 +213,7 @@ function mount(
     loadProjectModels,
     saveProjectModel,
     backup,
+    requestData,
   }
 }
 
@@ -213,6 +240,56 @@ describe('InvestmentReadinessSection', () => {
     )).toBeTruthy()
     expect(english.container.textContent?.toLowerCase()).not.toContain('workspace')
     expect(english.container.textContent?.toLowerCase()).not.toContain('scheduled backup')
+  })
+
+  it('uses managed storage and a manual-only holdings policy in cloud Web', async () => {
+    const filename = '投研备份-全量数据-2026-09-11_09-30-00.pabackup'
+    const { requestData } = mount(CONFIGURED, {
+      cloud: true,
+      backupList: async () => [{
+        filename,
+        size: 4,
+        modifiedAt: '2026-09-11T01:30:00.000Z',
+        status: 'ready',
+        manifest: {
+          format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-11T01:30:00.000Z',
+          createdByAppVersion: '0.1.0', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+        },
+      }],
+    })
+
+    expect(await screen.findByText('由云端安全托管；可在下方下载或导入备份。')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '复制路径' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '打开文件夹' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '更改位置' })).toBeNull()
+    expect(screen.getByRole('button', { name: '下载' })).toBeTruthy()
+    expect(screen.getByText('云端不会连接或扫描券商客户端；请使用手工录入或批量导入。')).toBeTruthy()
+    expect(requestData).not.toHaveBeenCalled()
+  })
+
+  it('aborts an in-flight backup transfer and releases its Host session on unmount', async () => {
+    const filename = '投研备份-全量数据-2026-09-11_09-30-00.pabackup'
+    let chunkSignal: AbortSignal | undefined
+    const view = mount(CONFIGURED, {
+      backupList: async () => [{ filename, size: 4, modifiedAt: '2026-09-11T01:30:00.000Z', status: 'ready', manifest: {
+        format: 'pa-investment-backup', formatVersion: 1, createdAt: '2026-09-11T01:30:00.000Z',
+        createdByAppVersion: '0.1.0', reason: 'manual', scope: ['holdings'], contents: [], domains: [],
+      } }],
+      backupDownloadChunk: (_input, signal) => {
+        chunkSignal = signal
+        return new Promise((_, reject) => {
+          signal?.addEventListener('abort', () => { reject(new DOMException('Aborted', 'AbortError')) }, { once: true })
+        })
+      },
+    })
+    expect(await screen.findByText(filename)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '下载' }))
+    await waitFor(() => { expect(view.backup.backupDownloadChunk).toHaveBeenCalledOnce() })
+
+    view.unmount()
+
+    await waitFor(() => { expect(chunkSignal?.aborted).toBe(true) })
+    await waitFor(() => { expect(view.backup.backupDownloadCancel).toHaveBeenCalledWith('download-1') })
   })
 
   it('shows the project default model, explains module routing, and persists a new default', async () => {

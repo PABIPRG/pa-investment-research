@@ -19,6 +19,21 @@ export type InvestmentBackendId = 'trading-core' | 'market-watch' | 'industry-ch
 /** Backend ownership modes selected by plugin configuration. */
 export type InvestmentBackendMode = 'managed' | 'external'
 
+/** Backup storage description that never exposes a cloud Host path. */
+export type BackupDescription = Readonly<
+  | {
+    readonly directory: string
+    readonly location?: { readonly kind: 'local'; readonly directory: string }
+    readonly format: 'pabackup'
+    readonly scheduledBackup: false
+  }
+  | {
+    readonly location: { readonly kind: 'managed' }
+    readonly format: 'pabackup'
+    readonly scheduledBackup: false
+  }
+>
+
 /** Capability facts published after one backend's business tools are registered. */
 export interface InvestmentCapabilityDefinition {
   /** Backend whose tools implement this capability. */

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { BackupService } from '../src/backup-service.ts'
+import { BackupService, readStableDownloadSnapshot } from '../src/backup-service.ts'
 import type { BackupBackendOperation } from '../src/backup-service.ts'
 import type { DomainSnapshot } from '../src/backup-archive.ts'
 
@@ -15,6 +15,7 @@ async function home(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.useRealTimers()
   const { rm } = await import('node:fs/promises')
   await Promise.all(homes.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
@@ -48,6 +49,17 @@ function tradingSnapshot(categories: string[]): DomainSnapshot {
 }
 
 describe('BackupService storage', () => {
+  it('rejects growth observed after opening before allocating or reading the file', async () => {
+    const expected = { dev: 1, ino: 2, size: 4, isFile: () => true }
+    const handle = {
+      stat: vi.fn(async () => ({ ...expected, size: 64 * 1024 * 1024 + 1 })),
+      read: vi.fn(),
+    }
+
+    await expect(readStableDownloadSnapshot(handle as never, expected as never)).rejects.toThrow(/下载前发生变化/)
+    expect(handle.read).not.toHaveBeenCalled()
+  })
+
   it('uses the DSH home default, persists an explicit directory, and scans readable and damaged backups', async () => {
     const dshHome = await home()
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
@@ -90,6 +102,69 @@ describe('BackupService storage', () => {
     await expect(service.delete('../secrets.pabackup')).rejects.toThrow(/文件名/)
     await service.delete(created.filename)
     await expect(stat(created.path)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('downloads only a validated direct backup through bounded ordered chunks', async () => {
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        throw new Error(`unexpected ${operation}`)
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+    const expected = await readFile(created.path)
+    const download = await service.beginDownload(created.filename)
+    const chunks: Buffer[] = []
+    let offset = 0
+    while (offset < download.size) {
+      const chunk = service.downloadChunk({ id: download.id, offset })
+      chunks.push(Buffer.from(chunk.base64, 'base64'))
+      offset = chunk.nextOffset
+    }
+    expect(Buffer.concat(chunks)).toEqual(expected)
+    expect(() => service.downloadChunk({ id: download.id, offset })).toThrow(/失效/)
+    const invalid = await service.beginDownload(created.filename)
+    expect(() => service.downloadChunk({ id: invalid.id, offset: 1 })).toThrow(/位置无效/)
+    expect(() => service.downloadChunk({ id: invalid.id, offset: 0 })).toThrow(/失效/)
+    await expect(service.beginDownload('../escape.pabackup')).rejects.toThrow(/文件名/)
+    service.dispose()
+  })
+
+  it('reserves download capacity atomically and actively expires abandoned snapshots', async () => {
+    vi.useFakeTimers()
+    let nowMs = Date.parse('2026-09-11T00:00:00.000Z')
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome,
+      appVersion: '0.1.0-rc.12',
+      now: () => new Date(nowMs),
+      request: async (_backend, operation, input) => {
+        if (operation === 'export') return tradingSnapshot(requestCategories(input))
+        throw new Error(`unexpected ${operation}`)
+      },
+    })
+    const created = await service.create({ categories: ['holdings'], reason: 'manual' })
+
+    const starts = await Promise.allSettled([
+      service.beginDownload(created.filename),
+      service.beginDownload(created.filename),
+      service.beginDownload(created.filename),
+    ])
+    expect(starts.filter(result => result.status === 'fulfilled')).toHaveLength(2)
+    expect(starts.filter(result => result.status === 'rejected')).toHaveLength(1)
+    const active = starts.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+    service.cancelDownload(active[0]!.id)
+    service.cancelDownload(active[1]!.id)
+
+    await expect(service.beginDownload('missing.pabackup')).rejects.toThrow()
+    const abandoned = await service.beginDownload(created.filename)
+    nowMs += 24 * 60 * 60 * 1000 + 1
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000 + 1)
+    expect(() => service.downloadChunk({ id: abandoned.id, offset: 0 })).toThrow(/失效/)
+    service.dispose()
   })
 
   it('streams an external backup through a bounded temporary file and enforces chunk order', async () => {

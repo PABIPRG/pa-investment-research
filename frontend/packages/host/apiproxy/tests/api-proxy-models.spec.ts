@@ -22,7 +22,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
-import { createApiProxy } from '../src/api-proxy.ts'
+import { createApiProxy } from './create-api-proxy.ts'
 
 let nextRpc = 1
 function request<P>(payload: P): RpcRequest<P> {

@@ -3,6 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { remoteMethods } from '@deepseek-ai/dsh-typert-protocol'
+import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
 import InvestmentPythonRuntime from '../src/index.ts'
 import type { InvestmentRestartResult, PythonBackendDefinition } from '../src/types.ts'
 
@@ -31,8 +32,17 @@ const externalBackend: PythonBackendDefinition = {
 function runtimeWith(appRestart?: () => void): InvestmentPythonRuntime {
   const ctx = new Context()
   new StubCredentials(ctx)
+  new DeploymentCapabilities(ctx, { surface: 'cli' })
   ctx.provide('subprocess', {} as never)
   if (appRestart !== undefined) ctx.provide('appRestart', appRestart)
+  return new InvestmentPythonRuntime(ctx)
+}
+
+function cloudRuntime(): InvestmentPythonRuntime {
+  const ctx = new Context()
+  new StubCredentials(ctx)
+  new DeploymentCapabilities(ctx, { surface: 'cloud-web' })
+  ctx.provide('subprocess', {} as never)
   return new InvestmentPythonRuntime(ctx)
 }
 
@@ -41,6 +51,17 @@ afterEach(() => {
 })
 
 describe('InvestmentPythonRuntime Remote', () => {
+  it('keeps manual holdings and managed backups while rejecting cloud broker and directory operations', async () => {
+    const runtime = cloudRuntime()
+    await expect(runtime.requestData({ operation: 'trading-core.holdings-sync' })).rejects.toThrow(/云端 Web/)
+    await expect(runtime.requestData({ operation: 'trading-core.holdings-user-config' })).rejects.toThrow(/云端 Web/)
+    await expect(runtime.backupDescribe()).resolves.toEqual({
+      location: { kind: 'managed' }, format: 'pabackup', scheduledBackup: false,
+    })
+    await expect(runtime.backupSetDirectory('/server/secret')).rejects.toThrow(/托管备份存储/)
+    await expect(runtime.nativeHoldings({ action: 'read', account_mode: 'simulated' })).rejects.toThrow(/不提供原生/)
+  })
+
   it('binds the investment Runtime namespace and exports only the allow-listed aliases', () => {
     const runtime = runtimeWith()
 
@@ -53,6 +74,9 @@ describe('InvestmentPythonRuntime Remote', () => {
       { method: 'requestData', exportName: 'request-data', invocation: { kind: 'direct' } },
       { method: 'backupDescribe', exportName: 'backup-describe', invocation: { kind: 'direct' } },
       { method: 'backupSetDirectory', exportName: 'backup-set-directory', invocation: { kind: 'direct' } },
+      { method: 'backupDownloadBegin', exportName: 'backup-download-begin', invocation: { kind: 'direct' } },
+      { method: 'backupDownloadChunk', exportName: 'backup-download-chunk', invocation: { kind: 'direct' } },
+      { method: 'backupDownloadCancel', exportName: 'backup-download-cancel', invocation: { kind: 'direct' } },
       { method: 'backupCreate', exportName: 'backup-create', invocation: { kind: 'direct' } },
       { method: 'backupList', exportName: 'backup-list', invocation: { kind: 'direct' } },
       { method: 'backupDelete', exportName: 'backup-delete', invocation: { kind: 'direct' } },
@@ -61,6 +85,7 @@ describe('InvestmentPythonRuntime Remote', () => {
       { method: 'backupUploadChunk', exportName: 'backup-upload-chunk', invocation: { kind: 'direct' } },
       { method: 'backupUploadInspect', exportName: 'backup-upload-inspect', invocation: { kind: 'direct' } },
       { method: 'backupUploadCancel', exportName: 'backup-upload-cancel', invocation: { kind: 'direct' } },
+      { method: 'backupPreviewCancel', exportName: 'backup-preview-cancel', invocation: { kind: 'direct' } },
       { method: 'backupImport', exportName: 'backup-import', invocation: { kind: 'direct' } },
       { method: 'backupReset', exportName: 'backup-reset', invocation: { kind: 'direct' } },
       { method: 'requestRestart', exportName: 'request-restart', invocation: { kind: 'direct' } },

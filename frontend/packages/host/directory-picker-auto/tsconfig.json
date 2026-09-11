@@ -21,6 +21,9 @@
       "path": "../webserver"
     },
     {
+      "path": "../deployment-capabilities"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     }
   ]

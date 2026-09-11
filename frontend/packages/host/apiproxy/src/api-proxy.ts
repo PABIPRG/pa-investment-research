@@ -97,7 +97,8 @@ import type {
   AskUserQuestionAnswer, AskUserQuestionItem, AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
-import { DirectoryPickerError } from '@deepseek-ai/dsh-host-directory-picker'
+import { DirectoryPickerError, type DirectoryPicker } from '@deepseek-ai/dsh-host-directory-picker'
+import type { DeploymentCapabilitySnapshot } from '@deepseek-ai/dsh-host-deployment-capabilities'
 import {
   ApiRemoteSessionNotFound as SessionNotFound,
   ApiRemoteSubagentSessionOwnership as SubagentSessionOwnership,
@@ -501,7 +502,11 @@ function sessionListUpdatedAt(header: SessionHeader, metadata: SessionListMetada
 }
 
 /** Shared Session-header projection for list baselines and creation frames. */
-function sessionListFields(header: SessionHeader, events: readonly SessionEvent[] = []): {
+function sessionListFields(
+  header: SessionHeader,
+  events: readonly SessionEvent[] = [],
+  exposeCwd = true,
+): {
   parentSessionId?: SessionId
   origin?: 'subagent'
   cwd?: string
@@ -514,20 +519,20 @@ function sessionListFields(header: SessionHeader, events: readonly SessionEvent[
   return {
     ...header.parentSession === undefined ? {} : { parentSessionId: header.parentSession },
     ...header.origin === undefined ? {} : { origin: header.origin },
-    ...header.cwd === undefined ? {} : { cwd: header.cwd },
+    ...exposeCwd && header.cwd !== undefined ? { cwd: header.cwd } : {},
     ...agentPreset === undefined ? {} : { agentPreset },
   }
 }
 
 /** SessionSummary projection for attached (in-memory) sessions. */
-function summarize(session: Session, running: boolean): SessionSummary {
+function summarize(session: Session, running: boolean, exposeCwd = true): SessionSummary {
   const metadata = sessionListMetadata(session.events)
   return {
     sessionId: session.id,
     updatedAt: sessionListUpdatedAt(session.header, metadata),
     running,
     blank: metadata.blank,
-    ...sessionListFields(session.header, session.events),
+    ...sessionListFields(session.header, session.events, exposeCwd),
   }
 }
 
@@ -577,6 +582,7 @@ async function summarizeCold(
   metadata: SessionListMetadata | undefined,
   blankProbeMaxBytes: number,
   signal?: AbortSignal,
+  exposeCwd = true,
 ): Promise<SessionSummary> {
   const probed = metadata?.blank === false
     ? undefined
@@ -589,7 +595,7 @@ async function summarizeCold(
     // Header-only: reading the log for a blank-window preset switch would
     // defeat the same index read, and attaching the session replaces this row
     // with `summarize()`, which resolves the switch from the events.
-    ...sessionListFields(meta),
+    ...sessionListFields(meta, [], exposeCwd),
   }
 }
 
@@ -620,6 +626,10 @@ export interface ApiProxyDefaults {
   saveDefaultModelSelection?: (selection: ModelSelection) => Promise<void>
   /** Default project directory for new sessions whose create request carries no cwd. */
   cwd: string
+  /** Client-safe Host-declared deployment policy. */
+  deploymentCapabilities: DeploymentCapabilitySnapshot
+  /** Whether host.describe may reveal the process working directory. */
+  exposeCwd?: boolean
   /** Native open-with-default-application; injectable for carrier tests. */
   openPath?: (path: string, signal: AbortSignal) => Promise<void>
   /** Native text-editor handoff; injectable for settings-document tests. */
@@ -1042,10 +1052,10 @@ function workspaceNotFound<T>(request: RpcRequest<unknown>, workspaceId: string)
 }
 
 /** Wire projection of one workspace entity (the workspace.* value row). */
-function workspaceView(workspace: Workspace): WorkspaceView {
+function workspaceView(workspace: Workspace, exposePath = true): WorkspaceView {
   return {
     workspaceId: workspace.id,
-    path: workspace.path,
+    ...exposePath ? { path: workspace.path } : {},
     title: workspace.title,
     sessionIds: [...workspace.sessionIds],
     createdAt: workspace.createdAt,
@@ -1054,11 +1064,11 @@ function workspaceView(workspace: Workspace): WorkspaceView {
 }
 
 /** Wire projection of the durable record carried by `domain/changed`. */
-function changedWorkspaceView(workspaceId: string, value: unknown): WorkspaceView {
+function changedWorkspaceView(workspaceId: string, value: unknown, exposePath = true): WorkspaceView {
   const record: WorkspaceRecord = workspaceRecord.parse(value)
   return {
     workspaceId: workspaceId as WorkspaceId,
-    path: record.path,
+    ...exposePath ? { path: record.path } : {},
     title: record.title,
     sessionIds: [...record.sessionIds],
     createdAt: record.createdAt,
@@ -1073,6 +1083,13 @@ function changedWorkspaceView(workspaceId: string, value: unknown): WorkspaceVie
  * @returns the ApiProxy implementation.
  */
 export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiProxy {
+  const deploymentCapabilityCandidate = Reflect.get(defaults, 'deploymentCapabilities') as
+    | DeploymentCapabilitySnapshot
+    | undefined
+  if (deploymentCapabilityCandidate === undefined) {
+    throw new Error('api-proxy: deploymentCapabilities is required')
+  }
+  const deploymentCapabilities = deploymentCapabilityCandidate
   const sessionExportCompressionLevel = defaults.sessionExportCompressionLevel
     ?? DEFAULT_SESSION_LOG_COMPRESSION_LEVEL
   const coldBlankProbeMaxBytes = defaults.coldBlankProbeMaxBytes
@@ -1697,7 +1714,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       const agent = ctx.agents.get(session.id)
       const projections = listProjectionsFor(ctx, session.header, session)
       return {
-        ...summarize(session, agent?.status === 'running'),
+        ...summarize(session, agent?.status === 'running', canExposeHostPaths()),
         ...projections === undefined ? {} : { projections },
       }
     }
@@ -1724,6 +1741,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               projections?.values.sessionListMetadata,
               coldBlankProbeMaxBytes,
               signal,
+              canExposeHostPaths(),
             )
             const attachedSession = ctx.sessions.get(meta.id)
             if (attachedSession !== undefined) return summarizeAttached(attachedSession)
@@ -1884,9 +1902,20 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
 
   /** Whether this deployment can hand a path to a native opener at all. */
   function canOpenPaths(): boolean {
+    if (!deploymentCapabilities.openHostPath) return false
     if (defaults.canOpenPath !== undefined) return defaults.canOpenPath()
     // An injected opener is by definition usable; otherwise ask the platform.
     return defaults.openPath !== undefined || canOpenNativePath()
+  }
+
+  /** Whether browser-facing projections may reveal canonical Host paths. */
+  function canExposeHostPaths(): boolean {
+    return defaults.exposeCwd !== false
+      && deploymentCapabilities.hostDirectories
+  }
+
+  function directoryPicker(): DirectoryPicker | undefined {
+    return ctx.get('directoryPicker')
   }
 
   /** Missing-service report shared by the credentials domain. */
@@ -2105,6 +2134,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async create(request) {
+        if (request.payload.cwd !== undefined && !canExposeHostPaths()) {
+          return err(request, {
+            code: 'internal',
+            message: 'custom Host working directories are unavailable in this deployment',
+            details: {},
+          })
+        }
         const sessionId = request.payload.sessionId ?? `session-${randomUUID()}` as SessionId
         let workspace: Workspace | undefined
         if (request.payload.workspaceId !== undefined) {
@@ -2136,6 +2172,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           const refused = presetFailure(request, error)
           if (refused !== undefined) return refused
           if (error instanceof SessionCwdConflict) {
+            if (!canExposeHostPaths()) {
+              return err(request, {
+                code: 'internal',
+                message: `session "${sessionId}" conflicts with its managed deployment workspace`,
+                details: { sessionId },
+              })
+            }
             return err(request, {
               code: 'session-conflict',
               message: error.message,
@@ -2742,16 +2785,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     workspace: {
       list(request) {
         return Promise.resolve(ok(request, {
-          items: ctx.workspaceRegistry.list().map(workspaceView),
+          items: ctx.workspaceRegistry.list().map(workspace => workspaceView(workspace, canExposeHostPaths())),
           archivedSessionIds: [...ctx.workspaceRegistry.archivedSessionIds],
         }))
       },
 
       async create(request) {
         const { path } = request.payload
+        if (!canExposeHostPaths()) {
+          return err(request, {
+            code: 'internal',
+            message: 'adopting Host directories is unavailable in this deployment',
+            details: {},
+          })
+        }
         try {
           const { workspace, created } = await ensureWorkspace(path)
-          return ok(request, { workspace: workspaceView(workspace), created })
+          return ok(request, { workspace: workspaceView(workspace, canExposeHostPaths()), created })
         } catch (error: unknown) {
           // The registry rejects a path that does not resolve to an existing
           // directory (realpath ENOENT / not-a-directory) — the business
@@ -2793,7 +2843,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           }
           throw error
         }
-        return ok(request, { workspace: workspaceView(workspace) })
+        return ok(request, { workspace: workspaceView(workspace, canExposeHostPaths()) })
       },
 
       async delete(request) {
@@ -2839,7 +2889,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             },
           })
         }
-        return ok(request, { workspace: workspaceView(workspace) })
+        return ok(request, { workspace: workspaceView(workspace, canExposeHostPaths()) })
       },
 
       async archiveSession(request) {
@@ -2868,18 +2918,23 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           version: '0.0.1',
           // Same source as session.create's fallback: the UI's default project
           // must match where an unspecified-cwd session actually lands.
-          cwd: defaults.cwd,
+          ...(!canExposeHostPaths() ? {} : { cwd: defaults.cwd }),
           // Read live for the same reason: this is what the NEXT session will
           // start from, so a saved default has to be what it reports.
           provider: selection.provider,
           model: selection.model,
           attachedSessions: ctx.agents.list().length,
           canOpenPath: canOpenPaths(),
+          deployment: deploymentCapabilities,
         }))
       },
 
       async pickDirectory(request, signal) {
-        const capability = ctx.directoryPicker.capability()
+        const picker = directoryPicker()
+        if (picker === undefined || !deploymentCapabilities.hostDirectories) {
+          return err(request, { code: 'directory-picker-unavailable', message: 'directory picker is unavailable in this deployment', details: { capability: 'none' } })
+        }
+        const capability = picker.capability()
         if (capability.kind !== 'native') {
           return err(request, {
             code: 'directory-picker-unavailable',
@@ -2907,7 +2962,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async listDirectory(request, signal) {
-        const capability = ctx.directoryPicker.capability()
+        const picker = directoryPicker()
+        if (picker === undefined || !deploymentCapabilities.hostDirectories) {
+          return err(request, { code: 'directory-picker-unavailable', message: 'directory browser is unavailable in this deployment', details: { capability: 'none' } })
+        }
+        const capability = picker.capability()
         if (capability.kind !== 'browse') {
           return err(request, {
             code: 'directory-picker-unavailable',
@@ -2930,7 +2989,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async createDirectory(request) {
-        const capability = ctx.directoryPicker.capability()
+        const picker = directoryPicker()
+        if (picker === undefined || !deploymentCapabilities.hostDirectories) {
+          return err(request, { code: 'directory-picker-unavailable', message: 'directory browser is unavailable in this deployment', details: { capability: 'none' } })
+        }
+        const capability = picker.capability()
         if (capability.kind !== 'browse') {
           return err(request, {
             code: 'directory-picker-unavailable',
@@ -2946,6 +3009,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async openPath(request, signal) {
+        if (!canOpenPaths()) return err(request, { code: 'internal', message: 'path opening is unavailable in this deployment', details: {} })
         return openPath(request, request.payload.path, signal)
       },
     },
@@ -3110,6 +3174,13 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         const { agentPreset } = request.payload
         const presets = ctx.get('agentPresets')
         if (presets === undefined) return err(request, noRoster(agentPreset))
+        if (!deploymentCapabilities.openHostPath) {
+          return err(request, {
+            code: 'internal',
+            message: 'opening Host agent-preset files is unavailable in this deployment',
+            details: {},
+          })
+        }
         try {
           const preset = await presets.resolve(agentPreset)
           // Same line as copy/remove draw: the shipped install is not the
@@ -3203,13 +3274,20 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         if (settings === undefined) return Promise.resolve(err(request, settingsAbsent()))
         return Promise.resolve(ok(request, {
           writable: settings.writable,
-          hasDocument: settings.documentPath !== undefined,
+          hasDocument: canOpenPaths() && settings.documentPath !== undefined,
           namespaces: settings.describe({ redactSecrets: true }).map(namespaceView),
         }))
       },
       async openDocument(request, signal) {
         const settings = ctx.get('settings')
         if (settings === undefined) return err(request, settingsAbsent())
+        if (!canOpenPaths()) {
+          return err(request, {
+            code: 'internal',
+            message: 'opening the Host settings document is unavailable in this deployment',
+            details: {},
+          })
+        }
         if (isAborted(signal)) {
           return err(request, {
             code: 'cancelled',
@@ -3488,7 +3566,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               // has run no turn yet, so this is constantly true in practice.
               blank: sessionBlank(session),
               // Including cwd lets the client group the new session without refreshing the list.
-              ...sessionListFields(session.header, session.events),
+              ...sessionListFields(session.header, session.events, canExposeHostPaths()),
             }))
           }),
           ctx.on('session/disposed', (session: Session) => {
@@ -3515,7 +3593,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                   throw new Error(`committed workspace registry references missing workspace "${workspaceId}"`)
                 }
                 committedWorkspaceIds.add(workspaceId)
-                queue.push(frame({ type: 'host/workspace-changed', workspace: workspaceView(workspace) }))
+                queue.push(frame({
+                  type: 'host/workspace-changed',
+                  workspace: workspaceView(workspace, canExposeHostPaths()),
+                }))
               }
               committedWorkspaceOrder = [...state.workspaceIds]
               if (orderChanged) {
@@ -3548,7 +3629,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             // A new entity's first put waits for the global registry write above.
             queue.push(frame({
               type: 'host/workspace-changed',
-              workspace: changedWorkspaceView(change.key, change.value),
+              workspace: changedWorkspaceView(change.key, change.value, canExposeHostPaths()),
             }))
           }),
           // Allowlisted host events ride one verbatim wrapper frame each. The

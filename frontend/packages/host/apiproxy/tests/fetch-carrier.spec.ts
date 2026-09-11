@@ -643,6 +643,7 @@ describe('handler carrier-layer statuses', () => {
     const body = JSON.stringify({ type: 'client-request', rpcId: 'r-12', method: 'session.list', payload: {} })
     const response = await handler.fetch('http://x/api/session.list', { method: 'POST', headers: { 'content-type': 'application/json' }, body })
     expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
   })
 })
 

@@ -131,6 +131,12 @@ async function bench(): Promise<Bench> {
       },
     }
     if (method.endsWith('/backup-list')) return []
+    if (method.endsWith('/backup-download-begin')) return {
+      id: 'download', filename: '投研备份.pabackup', size: 4, chunkSize: 4,
+    }
+    if (method.endsWith('/backup-download-chunk')) return {
+      base64: 'dGVzdA==', nextOffset: 4, done: true,
+    }
     if (method.endsWith('/backup-upload-begin')) return { id: 'upload', chunkSize: 262144 }
     if (method.endsWith('/backup-upload-chunk')) return { received: 42 }
     if (method.endsWith('/backup-preview-stored') || method.endsWith('/backup-upload-inspect')) return {
@@ -199,8 +205,12 @@ describe('investment research Runtime Client facade', () => {
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-create',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-delete',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-describe',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-download-begin',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-download-cancel',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-download-chunk',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-import',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-list',
+      '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-preview-cancel',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-preview-stored',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-reset',
       '@deepseek-ai/dsh-investment-python-runtime#investmentPythonRuntime/backup-set-directory',
@@ -223,8 +233,12 @@ describe('investment research Runtime Client facade', () => {
       'backupCreate',
       'backupDelete',
       'backupDescribe',
+      'backupDownloadBegin',
+      'backupDownloadCancel',
+      'backupDownloadChunk',
       'backupImport',
       'backupList',
+      'backupPreviewCancel',
       'backupPreviewStored',
       'backupReset',
       'backupSetDirectory',
@@ -255,7 +269,11 @@ describe('investment research Runtime Client facade', () => {
     await facade.backupSetDirectory('/safe/backups')
     await facade.backupCreate({ categories: ['holdings'], reason: 'manual' })
     await facade.backupList()
+    await facade.backupDownloadBegin('投研备份.pabackup')
+    await facade.backupDownloadChunk({ id: 'download', offset: 0 })
+    await facade.backupDownloadCancel('download')
     await facade.backupPreviewStored('投研备份.pabackup')
+    await facade.backupPreviewCancel('preview')
     await facade.backupUploadBegin({ filename: '外部.pabackup', size: 42 })
     await facade.backupUploadChunk({ id: 'upload', offset: 0, base64: 'UEs=' })
     await facade.backupUploadInspect('upload')
@@ -264,7 +282,7 @@ describe('investment research Runtime Client facade', () => {
     await facade.backupReset({ categories: ['holdings'], backupBefore: true })
     await facade.backupDelete('投研备份.pabackup')
 
-    expect(b.backup).toHaveBeenCalledTimes(12)
+    expect(b.backup).toHaveBeenCalledTimes(16)
   })
 
   it('loads on first subscription and refreshes only for the DeepSeek credential and reconnects', async () => {

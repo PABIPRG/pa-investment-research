@@ -13,6 +13,7 @@ import type { SidebarSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-sideba
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import { assistantPrompt, type AssistantIntent } from './assistant-intent.ts'
 import {
   ANALYSIS_MODULES,
@@ -48,6 +49,8 @@ import type {
   InvestmentRoute, InvestmentUiSnapshot,
 } from './state.ts'
 import css from './InvestmentShell.module.css'
+
+type HostDescriptionSource = ConnectionHandle['hostDescription']
 
 export const INVESTMENT_APP_VERSION = packageManifest.version
 
@@ -146,6 +149,7 @@ export function safeExternalNewsUrl(value: unknown): string | undefined {
 
 interface UiInjected {
   hooks: { investmentUi: HostObservable<InvestmentUiSnapshot> }
+  hostDescription?: HostDescriptionSource
   navigate: (route: InvestmentRoute, context?: InvestmentNavigationContext) => void
 }
 
@@ -867,12 +871,17 @@ const MIN_RESEARCH_SURFACE_WIDTH = 360
 const MAX_RESEARCH_SURFACE_WIDTH = 620
 
 export function InvestmentShell({
-  useInvestmentUi, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
+  useInvestmentUi, hostDescription, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
   navigate, setHistory, setReports,
   setAssistantMode, setModuleDraft, selectStrategy, startSession, openSession, searchSessions, renameSession,
   archiveSession, prepareAssistant, toggleTheme,
 }: InvestmentShellProps) {
   const snapshot = useInvestmentUi(s => s)
+  const deployment = useSyncExternalStore(
+    listener => hostDescription?.subscribe(listener) ?? (() => {}),
+    () => hostDescription?.getSnapshot()?.deployment,
+    () => undefined,
+  )
   const [startingSession, setStartingSession] = useState(false)
   const assistantConversationQueueRef = useRef<Promise<unknown>>(Promise.resolve())
   const assistantConversationPendingKeysRef = useRef(new Set<string>())
@@ -1459,6 +1468,10 @@ export function InvestmentShell({
             <div className={css.dashboardViewPane} data-dashboard-view="workbench" hidden={dashboardView !== 'workbench'}>
               <ResearchWorkbenchPage
                 requestData={requestData}
+                brokerSync={hostDescription === undefined ? true : deployment?.brokerSync ?? false}
+                holdingsProviders={hostDescription === undefined
+                  ? ['manual', 'easytrader', 'mac_ths', 'qmt']
+                  : deployment?.holdingsProviders ?? ['manual']}
                 navigate={navigate}
                 onAnalyze={prepareAssistantWithoutReturn}
                 onOpenPreferences={() => {

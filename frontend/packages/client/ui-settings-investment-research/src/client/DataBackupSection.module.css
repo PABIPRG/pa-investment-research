@@ -15,7 +15,8 @@
 .feedback { min-height: 18px; margin: -4px 0 0; color: var(--dsw-alias-label-secondary); font-size: .86rem; }
 .progress { position: relative; height: 4px; overflow: visible; border-radius: 4px; background: var(--dsw-alias-border-l1); }
 .progress progress { display: block; width: 100%; height: 100%; border: 0; border-radius: inherit; accent-color: var(--dsw-alias-state-business-primary); }
-.progress small { position: absolute; top: 7px; right: 0; color: var(--dsw-alias-label-tertiary); }
+.progress small { position: absolute; top: 7px; right: 72px; color: var(--dsw-alias-label-tertiary); }
+.progress button { position: absolute; top: 2px; right: 0; }
 .location, .conversationExport { align-items: center; padding: 13px 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-base); }
 .location h3, .sectionHeading h3, .conversationExport h3, .dangerZone h3, .modal h3 { margin: 0; font-size: 1rem; line-height: 1.57rem; }
 .location code { display: block; max-width: 490px; margin-top: 3px; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font-family: inherit; font-size: .86rem; }

@@ -25,7 +25,7 @@ import {
 } from '@deepseek-ai/dsh-session-persistence'
 import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
-import { createApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
+import { createApiProxy } from './create-api-proxy.ts'
 
 const sid = (id: string): SessionId => id as SessionId
 

@@ -2,9 +2,9 @@ import type { BackupPreview } from '@deepseek-ai/dsh-client-investment-research-
 
 /** Minimal client facade used by the browser-side chunk uploader. */
 export interface BackupUploadApi {
-  backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>
-  backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>
-  backupUploadInspect(id: string): Promise<BackupPreview>
+  backupUploadBegin(input: { filename: string; size: number }, signal?: AbortSignal): Promise<{ id: string; chunkSize: number }>
+  backupUploadChunk(input: { id: string; offset: number; base64: string }, signal?: AbortSignal): Promise<{ received: number }>
+  backupUploadInspect(id: string, signal?: AbortSignal): Promise<BackupPreview>
   backupUploadCancel(id: string): Promise<void>
 }
 
@@ -34,18 +34,19 @@ export async function uploadBackup(
 ): Promise<BackupPreview> {
   if (file.size <= 0) throw new Error('备份文件不能为空')
   signal?.throwIfAborted()
-  const upload = await api.backupUploadBegin({ filename: file.name, size: file.size })
+  const upload = await api.backupUploadBegin({ filename: file.name, size: file.size }, signal)
   try {
     let offset = 0
     while (offset < file.size) {
       signal?.throwIfAborted()
       const bytes = new Uint8Array(await file.slice(offset, offset + upload.chunkSize).arrayBuffer())
-      const result = await api.backupUploadChunk({ id: upload.id, offset, base64: toBase64(bytes) })
+      signal?.throwIfAborted()
+      const result = await api.backupUploadChunk({ id: upload.id, offset, base64: toBase64(bytes) }, signal)
       offset = result.received
       onProgress(offset / file.size)
     }
     signal?.throwIfAborted()
-    return await api.backupUploadInspect(upload.id)
+    return await api.backupUploadInspect(upload.id, signal)
   }
   catch (error) {
     await api.backupUploadCancel(upload.id).catch(() => {})

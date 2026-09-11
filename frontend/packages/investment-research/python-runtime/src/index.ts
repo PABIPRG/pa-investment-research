@@ -6,12 +6,14 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import packageManifest from '@deepseek-ai/dsh-investment-python-runtime/package.json' with { type: 'json' }
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import type { DeploymentCapabilitySnapshot } from '@deepseek-ai/dsh-host-deployment-capabilities'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { bindTypertRemote, Remote } from '@deepseek-ai/dsh-typert-protocol'
 import { BackupService } from './backup-service.ts'
 import { InvestmentBackendManager } from './runtime.ts'
 import { requestInvestmentData } from './data.ts'
 import type {
+  BackupDescription,
   Config,
   InvestmentBackendId,
   InvestmentCapabilityDefinition,
@@ -65,6 +67,7 @@ export type { OwnedBackendState, OwnedBackendStateRead } from './state.ts'
 export type { BackendPathResolutionOptions } from './path.ts'
 export type {
   BackendHealthResult,
+  BackupDescription,
   Config,
   InvestmentBackendId,
   InvestmentBackendMode,
@@ -94,7 +97,7 @@ declare module '@deepseek-ai/cordis' {
 
 /** Runtime service that verifies registered investment Python backends and leases their URLs. */
 export class InvestmentPythonRuntime extends Service {
-  static inject = ['credentials', 'subprocess']
+  static inject = ['credentials', 'deploymentCapabilities', 'subprocess']
 
   /** Visible binding consumed by Typert Gateway source-mode discovery. */
   readonly typertRemote = bindTypertRemote(this, 'investmentPythonRuntime')
@@ -113,6 +116,11 @@ export class InvestmentPythonRuntime extends Service {
   private readonly manager: InvestmentBackendManager
   private readonly holdingsNativeToken = randomBytes(32).toString('base64url')
   private readonly backups: BackupService
+  private readonly deploymentSnapshot: DeploymentCapabilitySnapshot
+
+  private deployment(): DeploymentCapabilitySnapshot {
+    return this.deploymentSnapshot
+  }
 
   /**
    * Create and install the investment Python Runtime service.
@@ -121,6 +129,11 @@ export class InvestmentPythonRuntime extends Service {
    */
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'investmentPythonRuntime')
+    const deploymentCapabilities = ctx.get('deploymentCapabilities')
+    if (deploymentCapabilities === undefined) {
+      throw new Error('investment Python runtime: deploymentCapabilities service is required')
+    }
+    this.deploymentSnapshot = deploymentCapabilities.snapshot()
     const dshHome = resolveDshHome(config.dshHome)
     const dataTransferToken = randomBytes(32).toString('base64url')
     const coordinatorDirectory = join(dshHome, 'investment-research', 'transfer-transactions')
@@ -144,8 +157,8 @@ export class InvestmentPythonRuntime extends Service {
     this.backups = new BackupService({
       dshHome,
       appVersion: BACKUP_CREATED_BY_APP_VERSION,
-      request: async (backend, operation, input) => {
-        const lease = await this.manager.acquire(backend)
+      request: async (backend, operation, input, signal) => {
+        const lease = await this.manager.acquire(backend, signal)
         try {
           if (lease.ownership !== 'owned') {
             throw new Error(`investment backup: ${backend} must be owned by this app instance`)
@@ -168,10 +181,11 @@ export class InvestmentPythonRuntime extends Service {
               ...(operation === 'export' ? {} : { 'Content-Type': 'application/json' }),
             },
             ...(operation === 'export' ? {} : { body: JSON.stringify(input) }),
+            ...(signal === undefined ? {} : { signal }),
           })
           if (!response.ok) {
-            const detail = (await response.text()).slice(0, 2_000)
-            throw new Error(`investment backup: ${backend} ${operation} failed with HTTP ${response.status}: ${detail}`)
+            await response.body?.cancel().catch(() => {})
+            throw new Error(`[backup-backend-http-error] ${backend}/${operation} returned HTTP ${response.status}`)
           }
           const value: unknown = await response.json()
           return value
@@ -182,7 +196,10 @@ export class InvestmentPythonRuntime extends Service {
       },
     })
     ctx.on('credentials/updated', (ref) => { this.manager.credentialUpdated(ref) })
-    ctx.effect(() => async () => this.manager.dispose(), 'investment Python runtime teardown')
+    ctx.effect(() => async () => {
+      this.backups.dispose()
+      await this.manager.dispose()
+    }, 'investment Python runtime teardown')
   }
 
   /**
@@ -239,6 +256,15 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('request-data')
   requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue> {
+    if (!this.deployment().brokerSync && [
+      'trading-core.holdings-source',
+      'trading-core.holdings-detect',
+      'trading-core.holdings-sync',
+      'trading-core.holdings-user-config',
+      'trading-core.holdings-user-config-update',
+    ].includes(request.operation)) {
+      return Promise.reject(new Error('云端 Web 不连接或扫描券商客户端，请使用手工录入或批量导入持仓。'))
+    }
     return requestInvestmentData(request, id => this.manager.acquire(id))
   }
 
@@ -249,6 +275,9 @@ export class InvestmentPythonRuntime extends Service {
    * @returns backend readiness or a read-only preview.
    */
   async nativeHoldings(input: { action: 'read' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; client_path?: string }): Promise<unknown> {
+    if (!this.deployment().nativeHoldings) {
+      throw new Error('当前部署不提供原生持仓操作。')
+    }
     const lease = await this.manager.acquire('trading-core')
     try {
       if (lease.ownership !== 'owned') throw new Error('原生持仓操作需要本应用管理的本机后台。')
@@ -270,8 +299,12 @@ export class InvestmentPythonRuntime extends Service {
    * @returns The configured directory and stable backup-format capabilities.
    */
   @Remote('backup-describe')
-  backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }> {
-    return this.backups.describe()
+  async backupDescribe(): Promise<BackupDescription> {
+    if (!this.deployment().hostDirectories) {
+      return { location: { kind: 'managed' }, format: 'pabackup', scheduledBackup: false }
+    }
+    const value = await this.backups.describe()
+    return { directory: value.directory, location: { kind: 'local', directory: value.directory }, format: value.format, scheduledBackup: value.scheduledBackup }
   }
 
   /**
@@ -281,8 +314,40 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('backup-set-directory')
   backupSetDirectory(directory: string): Promise<{ directory: string }> {
+    if (!this.deployment().hostDirectories) {
+      return Promise.reject(new Error('云端 Web 使用托管备份存储，不能更改服务器目录。'))
+    }
     return this.backups.setDirectory(directory)
   }
+
+  /**
+   * Start a validated, bounded browser download for a stored backup.
+   * @param filename - Direct child filename returned by the backup list.
+   * @param signal - Carrier cancellation for the allocation and bounded file read.
+   * @returns An opaque download id, immutable file metadata, and required chunk size.
+   */
+  @Remote('backup-download-begin')
+  backupDownloadBegin(filename: string, signal: AbortSignal): Promise<{ id: string; filename: string; size: number; chunkSize: number }> {
+    return this.backups.beginDownload(filename, signal)
+  }
+
+  /**
+   * Read one chunk from a browser download session.
+   * @param input - Download id and the exact next byte offset.
+   * @param signal - Carrier cancellation checked before reading the in-memory chunk.
+   * @returns The Base64 chunk, next byte offset, and completion flag.
+   */
+  @Remote('backup-download-chunk')
+  backupDownloadChunk(input: { id: string; offset: number }, signal: AbortSignal): { base64: string; nextOffset: number; done: boolean } {
+    return this.backups.downloadChunk(input, signal)
+  }
+
+  /**
+   * Release an incomplete browser download session.
+   * @param id - Opaque download id allocated by {@link backupDownloadBegin}.
+   */
+  @Remote('backup-download-cancel')
+  backupDownloadCancel(id: string): void { this.backups.cancelDownload(id) }
 
   /**
    * Create a manual or pre-danger backup and return only client-safe metadata.
@@ -319,41 +384,45 @@ export class InvestmentPythonRuntime extends Service {
   /**
    * Inspect one immutable source already present in the configured backup directory.
    * @param filename - Direct child filename returned by the backup list.
+   * @param signal - Carrier cancellation for archive inspection and backend previews.
    * @returns A bounded preview with counts, conflicts, and an expiring preview id.
    */
   @Remote('backup-preview-stored')
-  backupPreviewStored(filename: string): Promise<BackupPreview> {
-    return this.backups.previewStored(filename)
+  backupPreviewStored(filename: string, signal: AbortSignal): Promise<BackupPreview> {
+    return this.backups.previewStored(filename, signal)
   }
 
   /**
    * Allocate a bounded temporary-file upload session for an external backup.
    * @param input - Original filename and exact byte size of the selected archive.
+   * @param signal - Carrier cancellation for temporary-file allocation.
    * @returns The opaque upload id and required maximum chunk size.
    */
   @Remote('backup-upload-begin')
-  backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }> {
-    return this.backups.beginUpload(input)
+  backupUploadBegin(input: { filename: string; size: number }, signal: AbortSignal): Promise<{ id: string; chunkSize: number }> {
+    return this.backups.beginUpload(input, signal)
   }
 
   /**
    * Append one ordered Base64 chunk to an upload session.
    * @param input - Upload id, required byte offset, and bounded Base64 payload.
+   * @param signal - Carrier cancellation checked around the durable append.
    * @returns The total number of raw archive bytes received.
    */
   @Remote('backup-upload-chunk')
-  backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }> {
-    return this.backups.appendUploadChunk(input)
+  backupUploadChunk(input: { id: string; offset: number; base64: string }, signal: AbortSignal): Promise<{ received: number }> {
+    return this.backups.appendUploadChunk(input, signal)
   }
 
   /**
    * Validate a complete upload and create an editable import preview.
    * @param id - Opaque upload id allocated by {@link backupUploadBegin}.
+   * @param signal - Carrier cancellation for archive inspection and backend previews.
    * @returns A bounded preview with counts, conflicts, and an expiring preview id.
    */
   @Remote('backup-upload-inspect')
-  backupUploadInspect(id: string): Promise<BackupPreview> {
-    return this.backups.inspectUpload(id)
+  backupUploadInspect(id: string, signal: AbortSignal): Promise<BackupPreview> {
+    return this.backups.inspectUpload(id, signal)
   }
 
   /**
@@ -364,6 +433,13 @@ export class InvestmentPythonRuntime extends Service {
   backupUploadCancel(id: string): Promise<void> {
     return this.backups.cancelUpload(id)
   }
+
+  /**
+   * Explicitly release an import preview without mutating its source.
+   * @param id - Opaque preview id returned by a stored or uploaded inspection.
+   */
+  @Remote('backup-preview-cancel')
+  backupPreviewCancel(id: string): void { this.backups.cancelPreview(id) }
 
   /**
    * Apply a preview with user-selected conflict rules; the source remains untouched.

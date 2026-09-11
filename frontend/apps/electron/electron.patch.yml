@@ -20,6 +20,11 @@
 - id: directory-picker
   disabled: true
 
+- id: deployment-capabilities
+  name: '@deepseek-ai/dsh-host-deployment-capabilities'
+  config:
+    surface: electron
+
 - insert:
     - id: directory-picker-native
       name: '@deepseek-ai/dsh-host-directory-picker-native'

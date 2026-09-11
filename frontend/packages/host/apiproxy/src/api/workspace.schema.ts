@@ -15,7 +15,7 @@ export { workspaceIdSchema } from './sessions.schema.ts'
 /** WorkspaceView row of every workspace.* response. */
 export const workspaceViewSchema = z.object({
   workspaceId: workspaceIdSchema,
-  path: z.string(),
+  path: z.string().optional(),
   title: z.string(),
   sessionIds: z.array(sessionIdSchema),
   createdAt: z.string(),

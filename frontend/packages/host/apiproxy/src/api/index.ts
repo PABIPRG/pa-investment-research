@@ -48,6 +48,7 @@ export type {
   SessionListMetadata, SessionProjectionsBlock, SessionSearchItem, SessionsApi, SessionSummary,
 } from './sessions.ts'
 export type { DirectoryEntry, DirectoryListing, HostApi } from './host.ts'
+export type { DeploymentCapabilitySnapshot, DeploymentSurface, HoldingsProvider } from '@deepseek-ai/dsh-host-deployment-capabilities'
 export type {
   SubagentAddress, SubagentCatalog, SubagentInterruptReceipt, SubagentListEntry,
   SubagentPromptReceipt, SubagentsApi,

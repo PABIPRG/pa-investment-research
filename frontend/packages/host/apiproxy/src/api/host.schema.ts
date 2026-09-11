@@ -13,11 +13,20 @@ export const hostDescribeRequestSchema = z.object({}) satisfies z.ZodType<Wire<R
 /** host.describe response value. */
 export const hostDescribeValueSchema = z.object({
   version: z.string(),
-  cwd: z.string(),
+  cwd: z.string().optional(),
   provider: z.string().optional(),
   model: z.string().optional(),
   attachedSessions: z.number().int().nonnegative(),
   canOpenPath: z.boolean(),
+  deployment: z.object({
+    surface: z.enum(['cli', 'local-web', 'electron', 'cloud-web']),
+    browserFileTransfer: z.boolean(),
+    hostDirectories: z.boolean(),
+    openHostPath: z.boolean(),
+    brokerSync: z.boolean(),
+    nativeHoldings: z.boolean(),
+    holdingsProviders: z.array(z.enum(['manual', 'easytrader', 'mac_ths', 'qmt'])),
+  }).optional(),
 }) satisfies z.ZodType<Wire<ResponseValue<'host.describe'>>>
 
 /** host.pickDirectory request payload (empty object literal). */

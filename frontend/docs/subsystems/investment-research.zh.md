@@ -167,10 +167,18 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 @Remote('request-data') requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>
 
 /**
+ * Run one native holdings operation after the Electron main process obtained consent.
+ * This method is deliberately absent from the Remote registry.
+ * @param input - fixed action and account; client path comes only from the native picker.
+ * @returns backend readiness or a read-only preview.
+ */
+async nativeHoldings(input: { action: 'read' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; client_path?: string }): Promise<unknown>
+
+/**
  * Read user-visible backup configuration without exposing internal upload paths.
  * @returns The configured directory and stable backup-format capabilities.
  */
-@Remote('backup-describe') backupDescribe(): Promise<{ directory: string; format: 'pabackup'; scheduledBackup: false }>
+@Remote('backup-describe') async backupDescribe(): Promise<BackupDescription>
 
 /**
  * Persist a user-selected backup directory.
@@ -178,6 +186,28 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
  * @returns The normalized directory persisted by the Host.
  */
 @Remote('backup-set-directory') backupSetDirectory(directory: string): Promise<{ directory: string }>
+
+/**
+ * Start a validated, bounded browser download for a stored backup.
+ * @param filename - Direct child filename returned by the backup list.
+ * @param signal - Carrier cancellation for the allocation and bounded file read.
+ * @returns An opaque download id, immutable file metadata, and required chunk size.
+ */
+@Remote('backup-download-begin') backupDownloadBegin(filename: string, signal: AbortSignal): Promise<{ id: string; filename: string; size: number; chunkSize: number }>
+
+/**
+ * Read one chunk from a browser download session.
+ * @param input - Download id and the exact next byte offset.
+ * @param signal - Carrier cancellation checked before reading the in-memory chunk.
+ * @returns The Base64 chunk, next byte offset, and completion flag.
+ */
+@Remote('backup-download-chunk') backupDownloadChunk(input: { id: string; offset: number }, signal: AbortSignal): { base64: string; nextOffset: number; done: boolean }
+
+/**
+ * Release an incomplete browser download session.
+ * @param id - Opaque download id allocated by {@link backupDownloadBegin}.
+ */
+@Remote('backup-download-cancel') backupDownloadCancel(id: string): void
 
 /**
  * Create a manual or pre-danger backup and return only client-safe metadata.
@@ -201,36 +231,46 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 /**
  * Inspect one immutable source already present in the configured backup directory.
  * @param filename - Direct child filename returned by the backup list.
+ * @param signal - Carrier cancellation for archive inspection and backend previews.
  * @returns A bounded preview with counts, conflicts, and an expiring preview id.
  */
-@Remote('backup-preview-stored') backupPreviewStored(filename: string): Promise<BackupPreview>
+@Remote('backup-preview-stored') backupPreviewStored(filename: string, signal: AbortSignal): Promise<BackupPreview>
 
 /**
  * Allocate a bounded temporary-file upload session for an external backup.
  * @param input - Original filename and exact byte size of the selected archive.
+ * @param signal - Carrier cancellation for temporary-file allocation.
  * @returns The opaque upload id and required maximum chunk size.
  */
-@Remote('backup-upload-begin') backupUploadBegin(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }>
+@Remote('backup-upload-begin') backupUploadBegin(input: { filename: string; size: number }, signal: AbortSignal): Promise<{ id: string; chunkSize: number }>
 
 /**
  * Append one ordered Base64 chunk to an upload session.
  * @param input - Upload id, required byte offset, and bounded Base64 payload.
+ * @param signal - Carrier cancellation checked around the durable append.
  * @returns The total number of raw archive bytes received.
  */
-@Remote('backup-upload-chunk') backupUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }>
+@Remote('backup-upload-chunk') backupUploadChunk(input: { id: string; offset: number; base64: string }, signal: AbortSignal): Promise<{ received: number }>
 
 /**
  * Validate a complete upload and create an editable import preview.
  * @param id - Opaque upload id allocated by {@link backupUploadBegin}.
+ * @param signal - Carrier cancellation for archive inspection and backend previews.
  * @returns A bounded preview with counts, conflicts, and an expiring preview id.
  */
-@Remote('backup-upload-inspect') backupUploadInspect(id: string): Promise<BackupPreview>
+@Remote('backup-upload-inspect') backupUploadInspect(id: string, signal: AbortSignal): Promise<BackupPreview>
 
 /**
  * Explicitly release an incomplete upload.
  * @param id - Opaque upload id allocated by {@link backupUploadBegin}.
  */
 @Remote('backup-upload-cancel') backupUploadCancel(id: string): Promise<void>
+
+/**
+ * Explicitly release an import preview without mutating its source.
+ * @param id - Opaque preview id returned by a stored or uploaded inspection.
+ */
+@Remote('backup-preview-cancel') backupPreviewCancel(id: string): void
 
 /**
  * Apply a preview with user-selected conflict rules; the source remains untouched.
@@ -259,5 +299,5 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 invariantSnapshot(): ReturnType<InvestmentBackendManager['invariantSnapshot']>
 ```
 
-Source: [`packages/investment-research/python-runtime/src/index.ts:85`](../../packages/investment-research/python-runtime/src/index.ts)
+Source: [`packages/investment-research/python-runtime/src/index.ts:99`](../../packages/investment-research/python-runtime/src/index.ts)
 <!-- END GENERATED cordis-surface -->

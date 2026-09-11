@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, lstat, mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import type { Stats } from 'node:fs'
+import { appendFile, lstat, mkdir, open, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { isAbsolute, basename, join, resolve } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import {
@@ -21,6 +23,8 @@ const PREVIEW_TTL_MS = 24 * 60 * 60 * 1000
 const SETTINGS_VERSION = 1
 const UPLOAD_CHUNK_BYTES = 256 * 1024
 const MAX_ACTIVE_PREVIEWS = 2
+const MAX_ACTIVE_DOWNLOADS = 2
+const DOWNLOAD_TTL_MS = PREVIEW_TTL_MS
 const TRANSACTION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 type BackupBackend = 'trading-core' | 'market-watch'
 
@@ -35,6 +39,7 @@ export interface BackupBackendRequest {
     backend: 'trading-core' | 'market-watch',
     operation: BackupBackendOperation,
     input: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<unknown>
 }
 
@@ -83,6 +88,13 @@ interface UploadEntry {
   receivedSize: number
   touchedAtMs: number
   busy: boolean
+}
+
+interface DownloadEntry {
+  readonly filename: string
+  bytes: Uint8Array | undefined
+  offset: number
+  touchedAtMs: number
 }
 
 interface CoordinatorTransaction {
@@ -137,6 +149,33 @@ function ensureFilename(filename: string): void {
   }
 }
 
+/** @internal Read exactly one opened file identity without permitting growth to widen allocation. */
+export async function readStableDownloadSnapshot(
+  handle: Pick<FileHandle, 'read' | 'stat'>,
+  expected: Stats,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  const opened = await handle.stat()
+  signal?.throwIfAborted()
+  if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino || opened.size !== expected.size) {
+    throw new Error('所选备份在下载前发生变化')
+  }
+  if (opened.size > MAX_COMPRESSED_BYTES) throw new Error('备份文件超过 64 MiB 限制')
+  const snapshot = Buffer.allocUnsafe(opened.size)
+  let readOffset = 0
+  while (readOffset < opened.size) {
+    signal?.throwIfAborted()
+    const { bytesRead } = await handle.read(snapshot, readOffset, opened.size - readOffset, readOffset)
+    if (bytesRead === 0) break
+    readOffset += bytesRead
+  }
+  const completed = await handle.stat()
+  if (readOffset !== opened.size || completed.size !== opened.size) {
+    throw new Error('所选备份在下载时发生变化')
+  }
+  return snapshot
+}
+
 function selectedForBackend(
   backend: 'trading-core' | 'market-watch',
   categories: readonly BackupCategory[],
@@ -164,6 +203,8 @@ export class BackupService {
   private readonly now: () => Date
   private readonly previews = new Map<string, PreviewEntry>()
   private readonly uploads = new Map<string, UploadEntry>()
+  private readonly downloads = new Map<string, DownloadEntry>()
+  private downloadCleanupTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(options: BackupServiceOptions) {
     this.dshHome = resolve(options.dshHome)
@@ -350,14 +391,85 @@ export class BackupService {
     await unlink(join(directory, filename))
   }
 
+  /** Allocate an immutable, bounded browser download for one validated stored backup. */
+  async beginDownload(filename: string, signal?: AbortSignal): Promise<{ id: string; filename: string; size: number; chunkSize: number }> {
+    signal?.throwIfAborted()
+    ensureFilename(filename)
+    this.cleanupDownloads()
+    if (this.downloads.size >= MAX_ACTIVE_DOWNLOADS) throw new Error('已有过多下载，请先完成或取消当前下载')
+    // Reserve before the first await: concurrent starts cannot all pass the
+    // capacity check and then over-allocate immutable archive snapshots.
+    const id = randomUUID()
+    const entry: DownloadEntry = {
+      filename, bytes: undefined, offset: 0, touchedAtMs: this.now().getTime(),
+    }
+    this.downloads.set(id, entry)
+    this.scheduleDownloadCleanup()
+    try {
+      const path = join(await this.directory(), filename)
+      signal?.throwIfAborted()
+      const info = await lstat(path)
+      if (info.isSymbolicLink() || !info.isFile()) throw new Error('所选备份不是可下载的普通文件')
+      if (info.size > MAX_COMPRESSED_BYTES) throw new Error('备份文件超过 64 MiB 限制')
+      const handle = await open(path, 'r')
+      let bytes: Uint8Array
+      try {
+        bytes = await readStableDownloadSnapshot(handle, info, signal)
+      }
+      finally { await handle.close() }
+      signal?.throwIfAborted()
+      inspectBackupArchive(bytes)
+      if (!this.downloads.has(id)) throw new Error('下载会话已失效，请重新下载')
+      entry.bytes = bytes
+      entry.touchedAtMs = this.now().getTime()
+      this.scheduleDownloadCleanup()
+      return { id, filename, size: bytes.byteLength, chunkSize: UPLOAD_CHUNK_BYTES }
+    }
+    catch (error) {
+      this.deleteDownload(id)
+      throw error
+    }
+  }
+
+  /** Read one ordered chunk from a previously validated immutable download. */
+  downloadChunk(input: { id: string; offset: number }, signal?: AbortSignal): { base64: string; nextOffset: number; done: boolean } {
+    signal?.throwIfAborted()
+    this.cleanupDownloads()
+    const download = this.downloads.get(input.id)
+    if (!download || download.bytes === undefined) throw new Error('下载会话已失效，请重新下载')
+    if (!Number.isSafeInteger(input.offset) || input.offset !== download.offset) {
+      this.deleteDownload(input.id)
+      throw new Error('下载分块位置无效')
+    }
+    const nextOffset = Math.min(input.offset + UPLOAD_CHUNK_BYTES, download.bytes.byteLength)
+    const base64 = Buffer.from(download.bytes.subarray(input.offset, nextOffset)).toString('base64')
+    download.offset = nextOffset
+    download.touchedAtMs = this.now().getTime()
+    const done = nextOffset === download.bytes.byteLength
+    if (done) this.deleteDownload(input.id)
+    else this.scheduleDownloadCleanup()
+    return { base64, nextOffset, done }
+  }
+
+  /** Release an incomplete browser download. */
+  cancelDownload(id: string): void { this.deleteDownload(id) }
+
+  /** Release every active transfer resource and stop the expiry timer. */
+  dispose(): void {
+    if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
+    this.downloadCleanupTimer = undefined
+    this.downloads.clear()
+  }
+
   /**
    * Create an immutable import preview for a stored backup.
    * @param filename - Direct child filename selected from the backup list.
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
-  async previewStored(filename: string): Promise<BackupPreview> {
+  async previewStored(filename: string, signal?: AbortSignal): Promise<BackupPreview> {
+    signal?.throwIfAborted()
     ensureFilename(filename)
-    return this.previewFile(join(await this.directory(), filename))
+    return this.previewFile(join(await this.directory(), filename), signal)
   }
 
   /**
@@ -365,12 +477,13 @@ export class BackupService {
    * @param path - Exact local archive path selected by the Host.
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
-  async previewFile(path: string): Promise<BackupPreview> {
+  async previewFile(path: string, signal?: AbortSignal): Promise<BackupPreview> {
+    signal?.throwIfAborted()
     const info = await lstat(path)
     if (info.isSymbolicLink()) throw new Error('不支持通过符号链接读取备份文件')
     if (!info.isFile()) throw new Error('所选路径不是备份文件')
     if (info.size > MAX_COMPRESSED_BYTES) throw new Error('备份文件超过 64 MiB 限制')
-    return this.previewBytes(await readFile(path), basename(path))
+    return this.previewBytes(await readFile(path, { signal }), basename(path), signal)
   }
 
   /**
@@ -379,8 +492,10 @@ export class BackupService {
    * @param filename - User-visible source filename.
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
-  async previewBytes(bytes: Uint8Array, filename = '外部备份.pabackup'): Promise<BackupPreview> {
+  async previewBytes(bytes: Uint8Array, filename = '外部备份.pabackup', signal?: AbortSignal): Promise<BackupPreview> {
+    signal?.throwIfAborted()
     await this.recoverPendingTransactions()
+    signal?.throwIfAborted()
     if (bytes.byteLength > MAX_COMPRESSED_BYTES) throw new Error('备份文件超过 64 MiB 限制')
     const { manifest, snapshots } = inspectBackupArchive(bytes)
     this.cleanupPreviews()
@@ -391,7 +506,8 @@ export class BackupService {
     for (const [backend, snapshot] of Object.entries(snapshots)) {
       if (backend !== 'trading-core' && backend !== 'market-watch') continue
       if (Object.keys(snapshot.categories).length > 0) {
-        domains[backend] = domainPreview(await this.request(backend, 'preview', { snapshot }), backend)
+        domains[backend] = domainPreview(await this.request(backend, 'preview', { snapshot }, signal), backend)
+        signal?.throwIfAborted()
       }
     }
     const id = randomUUID()
@@ -403,6 +519,7 @@ export class BackupService {
       domains,
       expiresAt: new Date(expiresAtMs).toISOString(),
     }
+    signal?.throwIfAborted()
     this.previews.set(id, { preview, snapshots, expiresAtMs })
     return preview
   }
@@ -491,24 +608,36 @@ export class BackupService {
    * @param input - Original filename and exact compressed byte size.
    * @returns An opaque upload id and maximum raw chunk size.
    */
-  async beginUpload(input: { filename: string; size: number }): Promise<{ id: string; chunkSize: number }> {
+  async beginUpload(input: { filename: string; size: number }, signal?: AbortSignal): Promise<{ id: string; chunkSize: number }> {
+    signal?.throwIfAborted()
     await this.cleanupUploads()
+    signal?.throwIfAborted()
     if (!input.filename.endsWith('.pabackup')) throw new Error('请选择 .pabackup 备份文件')
     if (!Number.isSafeInteger(input.size) || input.size <= 0) throw new Error('备份文件不能为空')
     if (input.size > MAX_COMPRESSED_BYTES) throw new Error('备份文件超过 64 MiB 限制')
     const id = randomUUID()
-    await mkdir(this.uploadDirectory, { recursive: true, mode: 0o700 })
     const path = join(this.uploadDirectory, `${id}.part`)
-    await writeFile(path, new Uint8Array(), { flag: 'wx', mode: 0o600 })
-    this.uploads.set(id, {
-      filename: basename(input.filename),
-      declaredSize: input.size,
-      path,
-      receivedSize: 0,
-      touchedAtMs: this.now().getTime(),
-      busy: false,
-    })
-    return { id, chunkSize: UPLOAD_CHUNK_BYTES }
+    try {
+      await mkdir(this.uploadDirectory, { recursive: true, mode: 0o700 })
+      signal?.throwIfAborted()
+      await writeFile(path, new Uint8Array(), { flag: 'wx', mode: 0o600, signal })
+      signal?.throwIfAborted()
+      this.uploads.set(id, {
+        filename: basename(input.filename),
+        declaredSize: input.size,
+        path,
+        receivedSize: 0,
+        touchedAtMs: this.now().getTime(),
+        busy: false,
+      })
+      return { id, chunkSize: UPLOAD_CHUNK_BYTES }
+    }
+    catch (error) {
+      await unlink(path).catch((cleanupError: unknown) => {
+        if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') throw cleanupError
+      })
+      throw error
+    }
   }
 
   /**
@@ -516,8 +645,10 @@ export class BackupService {
    * @param input - Upload id, expected raw offset, and encoded bytes.
    * @returns The total raw bytes durably received.
    */
-  async appendUploadChunk(input: { id: string; offset: number; base64: string }): Promise<{ received: number }> {
+  async appendUploadChunk(input: { id: string; offset: number; base64: string }, signal?: AbortSignal): Promise<{ received: number }> {
+    signal?.throwIfAborted()
     await this.cleanupUploads()
+    signal?.throwIfAborted()
     const upload = this.uploads.get(input.id)
     if (!upload) throw new Error('上传会话已失效，请重新选择文件')
     if (upload.busy) throw new Error('上传会话正忙，请稍后重试')
@@ -532,6 +663,7 @@ export class BackupService {
     upload.busy = true
     try {
       await appendFile(upload.path, bytes)
+      signal?.throwIfAborted()
       upload.receivedSize += bytes.byteLength
       upload.touchedAtMs = this.now().getTime()
       return { received: upload.receivedSize }
@@ -546,15 +678,17 @@ export class BackupService {
    * @param id - Opaque upload id returned by {@link beginUpload}.
    * @returns Validated counts, conflicts, defaults, and an expiring preview id.
    */
-  async inspectUpload(id: string): Promise<BackupPreview> {
+  async inspectUpload(id: string, signal?: AbortSignal): Promise<BackupPreview> {
+    signal?.throwIfAborted()
     await this.cleanupUploads()
+    signal?.throwIfAborted()
     const upload = this.uploads.get(id)
     if (!upload) throw new Error('上传会话已失效，请重新选择文件')
     if (upload.busy) throw new Error('上传会话正忙，请稍后重试')
     if (upload.receivedSize !== upload.declaredSize) throw new Error('备份文件尚未上传完整')
     this.uploads.delete(id)
     try {
-      return await this.previewBytes(await readFile(upload.path), upload.filename)
+      return await this.previewBytes(await readFile(upload.path, { signal }), upload.filename, signal)
     }
     finally {
       await unlink(upload.path).catch((error: unknown) => {
@@ -589,6 +723,32 @@ export class BackupService {
     for (const [id, entry] of this.previews) {
       if (entry.expiresAtMs <= now) this.previews.delete(id)
     }
+  }
+
+  private cleanupDownloads(): void {
+    const threshold = this.now().getTime() - DOWNLOAD_TTL_MS
+    for (const [id, download] of this.downloads) {
+      if (download.touchedAtMs <= threshold) this.downloads.delete(id)
+    }
+    this.scheduleDownloadCleanup()
+  }
+
+  private deleteDownload(id: string): void {
+    this.downloads.delete(id)
+    this.scheduleDownloadCleanup()
+  }
+
+  private scheduleDownloadCleanup(): void {
+    if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
+    this.downloadCleanupTimer = undefined
+    if (this.downloads.size === 0) return
+    const expiresAt = Math.min(...[...this.downloads.values()].map(entry => entry.touchedAtMs + DOWNLOAD_TTL_MS))
+    const delay = Math.max(1, expiresAt - this.now().getTime())
+    this.downloadCleanupTimer = setTimeout(() => {
+      this.downloadCleanupTimer = undefined
+      this.cleanupDownloads()
+    }, delay)
+    this.downloadCleanupTimer.unref()
   }
 
   private async cleanupUploads(): Promise<void> {

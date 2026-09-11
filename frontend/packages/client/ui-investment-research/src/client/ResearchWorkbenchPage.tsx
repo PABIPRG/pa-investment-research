@@ -410,6 +410,8 @@ function RegionMeta({ state, settled }: { state: ResourceState; settled: string 
 
 interface ResearchWorkbenchPageProps {
   readonly requestData: RequestData
+  readonly brokerSync?: boolean
+  readonly holdingsProviders?: readonly string[]
   readonly navigate: (route: InvestmentRoute, context?: InvestmentNavigationContext) => void
   readonly onAnalyze: (intent: AssistantIntent) => void
   readonly onOpenPreferences: () => void
@@ -419,7 +421,8 @@ interface ResearchWorkbenchPageProps {
 
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
-  requestData, navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
+  requestData, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
+  navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
   const holdings = useWorkbenchResource(requestData)
   const risk = useWorkbenchResource(requestData)
@@ -1094,6 +1097,8 @@ export function ResearchWorkbenchPage({
           onSaveHoldings={saveHoldings}
           onSyncHoldings={syncHoldings}
           requestData={requestData}
+          brokerSync={brokerSync}
+          holdingsProviders={holdingsProviders}
           onClose={() => { setSelectedOverview(undefined) }}
         />
       )}

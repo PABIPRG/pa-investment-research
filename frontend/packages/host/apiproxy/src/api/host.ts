@@ -4,6 +4,7 @@
  */
 
 import type { RpcRequest, RpcResponse } from './rpc.ts'
+import type { DeploymentCapabilitySnapshot } from '@deepseek-ai/dsh-host-deployment-capabilities'
 
 /** One directory row of a listing: a child entry or a breadcrumb ancestor. */
 export interface DirectoryEntry {
@@ -45,11 +46,12 @@ export interface HostApi {
    */
   describe(request: RpcRequest<{}>): Promise<RpcResponse<{
     version: string
-    cwd: string
+    cwd?: string
     provider?: string
     model?: string
     attachedSessions: number
     canOpenPath: boolean
+    deployment?: DeploymentCapabilitySnapshot
   }>>
 
   /**

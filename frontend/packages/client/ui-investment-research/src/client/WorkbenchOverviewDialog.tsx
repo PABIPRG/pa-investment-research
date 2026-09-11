@@ -11,28 +11,20 @@ type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 interface HoldingsProviderOption {
   readonly value: string
   readonly label: string
-  readonly platforms: ReadonlySet<string>
 }
 
 const HOLDINGS_PROVIDER_OPTIONS: readonly HoldingsProviderOption[] = [
-  { value: 'manual', label: '手动输入', platforms: new Set(['darwin', 'win32', 'linux']) },
-  { value: 'easytrader', label: '同花顺（Windows）', platforms: new Set(['win32']) },
-  { value: 'mac_ths', label: '同花顺（macOS）', platforms: new Set(['darwin']) },
-  { value: 'qmt', label: 'QMT 迅投', platforms: new Set(['win32']) },
+  { value: 'manual', label: '手动输入' },
+  { value: 'easytrader', label: '同花顺（Windows）' },
+  { value: 'mac_ths', label: '同花顺（macOS）' },
+  { value: 'qmt', label: 'QMT 迅投' },
 ]
 
-function holdingsProviderPlatform(): string {
-  return navigator.platform.startsWith('Mac') ? 'darwin'
-    : navigator.platform.startsWith('Win') ? 'win32'
-    : 'linux'
-}
-
-function holdingsProviderOptions(current: string): readonly HoldingsProviderOption[] {
-  const platform = holdingsProviderPlatform()
-  const options = HOLDINGS_PROVIDER_OPTIONS.filter(option => option.value === current || option.platforms.has(platform))
+function holdingsProviderOptions(current: string, allowed: readonly string[]): readonly HoldingsProviderOption[] {
+  const options = HOLDINGS_PROVIDER_OPTIONS.filter(option => option.value === current || allowed.includes(option.value))
   return HOLDINGS_PROVIDER_OPTIONS.some(option => option.value === current)
     ? options
-    : [{ value: current, label: '未知数据源', platforms: new Set<string>() }, ...options]
+    : [{ value: current, label: '未知数据源' }, ...options]
 }
 
 export type WorkbenchDetailKind =
@@ -73,6 +65,8 @@ interface WorkbenchOverviewDialogProps {
   readonly onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
   readonly onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   readonly requestData: RequestData
+  readonly brokerSync?: boolean
+  readonly holdingsProviders?: readonly string[]
   readonly onClose: () => void
 }
 
@@ -340,8 +334,9 @@ function HoldingsBulkImport({
  * Chooses a persisted holdings provider, reads real holdings from its broker
  * client, and replaces the saved portfolio with them after explicit confirmation.
  */
-function HoldingsSyncPanel({ requestData, onSync, onBack, onSavingChange }: {
+function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onSavingChange }: {
   requestData: RequestData
+  holdingsProviders: readonly string[]
   onSync: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onBack: () => void
   onSavingChange: (saving: boolean) => void
@@ -386,7 +381,7 @@ function HoldingsSyncPanel({ requestData, onSync, onBack, onSavingChange }: {
   const account = text(effective.HOLDINGS_ACCOUNT_MODE, text(state.account_mode, 'simulated')) === 'real' ? 'real' : 'simulated'
   const accountLabel = account === 'simulated' ? '模拟操盘' : '真实操盘'
   const path = `交易 → ${account === 'simulated' ? '模拟' : 'A股'} → 股票 → 持仓`
-  const platform = text(state.platform, holdingsProviderPlatform())
+  const platform = text(state.platform, 'linux')
   const reason = blocking || text(state.blocking_reason, '')
   const loading = source.busy || config.busy
   useEffect(() => {
@@ -398,7 +393,7 @@ function HoldingsSyncPanel({ requestData, onSync, onBack, onSavingChange }: {
   const permission = reason === 'accessibility_required' || reason === 'automation_required'
   const missing = reason === 'client_missing' || reason === 'client_location_required'
   const navigation = reason === 'navigation_required'
-  const options = holdingsProviderOptions(provider)
+  const options = holdingsProviderOptions(provider, holdingsProviders)
   const run = async (operation: () => Promise<void>): Promise<void> => {
     if (busy) return
     setBusy(true); setError(''); onSavingChange(true)
@@ -519,10 +514,12 @@ function HoldingsSyncPanel({ requestData, onSync, onBack, onSavingChange }: {
 }
 
 function HoldingsEditor({
-  positions, requestData, onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
+  positions, requestData, brokerSync, holdingsProviders, onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
 }: {
   positions: readonly WorkbenchPositionDetail[]
   requestData: RequestData
+  brokerSync: boolean
+  holdingsProviders: readonly string[]
   onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
   onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onSavingChange: (saving: boolean) => void
@@ -684,7 +681,7 @@ function HoldingsEditor({
           <div className={css.workbenchHoldingToolbar}>
             <div><strong>持仓标的</strong><span>{effectivePositions.length} 项</span></div>
             <div className={css.workbenchHoldingToolbarActions}>
-              <button type="button" className={css.secondaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginSync}>从券商同步持仓</button>
+              {brokerSync && <button type="button" className={css.secondaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginSync}>从券商同步持仓</button>}
               <button ref={importButtonRef} type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
             </div>
           </div>
@@ -714,6 +711,7 @@ function HoldingsEditor({
       ) : flow === 'sync' ? (
         <HoldingsSyncPanel
           requestData={requestData}
+          holdingsProviders={holdingsProviders}
           onSync={applySyncedHoldings}
           onBack={returnToView}
           onSavingChange={(value) => { setSaving(value); onSavingChange(value) }}
@@ -875,7 +873,7 @@ function RiskProfileDetail({ risk, riskAsOf }: { risk: Record<string, unknown>; 
 
 function RiskCenterDetail({
   risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason, riskState, alertsState, onOpenAlert,
-}: Omit<WorkbenchOverviewDialogProps, 'kind' | 'positions' | 'onClose' | 'onSaveHoldings' | 'onSyncHoldings' | 'requestData'>) {
+}: Omit<WorkbenchOverviewDialogProps, 'kind' | 'positions' | 'onClose' | 'onSaveHoldings' | 'onSyncHoldings' | 'requestData' | 'brokerSync' | 'holdingsProviders'>) {
   const summary = asRecord(risk.summary)
   const breaches = records(risk.breaches)
   const equalWeight = number(summary.equal_weight)
@@ -943,7 +941,8 @@ function RiskCenterDetail({
 
 export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
-  holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onSyncHoldings, requestData, onClose,
+  holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onSyncHoldings, requestData,
+  brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'], onClose,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
@@ -968,6 +967,8 @@ export function WorkbenchOverviewDialog({
                 ? <HoldingsEditor
                     positions={positions}
                     requestData={requestData}
+                    brokerSync={brokerSync}
+                    holdingsProviders={holdingsProviders}
                     onSaveHoldings={onSaveHoldings}
                     onSyncHoldings={onSyncHoldings}
                     onSavingChange={setHoldingSaving}

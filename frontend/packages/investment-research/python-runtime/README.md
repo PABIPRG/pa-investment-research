@@ -63,6 +63,12 @@ The allowlist covers market observation in `market-watch`; personal research dat
 
 Personalized feedback and the five `trading-core.local-learning-*` operations are local-only. They accept only opaque object ids, enumerated actions and surfaces, and a fixed structured-context projection; search terms, prompts, titles, report content, holdings quantities or costs, URLs, paths, and credential-like fields have no protocol slot. Invalid values fail before acquisition. If a verified lease is `external`, the Host releases it and rejects the operation before `fetch`, so local preference facts cannot be forwarded to a configured remote trading service. An `owned` or `attached` local service assigns the authoritative timestamp and applies the retention policy.
 
+## Deployment-aware backup and holdings transport
+
+The Runtime consumes the Host deployment snapshot instead of inferring a browser platform. Cloud Web refuses broker discovery, broker synchronization, native holdings, and holdings-provider configuration, while manual entry and browser bulk import remain available. `backup-describe` returns a managed location without a path in Cloud Web; local deployments retain their directory description and directory management.
+
+Browser uploads use bounded chunk sessions followed by archive inspection and the existing import preview. Stored downloads use separate authenticated chunk sessions over an immutable validated archive snapshot. Only direct `.pabackup` files are accepted; symlinks, non-files, archives over 64 MiB, stale ids, and invalid offsets are rejected. The opened size is rechecked and a fixed-size read rejects concurrent growth. At most two compressed snapshots remain active (128 MiB resident ceiling); concurrent validation has a 384 MiB logical payload ceiling including bounded decompression, excluding allocator overhead. Every terminal path releases its session, and client cancellation aborts the in-flight Remote before best-effort server cleanup.
+
 ## Model Experience
 
 None, as this Host lifecycle service registers no prompt, tool schema, session event, or result.

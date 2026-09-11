@@ -16,7 +16,8 @@ import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
 import type { HostFrame, WorkspaceId } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { RpcRequest, RpcResponse } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
-import { createApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
+import { createApiProxy } from './create-api-proxy.ts'
+import { deploymentCapabilitiesFor } from '@deepseek-ai/dsh-host-deployment-capabilities'
 import { MemoryStorageBackend } from '../../../storage/storage-domain/tests/helpers/memory-backend.ts'
 
 let nextRpc = 1
@@ -64,6 +65,7 @@ async function harness(
   extras: {
     openPath?: (path: string, signal: AbortSignal) => Promise<void>
     canOpenPath?: () => boolean
+    cloud?: boolean
   } = {},
 ) {
   const ctx = new Context()
@@ -107,6 +109,10 @@ async function harness(
     cwd: root,
     ...extras.openPath === undefined ? {} : { openPath: extras.openPath },
     ...extras.canOpenPath === undefined ? {} : { canOpenPath: extras.canOpenPath },
+    ...extras.cloud === true ? {
+      deploymentCapabilities: deploymentCapabilitiesFor('cloud-web'),
+      exposeCwd: false,
+    } : {},
   })
   return { api, ctx, storageDomain, root }
 }
@@ -229,6 +235,36 @@ describe('host.listDirectory / host.createDirectory', () => {
 })
 
 describe('host.openPath', () => {
+  it('does not disclose cwd or allow any host path operation in cloud Web', async () => {
+    const { api, ctx, root } = await harness(undefined, undefined, { cloud: true, canOpenPath: () => true })
+    await ctx.workspaceRegistry.create(root)
+    const description = expectOk(await api.host.describe(request({})))
+    expect(description.cwd).toBeUndefined()
+    expect(description.canOpenPath).toBe(false)
+    expect(description.deployment?.surface).toBe('cloud-web')
+    expect((await api.host.pickDirectory(request({}), new AbortController().signal)).result)
+      .toMatchObject({ ok: false, error: { code: 'directory-picker-unavailable' } })
+    expect((await api.host.openPath(request({ path: '/server/secret' }), new AbortController().signal)).result)
+      .toMatchObject({ ok: false })
+    expect(expectOk(await api.workspace.list(request({}))).items[0]?.path).toBeUndefined()
+    expect((await api.workspace.create(request({ path: root }))).result).toMatchObject({ ok: false })
+    expect((await api.sessions.create(request({ cwd: root }))).result).toMatchObject({ ok: false })
+
+    const conflictingWorkspace = await ctx.workspaceRegistry.create(stageDir(root, 'managed-other'))
+    const sessionId = SessionId('cloud-managed-session')
+    expectOk(await api.sessions.create(request({ sessionId })))
+    const conflict = await api.sessions.create(request({
+      sessionId,
+      workspaceId: conflictingWorkspace.id,
+    }))
+    expect(conflict.result).toMatchObject({
+      ok: false,
+      error: { code: 'internal', details: { sessionId } },
+    })
+    expect(JSON.stringify(conflict)).not.toContain(root)
+    expect(JSON.stringify(conflict)).not.toContain(conflictingWorkspace.path)
+  })
+
   it('describes whether this deployment can reach a user-visible native desktop', async () => {
     const visible = await harness(undefined, undefined, { canOpenPath: () => true })
     const headless = await harness(undefined, undefined, { canOpenPath: () => false })
@@ -367,6 +403,8 @@ describe('session creation and Workspace membership', () => {
   it('attaches a preallocated idempotent session while cwd-only sessions stay ungrouped', async () => {
     const { api, ctx, root } = await harness()
     const workspace = expectOk(await api.workspace.create(request({ path: stageDir(root, 'project') }))).workspace
+    const workspacePath = workspace.path
+    if (workspacePath === undefined) throw new Error('local deployment must expose workspace path')
     const sessionId = SessionId('session-workspace-preallocated')
 
     expectOk(await api.sessions.create(request({ workspaceId: workspace.workspaceId, sessionId })))
@@ -375,14 +413,14 @@ describe('session creation and Workspace membership', () => {
     expect(ctx.agents.list().filter(agent => agent.id === sessionId)).toHaveLength(1)
 
     const ungrouped = SessionId('session-cwd-only')
-    expectOk(await api.sessions.create(request({ cwd: workspace.path, sessionId: ungrouped })))
+    expectOk(await api.sessions.create(request({ cwd: workspacePath, sessionId: ungrouped })))
     expect(expectOk(await api.workspace.list(request({}))).items[0]?.sessionIds).toEqual([sessionId])
     expect(expectOk(await api.sessions.list(request({}))).items.map(item => item.sessionId)).toContain(ungrouped)
 
-    const conflict = await api.sessions.create(request({ cwd: join(workspace.path, 'other'), sessionId }))
+    const conflict = await api.sessions.create(request({ cwd: join(workspacePath, 'other'), sessionId }))
     expect(conflict.result).toMatchObject({
       ok: false,
-      error: { code: 'session-conflict', details: { sessionId, existingCwd: workspace.path } },
+      error: { code: 'session-conflict', details: { sessionId, existingCwd: workspacePath } },
     })
     const missing = await api.sessions.create(request({
       workspaceId: 'missing-workspace' as WorkspaceId,
@@ -512,7 +550,9 @@ describe('Host Workspace increments', () => {
     expect(expectOk(await api.workspace.list(request({}))).items).toEqual([])
     expect(expectOk(await api.sessions.list(request({}))).items.map(item => item.sessionId)).toContain(sessionId)
     expect(ctx.agents.get(sessionId)).toBeDefined()
-    expect(existsSync(workspace.path)).toBe(true)
+    const workspacePath = workspace.path
+    if (workspacePath === undefined) throw new Error('local deployment must expose workspace path')
+    expect(existsSync(workspacePath)).toBe(true)
 
     const missing = await api.workspace.delete(request({ workspaceId: workspace.workspaceId }))
     expect(missing.result).toMatchObject({
@@ -520,7 +560,7 @@ describe('Host Workspace increments', () => {
       error: { code: 'workspace-not-found', details: { workspaceId: workspace.workspaceId } },
     })
 
-    const reregistered = expectOk(await api.workspace.create(request({ path: workspace.path }))).workspace
+    const reregistered = expectOk(await api.workspace.create(request({ path: workspacePath }))).workspace
     expect(reregistered.workspaceId).not.toBe(workspace.workspaceId)
     expect(reregistered.path).toBe(workspace.path)
     expect(reregistered.sessionIds).toEqual([])

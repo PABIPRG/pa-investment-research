@@ -4,6 +4,8 @@
 
 dsh 浏览器表层组合包。[`cordis.patch.yml`](cordis.patch.yml) 叠加在 [`dsh-base`](../base/README.md) 之上：设置 coding persona，插入 Web 宿主行与浏览器插件名录，保持客户端插件重载链挂载，并挂载本包的 `web-runtime` 粘合插件。运行时解析已构建的前端 dist，只把显式配置的公共 authority 提供给浏览器信任栅栏，挂载 [`frontend-static`](../../host/frontend-static/README.md) 回退席位，注册模型可见的 Web 表层上下文与 `DSH_WEB_URL`，并在 Loader 结算后打印一个规范 URL。普通 `web-startup` 提供方解析 `--host`、`--port`、可重复的 `--trusted-host`、可重复的 `--trusted-proxy` 与 `--help`。默认仍只绑定回环；仅当已启用必需的管理员鉴权、至少一个可信 HTTPS authority、至少一个精确可信反向代理地址且保持安全 Cookie 时，才接受 `--host 0.0.0.0`。此时公告的地址是 `https://` 加第一个可信 authority，不再公告可直接访问的 LAN HTTP 地址。代理边界与凭据文件契约见 [`docs/web-auth.md`](../../../docs/web-auth.md)。
 
+`DSH_DEPLOYMENT_SURFACE` 用于显式选择 `local-web`（默认值）或 `cloud-web`；其他值会使启动失败。由此产生的 Host 能力快照控制路径披露、目录交互、原生打开、本地券商同步与浏览器备份传输。详见[部署能力矩阵](../../../docs/deployment-capabilities.md)。
+
 ## 模型体验
 
 ### Harness 源码与 Web 表层上下文
