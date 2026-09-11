@@ -282,9 +282,11 @@ export async function buildInvestmentPythonSidecar(
   const requirementsLock = await readFile(requirementsLockPath, 'utf8')
   verifyExactRequirements(requirementsLock, target)
 
+  const archiveStarted = Date.now()
   const archive = await prepareArchive(
     resolve(options.cache), target, targetLock, options.offline === true, dependencies.download ?? defaultDownload,
   )
+  console.log(`Python sidecar: archive ready in ${Date.now() - archiveStarted}ms`)
   const entries = await (dependencies.listArchive ?? defaultListArchive)(archive)
   entries.forEach(safeArchivePath)
 
@@ -293,6 +295,7 @@ export async function buildInvestmentPythonSidecar(
   await mkdir(parent, { recursive: true })
   const staging = await mkdtemp(join(parent, '.investment-python-build-'))
   try {
+    const extractStarted = Date.now()
     const extracted = join(staging, '.archive')
     await mkdir(extracted)
     await (dependencies.extractArchive ?? defaultExtractArchive)(archive, extracted)
@@ -303,14 +306,17 @@ export async function buildInvestmentPythonSidecar(
     await cp(runtimeSource, runtimeDestination, { recursive: true, dereference: true })
     await rm(extracted, { recursive: true, force: true })
 
+    console.log(`Python sidecar: runtime extracted in ${Date.now() - extractStarted}ms`)
     const sitePackages = join(staging, 'site-packages')
     await mkdir(sitePackages)
     const pythonExecutable = join(runtimeDestination, ...executableTail.split('/'))
     const runCommand = dependencies.runCommand ?? defaultRunCommand
+    const pipStarted = Date.now()
     const pipExit = await runCommand(pythonExecutable, [
       '-m', 'pip', 'install', '--disable-pip-version-check', '--no-compile',
       '--target', sitePackages, '-r', requirementsLockPath,
     ], staging)
+    console.log(`Python sidecar: pip finished in ${Date.now() - pipStarted}ms (exit ${pipExit})`)
     if (pipExit !== 0) throw new Error(`locked dependency installation failed with exit code ${pipExit}`)
 
     await mkdir(join(staging, 'backends'))
