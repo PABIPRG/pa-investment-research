@@ -27,6 +27,10 @@ describe('Electron profile overlay', () => {
     const byId = new Map(rows.map(row => [row.id, row]))
 
     expect(byId.get('directory-picker')).toEqual(expect.objectContaining({ disabled: true }))
+    expect(byId.get('deployment-capabilities')).toEqual(expect.objectContaining({
+      inject: null,
+      config: { surface: 'electron' },
+    }))
     expect(byId.get('directory-picker-native')).toEqual(expect.objectContaining({
       name: '@deepseek-ai/dsh-host-directory-picker-native',
     }))

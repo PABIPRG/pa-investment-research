@@ -22,6 +22,7 @@
 
 - id: deployment-capabilities
   name: '@deepseek-ai/dsh-host-deployment-capabilities'
+  inject: null
   config:
     surface: electron
 
