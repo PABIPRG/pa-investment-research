@@ -344,7 +344,10 @@ describe('Electron investment sidecar packaging', () => {
       await mkdir(dirname(stagedBase), { recursive: true })
       await mkdir(dirname(workspacePlugin), { recursive: true })
       await writeFile(join(baseSourceDir, 'package.json'), JSON.stringify({
-        dependencies: { '@deepseek-ai/dsh-example': 'workspace:^' },
+        dependencies: {
+          '@deepseek-ai/dsh-example': 'workspace:^',
+          'registry-example': '^1.0.0',
+        },
         exports: './lib/index.mjs',
         name: '@deepseek-ai/dsh-base',
         type: 'module',
@@ -371,6 +374,39 @@ describe('Electron investment sidecar packaging', () => {
       expect(pluginRelative).not.toBe('..')
       expect(pluginRelative.startsWith(`..${sep}`)).toBe(false)
       expect(isAbsolute(pluginRelative)).toBe(false)
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
+  it('fails when a declared workspace runtime dependency is absent from the package map', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-missing-workspace-edge-test-'))
+    const workspaceDir = join(rootDir, 'workspace')
+    const baseSourceDir = join(workspaceDir, 'packages', 'bundle', 'base')
+    const appSourceDir = join(workspaceDir, 'apps', 'electron')
+    const stagingDir = join(rootDir, 'app')
+    const stagedBase = join(stagingDir, 'node_modules', '@deepseek-ai', 'dsh-base')
+    try {
+      await mkdir(baseSourceDir, { recursive: true })
+      await mkdir(appSourceDir, { recursive: true })
+      await mkdir(join(workspaceDir, 'node_modules', '.pnpm', 'node_modules'), { recursive: true })
+      await mkdir(dirname(stagedBase), { recursive: true })
+      await writeFile(join(baseSourceDir, 'package.json'), JSON.stringify({
+        dependencies: {
+          '@deepseek-ai/dsh-missing': 'workspace:^',
+          'registry-example': '^1.0.0',
+        },
+        name: '@deepseek-ai/dsh-base',
+      }))
+      await writeFile(join(appSourceDir, 'package.json'), '{"name":"@deepseek-ai/dsh-electron"}')
+      await writeFile(join(stagingDir, 'package.json'), '{"name":"@deepseek-ai/dsh-electron"}')
+      await symlink(baseSourceDir, stagedBase, 'dir')
+
+      await expect(materializePackagingWorkspaceLinks(stagingDir, workspaceDir, appSourceDir))
+        .rejects.toThrow(
+          'workspace runtime dependency is missing from the packaging map: '
+          + '@deepseek-ai/dsh-base -> @deepseek-ai/dsh-missing',
+        )
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }

@@ -227,8 +227,12 @@ function runtimeWorkspaceDependencies(
     workspacePackage.manifest.dependencies,
     workspacePackage.manifest.peerDependencies,
   ]) {
-    for (const name of Object.keys(dependencies ?? {})) {
-      if (workspacePackages.has(name)) names.add(name)
+    for (const [name, specifier] of Object.entries(dependencies ?? {})) {
+      if (workspacePackages.has(name)) {
+        names.add(name)
+      } else if (specifier.startsWith('workspace:')) {
+        throw new Error(`workspace runtime dependency is missing from the packaging map: ${workspacePackage.manifest.name} -> ${name}`)
+      }
     }
   }
   return [...names].sort()
