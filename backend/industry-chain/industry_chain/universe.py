@@ -17,7 +17,7 @@ import requests
 
 from .config import settings
 
-UNIVERSE_PATH = settings.root / "data" / "a_share_universe.json"
+UNIVERSE_PATH = settings.data_root / "a_share_universe.json"
 
 # push2delay 节点实测可达（push2.eastmoney.com 域名在本环境被重置）
 _CLIST_URL = "https://push2delay.eastmoney.com/api/qt/clist/get"

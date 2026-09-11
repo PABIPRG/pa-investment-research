@@ -643,7 +643,9 @@ describe('InvestmentBackendManager', () => {
     })
     const unresolvedLease = await unresolvedManager.acquire('trading-core')
     expect(resolveUndefined).toHaveBeenCalledOnce()
-    expect(unresolved.specs[0]).not.toHaveProperty('env')
+    expect(unresolved.specs[0]?.env).toEqual({
+      DSH_INVESTMENT_STATE_DIR: join(unresolved.home, 'investment-research', 'trading-core'),
+    })
     unresolved.handle.exit()
     await unresolvedLease.release()
 
@@ -704,6 +706,31 @@ describe('InvestmentBackendManager', () => {
     expect(current.specs[0]?.env).toMatchObject({
       DSH_DATA_TRANSFER_TOKEN: 'host-only-token',
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(current.home, 'transactions'),
+    })
+    current.handle.exit()
+    await lease.release()
+  })
+
+  it('injects the writable instance state root into a managed source child', async () => {
+    const current = await harness()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: current.subprocess,
+      config: { dshHome: current.home },
+      checkHealth: async () => probes++ === 0 ? refused : healthy,
+      resolvePaths: () => ({
+        source: 'source',
+        projectDir: current.projectDir,
+        pythonExecutable: join(current.projectDir, 'env', 'bin', 'python'),
+      }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+
+    const lease = await manager.acquire('trading-core')
+
+    expect(current.specs[0]?.env).toMatchObject({
+      DSH_INVESTMENT_STATE_DIR: join(current.home, 'investment-research', 'trading-core'),
     })
     current.handle.exit()
     await lease.release()
@@ -1094,7 +1121,9 @@ describe('InvestmentBackendManager', () => {
     const lease = await signalled.manager.acquire('trading-core', signal)
     expect(signalled.specs[0]?.signal).toBeInstanceOf(AbortSignal)
     expect(signalled.specs[0]?.signal).not.toBe(signal)
-    expect(signalled.specs[0]).not.toHaveProperty('env')
+    expect(signalled.specs[0]?.env).toEqual({
+      DSH_INVESTMENT_STATE_DIR: join(signalled.home, 'investment-research', 'trading-core'),
+    })
     signalled.handle.exit()
     await lease.release()
     await lease.release()

@@ -6,7 +6,7 @@ English | [中文](2026-08-20-investment-python-runtime-profile.zh.md)
 
 ## Problem
 
-The investment function plugins need two Python HTTP services, but plugin activation cannot safely infer process ownership from a port or PID. A product launch also needs the existing Electron renderer and native carrier without copying the Web composition or putting process logic into patch-only bundles. The [investment package ownership decision](2026-08-20-investment-research-package-ownership.md) keeps HTTP/SSE mapping and model-visible rendering in the business packages; this decision owns the lifecycle and application composition beside them.
+The investment function plugins need three Python HTTP services, but plugin activation cannot safely infer process ownership from a port or PID. A product launch also needs the existing Electron renderer and native carrier without copying the Web composition or putting process logic into patch-only bundles. The [investment package ownership decision](2026-08-20-investment-research-package-ownership.md) keeps HTTP/SSE mapping and model-visible rendering in the business packages; this decision owns the lifecycle, writable instance layout, and application composition beside them.
 
 ## Decision
 
@@ -18,7 +18,9 @@ The three investment bundles remain patch-only and independently composable. `in
 
 Electron selects a profile before native specialization. `dsh electron --profile investment-research` passes the profile name to the main process, which calls `runProfile` for those five layers and then applies only the existing `electron.patch.yml`. That patch disables the Web server, static Web runtime, Web connection, adaptive directory picker, and client HMR, then inserts the native connection and directory-picker rows. `dsh electron` retains `web` as its default. Configuration inspection stays a separate non-product command: `dsh --profile investment-research --dump-default-config`.
 
-Source checkouts discover the two backend directories upward from the installed Runtime package. Deployments without that repository layout configure an absolute `backendProjectDir`. A missing virtual environment produces the platform's `./init.sh` or `init.bat` instruction and performs no installation. Python scheduler and external push configuration remain backend-owned; stock-analysis in-chat push defaults to false.
+Source checkouts discover the three backend directories upward from the installed Runtime package. Deployments without that repository layout configure an absolute `backendProjectDir`. A missing virtual environment produces the platform's `./init.sh` or `init.bat` instruction and performs no installation. Every owned managed child receives `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`, so source and bundled children share one writable contract while independently started source backends retain repository defaults. Python scheduler and external push configuration remain backend-owned; stock-analysis in-chat push defaults to false.
+
+The shared home-path package resolves Host settings, profiles, sessions, attachments, storage, backups, and all backend subtrees from one mounted root. Runtime initialization creates an empty versioned layout. Runtime migration copies only the declared durable inventory through a sibling staging directory, verifies ordinary files, and atomically publishes the target without changing the source. It excludes credentials and operational artifacts, keeps PAB-14 business archive semantics separate, and requires an explicit consistency backup operation for SQLite files while the source is online.
 
 ## Alternatives considered
 
@@ -32,7 +34,7 @@ Source checkouts discover the two backend directories upward from the installed 
 
 ## Verification
 
-Package coverage pins URL and path validation, identity-aware health classification, registration conflicts, single-flight, reference counts, owned/attached/external release, bounded logs, state matching, cancellation, startup failures, and quiescent disposal. Real Loader tests pin bundle removal and external attachment; keyless replay pins the assembled twenty-tool investment profile. macOS and Windows CI run a real managed fake backend from a path containing spaces and CJK characters, while the manual engine workflow initializes both backend virtual environments and checks the composed twenty-tool profile. CLI and Electron tests pin argv forwarding, the five bundle layers, the Web-carrier removals, and the native rows.
+Package coverage pins URL and path validation, identity-aware health classification, registration conflicts, single-flight, reference counts, owned/attached/external release, bounded logs, state matching, cancellation, startup failures, and quiescent disposal. Layout and migration tests pin the complete path map, source preservation, target conflict refusal, staged failure, format rejection, checksum verification, and online SQLite backup boundary. Real Loader tests pin bundle removal and external attachment; keyless replay pins the assembled investment profile. macOS and Windows CI run a real managed fake backend from a path containing spaces and CJK characters, while the manual engine workflow initializes all backend virtual environments and checks the composed profile. CLI and Electron tests pin argv forwarding, bundle layers, Web-carrier removals, and native rows.
 
 ## Consequences
 

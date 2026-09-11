@@ -17,7 +17,7 @@ import requests
 
 from .config import settings
 
-REPORTS_DIR = settings.root / "data" / "reports"
+REPORTS_DIR = settings.reports_dir
 
 # 东财请求串行节流（进程级），reportapi 与详情页共用
 _MIN_INTERVAL = 0.6

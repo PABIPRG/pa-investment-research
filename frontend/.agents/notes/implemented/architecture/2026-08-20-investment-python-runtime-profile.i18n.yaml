@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-20-investment-python-runtime-profile.md
-2026-08-20-investment-python-runtime-profile.md: 1ac954bee5f63bf2221a153cefa9a51d628159f1
-2026-08-20-investment-python-runtime-profile.zh.md: 3d437fdb2167b14c34ea024beedd8d0c3dca35fb
+2026-08-20-investment-python-runtime-profile.md: 6e2dda749a7c3a341eb3eb82ef68d30bebec8612
+2026-08-20-investment-python-runtime-profile.zh.md: b6afbf6bae4784b06c3c6b25fb4cae408fa86c56
