@@ -4,7 +4,7 @@
 
 `investment-research` Profile 的投研设置页面。页面顶部的**数据与备份**区块管理可迁移的 `.pabackup` 归档，支持按投研数据域选择内容、预览增量导入、逐域配置冲突规则，并可在导入前创建安全备份。Host 确认数据应用成功后，页面会自动刷新，使所有已挂载的产品界面从权威来源重新读取导入数据；导入失败时保留确认弹窗与用户选择。**导出当前对话**仍是独立操作，它调用现有 `ctx.sessionLogDownload.download(currentSessionId)` 控制器，产物只包含所选对话树及其引用附件。
 
-浏览器插件在 `settings.section` 注册本地化的 `investment-research` 条目，同时只投影 `ctx.investmentResearchRuntimeClient` 提供的不含机密快照，展示每个 backend 的所有权、健康状态、已声明工具数、凭据状态、能力等级以及 Host 提供的 Runtime 日志提示。用户界面不会暴露内部持久化实现细节。
+浏览器插件在 `settings.section` 注册本地化的 `investment-research` 条目，同时只投影 `ctx.investmentResearchRuntimeClient` 提供的不含机密快照，展示每个 backend 的所有权、健康状态、已声明工具数、凭据状态和能力等级。本地部署还会展示 Host 提供的 Runtime 日志提示；云端 Web 的 readiness 不包含该路径，页面也会省略整行日志信息。用户界面不会暴露内部持久化实现细节。
 
 页面从不读取、接收或暂存凭据值。缺少 `DEEPSEEK_API_KEY` 时只提供一个凭据操作：调用 `openSection('models')`，让设置面板保持打开并导航到现有 Models 页面。Key 变更后，页面通过 facade 提供显式的全应用重启操作。root-scoped 交互 store 呈现请求中、已接受、不可用和失败反馈；readiness 重新检查采用 single-flight，并独立呈现失败反馈。UI 不直接调用 Electron。
 

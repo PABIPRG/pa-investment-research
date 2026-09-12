@@ -248,7 +248,14 @@ describe('InvestmentReadinessSection', () => {
 
   it('uses managed storage and a manual-only holdings policy in cloud Web', async () => {
     const filename = '投研备份-全量数据-2026-09-11_09-30-00.pabackup'
-    const { requestData } = mount(CONFIGURED, {
+    const cloudReadiness: InvestmentReadinessSnapshot = {
+      ...CONFIGURED,
+      backends: CONFIGURED.backends.map((backend) => {
+        const { runtimeLogPath: _runtimeLogPath, ...clientSafe } = backend
+        return clientSafe
+      }),
+    }
+    const { container, requestData } = mount(cloudReadiness, {
       cloud: true,
       backupList: async () => [{
         filename,
@@ -268,6 +275,9 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.queryByRole('button', { name: '更改位置' })).toBeNull()
     expect(screen.getByRole('button', { name: '下载' })).toBeTruthy()
     expect(screen.getByText('云端不会连接或扫描券商客户端；请使用手工录入或批量导入。')).toBeTruthy()
+    expect(screen.queryByText('运行日志')).toBeNull()
+    expect(container.textContent).not.toContain(SOURCE_LOG)
+    expect(container.textContent).not.toContain(WINDOWS_LOG)
     expect(requestData).not.toHaveBeenCalled()
   })
 
@@ -896,8 +906,28 @@ describe('InvestmentReadinessSection', () => {
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
     expect(refresh).toHaveBeenCalledOnce()
     await waitFor(() => {
-      expect(screen.getByRole('status').textContent).toBe('重新检查失败，请查看运行日志后重试。')
+      expect(screen.getByRole('status').textContent).toBe('重新检查失败，请稍后重试；持续失败请联系管理员。')
     })
+  })
+
+  it('uses a path-free English recovery hint when no Runtime log is exposed', async () => {
+    const { runtimeLogPath: _runtimeLogPath, ...pathFreeBackend } = MISSING.backends[0]!
+    const failedWithoutLog: InvestmentReadinessSnapshot = {
+      runtimeAsset: MISSING.runtimeAsset,
+      backends: [{ ...pathFreeBackend, backendStatus: 'failed', ownership: null }],
+    }
+    mount(failedWithoutLog, {
+      locale: 'en',
+      refresh: () => Promise.reject(new Error('readiness unavailable')),
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toBe(
+        'The readiness check failed. Try again later; contact an administrator if it continues.',
+      )
+    })
+    expect(screen.queryByText('Runtime log')).toBeNull()
   })
 
   it('owns one refresh flight and keeps restart feedback independent', async () => {

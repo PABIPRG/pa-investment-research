@@ -777,9 +777,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'readiness\') readiness(): InvestmentReadinessSnapshot',
-        description: 'Read the immutable, client-safe Runtime readiness projection.',
+        description: 'Read the immutable, client-safe Runtime readiness projection. Cloud Web omits Host Runtime log paths; local deployments retain them for repair diagnostics.',
         parameters: [],
-        returns: 'current backend, credential, and capability facts.',
+        returns: 'current backend, credential, capability, and deployment-safe diagnostic facts.',
       },
       {
         signature: '@Remote(\'request-data\') requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>',

@@ -85,8 +85,8 @@ export interface InvestmentBackendReadiness {
   readonly capability: InvestmentCapabilityReadiness | null
   /** Whether an owned child must be replaced before another LLM-dependent call. */
   readonly restartRequired: boolean
-  /** Active Runtime log path used by actionable diagnostics. */
-  readonly runtimeLogPath: string
+  /** Active Runtime log path for local-deployment diagnostics; omitted from Cloud Web projections. */
+  readonly runtimeLogPath?: string
 }
 
 /** Synchronous, immutable, JSON-safe investment Runtime readiness projection. */
