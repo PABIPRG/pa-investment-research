@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-client-ui-settings-investment-research",
   "description": "Investment Runtime readiness, portable data backup, import, reset, and conversation export Settings page",
-  "version": "0.1.0-rc.12",
+  "version": "0.2.0-alpha.2",
   "publishConfig": {
     "access": "public"
   },
