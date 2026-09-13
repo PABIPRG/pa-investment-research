@@ -194,9 +194,10 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
   const needsRefresh = snapshot.backends.length === 0 || snapshot.backends.some(
     backend => backend.backendStatus === 'failed' || backend.backendStatus === 'stopped',
   )
+  const hasRuntimeLog = snapshot.backends.some(backend => backend.runtimeLogPath !== undefined)
   const restartMessage = restartFeedback(restart, props.t)
   const refreshMessage = interaction.refresh === 'error'
-    ? props.t('refreshFailed')
+    ? props.t(hasRuntimeLog ? 'refreshFailed' : 'refreshFailedWithoutLog')
     : snapshot.backends.length === 0 ? props.t('loading') : undefined
   const runtimeAssetKey = snapshot.runtimeAsset.status === 'source-env-ready'
     ? 'sourceRuntime'
@@ -363,10 +364,12 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
                   <dt>{interpolate(props.t('tools'), 'count', String(capability?.toolCount ?? 0))}</dt>
                   <dd>{llmLabel(capability, props.t)}</dd>
                 </div>
-                <div className={css.logRow}>
-                  <dt>{props.t('log')}</dt>
-                  <dd><code>{backend.runtimeLogPath}</code></dd>
-                </div>
+                {backend.runtimeLogPath === undefined ? null : (
+                  <div className={css.logRow}>
+                    <dt>{props.t('log')}</dt>
+                    <dd><code>{backend.runtimeLogPath}</code></dd>
+                  </div>
+                )}
               </dl>
             </article>
           )

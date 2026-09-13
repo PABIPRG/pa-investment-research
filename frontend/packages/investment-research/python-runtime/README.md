@@ -29,7 +29,7 @@ Concurrent acquisitions for one backend id share one startup. Active acquisition
 
 The investment profile reuses the Models settings page as the only product input for `DEEPSEEK_API_KEY`. The credential provider resolves that reference only while an `owned` managed child is being spawned, and the Runtime forwards it only to backend definitions that explicitly allow it. The value is never copied into a backend `.env`, Runtime state, logs, readiness snapshots, or Client Remote data. An `attached` or `external` endpoint receives no local credential; its operator owns that service's credentials.
 
-Readiness reports backend ownership, safe credential facts, capability level, tool count, restart requirement, and the diagnostic log path. Updating the Key marks active owned backends `restart-required`; new LLM-dependent tool calls fail preflight until the application completes a quiescent restart. Non-LLM operations remain available according to their capability declaration, and a healthy `industry-chain` capability that declares `llm: none` reports `industry-full` without reading a model credential.
+Readiness reports backend ownership, safe credential facts, capability level, tool count, and restart requirement. Local deployments also receive the diagnostic log path; Cloud Web omits it from the Remote response. Updating the Key marks active owned backends `restart-required`; new LLM-dependent tool calls fail preflight until the application completes a quiescent restart. Non-LLM operations remain available according to their capability declaration, and a healthy `industry-chain` capability that declares `llm: none` reports `industry-full` without reading a model credential.
 
 ## Project discovery and initialization
 

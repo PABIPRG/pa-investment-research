@@ -29,7 +29,7 @@
 
 投研 profile 复用 Models 设置页作为 `DEEPSEEK_API_KEY` 的唯一产品输入。只有在启动 `owned` managed child 时，凭据 provider 才会解析该引用；Runtime 也只会把它转发给显式允许该引用的 backend 定义。凭据值不会复制进 backend `.env`、Runtime state、日志、就绪快照或 Client Remote 数据。`attached` 与 `external` endpoint 不接收本机凭据，其凭据由该服务的 operator 负责。
 
-就绪状态会报告 backend 归属、安全凭据事实、能力等级、工具数、重启要求和诊断日志路径。Key 更新后，活动 owned backend 会标记为 `restart-required`；应用完成 quiescent restart（静默收敛重启）前，新的 LLM 依赖工具调用会在 preflight 阶段失败。非 LLM 操作继续按能力声明保持可用；健康且声明 `llm: none` 的 `industry-chain` 能力无需读取模型凭据，并报告 `industry-full`。
+就绪状态会报告 backend 归属、安全凭据事实、能力等级、工具数和重启要求。本地部署还会收到诊断日志路径；云端 Web 会从 Remote 响应中省略该路径。Key 更新后，活动 owned backend 会标记为 `restart-required`；应用完成 quiescent restart（静默收敛重启）前，新的 LLM 依赖工具调用会在 preflight 阶段失败。非 LLM 操作继续按能力声明保持可用；健康且声明 `llm: none` 的 `industry-chain` 能力无需读取模型凭据，并报告 `industry-full`。
 
 ## 项目发现与初始化
 

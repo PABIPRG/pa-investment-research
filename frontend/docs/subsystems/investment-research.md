@@ -154,7 +154,8 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
 
 /**
  * Read the immutable, client-safe Runtime readiness projection.
- * @returns current backend, credential, and capability facts.
+ * Cloud Web omits Host Runtime log paths; local deployments retain them for repair diagnostics.
+ * @returns current backend, credential, capability, and deployment-safe diagnostic facts.
  */
 @Remote('readiness') readiness(): InvestmentReadinessSnapshot
 

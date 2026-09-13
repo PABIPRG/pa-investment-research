@@ -6,7 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { remoteMethods, TypertRemoteFailure } from '@deepseek-ai/dsh-typert-protocol'
-import DeploymentCapabilities from '@deepseek-ai/dsh-host-deployment-capabilities'
+import DeploymentCapabilities, { type DeploymentSurface } from '@deepseek-ai/dsh-host-deployment-capabilities'
 import InvestmentPythonRuntime from '../src/index.ts'
 import type { InvestmentRestartResult, PythonBackendDefinition } from '../src/types.ts'
 
@@ -34,11 +34,14 @@ const externalBackend: PythonBackendDefinition = {
   managedEnv: { DEEPSEEK_API_KEY: SECRET },
 }
 
-function runtimeWith(appRestart?: () => void): InvestmentPythonRuntime {
+function runtimeWith(
+  appRestart?: () => void,
+  surface: DeploymentSurface = 'cli',
+): InvestmentPythonRuntime {
   const ctx = new Context()
   contexts.push(ctx)
   new StubCredentials(ctx)
-  new DeploymentCapabilities(ctx, { surface: 'cli' })
+  new DeploymentCapabilities(ctx, { surface })
   ctx.provide('subprocess', {} as never)
   if (appRestart !== undefined) ctx.provide('appRestart', appRestart)
   return new InvestmentPythonRuntime(ctx)
@@ -71,6 +74,25 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(directoryError).toBeInstanceOf(TypertRemoteFailure)
     expect((directoryError as TypertRemoteFailure<{ message: string }>).failure.message).toMatch(/托管备份存储/)
     await expect(runtime.nativeHoldings({ action: 'read', account_mode: 'simulated' })).rejects.toThrow(/不提供原生/)
+  })
+
+  it('omits Host Runtime log paths from cloud readiness', () => {
+    const dshHome = '/private/server/investment-state'
+    const runtime = cloudRuntime(dshHome)
+    runtime.register(externalBackend)
+
+    const readiness = runtime.readiness()
+
+    expect(readiness.backends).toHaveLength(1)
+    expect(readiness.backends[0]).not.toHaveProperty('runtimeLogPath')
+    expect(JSON.stringify(readiness)).not.toContain(dshHome)
+  })
+
+  it.each(['cli', 'local-web', 'electron'] as const)('keeps the Runtime log path in %s readiness', (surface) => {
+    const runtime = runtimeWith(undefined, surface)
+    runtime.register(externalBackend)
+
+    expect(runtime.readiness().backends[0]?.runtimeLogPath).toMatch(/backend\.log$/)
   })
 
   it('maps a cloud storage failure to a stable safe Remote error without exposing its Host path', async () => {
