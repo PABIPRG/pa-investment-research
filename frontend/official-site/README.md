@@ -29,15 +29,27 @@ node build.mjs
 node --env-file=.env build.mjs
 # 验证构建与环境变量分支
 node verify.mjs
+# 方向累计、焦点、回弹与布局重算
+node --test scroll-header.test.mjs
 ```
 
 部署仅上传 dist；不要将整个目录设为静态输出目录。源码 index.html 是未注入环境变量的预览模板，以 dist/index.html 为部署结果。
 
 ## 目录
 
-- index.html、style.css、motion.js、app-icon.png：官网源码及资源。
+- index.html、style.css、motion.js、scroll-header.mjs、app-icon.png：官网源码及资源。
 - build.mjs、vercel.json：构建与部署配置。
 - design/：设计拆解、历史深色参考与修改记录，不参与发布。记录中的旧预览路径仅为历史证据。
 - DEPLOY-SEO.md：SEO/GEO 检查与上线后待验证项。
 
 尚未部署；投研业务入口仅在配置 WEB_APP_URL 后跳转。历史 dark-reference 不代表当前官网功能。
+
+## 方向感知导航
+
+首屏内保持显示；离开实际首屏底部后，同向累计下滚 24px 隐藏、上滚 12px 显示。固定层使用 0.36 秒 transform 过渡，不改变正文布局。导航键盘焦点（:focus-visible）强制显示，鼠标点击后的残留焦点不阻止下滚隐藏；主题按钮保留原高度，入口按钮与其对齐（桌面实测 40.5px、窄屏 40px）。键盘焦点，减少动态模式持续显示且无过渡。无 JavaScript 时保留原非吸顶导航。锚点偏移随导航高度更新，研究流程固定段为导航预留空间。
+
+导航沿用全宽与 blur 3px；首屏使用浅色 10% / 深色 14% 背景，导航下缘覆盖正文时两种主题均改为 96% 不透明度，保证跨区段可读性。全站主题由原主题按钮管理。实际验收与可读性限制见 [方向导航验收记录](design/scroll-header-uat.md)。
+
+## 研究助理展示
+
+研究助理采用研究视角选择与问题札记布局，三项切换复用原示例内容和键盘方向键操作。标题、问题与输出分层呈现，标注非实时分析；移除语音波形装饰，窄屏改为上方三列选择、下方正文。

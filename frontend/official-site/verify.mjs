@@ -9,7 +9,7 @@ import {readdir} from 'node:fs/promises';
 const root=dirname(fileURLToPath(import.meta.url));
 const dir=await mkdtemp(join(tmpdir(),'official-site-check-'));
 try{
- for(const file of ['build.mjs','index.html','style.css','motion.js','app-icon.png'])await copyFile(join(root,file),join(dir,file));
+ for(const file of ['build.mjs','index.html','style.css','motion.js','scroll-header.mjs','app-icon.png'])await copyFile(join(root,file),join(dir,file));
  const run=vars=>spawnSync(process.execPath,[join(dir,'build.mjs')],{env:{...process.env,SITE_URL:'',WEB_APP_URL:'',VERCEL_ENV:'preview',...vars},encoding:'utf8'});
  assert.equal(run({}).status,0);
  let html=await readFile(join(dir,'dist/index.html'),'utf8');
@@ -31,7 +31,7 @@ try{
  assert.ok(!html.includes('目前本站的网页版入口尚未接入'));
  assert.ok(html.includes('rel="canonical" href="https://example.com/"'));
  assert.ok((await readFile(join(dir,'dist/sitemap.xml'),'utf8')).includes('<loc>https://example.com/</loc>'));
- assert.deepEqual((await readdir(join(dir,'dist'))).sort(),['app-icon.png','index.html','motion.js','robots.txt','sitemap.xml','style.css']);
+ assert.deepEqual((await readdir(join(dir,'dist'))).sort(),['app-icon.png','index.html','motion.js','robots.txt','scroll-header.mjs','sitemap.xml','style.css']);
  const motion=await readFile(join(root,'motion.js'),'utf8');
  const binding=motion.slice(motion.indexOf("document.querySelectorAll('.web-entry')"));
  const navigations=[];const listeners=[];
