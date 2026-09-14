@@ -51,3 +51,7 @@ dsh web --host 0.0.0.0 --trusted-host research.example.com --trusted-proxy 127.0
 `GET /healthz` 只返回 `ok` 或 `not-ready`，不会暴露用户名、文件路径或会话信息。PAB-19 的进程托管可使用该端点判断就绪；鉴权配置缺失时必须把 503 当作不可就绪。PAB-20 的网络部署必须提供 HTTPS、保留 Host、配置可信 authority，且不能开启不安全 Cookie。
 
 匿名可见信息仅限登录页 HTML/基础壳资源、`/auth/session` 的最小公开状态与不含部署细节的 `/healthz` 就绪状态。客户端能力图通过受保护的 `/auth/boot` 获取，插件 bundle 与 `/plugins/events` HMR 流必须先通过共享请求信任和会话授权，所有 source map 返回 404；`/api`、通用 RPC、会话导出和 WebSocket 业务通道均在服务端鉴权边界之后。
+
+## 验证码与登录恢复
+
+本地自适应验证码在同一有效 IP 连续两次凭据失败后出现。验证码为 6 位数字，2 分钟有效；可用“换一张”刷新，失败后按新图片重新输入。图片区域支持键盘操作，但图片内容暂不支持读屏识别；需要协助时请联系部署管理员。该机制不能替代强密码和限流，详细状态、容量、IP 共用与 OCR 限制见[鉴权包说明](../packages/api/web-auth/README.zh.md#本地自适应验证码)。
