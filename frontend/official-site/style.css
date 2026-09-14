@@ -114,3 +114,9 @@ html[data-theme="dark"]{color-scheme:dark}
 .docs-entry{display:inline-flex;align-items:center;gap:10px;line-height:20px}.docs-entry:hover .entry-arrow,.docs-entry:focus-visible .entry-arrow{transform:translateX(2px)}
 
 .web-entry[aria-disabled="true"] .entry-arrow{display:none}
+
+/* 导航玻璃层柔化背后的坐标轴，文字与控件保持清晰。 */
+body>header{background:rgba(255,255,255,.68);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}[data-theme="dark"] body>header{background:rgba(17,17,17,.68)}@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){body>header{background:rgba(255,255,255,.94)}[data-theme="dark"] body>header{background:rgba(17,17,17,.94)}}
+
+/* 全宽玻璃导航随页面滚动，保留背景内容的可辨识度。 */
+body>header{position:absolute;top:0;left:0;right:0;width:100%;z-index:5;padding-inline:40px;background:rgba(255,255,255,.10);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}[data-theme="dark"] body>header{background:rgba(17,17,17,.14)}@media(max-width:767px){body>header{padding-inline:20px}}@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){body>header{background:rgba(255,255,255,.9)}[data-theme="dark"] body>header{background:rgba(17,17,17,.9)}}
