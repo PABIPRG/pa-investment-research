@@ -2177,6 +2177,14 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
   }
 
   const api: ApiProxy = {
+    modelAdmin: {
+      describe: request => api.settings.describe(request),
+      mutate: request => api.settings.mutate(request),
+      describeCredentials: request => api.credentials.describe(request),
+      setCredential: request => api.credentials.set(request),
+      unsetCredential: request => api.credentials.unset(request),
+      discoverModels: (request, signal) => api.llm.discoverModels(request, signal),
+    },
     sessions: {
       list: request => ok(request, { items: [...sessions].sort((a, b) => b.updatedAt - a.updatedAt) }),
       search: (request, signal) => {
@@ -3077,6 +3085,13 @@ export class FixtureApiClient extends AbstractApiClient {
     signal: AbortSignal,
   ): Promise<RpcResponse<unknown>> {
     switch (method) {
+      case 'modelAdmin.describe': return this.api.modelAdmin.describe(request)
+      case 'modelAdmin.mutate': return this.api.modelAdmin.mutate(request)
+      case 'modelAdmin.describeCredentials': return this.api.modelAdmin.describeCredentials(request)
+      case 'modelAdmin.setCredential': return this.api.modelAdmin.setCredential(request)
+      case 'modelAdmin.unsetCredential': return this.api.modelAdmin.unsetCredential(request)
+      case 'modelAdmin.discoverModels': return this.api.modelAdmin.discoverModels(request, signal)
+
       case 'session.list': return this.api.sessions.list(request)
       case 'session.search': return this.api.sessions.search(request, signal)
       case 'session.create': return this.api.sessions.create(request)

@@ -24,7 +24,7 @@ async function bench(isLoopback = true) {
   new TestRemote(ctx)
   // The apply path only captures the wire face; no call leaves this fake
   // until a section actually loads.
-  ctx.provide('connection', { api: {}, isLoopback } as never)
+  ctx.provide('connection', { api: { modelAdmin: { describe: vi.fn(), mutate: vi.fn(), describeCredentials: vi.fn(), setCredential: vi.fn(), unsetCredential: vi.fn(), discoverModels: vi.fn() } }, isLoopback } as never)
   return { ctx, slots: ctx.get('slots') as SlotRegistry, locale }
 }
 

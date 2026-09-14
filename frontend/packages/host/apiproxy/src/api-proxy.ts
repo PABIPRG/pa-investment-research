@@ -3,6 +3,8 @@
  * narrow RpcRequest<P> and echoes request.rpcId on the RpcResponse<T>.
  */
 
+import { createModelAdmin } from './model-admin.ts'
+
 import { randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -1992,7 +1994,8 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     return ok(request, namespaceView(descriptor))
   }
 
-  return {
+  const api: ApiProxy = {
+    modelAdmin: createModelAdmin(() => api),
     sessions: {
       // Attached sessions summarize from memory; persisted-but-unattached (cold)
       // sessions merge in from the persistence store so history survives restarts.
@@ -3759,4 +3762,5 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       return Promise.resolve({ accepted: true })
     },
   }
+  return api
 }

@@ -56,7 +56,10 @@ export interface ModelsSettingsState {
  * @returns the message to show.
  */
 export function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  const message = error instanceof Error ? error.message : String(error)
+  if (/HTTP 403/.test(message)) return '当前会话无权管理模型配置，请重新登录管理员账号后重试'
+  if (/HTTP 401/.test(message)) return '登录已过期，请重新登录后重试'
+  return message
 }
 
 /**
@@ -136,7 +139,7 @@ export class ModelsSettingsStore {
       if (generation !== this.generation) return
       this.store.update((s) => {
         s.status = 'error'
-        s.error = error instanceof Error ? error.message : String(error)
+        s.error = messageOf(error)
       })
       return
     }
