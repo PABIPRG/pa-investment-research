@@ -1,0 +1,20 @@
+{
+  "mode": "preview",
+  "scene": "投研智能体首页",
+  "revision": 11,
+  "user_approved": false,
+  "dynamic_verified": false,
+  "evidence": "revision-notes.md",
+  "hashes": {
+    "preview.html": "e14d63d05ec91e94e7115b0a122e1890755234193d12285261c4cc63939981b2",
+    "style.css": "4be08d6873b850ea24cab95a2a82a7446e0d214cefe4c7c1c7970dddb53ea518",
+    "motion.js": "c50f7389933d222e789a70afb30973f3c9ec24f666fde68478e63e1fd7415ac3",
+    "app-icon.png": "41d9922d7bc8a95b15787446cfa616f9506495d698efece08f6d084b0236817b",
+    "revision-notes.md": "3bdda30087f051952b560c33f7dae57ca0f128465b2658090b9659f858c189d8",
+    "build.mjs": "5f383f8c1008231176d87bb7b53b9c8770619525b27fedfaa85a59f4fee5d166",
+    "vercel.json": "ce6d04421ce35056b8709927a1b217cfbff671a791ca0fc09ceb59b8ec8fdbd6",
+    "DEPLOY-SEO.md": "79f136a3babdd772bc2d1e448fed08f2df00b6ed61b5e1e3f5d2817bf98173c1"
+  },
+  "default_theme": "light",
+  "preserved_dark": "dark-reference/preview.html"
+}
