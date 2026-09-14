@@ -16,6 +16,7 @@ import {
 } from './strategy-display.ts'
 import type { StrategyResearchStage } from './state.ts'
 import { TASK_CANCELLED, taskId, waitForTask } from './task-client.ts'
+import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import css from './InvestmentShell.module.css'
 
 export type InvestmentRequestData = (request: InvestmentDataRequest) => Promise<unknown>
@@ -26,20 +27,26 @@ interface DataState {
   readonly error: string
 }
 
+interface DataResourceRunOptions {
+  readonly background?: boolean
+}
+
 function useDataResource(requestData: InvestmentRequestData) {
   const generation = useRef(0)
   const settledKey = useRef('')
   const flights = useRef(new Map<string, Promise<unknown>>())
   const [state, setState] = useState<DataState>({ phase: 'loading', value: undefined, error: '' })
   useEffect(() => () => { generation.current += 1 }, [])
-  const run = useCallback((request: InvestmentDataRequest): void => {
+  const run = useCallback((request: InvestmentDataRequest, options: DataResourceRunOptions = {}): void => {
     const key = JSON.stringify(request)
     const current = ++generation.current
-    setState(previous => ({
-      phase: 'loading',
-      value: settledKey.current === key ? previous.value : undefined,
-      error: '',
-    }))
+    if (options.background !== true) {
+      setState(previous => ({
+        phase: 'loading',
+        value: settledKey.current === key ? previous.value : undefined,
+        error: '',
+      }))
+    }
     let flight = flights.current.get(key)
     if (flight === undefined) {
       flight = Promise.resolve().then(() => requestData(request))
@@ -58,11 +65,13 @@ function useDataResource(requestData: InvestmentRequestData) {
       },
       (reason: unknown) => {
         if (current === generation.current) {
-          setState(previous => ({
-            phase: 'error',
-            value: settledKey.current === key ? previous.value : undefined,
-            error: productErrorText(reason),
-          }))
+          setState(previous => options.background === true
+            ? { ...previous, error: productErrorText(reason) }
+            : {
+                phase: 'error',
+                value: settledKey.current === key ? previous.value : undefined,
+                error: productErrorText(reason),
+              })
         }
       },
     )
@@ -1526,6 +1535,7 @@ export function ShadowValidationPage({
   requestData, selectedStrategyId, onOpenEvolution, onOpenReports, onAnalyze,
   onOpenStock = () => {}, strategyNames = {}, embedded = false, onShowAllStrategies,
 }: ShadowValidationPageProps) {
+  const { hidden: fundsHidden } = useFundsPrivacy()
   const status = useDataResource(requestData)
   const alive = useAliveRef()
   const positions = useDataResource(requestData)
@@ -1714,8 +1724,8 @@ export function ShadowValidationPage({
               const row = <>
                 <span><strong>{name}</strong><small>{positionMeta}</small></span>
                 <span>
-                  <b>{quantity === undefined ? money(item.market_value) : `${quantity.toLocaleString('zh-CN')} 股`}</b>
-                  <small>{quantity === 0 ? '当前空仓' : `成本 ${money(item.avg_cost ?? item.entry_price)}`}</small>
+                  <b>{privateFunds(quantity === undefined ? money(item.market_value) : `${quantity.toLocaleString('zh-CN')} 股`, fundsHidden)}</b>
+                  <small>{quantity === 0 ? '当前空仓' : `成本 ${privateFunds(money(item.avg_cost ?? item.entry_price), fundsHidden)}`}</small>
                 </span>
               </>
               return canOpenStock ? (
@@ -1785,8 +1795,8 @@ export function ShadowValidationPage({
                     <p>该记录来自旧版每日影子快照，不具备任务编号、精确报告或重跑关系。</p>
                     <dl className={css.shadowTaskMeta}>
                       <div><dt>净值</dt><dd>{compactMetric(item.nav)}</dd></div>
-                      <div><dt>当前权益</dt><dd>{money(number(item.equity))}</dd></div>
-                      <div><dt>初始资金</dt><dd>{money(number(item.initial_capital))}</dd></div>
+                      <div><dt>当前权益</dt><dd>{privateFunds(money(number(item.equity)), fundsHidden)}</dd></div>
+                      <div><dt>初始资金</dt><dd>{privateFunds(money(number(item.initial_capital)), fundsHidden)}</dd></div>
                       <div><dt>异常</dt><dd>{text(item.strategy_error, Object.keys(asRecord(item.symbol_errors)).length > 0 ? `${Object.keys(asRecord(item.symbol_errors)).length} 个标的行情异常` : '—')}</dd></div>
                     </dl>
                   </article>
@@ -1831,7 +1841,7 @@ export function ShadowValidationPage({
                               <StatusBadge value={text(result.status, '')} />
                             </div>
                             {text(result.reason, '') !== '' && <p>{text(result.reason)}</p>}
-                            <small>净值 {compactMetric(snapshot.nav)} · 权益 {money(number(snapshot.equity))}</small>
+                            <small>净值 {compactMetric(snapshot.nav)} · 权益 {privateFunds(money(number(snapshot.equity)), fundsHidden)}</small>
                             <small>净值证据：{text(equityRef.collection)} / {text(equityRef.key)} / {text(equityRef.task_id)}</small>
                             <small>报告编号：{text(result.report_id)}</small>
                           </div>
@@ -3499,6 +3509,9 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const loadDataStatus = useCallback(() => {
     dataStatus.run({ operation: 'industry-chain.data-status' })
   }, [dataStatus.run])
+  const pollDataStatus = useCallback(() => {
+    dataStatus.run({ operation: 'industry-chain.data-status' }, { background: true })
+  }, [dataStatus.run])
   const loadStats = useCallback(() => {
     stats.run({ operation: 'industry-chain.stats' })
   }, [stats.run])
@@ -3648,16 +3661,16 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
 
   useEffect(() => {
     if (status !== 'downloading' || bootstrapBusy) return
-    const timer = window.setInterval(loadDataStatus, 900)
+    const timer = window.setInterval(pollDataStatus, 900)
     return () => { window.clearInterval(timer) }
-  }, [bootstrapBusy, loadDataStatus, status])
+  }, [bootstrapBusy, pollDataStatus, status])
   useEffect(() => stopBootstrapPoll, [stopBootstrapPoll])
 
   const bootstrapData = useCallback(async (): Promise<void> => {
     if (bootstrapBusy) return
     setBootstrapBusy(true)
     setBootstrapFailed(false)
-    bootstrapPoll.current = window.setInterval(loadDataStatus, 900)
+    bootstrapPoll.current = window.setInterval(pollDataStatus, 900)
     try {
       const result = asRecord(await requestData({ operation: 'industry-chain.data-bootstrap' }))
       if (!alive.current) return
@@ -3668,10 +3681,10 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
       stopBootstrapPoll()
       if (alive.current) {
         setBootstrapBusy(false)
-        loadDataStatus()
+        pollDataStatus()
       }
     }
-  }, [alive, bootstrapBusy, loadDataStatus, requestData, stopBootstrapPoll])
+  }, [alive, bootstrapBusy, pollDataStatus, requestData, stopBootstrapPoll])
 
   const refresh = useCallback(() => {
     loadDataStatus()
@@ -3756,6 +3769,9 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const downloadedBytes = number(statusValue.downloaded_bytes) ?? 0
   const downloadActive = bootstrapBusy || status === 'downloading'
   const downloadFailed = bootstrapFailed || status === 'error'
+  const progressMax = Math.max(filesTotal, 1)
+  const progressValue = Math.min(filesCompleted, progressMax)
+  const progressPercent = Math.max(0, Math.min(100, (progressValue / progressMax) * 100))
   const selectedReference = selectedCompany === undefined
     ? ''
     : `${selectedCompany.code} ${selectedCompany.name}`.trim()
@@ -3843,7 +3859,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
       </PageHeading>
 
       {dataStatus.state.phase === 'loading' && dataStatus.state.value === undefined && <BusyRows />}
-      {dataStatus.state.phase === 'loading' && dataStatus.state.value !== undefined && status !== 'ready' && (
+      {dataStatus.state.phase === 'loading' && dataStatus.state.value !== undefined && status !== 'ready' && !downloadActive && (
         <div className={css.industryResourceNotice} role="status">正在检查本机产业链数据，暂时保留当前页面状态。</div>
       )}
       {dataStatus.state.phase === 'error' && status !== 'ready' && (
@@ -3858,8 +3874,13 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
         />
       )}
 
-      {!industryReady && status !== '' && dataStatus.state.phase === 'success' && (
-        <section className={css.industryBootstrap} aria-busy={downloadActive} aria-labelledby="industry-data-title">
+      {!industryReady && status !== '' && dataStatus.state.value !== undefined && dataStatus.state.phase !== 'error' && (
+        <section
+          className={css.industryBootstrap}
+          data-phase={downloadFailed ? 'error' : downloadActive ? 'loading' : 'idle'}
+          aria-busy={downloadActive}
+          aria-labelledby="industry-data-title"
+        >
           <div>
             <h2 id="industry-data-title">{downloadActive ? '正在下载产业链数据' : downloadFailed ? '产业链数据下载未完成' : '首次使用需下载产业链数据'}</h2>
             <p>{downloadActive
@@ -3868,14 +3889,16 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
                 ? '数据未能完整下载，未完成的文件已清理。请检查网络后重试。'
                 : '产业链公司与上下游关系数据约 25 MB，仅在你明确确认后保存到本机应用数据目录。'}</p>
           </div>
-          {downloadActive && (
-            <progress
-              className={css.industryProgress}
-              max={Math.max(filesTotal, 1)}
-              value={Math.min(filesCompleted, Math.max(filesTotal, 1))}
-              aria-label="产业链数据下载进度"
-            />
-          )}
+          <div
+            className={css.industryProgress}
+            data-active={downloadActive}
+            role={downloadActive ? 'progressbar' : undefined}
+            aria-hidden={!downloadActive}
+            aria-label={downloadActive ? '产业链数据下载进度' : undefined}
+            aria-valuemin={downloadActive ? 0 : undefined}
+            aria-valuemax={downloadActive ? progressMax : undefined}
+            aria-valuenow={downloadActive ? progressValue : undefined}
+          ><span style={{ width: `${progressPercent}%` }} /></div>
           <button
             type="button"
             className={css.primaryButton}

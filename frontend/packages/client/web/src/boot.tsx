@@ -48,7 +48,9 @@ import { STATE_LABELS, createLoaderStatusStore, createSignal } from './loader-st
 import './base.css'
 
 /** Module transport hook the shell passes through (jsdom tests replace the <script> path). */
-export type BootSeams = Pick<ClientModuleSystemOptions, 'loadBundle'>
+export type BootSeams = Pick<ClientModuleSystemOptions, 'loadBundle'> & {
+  readonly loadingHint?: string
+}
 
 /**
  * The modules package's own graph row id. The kernel adopts that entry
@@ -117,6 +119,7 @@ export class AppWebEntry {
         settled={this.settled}
         status={this.status}
         error={this.error}
+        loadingHint={this.seams?.loadingHint}
         renderApp={() => {
           const shell = this.ctx.get('appShell')
           // Unreachable after a clean settle (the app-shell entry is in every graph).
@@ -134,11 +137,23 @@ export class AppWebEntry {
     this.ctx = new Context()
     try {
       await this.runPluginBoot(prefetching)
+      await this.waitForAppShellReady()
       this.settled.set(true)
     } catch (reason) {
       // Stay on the loading page; surface the sweep report (fail loud).
       console.error(reason)
       this.error.set(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  /** Keep the boot gate up until Cordis exposes the active shell service. */
+  private async waitForAppShellReady(): Promise<void> {
+    if (this.ctx.get('appShell') !== undefined) return
+    // Fiber activation publishes service visibility at the end of its task.
+    // Yield once so React cannot observe `settled` between those two steps.
+    await new Promise<void>(resolve => { setTimeout(resolve, 0) })
+    if (this.ctx.get('appShell') === undefined) {
+      throw new Error('web boot: appShell service missing after entries activated')
     }
   }
 

@@ -202,6 +202,7 @@ export function apply(ctx: ClientContext): void {
   let floatingAssistantSessionId: SessionId | undefined
   let primaryAssistantSessionId: SessionId | undefined
   let activeConversationSurface: 'floating' | 'primary' = 'floating'
+  let floatingNavigationModule = navigationModule(state.getSnapshot().route)
   let navigationGeneration = 0
   let floatingSessionResetRequired = false
   let floatingResetPromise: Promise<SessionId> | undefined
@@ -315,8 +316,6 @@ export function apply(ctx: ClientContext): void {
         }
         if (request.generation !== navigationGeneration) continue
         activeConversationSurface = request.surface
-        state.navigate(request.route, request.context)
-        ctx.layout.closeDetails()
       }
     })().finally(() => {
       conversationSwitchRunning = false
@@ -328,19 +327,24 @@ export function apply(ctx: ClientContext): void {
     const generation = ++navigationGeneration
     const nextSurface = route === 'portfolio' ? 'primary' : 'floating'
     const nextNavigationModule = navigationModule(route)
-    const moduleChanged = navigationModule(state.getSnapshot().route) !== nextNavigationModule
-    if (nextSurface === 'floating' && moduleChanged) {
+    const moduleChanged = nextSurface === 'floating' && floatingNavigationModule !== nextNavigationModule
+    const returningFromPrimary = nextSurface === 'floating' && activeConversationSurface === 'primary'
+    if (nextSurface === 'floating' && (moduleChanged || returningFromPrimary)) {
+      floatingNavigationModule = nextNavigationModule
       floatingSessionResetRequired = true
       cancelPendingDraft?.()
       cancelPendingDraft = undefined
       state.setAssistantMode('closed')
       state.setAssistantModule('general')
     }
+    // Route feedback must never wait for conversation/session preparation. The
+    // target surface is reconciled in the background and stale completions are
+    // still rejected by navigationGeneration.
+    state.navigate(route, context)
+    ctx.layout.closeDetails()
     if (!conversationSwitchRunning
       && nextSurface === activeConversationSurface
       && !floatingSessionResetRequired) {
-      state.navigate(route, context)
-      ctx.layout.closeDetails()
       return
     }
     pendingNavigation = { generation, route, context, surface: nextSurface }

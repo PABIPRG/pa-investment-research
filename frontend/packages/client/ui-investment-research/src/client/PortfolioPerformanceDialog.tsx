@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { asRecord, compactMoney, money, number, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
 import { PortfolioPerformanceChart } from './PortfolioPerformanceChart.tsx'
+import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import type { WorkbenchPositionDetail } from './WorkbenchOverviewDialog.tsx'
 import css from './InvestmentShell.module.css'
 
@@ -113,6 +114,7 @@ export function PortfolioPerformanceDialog({
   customStart, customEnd, customError, onPeriodChange, onMethodChange,
   onCustomStartChange, onCustomEndChange, onApplyCustom, onHistoryStartSave, onRetry, onClose,
 }: PortfolioPerformanceDialogProps) {
+  const { hidden: fundsHidden } = useFundsPrivacy()
   const [historyEditorOpen, setHistoryEditorOpen] = useState(false)
   const [historyDraft, setHistoryDraft] = useState('')
   const [historySaving, setHistorySaving] = useState(false)
@@ -231,9 +233,9 @@ export function PortfolioPerformanceDialog({
           {methodNotice !== '' && <p className={css.performanceNotice} role="status">{methodNotice}</p>}
           <dl className={css.performanceMetricGrid}>
             <div><dt>{selectedMethod.label}</dt><dd data-tone={tone(selectedReturn)}>{signedPercent(selectedReturn)}</dd></div>
-            <div><dt>{profitLossLabel}</dt><dd data-tone={tone(profitLoss)}>{signedMoney(profitLoss)}</dd></div>
-            <div><dt>{openingValueLabel}</dt><dd>{openingValue === undefined ? '—' : compactMoney(openingValue)}</dd></div>
-            <div><dt>{endingValueLabel}</dt><dd>{endingValue === undefined ? '—' : compactMoney(endingValue)}</dd></div>
+            <div><dt>{profitLossLabel}</dt><dd data-tone={tone(profitLoss)}>{privateFunds(signedMoney(profitLoss), fundsHidden)}</dd></div>
+            <div><dt>{openingValueLabel}</dt><dd>{privateFunds(openingValue === undefined ? '—' : compactMoney(openingValue), fundsHidden)}</dd></div>
+            <div><dt>{endingValueLabel}</dt><dd>{privateFunds(endingValue === undefined ? '—' : compactMoney(endingValue), fundsHidden)}</dd></div>
           </dl>
           <div className={css.performanceHistoryBlock}>
             <p className={css.performanceHistoryNote}>
@@ -285,7 +287,8 @@ export function PortfolioPerformanceDialog({
             ) : (
               <PortfolioPerformanceChart
                 series={series}
-                ariaLabel={`组合收益曲线，${text(value.start_date, '起始日未知')}至${text(value.end_date, '结束日未知')}，${profitLossLabel}${signedMoney(profitLoss)}`}
+                fundsHidden={fundsHidden}
+                ariaLabel={`组合收益曲线，${text(value.start_date, '起始日未知')}至${text(value.end_date, '结束日未知')}${fundsHidden ? '' : `，${profitLossLabel}${signedMoney(profitLoss)}`}`}
               />
             )}
             {series.length > 0 && (
@@ -297,8 +300,8 @@ export function PortfolioPerformanceDialog({
                     <tbody>{series.map((item, index) => (
                       <tr key={`${text(item.date, '')}-${index}`}>
                         <th scope="row">{text(item.date, '—')}</th>
-                        <td>{number(item.value) === undefined ? '—' : compactMoney(number(item.value) ?? 0)}</td>
-                        <td data-tone={tone(number(item.profit_loss))}>{signedMoney(number(item.profit_loss))}</td>
+                        <td>{privateFunds(number(item.value) === undefined ? '—' : compactMoney(number(item.value) ?? 0), fundsHidden)}</td>
+                        <td data-tone={tone(number(item.profit_loss))}>{privateFunds(signedMoney(number(item.profit_loss)), fundsHidden)}</td>
                       </tr>
                     ))}</tbody>
                   </table>
@@ -332,10 +335,10 @@ export function PortfolioPerformanceDialog({
                     return (
                       <tr key={`${ticker}-${index}`}>
                         <th scope="row"><strong>{nameByCode.get(ticker) ?? (ticker || '未知标的')}</strong><small>{ticker || '—'}</small></th>
-                        <td>{costPrice === undefined ? '—' : money(costPrice)}</td>
+                        <td>{privateFunds(costPrice === undefined ? '—' : money(costPrice), fundsHidden)}</td>
                         <td>{currentPrice === undefined ? '—' : money(currentPrice)}</td>
                         <td data-tone={tone(priceReturn)}>{signedPercent(priceReturn)}</td>
-                        <td data-tone={tone(contribution)}>{signedMoney(contribution)}</td>
+                        <td data-tone={tone(contribution)}>{privateFunds(signedMoney(contribution), fundsHidden)}</td>
                       </tr>
                     )
                   })}</tbody>
@@ -349,7 +352,7 @@ export function PortfolioPerformanceDialog({
             <dl className={css.performanceQualityFacts}>
               <div><dt>数据质量</dt><dd>{qualityLabel(value.quality)}</dd></div>
               <div><dt>行情覆盖</dt><dd>{number(value.coverage_ratio) === undefined ? '—' : `${((number(value.coverage_ratio) ?? 0) * 100).toFixed(0)}%`}</dd></div>
-              <div><dt>净流入估算</dt><dd>{signedMoney(number(summary.net_flow))}</dd></div>
+              <div><dt>净流入估算</dt><dd>{privateFunds(signedMoney(number(summary.net_flow)), fundsHidden)}</dd></div>
             </dl>
             {limitations.length > 0 && <ul className={css.performanceLimitations}>{limitations.map(item => <li key={item}>{item}</li>)}</ul>}
           </section>

@@ -28,6 +28,7 @@ import type {
   LocalTelemetryContext, LocalTelemetryEvent, TrackLocalTelemetry,
 } from './telemetry.ts'
 import css from './InvestmentShell.module.css'
+import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
@@ -257,6 +258,18 @@ function resolvedSecurityName(
   return stored !== '' && stored !== code ? stored : resolved !== '' ? resolved : code
 }
 
+function holdingSecurityName(
+  item: Record<string, unknown>,
+  code: string,
+  securityNames: Readonly<Record<string, string>>,
+): string {
+  const stored = text(item.name, '').trim()
+  if (stored !== '' && stored !== code) return stored
+  const resolved = securityNames[code]
+  if (resolved === undefined) return '名称加载中'
+  return resolved.trim() === '' ? '名称暂不可用' : resolved.trim()
+}
+
 function strategyDisplayName(item: Record<string, unknown>, securityNames: Readonly<Record<string, string>>): string {
   const symbols = strategySymbols(item)
   if (symbols.length === 0) return text(item.name, '未命名策略')
@@ -424,6 +437,7 @@ export function ResearchWorkbenchPage({
   requestData, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
   navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
+  const { hidden: fundsHidden } = useFundsPrivacy()
   const holdings = useWorkbenchResource(requestData)
   const risk = useWorkbenchResource(requestData)
   const alerts = useWorkbenchResource(requestData)
@@ -490,6 +504,11 @@ export function ResearchWorkbenchPage({
 
   const quoteItems = records(asRecord(quotes.state.value).items)
   const quoteMap = new Map(quoteItems.map(item => [text(item.code, ''), item] as const))
+  const quoteSecurityNames = Object.fromEntries(quoteItems.flatMap((item) => {
+    const code = text(item.code, '').trim()
+    const name = text(item.name, '').trim()
+    return code !== '' && name !== '' && name !== code ? [[code, name]] : []
+  }))
   const totalCurrent = (() => {
     if (positions.length === 0) return undefined
     let sum = 0
@@ -516,7 +535,7 @@ export function ResearchWorkbenchPage({
     .filter((item) => {
       const code = text(item.ticker, '')
       const name = text(item.name, '').trim()
-      return name === '' || name === code
+      return (name === '' || name === code) && quoteSecurityNames[code] === undefined
     })
     .map(item => text(item.ticker, ''))
   const knownCardCodes = new Set(eventCards.flatMap(card => records(card.tickers))
@@ -534,11 +553,12 @@ export function ResearchWorkbenchPage({
     ...reasonCodes.filter(code => !knownCardCodes.has(code)),
     ...strategyItems.flatMap(strategySymbols),
   ])
+  const resolvedSecurityNames = { ...securityNames, ...quoteSecurityNames }
   const overviewPositions: WorkbenchPositionDetail[] = positions.map((item) => {
     const code = text(item.ticker, '')
     return {
       code,
-      name: resolvedSecurityName(item, code, securityNames),
+      name: resolvedSecurityName(item, code, resolvedSecurityNames),
       quantity: number(item.quantity),
       costPrice: number(item.cost_price),
       currentPrice: number(asRecord(quoteMap.get(code)).price),
@@ -738,8 +758,8 @@ export function ResearchWorkbenchPage({
 
       <section className={css.dashboardSummary} aria-label="投研概览">
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('holdings') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('cost') }}><span>持仓成本金额</span><strong>{holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—'}</strong><small>数量 × 成本价 →</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setPerformanceOpen(true) }}><span>总资产现价</span><strong>{holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—'}</strong><small data-tone={currentProfit === undefined || currentProfit === 0 ? undefined : currentProfit > 0 ? 'positive' : 'negative'}>盈亏 {holdings.state.loaded && quotes.state.loaded ? signedCompactMoney(currentProfit) : '—'} · 成本收益率 {holdings.state.loaded && quotes.state.loaded ? signedReturn(currentCostReturn) : '—'} →</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('cost') }}><span>持仓成本金额</span><strong>{privateFunds(holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—', fundsHidden)}</strong><small>数量 × 成本价 →</small></button>
+        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setPerformanceOpen(true) }}><span>总资产现价</span><strong>{privateFunds(holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—', fundsHidden)}</strong><small data-tone={currentProfit === undefined || currentProfit === 0 ? undefined : currentProfit > 0 ? 'positive' : 'negative'}>盈亏 {privateFunds(holdings.state.loaded && quotes.state.loaded ? signedCompactMoney(currentProfit) : '—', fundsHidden)} · 成本收益率 {holdings.state.loaded && quotes.state.loaded ? signedReturn(currentCostReturn) : '—'} →</small></button>
         <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
       </section>
 
@@ -758,13 +778,14 @@ export function ResearchWorkbenchPage({
               <div className={css.dashboardHoldingList}>
                 {positions.slice(0, 6).map((item, index) => {
                   const code = text(item.ticker, '')
+                  const displayName = holdingSecurityName(item, code, resolvedSecurityNames)
                   const quantity = number(item.quantity)
                   const price = number(asRecord(quoteMap.get(code)).price)
                   const marketValue = quantity !== undefined && price !== undefined ? quantity * price : undefined
                   return (
                     <button key={`${code}-${index}`} type="button" onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
-                      <span><strong>{resolvedSecurityName(item, code, securityNames)}</strong><small>{code}</small></span>
-                      <span><b>{quantity?.toLocaleString('zh-CN') ?? '—'} 股</b><small>成本 {money(number(item.cost_price))} · 现价 {money(price)} · 市值 {marketValue === undefined ? '—' : compactMoney(marketValue)}</small></span>
+                      <span><strong className={displayName === '名称加载中' ? css.securityNameLoading : undefined}>{displayName}</strong><small>{code}</small></span>
+                      <span><b>{privateFunds(quantity === undefined ? '—' : `${quantity.toLocaleString('zh-CN')} 股`, fundsHidden)}</b><small>成本 {privateFunds(money(number(item.cost_price)), fundsHidden)} · 现价 {money(price)} · 市值 {privateFunds(marketValue === undefined ? '—' : compactMoney(marketValue), fundsHidden)}</small></span>
                     </button>
                   )
                 })}

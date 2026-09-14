@@ -39,6 +39,7 @@ import { ResearchFloatingSurface } from './ResearchFloatingSurface.tsx'
 import { MarketNewsPanel } from './MarketNewsPanel.tsx'
 import { SecurityResearchContent } from './SecurityResearchContent.tsx'
 import { SurfaceResizeIcon } from './SurfaceResizeIcon.tsx'
+import { FundsPrivacyProvider, privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import { createResearchResourceStore } from './research-resource.ts'
 import type { ResearchResourceStore } from './research-resource.ts'
 import type { RequestData, ResearchSubject, ResearchSurfaceMode } from './research-types.ts'
@@ -259,6 +260,16 @@ function ThemeIcon({ scheme }: { scheme: 'light' | 'dark' }) {
           <circle cx="8" cy="8" r="2.75" />
           <path d="M8 1.25v1.5M8 13.25v1.5M1.25 8h1.5M13.25 8h1.5M3.23 3.23l1.06 1.06M11.71 11.71l1.06 1.06M12.77 3.23l-1.06 1.06M4.29 11.71l-1.06 1.06" />
         </>}
+    </svg>
+  )
+}
+
+function FundsPrivacyIcon({ hidden }: { hidden: boolean }) {
+  return (
+    <svg className={css.actionIcon} viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M1.5 8s2.2-3.75 6.5-3.75S14.5 8 14.5 8 12.3 11.75 8 11.75 1.5 8 1.5 8Z" />
+      <circle cx="8" cy="8" r="1.75" />
+      {hidden && <path d="m2.4 2.4 11.2 11.2" />}
     </svg>
   )
 }
@@ -870,12 +881,17 @@ const DEFAULT_RESEARCH_SURFACE_WIDTH = 410
 const MIN_RESEARCH_SURFACE_WIDTH = 360
 const MAX_RESEARCH_SURFACE_WIDTH = 620
 
-export function InvestmentShell({
+export function InvestmentShell(props: InvestmentShellProps) {
+  return <FundsPrivacyProvider><InvestmentShellContent {...props} /></FundsPrivacyProvider>
+}
+
+function InvestmentShellContent({
   useInvestmentUi, hostDescription, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
   navigate, setHistory, setReports,
   setAssistantMode, setModuleDraft, selectStrategy, startSession, openSession, searchSessions, renameSession,
   archiveSession, prepareAssistant, toggleTheme,
 }: InvestmentShellProps) {
+  const fundsPrivacy = useFundsPrivacy()
   const snapshot = useInvestmentUi(s => s)
   const deployment = useSyncExternalStore(
     listener => hostDescription?.subscribe(listener) ?? (() => {}),
@@ -1397,6 +1413,17 @@ export function InvestmentShell({
       <header className={css.topbar}>
         <GlobalStockSearch requestData={requestData} navigate={navigate} trackTelemetry={trackTelemetry} />
         <div className={css.topActions} role="group" aria-label="页面操作">
+          <button
+            type="button"
+            className={css.fundsPrivacyToggle}
+            aria-pressed={fundsPrivacy.hidden}
+            aria-label={fundsPrivacy.hidden ? '资金数据已隐藏，点击显示' : '资金数据已显示，点击隐藏'}
+            title={fundsPrivacy.hidden ? '显示资金数据' : '隐藏资金数据'}
+            onClick={fundsPrivacy.toggle}
+          >
+            <FundsPrivacyIcon hidden={fundsPrivacy.hidden} />
+            <span className={css.actionLabel}>{fundsPrivacy.hidden ? '资金已隐藏' : '隐藏资金'}</span>
+          </button>
           {conversationPrimary && (
             <>
               <button
@@ -2598,6 +2625,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   onViewStock: (code: string) => void
   trackTelemetry: TrackLocalTelemetry
 }) {
+  const { hidden: fundsHidden } = useFundsPrivacy()
   const [nonce, setNonce] = useState(0)
   const [importOpen, setImportOpen] = useState(false)
   const [notice, setNotice] = useState('')
@@ -2631,6 +2659,11 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
 
   const quoteItems = records(asRecord(quotes.state.value).items)
   const quoteMap = new Map(quoteItems.map(item => [text(item.code, ''), item] as const))
+  const quoteSecurityNames = Object.fromEntries(quoteItems.flatMap((item) => {
+    const code = text(item.code, '').trim()
+    const name = text(item.name, '').trim()
+    return code !== '' && name !== '' && name !== code ? [[code, name]] : []
+  }))
   const totalCurrent = (() => {
     if (positions.length === 0) return undefined
     let sum = 0
@@ -2646,9 +2679,10 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
     .filter((item) => {
       const code = text(item.ticker, '')
       const name = text(item.name, '').trim()
-      return name === '' || name === code
+      return (name === '' || name === code) && quoteSecurityNames[code] === undefined
     })
     .map(item => text(item.ticker, '')))
+  const resolvedPositionNames = { ...positionNames, ...quoteSecurityNames }
   const riskRecord = asRecord(risk.state.value)
   const summary = asRecord(riskRecord.summary)
   const breaches = records(riskRecord.breaches)
@@ -2722,7 +2756,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
         {!risk.state.loaded && risk.state.error === '' && <LoadingSkeleton rows={2} />}
         {risk.state.loaded && (
           <div className={css.metricRow}>
-            <Metric label="总资产现价" value={totalCurrent === undefined ? '—' : compactMoney(totalCurrent)} hint="不含现金 · 实时" onClick={() => { revealSection(holdingsSection) }} />
+            <Metric label="总资产现价" value={privateFunds(totalCurrent === undefined ? '—' : compactMoney(totalCurrent), fundsHidden)} hint="不含现金 · 实时" onClick={() => { revealSection(holdingsSection) }} />
             <Metric label="持仓数量" value={number(summary.n_positions)?.toFixed(0) ?? String(positions.length)} hint="查看当前持仓" onClick={() => { revealSection(holdingsSection) }} />
             <Metric label="风险画像" value={text(riskRecord.profile_label)} hint="查看画像与风险" onClick={() => { revealSection(riskSection) }} />
             <Metric label="等权占比" value={equalWeight === undefined ? '—' : `${(equalWeight * 100).toFixed(1)}%`} hint="查看风险预算" onClick={() => { revealSection(riskSection) }} />
@@ -2794,7 +2828,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                     {positions.map((row, index) => {
                       const code = text(row.ticker, '')
                       const storedName = text(row.name, '').trim()
-                      const name = storedName !== '' && storedName !== code ? storedName : positionNames[code] || code
+                      const name = storedName !== '' && storedName !== code ? storedName : resolvedPositionNames[code] || code
                       const quantity = number(row.quantity)
                       const price = number(asRecord(quoteMap.get(code)).price)
                       const marketValue = quantity !== undefined && price !== undefined ? quantity * price : undefined
@@ -2807,10 +2841,10 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                           >{code}</button>
                         </td>
                         <td><button type="button" className={css.nameButton} onClick={() => { onViewStock(code) }}>{name}</button></td>
-                        <td>{quantity?.toLocaleString('zh-CN') ?? '—'}</td>
-                        <td>{money(row.cost_price)}</td>
+                        <td>{privateFunds(quantity?.toLocaleString('zh-CN') ?? '—', fundsHidden)}</td>
+                        <td>{privateFunds(money(row.cost_price), fundsHidden)}</td>
                         <td>{money(price)}</td>
-                        <td>{money(marketValue)}</td>
+                        <td>{privateFunds(money(marketValue), fundsHidden)}</td>
                       </tr>
                     })}
                   </tbody>

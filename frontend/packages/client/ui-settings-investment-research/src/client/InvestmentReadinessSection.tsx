@@ -249,7 +249,11 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
 
   return (
     <section className={css.section}>
-      <DataBackupSection {...props} currentSession={currentSession} useSessionLogDownload={props.useSessionLogDownload} />
+      <DataBackupSection
+        {...props}
+        currentSession={currentSession}
+        useSessionLogDownload={props.useSessionLogDownload}
+      />
 
       <HoldingsProviderSection
         t={props.t}

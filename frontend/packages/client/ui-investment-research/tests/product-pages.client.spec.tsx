@@ -706,7 +706,9 @@ describe('投研产品闭环', () => {
         statusCalls += 1
         return Promise.resolve(statusCalls === 1
           ? { status: 'missing', files_completed: 0, files_total: 5, downloaded_bytes: 0, current_file: null, error: null }
-          : { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null })
+          : statusCalls === 2
+            ? { status: 'downloading', files_completed: 2, files_total: 5, downloaded_bytes: 10_000_000, current_file: 'companies.csv', error: null }
+            : { status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null })
       }
       if (request.operation === 'industry-chain.data-bootstrap') return bootstrap
       if (request.operation === 'industry-chain.stats') return Promise.resolve({ total_nodes: 2594, total_edges: 8700, subject_count: 1297, relationships: 4 })
@@ -720,6 +722,9 @@ describe('投研产品闭环', () => {
     expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
     expect(screen.getByText(/约 25 MB/)).toBeTruthy()
     expect(requestData.mock.calls.some(([request]) => request.operation === 'industry-chain.stats')).toBe(false)
+    const reservedProgress = view.container.querySelector(`.${css.industryProgress}`)
+    expect(reservedProgress?.getAttribute('aria-hidden')).toBe('true')
+    expect(reservedProgress?.closest(`.${css.industryBootstrap}`)?.getAttribute('data-phase')).toBe('idle')
 
     fireEvent.click(screen.getByRole('button', { name: '下载并开始使用' }))
     await waitFor(() => {
@@ -728,6 +733,16 @@ describe('投研产品闭环', () => {
     const busyButton = screen.getByRole<HTMLButtonElement>('button', { name: '正在下载…' })
     expect(busyButton.disabled).toBe(true)
     expect(busyButton.getAttribute('aria-busy')).toBe('true')
+    const progress = screen.getByRole('progressbar', { name: '产业链数据下载进度' })
+    expect(progress).toBe(reservedProgress)
+    const bootstrapPanel = progress.closest(`.${css.industryBootstrap}`)
+    expect(bootstrapPanel).not.toBeNull()
+    expect(bootstrapPanel?.getAttribute('data-phase')).toBe('loading')
+
+    await waitFor(() => { expect(statusCalls).toBeGreaterThan(1) })
+    expect(screen.getByRole('progressbar', { name: '产业链数据下载进度' })).toBe(progress)
+    expect(screen.getByRole('progressbar', { name: '产业链数据下载进度' }).closest(`.${css.industryBootstrap}`)).toBe(bootstrapPanel)
+    expect(screen.queryByText('正在检查本机产业链数据，暂时保留当前页面状态。')).toBeNull()
 
     finishBootstrap?.({ status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 25_000_000, current_file: null, error: null })
     await waitFor(() => {

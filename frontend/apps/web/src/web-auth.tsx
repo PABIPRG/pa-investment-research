@@ -37,8 +37,8 @@ export function LoginGate({ initialPhase, onLogin, onRetry }: LoginGateProps) {
   return (
     <main className={css.page}>
       <section className={css.card} aria-labelledby="web-auth-title">
-        <div className={css.brandMark} aria-hidden="true">DS</div>
-        <p className={css.eyebrow}>DeepSeek Harness</p>
+        <img className={css.brandMark} src="/icons/app-icon-001/icon-192.png" alt="投研智能体" />
+        <p className={css.eyebrow}>投研智能体</p>
         <h1 id="web-auth-title" className={css.title}>管理员登录</h1>
         <p className={css.subtitle}>登录后可访问此设备上的投研工作台。</p>
         <form className={css.form} onSubmit={event => void submit(event)}>

@@ -14,7 +14,7 @@ afterEach(cleanup)
 import { AppRoot } from '@deepseek-ai/dsh-client-web/src/AppRoot.tsx'
 import { createLoaderStatusStore, createSignal } from '@deepseek-ai/dsh-client-web/src/loader-status.ts'
 
-function mount() {
+function mount(loadingHint?: string) {
   const settled = createSignal(false)
   const error = createSignal<string | undefined>(undefined)
   const status = createLoaderStatusStore()
@@ -24,6 +24,7 @@ function mount() {
       settled={settled}
       status={status}
       error={error}
+      loadingHint={loadingHint}
       renderApp={() => { renders += 1; return <div data-testid="real-ui" /> }}
     />,
   )
@@ -36,6 +37,11 @@ describe('AppRoot', () => {
     expect(getByText('HARNESS')).toBeTruthy()
     expect(queryByTestId('real-ui')).toBeNull()
     expect(counts()).toBe(0)
+  })
+
+  it('explains import recovery while the product boot gate is active', () => {
+    const { getByText } = mount('导入完成，正在更新工作台…')
+    expect(getByText('导入完成，正在更新工作台…')).toBeTruthy()
   })
 
   it('all-active status alone does not open the gate (settled signal is the only key)', () => {
