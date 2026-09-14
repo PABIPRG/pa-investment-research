@@ -235,12 +235,15 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
   }
 
   if (state.status === 'idle') void controller.load()
+  if ((state.status === 'idle' || state.status === 'loading') && state.rows.length === 0) {
+    return <div className={styles['section']} role="status" aria-live="polite">正在加载模型提供方与配置…</div>
+  }
   if (state.status === 'error') {
     /* v8 ignore next -- an error status always carries text; the fallback satisfies the nullable type */
     const errorText = state.error ?? ''
     return (
       <div className={styles['section']}>
-        <p className={styles['error']}>{`${t('loadFailed')}: ${errorText}`}</p>
+        <p className={styles['error']} role="alert">{`${t('loadFailed')}: ${errorText}`}</p>
         <button type="button" className={styles['secondaryButton']} onClick={() => { void controller.load() }}>
           {t('retry')}
         </button>

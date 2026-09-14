@@ -611,3 +611,51 @@ describe('connection node half over a real HTTP server', () => {
     }
   })
 })
+
+describe('authenticated remote model administration', () => {
+  it('requires HTTPS proxy trust, session and CSRF while keeping generic settings local', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const directory = mkdtempSync(join(tmpdir(), 'cloud-model-auth-'))
+    const passwordHashFile = join(directory, 'password.hash')
+    writeFileSync(passwordHashFile, hashPassword('model-admin-test-password'), { mode: 0o600 })
+    const trust = { trustedHosts: ['models.example'], trustedProxyAddresses: ['127.0.0.1'] }
+    const auth = new WebAuthService(ctx, { mode: 'required', username: 'admin', passwordHashFile, secureCookies: true, ...trust })
+    const describe = vi.fn(async (request: { rpcId: string }) => ({ rpcId: request.rpcId, result: { ok: true, value: { writable: true, hasDocument: false, namespaces: [] } } }))
+    ctx.provide('apiProxy', { modelAdmin: { describe } } as unknown as ApiProxy)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, trust)
+    await fiber.await()
+    try {
+      const route = routes.find(candidate => candidate.path === API_PATH)!
+      const headers = { host: 'models.example', origin: 'https://models.example', 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.20' }
+      const body = { type: 'client-request', rpcId: RpcId('model-admin-auth'), method: 'modelAdmin.describe', payload: {} }
+      const send = async (extra: Record<string, string>, method = 'modelAdmin.describe') => {
+        const response = fakeResponse()
+        await route.handler(fakePost({ ...headers, ...extra }, `${API_PATH}/${method}`, { ...body, method }), response.response)
+        return response.state
+      }
+      expect((await send({})).status).toBe(401)
+      const login = await auth.login('admin', 'model-admin-test-password', fakeRequest(headers))
+      expect(login.ok).toBe(true)
+      if (!login.ok || !login.token || !login.cookieName || !login.session) throw new Error('login failed')
+      const cookie = `${login.cookieName}=${login.token}`
+      expect((await send({ cookie })).status).toBe(403)
+      const proof = { cookie, 'x-dsh-csrf': login.session.csrfToken }
+      expect((await send(proof)).status).toBe(200)
+      expect(describe).toHaveBeenCalledOnce()
+      expect((await send(proof, 'settings.describe')).status).toBe(403)
+      expect((await send({ ...proof, host: 'evil.example' })).status).toBe(403)
+      expect((await send({ ...proof, 'x-forwarded-proto': 'http' })).status).toBe(403)
+    } finally { await fiber.dispose() }
+  })
+
+  it('does not expose model administration on an unauthenticated trusted-host deployment', async () => {
+    const { routes, dispose } = await mounted({ trustedHosts: ['models.example'] })
+    try {
+      const response = fakeResponse()
+      await routes[0]!.handler(fakeRequest({ host: 'models.example' }, `${API_PATH}/modelAdmin.describe`, '192.0.2.20'), response.response)
+      expect(response.state.status).toBe(403)
+    } finally { await dispose() }
+  })
+})

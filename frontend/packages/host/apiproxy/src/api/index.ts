@@ -12,6 +12,7 @@ import type { SkillsApi } from './skills.ts'
 import type { SubagentsApi } from './subagents.ts'
 import type { EventsApi } from './events.ts'
 import type { GoalsApi } from './goals.ts'
+import type { ModelAdminApi } from './model-admin.ts'
 import type { SettingsApi } from './settings.ts'
 import type { CredentialsApi } from './credentials.ts'
 import type { LlmApi } from './llm.ts'
@@ -28,6 +29,7 @@ export interface ApiProxy {
   agentPresets: AgentPresetsApi
   events: EventsApi
   goals: GoalsApi
+  modelAdmin: ModelAdminApi
   settings: SettingsApi
   credentials: CredentialsApi
   llm: LlmApi

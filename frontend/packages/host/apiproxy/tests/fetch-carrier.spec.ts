@@ -16,6 +16,14 @@ function fakeApi(overrides: Partial<{ muxFrames: MuxFrame[]; hostFrames: HostFra
     }
   }
   return {
+    modelAdmin: {
+      describe: async r => ({ rpcId: r.rpcId, result: { ok: true, value: { writable: true, hasDocument: false, namespaces: [] } } }),
+      mutate: async r => ({ rpcId: r.rpcId, result: { ok: false, error: { code: 'internal', message: 'stub', details: {} } } }),
+      describeCredentials: async r => ({ rpcId: r.rpcId, result: { ok: true, value: { credentials: {} } } }),
+      setCredential: async r => ({ rpcId: r.rpcId, result: { ok: true, value: {} } }),
+      unsetCredential: async r => ({ rpcId: r.rpcId, result: { ok: true, value: {} } }),
+      discoverModels: async r => ({ rpcId: r.rpcId, result: { ok: true, value: { models: [] } } }),
+    },
     sessions: {
       async list(request) {
         if (overrides.crashOn === 'session.list') throw new Error('impl crashed')

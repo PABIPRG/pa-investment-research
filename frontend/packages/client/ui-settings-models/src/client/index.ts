@@ -6,6 +6,8 @@
  * Export discipline:
  * packages/client/AGENTS.md.
  */
+
+import { modelAdminApi } from './modelAdminApi.ts'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-web-react'
@@ -68,7 +70,8 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-settings-models: copy dictionaries')
 
   const connection = ctx.get('connection') as ConnectionHandle
-  const controller = new ModelsSettingsStore(connection.api)
+  const modelApi = connection.isLoopback ? connection.api : modelAdminApi(connection.api)
+  const controller = new ModelsSettingsStore(modelApi)
   const useSnapshot = bindSnapshotSelector(controller.store)
   // Registration-time text (the nav label thunk) and the inject faces share
   // one bound translate; copy freshness rides the locale revision.
@@ -76,13 +79,13 @@ export function apply(ctx: ClientContext): void {
   const injected = (): ModelsSectionInjected => ({
     controller,
     useSnapshot,
-    api: connection.api,
+    api: modelApi,
     t,
   })
   const deepSeekOnboardingInjected = (): DeepSeekOnboardingInjected => ({
     controller,
     hooks: { models: controller.store },
-    api: connection.api,
+    api: modelApi,
     t,
   })
   const welcomeController = new WelcomeNoticeStore(

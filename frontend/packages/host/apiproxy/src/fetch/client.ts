@@ -85,6 +85,14 @@ import {
  * Derived per method key from RpcMethodMap so a map row addition updates this mechanically.
  */
 export interface IApiClient {
+  modelAdmin: {
+    describe(payload: RequestPayload<'modelAdmin.describe'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'modelAdmin.describe'>>>
+    mutate(payload: RequestPayload<'modelAdmin.mutate'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'modelAdmin.mutate'>>>
+    describeCredentials(payload: RequestPayload<'modelAdmin.describeCredentials'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'modelAdmin.describeCredentials'>>>
+    setCredential(payload: RequestPayload<'modelAdmin.setCredential'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'modelAdmin.setCredential'>>>
+    unsetCredential(payload: RequestPayload<'modelAdmin.unsetCredential'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'modelAdmin.unsetCredential'>>>
+    discoverModels(payload: RequestPayload<'modelAdmin.discoverModels'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'modelAdmin.discoverModels'>>>
+  }
   sessions: {
     list(payload: RequestPayload<'session.list'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.list'>>>
     search(payload: RequestPayload<'session.search'>, signal?: AbortSignal): Promise<RpcResponse<ResponseValue<'session.search'>>>
@@ -219,6 +227,12 @@ const UNARY_VALUE_SCHEMAS: { [K in keyof RpcMethodMap]: z.ZodType<Wire<ResponseV
   'credentials.describe': credentialsDescribeValueSchema,
   'credentials.set': credentialsSetValueSchema,
   'credentials.unset': credentialsUnsetValueSchema,
+  'modelAdmin.describe': settingsDescribeValueSchema,
+  'modelAdmin.mutate': settingsMutateValueSchema,
+  'modelAdmin.describeCredentials': credentialsDescribeValueSchema,
+  'modelAdmin.setCredential': credentialsSetValueSchema,
+  'modelAdmin.unsetCredential': credentialsUnsetValueSchema,
+  'modelAdmin.discoverModels': llmDiscoverModelsValueSchema,
   'llm.providers': llmProvidersValueSchema,
   'llm.models': llmModelsValueSchema,
   'llm.discoverModels': llmDiscoverModelsValueSchema,
@@ -478,6 +492,15 @@ export abstract class AbstractApiClient implements IApiClient {
     resume: (payload, signal) => this.callUnary('goal.resume', payload, signal),
     complete: (payload, signal) => this.callUnary('goal.complete', payload, signal),
     clear: (payload, signal) => this.callUnary('goal.clear', payload, signal),
+  }
+
+  readonly modelAdmin: IApiClient['modelAdmin'] = {
+    describe: (payload, signal) => this.callUnary('modelAdmin.describe', payload, signal),
+    mutate: (payload, signal) => this.callUnary('modelAdmin.mutate', payload, signal),
+    describeCredentials: (payload, signal) => this.callUnary('modelAdmin.describeCredentials', payload, signal),
+    setCredential: (payload, signal) => this.callUnary('modelAdmin.setCredential', payload, signal),
+    unsetCredential: (payload, signal) => this.callUnary('modelAdmin.unsetCredential', payload, signal),
+    discoverModels: (payload, signal) => this.callUnary('modelAdmin.discoverModels', payload, signal),
   }
 
   readonly settings: IApiClient['settings'] = {

@@ -34,6 +34,14 @@ function scriptedApi(overrides: {
   const err = <T>(r: RpcRequest<unknown>): Promise<RpcResponse<T>> =>
     Promise.resolve({ rpcId: r.rpcId, result: { ok: false, error: { code: 'internal' as const, message: 'stub', details: {} } } })
   return {
+    modelAdmin: {
+      describe: async r => ({ rpcId: r.rpcId, result: { ok: true, value: { writable: true, hasDocument: false, namespaces: [] } } }),
+      mutate: async r => ({ rpcId: r.rpcId, result: { ok: false, error: { code: 'internal', message: 'stub', details: {} } } }),
+      describeCredentials: async r => ({ rpcId: r.rpcId, result: { ok: true, value: { credentials: {} } } }),
+      setCredential: async r => ({ rpcId: r.rpcId, result: { ok: true, value: {} } }),
+      unsetCredential: async r => ({ rpcId: r.rpcId, result: { ok: true, value: {} } }),
+      discoverModels: async r => ({ rpcId: r.rpcId, result: { ok: true, value: { models: [] } } }),
+    },
     sessions: {
       list: r => ok(r, { items: [] }),
       search: r => ok(r, { items: [], hasMore: false }),

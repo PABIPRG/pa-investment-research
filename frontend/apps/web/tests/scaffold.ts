@@ -185,6 +185,8 @@ export interface WebScaffold {
 
 /** Options for {@link launchWebScaffold}. */
 export interface LaunchOptions {
+  /** Explicit launcher arguments for trusted-proxy and authentication scenarios. */
+  webArgs?: string[]
   /**
    * Optional product overlay applied after the shipped Web surface and before
    * the scaffold's hermetic test patches, matching the launcher's `--patch`
@@ -446,7 +448,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // (apps/web IS @deepseek-ai/dsh-web-frontend); only the URL line is silenced.
     // Preserve the composed surface-context choice because a patch replaces
     // the row's complete config.
-    { id: 'web-runtime', config: { printUrl: false, surfaceContext } },
+    { id: 'web-runtime', config: { ...webRuntimeConfig, printUrl: false, surfaceContext } },
     ...options.remoteAuthority === undefined
       ? []
       : [{ id: 'connection', config: { trustedHosts: [options.remoteAuthority] } }],
@@ -514,7 +516,7 @@ export async function launchWebScaffold(options: LaunchOptions = {}): Promise<We
     // the values this scaffold composed above. An exit request can only come
     // from a rejected argument, which a fixed empty list has none of.
     provideCmdline(ctx, {
-      args: [],
+      args: options.webArgs ?? [],
       exit: (code) => {
         throw new Error(`web e2e scaffold: the web app requested exit ${String(code)} with no arguments to reject`)
       },

@@ -10,6 +10,7 @@ import type { WorkspaceApi } from './workspace.ts'
 import type { AgentPresetsApi } from './agent-presets.ts'
 import type { SkillsApi } from './skills.ts'
 import type { GoalsApi } from './goals.ts'
+import type { ModelAdminApi } from './model-admin.ts'
 import type { SettingsApi } from './settings.ts'
 import type { CredentialsApi } from './credentials.ts'
 import type { LlmApi } from './llm.ts'
@@ -22,6 +23,13 @@ import type { RpcResponse } from './rpc.ts'
  * request (command.execute): the carrier passes its request signal, never a wire field.
  */
 export interface RpcMethodMap {
+  'modelAdmin.describe': ModelAdminApi['describe']
+  'modelAdmin.mutate': ModelAdminApi['mutate']
+  'modelAdmin.describeCredentials': ModelAdminApi['describeCredentials']
+  'modelAdmin.setCredential': ModelAdminApi['setCredential']
+  'modelAdmin.unsetCredential': ModelAdminApi['unsetCredential']
+  'modelAdmin.discoverModels': ModelAdminApi['discoverModels']
+
   'session.list': SessionsApi['list']
   'session.search': SessionsApi['search']
   'session.create': SessionsApi['create']

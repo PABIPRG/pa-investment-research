@@ -182,6 +182,12 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
       const method = pathname.startsWith(`${API_PATH}/`)
         ? pathname.slice(API_PATH.length + 1)
         : undefined
+      if (method?.startsWith('modelAdmin.') && !auth?.enabled
+        && !isLoopbackRequestPeer(req, trustedProxyAddresses)) {
+        res.writeHead(403)
+        res.end('forbidden')
+        return
+      }
       if (((method !== undefined && PRIVILEGED_METHODS.has(method))
         || connection.isLoopbackInterceptor(pathname))
         && !isLoopbackRequestPeer(req, trustedProxyAddresses)) {

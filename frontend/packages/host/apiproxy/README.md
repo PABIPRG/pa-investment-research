@@ -4,6 +4,10 @@ English | [中文](README.zh.md)
 
 The API gateway shared by every client consists of the TypeScript API contract (`src/api/`, zero Node dependencies, importable from the browser), the fetch carrier pair (`src/fetch/`: `toFetchHandler` on the host side, `AbstractApiClient` plus platform subclasses on the client side), and the host-side implementation (`src/api-proxy.ts`: `createApiProxy` plus the default-exported `ApiProxyService` gateway plugin — config `{nativeOpen?, sessionExportCompressionLevel?, coldBlankProbeMaxBytes?}`, provides `ctx.apiProxy`). This package registers no routes; carriers such as HTTP wrap `ctx.apiProxy` themselves. The shipped Web composition lives in [`packages/bundle/web-app/cordis.patch.yml`](../../bundle/web-app/cordis.patch.yml), while its default Agent model selection belongs to [`@deepseek-ai/dsh-agent-default-model`](../../core/agent-default-model/README.md) in the base bundle.
 
+## Cloud model administration
+
+`modelAdmin` reuses settings/credentials persistence and revisions, projecting and editing only model fields in `llm-deepseek` and `llm-pi-ai`. Credential reads return only configured/writable status; new references must belong to the provider. General configuration, local file actions, and arbitrary environment variables remain outside this scope. Remote discovery requests only public HTTPS OpenAI-compatible listings, pins validated DNS addresses, rejects redirects, and bounds duration and response size. Draft requests never resolve stored keys. This policy does not isolate inference adapters or process-wide egress.
+
 ## The shared Agent default (`agent-default-model` Settings section)
 
 `ApiProxyService` consumes `ctx.agentDefaultModel`; it does not own a provider/model config or settings section. The shared service registers `{provider, model, reasoningEffort?}` under `agent-default-model`: the base bundle's composition entry is the lower layer and `settings.yaml` layers the user's choice over it.
