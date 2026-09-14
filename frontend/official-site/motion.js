@@ -142,6 +142,7 @@ const texts=['先明确研究对象、观察区间与走势变化，再区分已
 let typing=0;
 function selectMode(index,focus=false){
  cancelAnimationFrame(typing);const tabs=[...document.querySelectorAll('[role=tab]')];tabs.forEach((tab,i)=>{tab.setAttribute('aria-selected',String(i===index));tab.tabIndex=i===index?0:-1;});if(focus)tabs[index].focus();
+ $('#output-label').textContent=['先把问题问清楚','沿着线索比较解释','用证据检验判断'][index];
  $('#output').setAttribute('aria-labelledby',`tab-${index}`);$('#output').setAttribute('aria-busy','true');
  const start=performance.now(),text=texts[index];
  const type=now=>{const p=reduced?1:clamp((now-start)/1100);$('#typed').textContent=text.slice(0,Math.ceil(text.length*(1-Math.pow(1-p,3))));if(p<1)typing=requestAnimationFrame(type);else $('#output').setAttribute('aria-busy','false');};typing=requestAnimationFrame(type);

@@ -20,7 +20,7 @@ if(appUrl){
 }
 html=html.replace('</head>',metadata+'</head>');
 await writeFile(path.join(out,'index.html'),html);
-for(const file of ['style.css','motion.js','app-icon.png'])await copyFile(path.join(root,file),path.join(out,file));
+for(const file of ['style.css','motion.js','scroll-header.mjs','app-icon.png'])await copyFile(path.join(root,file),path.join(out,file));
 await writeFile(path.join(out,'robots.txt'),'User-agent: *\nAllow: /\n'+(production&&origin?`Sitemap: ${origin}/sitemap.xml\n`:''));
 if(production&&origin)await writeFile(path.join(out,'sitemap.xml'),`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>${esc(origin)}/</loc></url></urlset>`);
 console.log(`生成 dist：${production?'生产，可索引':'预览，noindex'}。`);
