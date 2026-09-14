@@ -209,7 +209,7 @@ describe('WebAuthService', () => {
     expect(await auth.login('admin', 'bad', forwarded('10.0.0.1'))).toMatchObject({ status: 401 })
     expect(await auth.login('admin', 'bad', forwarded('10.0.0.2'))).toMatchObject({ status: 401 })
     expect(await auth.login('admin', 'bad', forwarded('10.0.0.3'))).toMatchObject({ status: 429, code: 'rate-limited' })
-    vi.advanceTimersByTime(60_001)
+    vi.advanceTimersByTime(600_001)
     expect(await auth.login('admin', 'bad', forwarded('10.0.0.3'))).toMatchObject({ status: 401, code: 'invalid-credentials' })
   })
 
@@ -336,5 +336,43 @@ describe('Web auth HTTP boundary', () => {
     expect(authorized.state.status).toBe(200)
     expect(authorized.state.body).toContain('PRIVATE_GRAPH_MARKER')
     await fiber.dispose()
+  })
+})
+
+describe('captcha HTTP request boundary', () => {
+  it('uses the same trusted route policy, rejects malformed proofs, and returns only a public challenge', async () => {
+    const routes: WebRoute[] = []
+    const ctx = new Context(); contexts.push(ctx)
+    ctx.provide('webServer', { host: '127.0.0.1', port: 0,
+      register(route: WebRoute) { routes.push(route); return () => { routes.splice(routes.indexOf(route), 1) } },
+    } as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply: applyWebAuth }, configured())
+    await fiber.await()
+    const call = async (path: string, method: string, body?: unknown, headers = { host: '127.0.0.1:3281' }) => {
+      const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]) as unknown as IncomingMessage
+      Object.assign(req, { url: path, method, headers, socket: { remoteAddress: '127.0.0.1' } })
+      const result = routeResponse()
+      await routes.find(route => route.path === path)!.handler(req, result.response)
+      return result.state
+    }
+    expect((await call('/auth/captcha', 'GET')).status).toBe(405)
+    expect((await call('/auth/captcha', 'POST', undefined, { host: 'evil.test' })).status).toBe(403)
+    expect(JSON.parse((await call('/auth/captcha', 'POST')).body)).toEqual({ captchaRequired: false })
+    for (const captcha of [null, '222222', { id: 'id', answer: 222222 }, { id: 'x'.repeat(65), answer: '222222' }]) {
+      expect((await call('/auth/login', 'POST', { username: 'admin', password: 'wrong', captcha })).status).toBe(400)
+    }
+    const first = await call('/auth/login', 'POST', { username: 'admin', password: 'wrong' })
+    expect(JSON.parse(first.body)).toEqual({ code: 'invalid-credentials' })
+    const second = await call('/auth/login', 'POST', { username: 'unknown', password: 'wrong' })
+    const publicResult = JSON.parse(second.body) as { code: string; captcha: { id: string; image: string; expiresAt: number } }
+    expect(publicResult.code).toBe('invalid-credentials')
+    expect(Object.keys(publicResult.captcha).sort()).toEqual(['expiresAt', 'id', 'image'])
+    expect(publicResult.captcha.image).toMatch(/^data:image\/png;base64,/)
+    expect(second.body).not.toContain('answerHash')
+    expect(JSON.parse((await call('/auth/session', 'GET')).body)).toEqual({ state: 'signed-out', captchaRequired: true })
+    expect(JSON.parse((await call('/auth/login', 'POST', { username: 'admin', password: 'correct horse battery staple' })).body))
+      .toMatchObject({ code: 'captcha-required' })
+    await fiber.dispose()
+    expect(routes).toHaveLength(0)
   })
 })

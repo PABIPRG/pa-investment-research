@@ -1,0 +1,18 @@
+- main:
+  - region "管理员登录":
+    - img "投研智能体"
+    - paragraph: 投研智能体
+    - heading "管理员登录" [level=1]
+    - paragraph: 登录后可访问此设备上的投研工作台。
+    - text: 用户名
+    - textbox "用户名": uat-admin
+    - text: 密码
+    - textbox "密码": wrong-password
+    - text: 验证码
+    - img "登录验证码，6 位数字"
+    - button "换一张"
+    - textbox "验证码"
+    - paragraph: 输入图片中的 6 位数字，2 分钟内有效。看不清可换一张。图片验证暂不支持读屏识别，请联系部署管理员协助。
+    - status: 用户名或密码不正确，请重试。
+    - button "登录" [disabled]
+    - paragraph: 会话仅保存在当前浏览器与服务进程中。

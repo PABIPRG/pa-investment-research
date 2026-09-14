@@ -12,6 +12,7 @@ import {
   type WebRequestLifecycleResource,
 } from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
+import { createCaptcha, type CaptchaView, type CaptchaProof, type CaptchaRecord, verifyCaptcha } from './captcha.ts'
 
 declare module '@deepseek-ai/cordis' { interface Context { webAuth?: WebAuthService } }
 
@@ -86,7 +87,7 @@ interface SessionView { username: string; csrfToken: string; expiresAt: number }
 export type WebAuthSessionState =
   | { state: 'disabled' }
   | { state: 'unavailable'; reason: 'configuration' | 'transport' }
-  | { state: 'signed-out' }
+  | { state: 'signed-out'; captchaRequired?: boolean }
   | ({ state: 'signed-in' } & SessionView)
 
 export type WebAuthDecision = {
@@ -95,13 +96,14 @@ export type WebAuthDecision = {
 } | {
   ok: false
   status: 401 | 403 | 429 | 503
-  code: 'auth-required' | 'auth-unavailable' | 'secure-transport-required' | 'csrf-invalid' | 'invalid-credentials' | 'rate-limited'
+  code: 'auth-required' | 'auth-unavailable' | 'secure-transport-required' | 'csrf-invalid' | 'invalid-credentials' | 'rate-limited' | 'captcha-required' | 'captcha-invalid' | 'captcha-expired'
 }
 
 export type WebAuthLoginResult = WebAuthDecision & Partial<{
   cookieName: string
   token: string
   session: SessionView
+  captcha: CaptchaView
 }>
 
 /** Produce a salted, versioned password record suitable for a protected file. */
@@ -198,6 +200,19 @@ function readProtectedPasswordHash(path: string): string | undefined {
   finally { if (descriptor !== undefined) closeSync(descriptor) }
 }
 
+interface LoginClient {
+  attempts: number[]
+  failures: number
+  lastFailureAt: number
+  verifying: boolean
+  captcha?: CaptchaRecord | undefined
+  lastChallengeAt: number
+}
+
+// Security invariants: the observation window outlives both rate limit and challenge.
+const CAPTCHA_OBSERVATION_MS = 10 * 60_000
+const CAPTCHA_THRESHOLD = 2
+
 /** Process-local, fail-closed Web authentication authority. */
 export class WebAuthService extends Service {
   readonly enabled: boolean
@@ -214,7 +229,8 @@ export class WebAuthService extends Service {
   private readonly loginMaxConcurrentVerifications: number
   private readonly trustedProxyAddresses: readonly string[]
   private readonly sessions = new Map<string, SessionRecord>()
-  private readonly attempts = new Map<string, number[]>()
+  private readonly clients = new Map<string, LoginClient>()
+  private disposed = false
   private activePasswordVerifications = 0
   private readonly attemptCleanup: ReturnType<typeof setInterval>
 
@@ -241,7 +257,8 @@ export class WebAuthService extends Service {
     this.attemptCleanup.unref()
     ctx.effect(() => () => {
       for (const id of [...this.sessions.keys()]) this.revoke(id)
-      this.attempts.clear()
+      this.disposed = true
+      this.clients.clear()
       clearInterval(this.attemptCleanup)
     }, 'web-auth: session cleanup')
   }
@@ -258,7 +275,11 @@ export class WebAuthService extends Service {
       return { state: 'unavailable', reason: 'transport' }
     }
     const found = facts === undefined ? undefined : this.find(facts, false)
-    return found === undefined ? { state: 'signed-out' } : { state: 'signed-in', ...this.view(found.record) }
+    if (found !== undefined) return { state: 'signed-in', ...this.view(found.record) }
+    const address = facts === undefined ? undefined : requestClientAddress(facts, this.trustedProxyAddresses)
+    this.cleanupAttempts()
+    return address !== undefined && (this.clients.get(address)?.failures ?? 0) >= CAPTCHA_THRESHOLD
+      ? { state: 'signed-out', captchaRequired: true } : { state: 'signed-out' }
   }
 
   /**
@@ -268,7 +289,7 @@ export class WebAuthService extends Service {
    */
   authorize(facts: RequestFacts): WebAuthDecision {
     if (!this.enabled) return { ok: true, bindLifecycle: () => true }
-    if (!this.available) return { ok: false, status: 503, code: 'auth-unavailable' }
+    if (!this.available || this.disposed) return { ok: false, status: 503, code: 'auth-unavailable' }
     if (!this.isAllowedTransport(facts)) {
       return { ok: false, status: 403, code: 'secure-transport-required' }
     }
@@ -287,23 +308,40 @@ export class WebAuthService extends Service {
    * Validate administrator credentials and create a process-local session.
    * @param username - submitted administrator identifier.
    * @param password - submitted password, retained only for this verification call.
-   * @param address - transport source used by the per-address limiter.
+   * @param facts - transport facts used by the per-address limiter and challenge binding.
+   * @param proof - optional one-use challenge proof, required after repeated credential failures.
    * @returns a rejection or the new opaque token and public session view.
    */
-  async login(username: string, password: string, facts: BrowserTrustRequest): Promise<WebAuthLoginResult> {
+  async login(username: string, password: string, facts: BrowserTrustRequest, proof?: CaptchaProof): Promise<WebAuthLoginResult> {
     if (!this.enabled) return { ok: true }
-    if (!this.available) return { ok: false, status: 503, code: 'auth-unavailable' }
+    if (!this.available || this.disposed) return { ok: false, status: 503, code: 'auth-unavailable' }
     if (!this.isAllowedTransport(facts)) {
       return { ok: false, status: 403, code: 'secure-transport-required' }
     }
+    this.cleanupAttempts()
     const address = requestClientAddress(facts, this.trustedProxyAddresses)
-    if (address === undefined || this.addressCapacityReached(address)) {
+    if (address === undefined || (!this.clients.has(address) && this.clients.size >= this.loginMaxTrackedAddresses)) {
       return { ok: false, status: 429, code: 'rate-limited' }
     }
-    if (this.rateLimited(address)) return { ok: false, status: 429, code: 'rate-limited' }
-    if (this.activePasswordVerifications >= this.loginMaxConcurrentVerifications) {
+    const client = this.clients.get(address) ?? {
+      attempts: [], failures: 0, lastFailureAt: 0, verifying: false, lastChallengeAt: 0,
+    }
+    // Reserve capacity before the first await; one identity cannot race the failure threshold.
+    this.clients.set(address, client)
+    if (client.verifying || client.attempts.length >= this.loginMaxAttempts
+      || this.activePasswordVerifications >= this.loginMaxConcurrentVerifications) {
       return { ok: false, status: 429, code: 'rate-limited' }
     }
+    client.attempts.push(Date.now())
+    if (client.failures >= CAPTCHA_THRESHOLD) {
+      const challenge = client.captcha
+      client.captcha = undefined
+      const code = proof === undefined ? 'captcha-required'
+        : challenge === undefined || challenge.expiresAt <= Date.now() ? 'captcha-expired'
+          : verifyCaptcha(challenge, proof) ? undefined : 'captcha-invalid'
+      if (code !== undefined) return { ok: false, status: 401, code, captcha: this.rotateCaptcha(client) }
+    }
+    client.verifying = true
     // Always pay the password-verification cost so a remote caller cannot use
     // response timing to distinguish a valid administrator identifier. The
     // asynchronous KDF is capped above and excess work is rejected, never
@@ -315,12 +353,16 @@ export class WebAuthService extends Service {
       passwordMatches = await verifyPasswordWithoutBlocking(password, this.passwordHash as string)
     } finally {
       this.activePasswordVerifications -= 1
+      client.verifying = false
     }
+    if (this.disposed) return { ok: false, status: 503, code: 'auth-unavailable' }
     if (!usernameMatches || !passwordMatches) {
-      this.recordFailure(address)
-      return { ok: false, status: 401, code: 'invalid-credentials' }
+      client.failures = Math.min(CAPTCHA_THRESHOLD, client.failures + 1)
+      client.lastFailureAt = Date.now()
+      return { ok: false, status: 401, code: 'invalid-credentials',
+        ...(client.failures >= CAPTCHA_THRESHOLD ? { captcha: this.rotateCaptcha(client) } : {}) }
     }
-    this.attempts.delete(address)
+    this.clients.delete(address)
     const token = randomBytes(32).toString('base64url')
     const id = digest(token)
     const now = Date.now()
@@ -418,24 +460,43 @@ export class WebAuthService extends Service {
     record.resources.clear()
   }
 
-  private recent(address: string): number[] {
-    const cutoff = Date.now() - this.loginWindowMs
-    const recent = (this.attempts.get(address) ?? []).filter(at => at > cutoff)
-    if (recent.length === 0) this.attempts.delete(address); else this.attempts.set(address, recent)
-    return recent
+  /**
+   * Replace the requesting client's challenge after the failure threshold.
+   * @param facts - transport facts resolved with the same proxy policy as login.
+   * @returns an opaque PNG challenge, no challenge requirement, or a fail-closed rejection.
+   */
+  challenge(facts: BrowserTrustRequest): WebAuthLoginResult {
+    if (!this.available || this.disposed) return { ok: false, status: 503, code: 'auth-unavailable' }
+    if (!this.isAllowedTransport(facts)) return { ok: false, status: 403, code: 'secure-transport-required' }
+    this.cleanupAttempts()
+    const address = requestClientAddress(facts, this.trustedProxyAddresses)
+    if (address === undefined) return { ok: false, status: 429, code: 'rate-limited' }
+    const client = this.clients.get(address)
+    if (client === undefined || client.failures < CAPTCHA_THRESHOLD) return { ok: true }
+    if (client.verifying || Date.now() - client.lastChallengeAt < 1_000) {
+      return { ok: false, status: 429, code: 'rate-limited' }
+    }
+    return { ok: true, captcha: this.rotateCaptcha(client) }
   }
+
+  private rotateCaptcha(client: LoginClient): CaptchaView {
+    const { record, view } = createCaptcha()
+    client.captcha = record
+    client.lastChallengeAt = Date.now()
+    return view
+  }
+
   private cleanupAttempts(): void {
-    for (const address of [...this.attempts.keys()]) this.recent(address)
-  }
-  private addressCapacityReached(address: string): boolean {
-    if (this.attempts.has(address)) return false
-    return this.attempts.size >= this.loginMaxTrackedAddresses
-  }
-  private rateLimited(address: string): boolean {
-    return this.recent(address).length >= this.loginMaxAttempts
-  }
-  private recordFailure(address: string): void {
-    this.attempts.set(address, [...this.recent(address), Date.now()])
+    const now = Date.now()
+    for (const [address, client] of this.clients) {
+      client.attempts = client.attempts.filter(at => at > now - this.loginWindowMs)
+      if (client.captcha !== undefined && client.captcha.expiresAt <= now) client.captcha = undefined
+      if (!client.verifying && client.lastFailureAt <= now - CAPTCHA_OBSERVATION_MS) {
+        client.failures = 0
+        client.captcha = undefined
+      }
+      if (!client.verifying && client.attempts.length === 0 && client.failures === 0) this.clients.delete(address)
+    }
   }
   private isAllowedTransport(facts: BrowserTrustRequest): boolean {
     return this.secureCookies
@@ -449,7 +510,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown, headers: 
   res.end(JSON.stringify(body))
 }
 
-async function readLoginBody(req: IncomingMessage): Promise<{ username: string; password: string } | undefined> {
+async function readLoginBody(req: IncomingMessage): Promise<{ username: string; password: string; proof?: CaptchaProof } | undefined> {
   let size = 0; const chunks: Uint8Array[] = []
   for await (const chunk of req) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); size += bytes.length
@@ -460,8 +521,14 @@ async function readLoginBody(req: IncomingMessage): Promise<{ username: string; 
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
     if (typeof parsed !== 'object' || parsed === null) return undefined
     const body = parsed as Record<string, unknown>
+    const proof = body.captcha
+    if (proof !== undefined && (typeof proof !== 'object' || proof === null
+      || typeof (proof as Record<string, unknown>).id !== 'string'
+      || typeof (proof as Record<string, unknown>).answer !== 'string'
+      || ((proof as Record<string, unknown>).id as string).length > 64
+      || ((proof as Record<string, unknown>).answer as string).length > 16)) return undefined
     return typeof body.username === 'string' && typeof body.password === 'string'
-      ? { username: body.username, password: body.password } : undefined
+      ? { username: body.username, password: body.password, ...(proof === undefined ? {} : { proof: proof as CaptchaProof }) } : undefined
   } catch { return undefined }
 }
 
@@ -503,10 +570,16 @@ export function apply(ctx: Context, config: WebAuthConfig): void {
     }
     const body = await readLoginBody(req)
     if (body === undefined) { writeJson(res, 400, { code: 'invalid-request' }); return }
-    const result = await auth.login(body.username, body.password, req)
-    if (!result.ok) { writeJson(res, result.status, { code: result.code }); return }
+    const result = await auth.login(body.username, body.password, req, body.proof)
+    if (!result.ok) { writeJson(res, result.status, { code: result.code, captcha: result.captcha }); return }
     if (result.session === undefined || result.token === undefined) { writeJson(res, 200, { state: 'disabled' }); return }
     writeJson(res, 200, { state: 'signed-in', ...result.session }, { 'set-cookie': auth.cookieHeader(result.token) })
+  })
+  route('/auth/captcha', (req, res) => {
+    if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+    const result = auth.challenge(req)
+    writeJson(res, result.ok ? 200 : result.status, result.ok
+      ? { captcha: result.captcha, captchaRequired: result.captcha !== undefined } : { code: result.code })
   })
   route('/auth/logout', (req, res) => {
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
