@@ -10,6 +10,26 @@
 
 以下快速开始面向源码开发；使用独立桌面包不需要执行源码初始化。
 
+## 官网模块
+
+[`frontend/official-site/`](frontend/official-site/README.md) 是投研智能体的独立介绍官网，包含粒子首屏、研究能力介绍、明暗主题、产品问答和基础 SEO。它与投研业务应用、`frontend/website/` 文档站分别维护，可独立部署到 Vercel，无需初始化或安装整个业务前端。
+
+Vercel 项目将 **Root Directory** 设置为 `frontend/official-site`，框架选择 **Other**；目录内的 `vercel.json` 已配置 `node build.mjs` 构建及 `dist` 输出目录。
+
+| 环境变量 | 作用 |
+|---|---|
+| `SITE_URL` | 官网的正式 HTTPS 根域名；生产部署必填，用于 canonical、sitemap 和分享地址 |
+| `WEB_APP_URL` | 投研网页版的完整 HTTPS 地址；配置后两处入口跳转，留空时显示“敬请期待” |
+
+环境变量在构建时生效，修改后需重新部署。预览部署默认 `noindex`，生产部署生成 sitemap；设计记录与历史稿不会进入部署产物。官网不包含投研业务后端。
+
+```sh
+node frontend/official-site/build.mjs   # 本地预览构建
+node frontend/official-site/verify.mjs  # 构建与入口配置校验
+```
+
+完整步骤见[官网部署说明](frontend/official-site/README.md)与[SEO / GEO 验证记录](frontend/official-site/DEPLOY-SEO.md)。
+
 ## 快速开始
 
 所有常用操作通过根目录入口 `start.sh` 完成（跨平台：Linux / macOS 原生支持，Windows 需在 Git Bash 中运行）：
