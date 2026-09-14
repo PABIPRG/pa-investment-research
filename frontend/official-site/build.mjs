@@ -14,7 +14,10 @@ html=html.replace(/(<span id="copyright-year">)\d{4}/,'$1'+new Date().getFullYea
 const esc=s=>s.replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
 let metadata=production?'<meta name="robots" content="index,follow,max-image-preview:large">':'<meta name="robots" content="noindex,follow">';
 if(origin)metadata+=`<link rel="canonical" href="${esc(origin)}/"><meta property="og:url" content="${esc(origin)}/"><meta property="og:image" content="${esc(origin)}/app-icon.png"><meta property="og:image:alt" content="投研智能体标志">`;
-html=html.replaceAll('data-web-app-url=""',`data-web-app-url="${esc(appUrl)}"`);
+if(appUrl){
+ html=html.replaceAll('data-web-app-url="" aria-disabled="true"',`data-web-app-url="${esc(appUrl)}"`);
+ html=html.replaceAll('<span class="entry-label">敬请期待</span>','<span class="entry-label">进入网页版</span>');
+}
 html=html.replace('</head>',metadata+'</head>');
 await writeFile(path.join(out,'index.html'),html);
 for(const file of ['style.css','motion.js','app-icon.png'])await copyFile(path.join(root,file),path.join(out,file));

@@ -112,3 +112,5 @@ html[data-theme="dark"]{color-scheme:dark}
 .download.web-entry{background:#70b1ee;color:#fff}.download.web-entry .entry-arrow{opacity:1}
 
 .docs-entry{display:inline-flex;align-items:center;gap:10px;line-height:20px}.docs-entry:hover .entry-arrow,.docs-entry:focus-visible .entry-arrow{transform:translateX(2px)}
+
+.web-entry[aria-disabled="true"] .entry-arrow{display:none}

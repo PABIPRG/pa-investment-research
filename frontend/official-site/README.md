@@ -14,7 +14,7 @@
 | 环境变量 | 用途 | 为空时 |
 |---|---|---|
 | SITE_URL | 官网正式 HTTPS 根域名，用于 canonical、sitemap、分享地址 | 生产构建失败；预览可用 |
-| WEB_APP_URL | “进入网页版”按钮的 HTTPS 跳转地址，可带路径 | 顶部和页脚入口正常显示，点击不跳转 |
+| WEB_APP_URL | “进入网页版”按钮的 HTTPS 跳转地址，可带路径 | 顶部和页脚显示“敬请期待”，点击不跳转 |
 | VERCEL_ENV | Vercel 自动注入的环境标识 | 非 production 默认 noindex |
 
 WEB_APP_URL 在构建时写入 HTML，因此是公开网址，不要填含凭证的地址。配置后两个入口均通过 JavaScript 跳转到该地址。SITE_URL 与 WEB_APP_URL 可以属于不同域名。

@@ -14,6 +14,8 @@ try{
  assert.equal(run({}).status,0);
  let html=await readFile(join(dir,'dist/index.html'),'utf8');
  assert.equal((html.match(/data-web-app-url=""/g)||[]).length,2);
+ assert.equal((html.match(/敬请期待/g)||[]).length,2);
+ assert.equal((html.match(/aria-disabled="true"/g)||[]).length,2);
  assert.ok(html.includes('noindex,follow'));
  assert.ok(html.includes(`id="copyright-year">${new Date().getFullYear()}`));
  assert.equal(run({VERCEL_ENV:'production'}).status,1);
@@ -22,6 +24,9 @@ try{
  assert.equal(run({VERCEL_ENV:'production',SITE_URL:'https://example.com',WEB_APP_URL:'https://app.example.com/research?a=1&b=2'}).status,0);
  html=await readFile(join(dir,'dist/index.html'),'utf8');
  assert.equal((html.match(/data-web-app-url="https:\/\/app.example.com\/research\?a=1&amp;b=2"/g)||[]).length,2);
+ assert.ok(!html.includes('敬请期待'));
+ assert.equal((html.match(/<span class="entry-label">进入网页版<\/span>/g)||[]).length,2);
+ assert.ok(!html.includes('aria-disabled="true"'));
  assert.ok(!html.includes('网页版地址待接入'));
  assert.ok(!html.includes('目前本站的网页版入口尚未接入'));
  assert.ok(html.includes('rel="canonical" href="https://example.com/"'));
