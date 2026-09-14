@@ -257,7 +257,7 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
-  it('maps all nine industry-chain operations to the fixed backend routes', async () => {
+  it('maps all ten industry-chain operations to the fixed backend routes', async () => {
     const release = vi.fn(async () => {})
     const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8200', release }))
     const calls: Array<[string, RequestInit | undefined]> = []
@@ -271,6 +271,7 @@ describe('investment data broker', () => {
 
     await requestInvestmentData({ operation: 'industry-chain.data-status' }, acquire)
     await requestInvestmentData({ operation: 'industry-chain.data-bootstrap' }, acquire)
+    await requestInvestmentData({ operation: 'industry-chain.data-delete' }, acquire)
     await requestInvestmentData({ operation: 'industry-chain.stats' }, acquire)
     await requestInvestmentData({
       operation: 'industry-chain.companies', input: { keyword: '电池', limit: 5 },
@@ -290,10 +291,11 @@ describe('investment data broker', () => {
       },
     }, acquire)
 
-    expect(acquire.mock.calls).toEqual(Array.from({ length: 9 }, () => ['industry-chain']))
+    expect(acquire.mock.calls).toEqual(Array.from({ length: 10 }, () => ['industry-chain']))
     expect(calls).toEqual([
       ['http://127.0.0.1:8200/data/status', { method: 'GET' }],
       ['http://127.0.0.1:8200/data/bootstrap', { method: 'POST' }],
+      ['http://127.0.0.1:8200/data/delete', { method: 'POST' }],
       ['http://127.0.0.1:8200/stats', { method: 'GET' }],
       ['http://127.0.0.1:8200/companies?keyword=%E7%94%B5%E6%B1%A0&limit=5', { method: 'GET' }],
       ['http://127.0.0.1:8200/companies/300750', { method: 'GET' }],
@@ -308,7 +310,7 @@ describe('investment data broker', () => {
         { method: 'GET' },
       ],
     ])
-    expect(release).toHaveBeenCalledTimes(9)
+    expect(release).toHaveBeenCalledTimes(10)
   })
 
   it('maps the complete trading workflow to fixed routes and typed inputs', async () => {

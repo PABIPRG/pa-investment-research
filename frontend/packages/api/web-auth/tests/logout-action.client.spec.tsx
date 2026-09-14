@@ -48,7 +48,7 @@ describe('Web auth logout action', () => {
     expect(view.container.innerHTML).toBe('')
   })
 
-  it('uses a native button and keeps logout failures visible and retryable', async () => {
+  it('asks for confirmation before logout and keeps failures visible and retryable', async () => {
     const logout = vi.fn()
       .mockResolvedValueOnce('error')
       .mockResolvedValueOnce('signed-out')
@@ -57,9 +57,17 @@ describe('Web auth logout action', () => {
     const initial = screen.getByRole('button', { name: '退出登录' })
     expect(initial.tagName).toBe('BUTTON')
     fireEvent.click(initial)
+    expect(screen.getByRole('dialog', { name: '确认退出登录' })).toBeTruthy()
+    expect(screen.getByText('退出后需要重新输入管理员账号和密码才能访问投研工作台。')).toBeTruthy()
+    expect(logout).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('dialog', { name: '确认退出登录' })).toBeNull()
+    fireEvent.click(initial)
+    fireEvent.click(screen.getByRole('button', { name: '确认退出' }))
     const retry = await screen.findByRole('button', { name: '退出失败，重试' })
     expect(retry.textContent).toContain('退出失败，重试')
     fireEvent.click(retry)
+    fireEvent.click(screen.getByRole('button', { name: '确认退出' }))
     await waitFor(() => { expect(logout).toHaveBeenCalledTimes(2) })
   })
 })

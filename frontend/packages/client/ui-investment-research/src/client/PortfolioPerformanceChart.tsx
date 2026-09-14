@@ -6,12 +6,14 @@ import { AriaComponent, GridComponent, TooltipComponent } from 'echarts/componen
 import { CanvasRenderer } from 'echarts/renderers'
 import { compactMoney, number, text } from './data.ts'
 import css from './InvestmentShell.module.css'
+import { privateFunds } from './funds-privacy.tsx'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, AriaComponent, CanvasRenderer])
 
 interface PortfolioPerformanceChartProps {
   readonly ariaLabel: string
   readonly series: readonly Record<string, unknown>[]
+  readonly fundsHidden?: boolean
 }
 
 interface PortfolioPerformanceDatum {
@@ -55,7 +57,7 @@ function token(element: HTMLElement, name: string): string {
   return getComputedStyle(element).getPropertyValue(name).trim()
 }
 
-function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDatum[], ariaLabel: string): EChartsCoreOption {
+function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDatum[], ariaLabel: string, fundsHidden: boolean): EChartsCoreOption {
   const primary = token(element, '--investment-primary')
   const background = token(element, '--dsw-alias-bg-base')
   const overlay = token(element, '--dsw-alias-bg-overlay')
@@ -73,7 +75,7 @@ function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDa
   return {
     animationDuration: 420,
     animationEasing: 'cubicOut',
-    aria: { enabled: true, label: { description: `${ariaLabel}。使用左右方向键逐点查看估值明细。` } },
+    aria: { enabled: !fundsHidden, label: { description: `${ariaLabel}。使用左右方向键逐点查看估值明细。` } },
     grid: { top: 36, right: 24, bottom: 58, left: 78, containLabel: false },
     tooltip: {
       trigger: 'axis',
@@ -97,7 +99,7 @@ function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDa
         const index = tooltipDataIndex(params)
         const point = index === undefined ? undefined : data[index]
         if (point === undefined) return ''
-        return `{date|${point.date}}\n总资产  {value|${compactMoney(point.value)}}\n累计盈亏  {value|${signedMoney(point.profitLoss)}}`
+        return `{date|${point.date}}\n总资产  {value|${privateFunds(compactMoney(point.value), fundsHidden)}}\n累计盈亏  {value|${privateFunds(signedMoney(point.profitLoss), fundsHidden)}}`
       },
     },
     xAxis: {
@@ -129,7 +131,7 @@ function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDa
       splitNumber: 4,
       axisLine: { show: false },
       axisTick: { show: false },
-      axisLabel: { color: labelTertiary, fontSize: 11, formatter: (value: number) => axisMoney(value, visibleRange) },
+      axisLabel: { color: labelTertiary, fontSize: 11, formatter: (value: number) => privateFunds(axisMoney(value, visibleRange), fundsHidden) },
       nameTextStyle: { color: labelTertiary, fontSize: 11, align: 'left' },
       splitLine: { lineStyle: { color: border, type: 'dashed' } },
     },
@@ -152,7 +154,7 @@ function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDa
         fontSize: 11,
         formatter: (params: unknown) => {
           const index = eventDataIndex(params)
-          return index === undefined ? '' : compactMoney(data[index]?.value ?? 0)
+          return index === undefined ? '' : privateFunds(compactMoney(data[index]?.value ?? 0), fundsHidden)
         },
       },
       endLabel: {
@@ -161,7 +163,7 @@ function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDa
         fontSize: 11,
         formatter: (params: unknown) => {
           const index = eventDataIndex(params)
-          return index === undefined ? '' : compactMoney(data[index]?.value ?? 0)
+          return index === undefined ? '' : privateFunds(compactMoney(data[index]?.value ?? 0), fundsHidden)
         },
       },
       emphasis: { focus: 'series', scale: 1.45 },
@@ -170,7 +172,7 @@ function chartOption(element: HTMLElement, data: readonly PortfolioPerformanceDa
 }
 
 /** Canvas-rendered interactive valuation chart with keyboard point navigation. */
-export function PortfolioPerformanceChart({ ariaLabel, series }: PortfolioPerformanceChartProps) {
+export function PortfolioPerformanceChart({ ariaLabel, series, fundsHidden = false }: PortfolioPerformanceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null)
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
@@ -184,7 +186,7 @@ export function PortfolioPerformanceChart({ ariaLabel, series }: PortfolioPerfor
     const container = containerRef.current
     if (container === null || data.length < 2) return
     let chart: ReturnType<typeof echarts.init> | undefined
-    const render = () => { chart?.setOption(chartOption(container, data, ariaLabel), true) }
+    const render = () => { chart?.setOption(chartOption(container, data, ariaLabel, fundsHidden), true) }
     const initialize = () => {
       if (chart !== undefined || container.clientWidth === 0 || container.clientHeight === 0) return
       try {
@@ -222,7 +224,7 @@ export function PortfolioPerformanceChart({ ariaLabel, series }: PortfolioPerfor
       chart?.dispose()
       chartRef.current = null
     }
-  }, [ariaLabel, data])
+  }, [ariaLabel, data, fundsHidden])
 
   const revealPoint = (index: number) => {
     const normalized = Math.max(0, Math.min(index, data.length - 1))
@@ -260,8 +262,8 @@ export function PortfolioPerformanceChart({ ariaLabel, series }: PortfolioPerfor
       {activePoint !== undefined && (
         <div className={css.performanceChartPointSummary} aria-live="polite">
           <strong>{activeIndex === null ? `最新估值 · ${activePoint.date}` : activePoint.date}</strong>
-          <span>总资产 <b>{compactMoney(activePoint.value)}</b></span>
-          <span>累计盈亏 <b data-tone={activePoint.profitLoss === undefined || activePoint.profitLoss === 0 ? undefined : activePoint.profitLoss > 0 ? 'positive' : 'negative'}>{signedMoney(activePoint.profitLoss)}</b></span>
+          <span>总资产 <b>{privateFunds(compactMoney(activePoint.value), fundsHidden)}</b></span>
+          <span>累计盈亏 <b data-tone={activePoint.profitLoss === undefined || activePoint.profitLoss === 0 ? undefined : activePoint.profitLoss > 0 ? 'positive' : 'negative'}>{privateFunds(signedMoney(activePoint.profitLoss), fundsHidden)}</b></span>
         </div>
       )}
       <p className={css.performanceChartHelp}>悬停节点查看明细；键盘聚焦图表后，可用左右方向键切换估值日。</p>

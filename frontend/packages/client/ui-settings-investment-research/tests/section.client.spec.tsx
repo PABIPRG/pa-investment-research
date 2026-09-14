@@ -19,7 +19,10 @@ import type { InvestmentReadinessKey } from '../src/client/locales.ts'
 
 type HostDescriptionSource = ConnectionHandle['hostDescription']
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  sessionStorage.clear()
+})
 
 const SOURCE_LOG = '/Users/example/DeepSeek Harness/.dsh/investment-research/trading-core/backend.log'
 const WINDOWS_LOG = 'C:\\Users\\Example User\\.dsh\\investment-research\\market-watch\\backend.log'
@@ -170,9 +173,15 @@ function mount(
     openBackupDirectory: vi.fn(async () => {}),
     reloadPage: vi.fn(overrides.reloadPage),
   }
-  const requestData = vi.fn(overrides.requestData ?? (async () => ({
-    backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' },
-  })))
+  const requestData = vi.fn<InvestmentReadinessSectionInjected['requestData']>(overrides.requestData ?? (async (request) => {
+    if (request.operation === 'industry-chain.data-status') {
+      return {
+        status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 2048,
+        current_file: null, error: null,
+      }
+    }
+    return { backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' } }
+  }))
   const cloudDescription = {
     version: 'test', attachedSessions: 0, canOpenPath: false,
     deployment: {
@@ -278,7 +287,7 @@ describe('InvestmentReadinessSection', () => {
     expect(screen.queryByText('运行日志')).toBeNull()
     expect(container.textContent).not.toContain(SOURCE_LOG)
     expect(container.textContent).not.toContain(WINDOWS_LOG)
-    expect(requestData).not.toHaveBeenCalled()
+    expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.data-status' })
   })
 
   it('fails closed for Host directory actions while backup storage is unknown or failed', async () => {
@@ -512,12 +521,16 @@ describe('InvestmentReadinessSection', () => {
     fireEvent.click(safety)
     expect(screen.getByText(/已取消安全备份/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
+    const recoveryStatus = await screen.findByRole('status')
+    expect(recoveryStatus.textContent).toContain('导入完成，正在更新工作台…')
+    expect(recoveryStatus.textContent).toContain('正在重新读取持仓、行情与研究数据，请稍候。')
     await waitFor(() => {
       expect(backup.backupImport).toHaveBeenCalledWith({
         previewId: 'preview-1', rules: { holdings: 'use_import' }, backupBefore: false,
       })
       expect(backup.reloadPage).toHaveBeenCalledOnce()
     })
+    expect(sessionStorage.getItem('dsh-investment-import-recovery')).toBe('1')
   })
 
   it('passes cancellation into stored preview and releases the preview on cancel and unmount', async () => {
@@ -735,6 +748,53 @@ describe('InvestmentReadinessSection', () => {
         categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences'], backupBefore: true,
       })
     })
+  })
+
+  it('downloads industry-chain data and deletes it only after confirmation', async () => {
+    const requestData = vi.fn<InvestmentReadinessSectionInjected['requestData']>(async (request) => {
+      if (request.operation === 'industry-chain.data-status') {
+        return {
+          status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 2048,
+          current_file: null, error: null,
+        }
+      }
+      if (request.operation === 'industry-chain.data-delete') {
+        return {
+          status: 'missing', files_completed: 0, files_total: 5, downloaded_bytes: 0,
+          current_file: null, error: null,
+        }
+      }
+      if (request.operation === 'industry-chain.data-bootstrap') {
+        return {
+          status: 'ready', files_completed: 5, files_total: 5, downloaded_bytes: 4096,
+          current_file: null, error: null,
+        }
+      }
+      return { backend_env: {}, effective: { HOLDINGS_PROVIDER: 'manual' } }
+    })
+    mount(CONFIGURED, { requestData })
+
+    expect(await screen.findByText('已下载 · 2.0 KB')).toBeTruthy()
+    const download = screen.getByRole('button', { name: '下载产业链数据' }) as HTMLButtonElement
+    expect(download.disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '删除产业链数据' }))
+    expect(screen.getByRole('dialog', { name: '删除产业链图谱数据？' })).toBeTruthy()
+    expect(screen.getByText(/不影响持仓、策略、研究记录或备份/)).toBeTruthy()
+    expect(requestData).not.toHaveBeenCalledWith({ operation: 'industry-chain.data-delete' })
+
+    fireEvent.click(screen.getByRole('button', { name: '确认删除数据' }))
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.data-delete' })
+    })
+    expect(await screen.findByText('未下载')).toBeTruthy()
+    expect(screen.getByText('产业链图谱数据已删除，可在产业链页面重新下载。')).toBeTruthy()
+    await waitFor(() => { expect(download.disabled).toBe(false) })
+    fireEvent.click(download)
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({ operation: 'industry-chain.data-bootstrap' })
+    })
+    expect(await screen.findByText('已下载 · 4.0 KB')).toBeTruthy()
+    expect(screen.getByText('产业链图谱数据下载完成。')).toBeTruthy()
   })
 
   it('shows source-owned keyless readiness and routes the only credential action to Models', () => {

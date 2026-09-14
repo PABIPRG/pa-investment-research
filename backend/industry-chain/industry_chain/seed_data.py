@@ -323,3 +323,38 @@ class SeedDataManager:
             self._disk_signature = self._dataset_signature()
             self._condition.notify_all()
             return self._snapshot_locked()
+
+    def delete(self) -> DataStatus:
+        """显式删除当前种子数据；下载进行中时拒绝删除。"""
+        with self._condition:
+            self._inspect_locked()
+            if self._status == "downloading":
+                raise SeedDataError("产业链数据正在下载，请完成后再删除")
+
+            target = self._data_dir
+            tombstone: Path | None = None
+            if target.exists() or target.is_symlink():
+                tombstone = target.parent / f".{target.name}-deleted-{uuid.uuid4().hex}"
+                try:
+                    os.replace(target, tombstone)
+                    _remove_path(tombstone)
+                except OSError as exc:
+                    if tombstone.exists() or tombstone.is_symlink():
+                        try:
+                            if not target.exists() and not target.is_symlink():
+                                os.replace(tombstone, target)
+                        except OSError:
+                            pass
+                    self._initialized = False
+                    self._inspect_locked()
+                    raise SeedDataError("产业链数据删除失败，请重试") from exc
+
+            self._initialized = True
+            self._disk_signature = None
+            self._status = "missing"
+            self._files_completed = 0
+            self._downloaded_bytes = 0
+            self._current_file = None
+            self._error = None
+            self._condition.notify_all()
+            return self._snapshot_locked()

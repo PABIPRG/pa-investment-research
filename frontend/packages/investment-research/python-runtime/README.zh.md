@@ -53,13 +53,13 @@ Host 会为每个 owned managed child 设置 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME
 
 静默迁移可以复制已经关闭的 SQLite。在线迁移会按扩展名或文件头识别 SQLite，调用方必须提供 `backupSqlite`，并通过 SQLite backup API 或等价一致性快照实现；活动 WAL、SHM 与 rollback-journal sidecar 会被排除。在线 Host 会话与附件需要共同的静默点或快照屏障，不能逐文件复制，因此迁移器会明确拒绝。应用回滚负责选择兼容的可执行文件或镜像，数据回滚则要求停止应用并恢复迁移前目录快照，两者都不会隐式代替对方。
 
-sidecar 不重新分发 industry-chain 种子数据，应用启动也绝不下载。`industry-chain.data-status` 在不联网的情况下读取本地 `missing`、`downloading`、`ready` 或 `error` 状态；只有用户显式触发 `industry-chain.data-bootstrap` 才会下载固定五文件。backend 会限制文件大小，在临时目录校验 JSON 与最低结构，仅在完整数据集全部通过后发布，并清理失败的临时数据；并发 bootstrap 请求复用同一次下载。
+sidecar 不重新分发 industry-chain 种子数据，应用启动也绝不下载。`industry-chain.data-status` 在不联网的情况下读取本地 `missing`、`downloading`、`ready` 或 `error` 状态；只有用户显式触发 `industry-chain.data-bootstrap` 才会下载固定五文件，设置页二次确认后才会调用 `industry-chain.data-delete` 删除该可重新下载的数据集。backend 会限制文件大小，在临时目录校验 JSON 与最低结构，仅在完整数据集全部通过后发布，并清理失败的临时数据；并发 bootstrap 请求复用同一次下载，下载期间拒绝删除。
 
 ## 浏览器安全数据操作
 
 Host 的 `request-data` Remote 只接受编译期列举的 operation（操作）与各 operation 已知输入键，浏览器不能传入 backend origin、任意 URL 或任意 path。动态报告、策略和任务 id 必须符合受限标识符格式，并在拼接固定路由前经过 `encodeURIComponent`；未知键、非法枚举、越界数值和不安全 id 都会在获取 backend lease 前被拒绝。
 
-白名单覆盖 `market-watch` 的市场观测；`trading-core` 的个人投研数据、分析、简报、回测、统一报告列表／详情、策略假设／状态迁移／运行、影子状态／持仓／净值／运行、自进化状态／归因／运行、个性化匹配／产业影响与后台任务状态／结果；以及 `industry-chain` 的无输入 `GET /data/status`、`POST /data/bootstrap` 数据生命周期路由、图谱统计、公司搜索／详情、实体档案、单公司视图、多层产业链与筛选后的全局网络。两条生命周期 operation 都返回 `{ status, files_completed, files_total, downloaded_bytes, current_file, error }`；bootstrap 是一次非流式长请求，界面可同时轮询 status 展示进度。实体业务名称可以包含 `/`，Host 会把整段编码成一个参数，同时拒绝类似路径穿越的分段和不安全标识符。浏览器不能传入下载 URL 或请求 body。其他写操作的 JSON body 只由 Host 根据已知键构造；报告列表与所有只读状态通过固定 GET 路由读取；系统既不开放任意 backend 访问，也不生成虚构结果。
+白名单覆盖 `market-watch` 的市场观测；`trading-core` 的个人投研数据、分析、简报、回测、统一报告列表／详情、策略假设／状态迁移／运行、影子状态／持仓／净值／运行、自进化状态／归因／运行、个性化匹配／产业影响与后台任务状态／结果；以及 `industry-chain` 的无输入 `GET /data/status`、`POST /data/bootstrap`、`POST /data/delete` 数据生命周期路由、图谱统计、公司搜索／详情、实体档案、单公司视图、多层产业链与筛选后的全局网络。三条生命周期 operation 都返回 `{ status, files_completed, files_total, downloaded_bytes, current_file, error }`；bootstrap 是一次非流式长请求，界面可同时轮询 status 展示进度。实体业务名称可以包含 `/`，Host 会把整段编码成一个参数，同时拒绝类似路径穿越的分段和不安全标识符。浏览器不能传入下载 URL 或请求体。其他写操作的 JSON body 只由 Host 根据已知键构造；报告列表与所有只读状态通过固定 GET 路由读取；系统既不开放任意 backend 访问，也不生成虚构结果。
 
 个性化反馈与五个 `trading-core.local-learning-*` operation 仅限本机。它们只接受不透明对象 id、枚举化动作与表层，以及固定的结构化上下文投影；搜索词、提示词、标题、报告正文、持仓数量与成本、URL、路径和类似凭据的字段在协议中没有入口。非法值会在获取租约前失败。若经过验证的租约属于 `external`，Host 会释放租约并在 `fetch` 前拒绝 operation，因此本地偏好事实不会转发到配置的远程交易服务。`owned` 或 `attached` 本地服务负责生成权威时间并执行保留策略。
 

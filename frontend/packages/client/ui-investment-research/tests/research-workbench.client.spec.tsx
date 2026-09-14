@@ -3,15 +3,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { ResearchWorkbenchPage } from '../src/client/ResearchWorkbenchPage.tsx'
+import { FundsPrivacyProvider } from '../src/client/funds-privacy.tsx'
 import css from '../src/client/InvestmentShell.module.css'
 
 const primaryRouteSurfaceClass = css.primaryRouteSurface
 if (primaryRouteSurfaceClass === undefined) {
   throw new Error('primaryRouteSurface class missing from InvestmentShell.module.css')
 }
+const securityNameLoadingClass = css.securityNameLoading
+if (securityNameLoadingClass === undefined) {
+  throw new Error('securityNameLoading class missing from InvestmentShell.module.css')
+}
 
 afterEach(() => {
   cleanup()
+  window.localStorage.clear()
   vi.useRealTimers()
   vi.unstubAllGlobals()
 })
@@ -135,13 +141,16 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
   return {}
 }
 
-function renderWorkbench(requestData = vi.fn(async (request: InvestmentDataRequest) => completeResponse(request.operation))) {
+function renderWorkbench(
+  requestData = vi.fn(async (request: InvestmentDataRequest) => completeResponse(request.operation)),
+  fundsPrivacy = false,
+) {
   const navigate = vi.fn()
   const onAnalyze = vi.fn()
   const onOpenReports = vi.fn()
   const onOpenPreferences = vi.fn()
   const trackTelemetry = vi.fn(async () => {})
-  const view = render(
+  const page = (
     <ResearchWorkbenchPage
       requestData={requestData}
       navigate={navigate}
@@ -149,8 +158,9 @@ function renderWorkbench(requestData = vi.fn(async (request: InvestmentDataReque
       onOpenReports={onOpenReports}
       onOpenPreferences={onOpenPreferences}
       trackTelemetry={trackTelemetry}
-    />,
+    />
   )
+  const view = render(fundsPrivacy ? <FundsPrivacyProvider>{page}</FundsPrivacyProvider> : page)
   return { ...view, requestData, navigate, onAnalyze, onOpenReports, onOpenPreferences, trackTelemetry }
 }
 
@@ -161,6 +171,52 @@ function deferred<T>() {
 }
 
 describe('研究工作台', () => {
+  it('优先使用批量行情名称，避免证券目录查询阻塞持仓名称', async () => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [{ ticker: '002131', quantity: 400, cost_price: 7.45 }] }
+      }
+      if (request.operation === 'market-watch.quotes-batch') {
+        return { items: [{ code: '002131', name: '利欧股份', price: 4.47, pct_change: 0.2 }] }
+      }
+      if (request.operation === 'market-watch.security-search') return { items: [] }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+
+    expect(await view.findByText('利欧股份')).toBeTruthy()
+    expect(view.queryByText('名称加载中')).toBeNull()
+  })
+
+  it('隐私模式遮蔽持仓资金字段并保留公开行情', async () => {
+    const view = renderWorkbench(undefined, true)
+    await view.findByText('白酒板块经营数据改善')
+
+    expect(view.getAllByText('***').length).toBeGreaterThan(2)
+    expect(view.queryByText('¥15.0 万')).toBeNull()
+    expect(view.queryByText('100 股')).toBeNull()
+    expect(view.queryByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeNull()
+    expect(view.getByText(/成本 \*\*\* · 现价 ¥1450\.00 · 市值 \*\*\*/)).toBeTruthy()
+    expect(view.getByText('成本收益率 -3.33% →', { exact: false })).toBeTruthy()
+  })
+
+  it('名称查询完成前保留稳定加载状态，完成后展示股票名称', async () => {
+    const nameLookup = deferred<unknown>()
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [{ ticker: '002131', name: '002131', quantity: 400, cost_price: 7.45 }] }
+      }
+      if (request.operation === 'market-watch.security-search') return nameLookup.promise
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+
+    expect((await view.findByText('名称加载中')).classList.contains(securityNameLoadingClass)).toBe(true)
+    nameLookup.resolve({ items: [{ code: '002131', name: '利欧股份' }] })
+    expect(await view.findByText('利欧股份')).toBeTruthy()
+    expect(view.getByText('002131')).toBeTruthy()
+  })
+
   it('从页头操作区打开偏好复盘', () => {
     const view = renderWorkbench()
 

@@ -107,6 +107,33 @@ class SeedDataManagerTests(unittest.TestCase):
         self.assertEqual(status["files_completed"], 5)
         self.assertEqual(calls, [])
 
+    def test_delete_removes_ready_dataset_and_returns_missing_status(self):
+        calls: list[str] = []
+        manager = SeedDataManager(self.data_dir, "https://fixed.example/data", http_get=self._http_get(calls))
+        self.assertEqual(manager.bootstrap()["status"], "ready")
+
+        result = manager.delete()
+
+        self.assertEqual(result, {
+            "status": "missing",
+            "files_completed": 0,
+            "files_total": 5,
+            "downloaded_bytes": 0,
+            "current_file": None,
+            "error": None,
+        })
+        self.assertFalse(self.data_dir.exists())
+        self.assertFalse(any("deleted" in path.name for path in self.data_dir.parent.iterdir()))
+
+    def test_delete_rejects_while_download_is_running(self):
+        manager = SeedDataManager(self.data_dir, "https://fixed.example/data")
+        with manager._condition:
+            manager._initialized = True
+            manager._status = "downloading"
+
+        with self.assertRaisesRegex(seed_data.SeedDataError, "正在下载"):
+            manager.delete()
+
     def test_failure_cleans_staging_and_never_publishes_a_partial_dataset(self):
         self.data_dir.mkdir(parents=True)
         existing = self.data_dir / "stats.json"

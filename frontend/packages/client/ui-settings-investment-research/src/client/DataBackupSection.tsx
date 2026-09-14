@@ -9,6 +9,8 @@ import type {
   BackupManifest,
   BackupPreview,
   BackupReason,
+  InvestmentDataRequest,
+  InvestmentJsonValue,
 } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { uploadBackup } from './backup-upload.ts'
 import { downloadBackup } from './backup-download.ts'
@@ -59,11 +61,20 @@ export interface DataBackupSectionProps {
   pickBackupDirectory(): Promise<string | null>
   openBackupDirectory(path: string): Promise<void>
   reloadPage(): void
+  requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>
 }
 
-type DialogState = 'create' | 'import' | 'reset' | 'delete' | null
+type DialogState = 'create' | 'import' | 'reset' | 'delete' | 'industry-delete' | null
 type BackupStorageState = 'unknown' | 'managed' | 'local'
 type ActivePreview = { value: BackupPreview; ownership: 'client' | 'importing' }
+type IndustryChainDataStatus = {
+  status: 'missing' | 'downloading' | 'ready' | 'error'
+  files_completed: number
+  files_total: 5
+  downloaded_bytes: number
+  current_file: string | null
+  error: string | null
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -74,6 +85,27 @@ function formatBytes(bytes: number): string {
 function formatTime(value: string): string {
   const date = new Date(value)
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : value
+}
+
+function industryDataStatus(value: InvestmentJsonValue): IndustryChainDataStatus {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('产业链数据状态格式无效')
+  }
+  const status = value.status
+  if (status !== 'missing' && status !== 'downloading' && status !== 'ready' && status !== 'error') {
+    throw new Error('产业链数据状态格式无效')
+  }
+  if (value.files_total !== 5 || typeof value.files_completed !== 'number' || typeof value.downloaded_bytes !== 'number') {
+    throw new Error('产业链数据状态格式无效')
+  }
+  return {
+    status,
+    files_completed: value.files_completed,
+    files_total: 5,
+    downloaded_bytes: value.downloaded_bytes,
+    current_file: typeof value.current_file === 'string' ? value.current_file : null,
+    error: typeof value.error === 'string' ? value.error : null,
+  }
 }
 
 function categoryLabel(category: BackupCategory, t: DataBackupSectionProps['t']): string {
@@ -233,6 +265,10 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   const [feedback, setFeedback] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [recovering, setRecovering] = useState(false)
+  const [industryStatus, setIndustryStatus] = useState<IndustryChainDataStatus>()
+  const [industryStatusFailed, setIndustryStatusFailed] = useState(false)
+  const [industryDownloading, setIndustryDownloading] = useState(false)
 
   const refresh = async (): Promise<void> => {
     setLoading(true)
@@ -275,6 +311,16 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     )
     return () => { alive = false }
   }, [props.backupDescribe, props.backupList, props.t])
+
+  useEffect(() => {
+    let alive = true
+    setIndustryStatus(undefined)
+    setIndustryStatusFailed(false)
+    void props.requestData({ operation: 'industry-chain.data-status' })
+      .then((value) => { if (alive) setIndustryStatus(industryDataStatus(value)) })
+      .catch(() => { if (alive) setIndustryStatusFailed(true) })
+    return () => { alive = false }
+  }, [props.requestData])
 
   useEffect(() => {
     mounted.current = true
@@ -457,7 +503,9 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
         setDialog(null)
         setPreview(undefined)
         setFeedback(props.t('backupImportSucceeded'))
-        props.reloadPage()
+        try { sessionStorage.setItem('dsh-investment-import-recovery', '1') } catch { /* reload still restores data */ }
+        setRecovering(true)
+        window.setTimeout(props.reloadPage, 120)
       }
       catch (error) {
         if (error instanceof Error && error.message.includes('预览已失效')) {
@@ -498,9 +546,62 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     })
   }
 
+  const deleteIndustryData = (): void => {
+    run(async () => {
+      const result = await props.requestData({ operation: 'industry-chain.data-delete' })
+      setIndustryStatus(industryDataStatus(result))
+      setIndustryStatusFailed(false)
+      window.dispatchEvent(new CustomEvent('dsh:investment-data-changed', { detail: { reason: 'industry-data-delete' } }))
+      setDialog(null)
+      setFeedback(props.t('industryDataDeleteSucceeded'))
+    })
+  }
+
+  const downloadIndustryData = (): void => {
+    run(async () => {
+      setIndustryDownloading(true)
+      setIndustryStatusFailed(false)
+      setIndustryStatus(current => ({
+        status: 'downloading',
+        files_completed: current?.files_completed ?? 0,
+        files_total: 5,
+        downloaded_bytes: current?.downloaded_bytes ?? 0,
+        current_file: current?.current_file ?? null,
+        error: null,
+      }))
+      try {
+        const result = industryDataStatus(await props.requestData({ operation: 'industry-chain.data-bootstrap' }))
+        setIndustryStatus(result)
+        if (result.status === 'ready') setFeedback(props.t('industryDataDownloadSucceeded'))
+        else if (result.status === 'error') setFeedback(result.error ?? props.t('backupOperationFailed'))
+      }
+      catch (error) {
+        setIndustryStatusFailed(true)
+        throw error
+      }
+      finally {
+        setIndustryDownloading(false)
+      }
+    })
+  }
+
+  const industryStatusLabel = industryStatusFailed
+    ? props.t('industryDataStatusUnavailable')
+    : industryStatus === undefined
+      ? props.t('industryDataStatusLoading')
+      : industryStatus.status === 'ready'
+        ? `${props.t('industryDataStatusReady')} · ${formatBytes(industryStatus.downloaded_bytes)}`
+        : industryStatus.status === 'downloading'
+          ? props.t('industryDataStatusDownloading')
+          : industryStatus.status === 'error'
+            ? props.t('industryDataStatusError')
+            : props.t('industryDataStatusMissing')
+  const canDeleteIndustryData = industryStatus?.status === 'ready' || industryStatus?.status === 'error'
+  const canDownloadIndustryData = industryStatusFailed || industryStatus?.status === 'missing' || industryStatus?.status === 'error'
+
   const downloadBusy = downloadStatus === 'downloading'
 
-  return <section className={css.section} aria-labelledby="investment-research-data-backup-title">
+  return <section className={css.section} aria-labelledby="investment-research-data-backup-title" aria-busy={recovering}>
     <header className={css.heading}>
       <div>
         <span className={css.eyebrow}>{props.t('backupEyebrow')}</span>
@@ -604,6 +705,27 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       >{props.t(downloadBusy ? 'exportingCurrentConversation' : 'exportCurrentConversation')}</button>
     </section>
 
+    <section className={css.industryDataCard} aria-labelledby="industry-data-title">
+      <div>
+        <h3 id="industry-data-title">{props.t('industryDataTitle')}</h3>
+        <p>{props.t('industryDataHint')}</p>
+        <span className={css.industryDataStatus} data-status={industryStatus?.status ?? (industryStatusFailed ? 'error' : 'loading')}>{industryStatusLabel}</span>
+      </div>
+      <div className={css.industryDataActions}>
+        <button
+          type="button"
+          className={css.secondaryButton}
+          disabled={busy || !canDownloadIndustryData}
+          aria-busy={industryDownloading}
+          aria-label={props.t('industryDataDownloadAriaLabel')}
+          onClick={downloadIndustryData}
+        >{props.t(industryDownloading ? 'industryDataDownloadingAction' : 'industryDataDownloadAction')}</button>
+        <button type="button" className={css.dangerOutlineButton} disabled={busy || !canDeleteIndustryData} aria-label={props.t('industryDataDeleteAriaLabel')} onClick={() => {
+          setDialog('industry-delete')
+        }}>{props.t('industryDataDeleteAction')}</button>
+      </div>
+    </section>
+
     <section className={css.dangerZone} aria-labelledby="backup-danger-title">
       <div><span className={css.dangerEyebrow}>{props.t('backupDanger')}</span><h3 id="backup-danger-title">{props.t('backupReset')}</h3><p>{props.t('backupResetHint')}</p></div>
       <button type="button" className={css.dangerOutlineButton} disabled={busy} onClick={() => {
@@ -670,5 +792,19 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
     }} onConfirm={deleteBackup}>
       <p>{props.t('backupDeleteDialogHint')}</p><strong className={css.deleteTarget}>{deleteTarget}</strong>
     </Modal>}
+
+    {dialog === 'industry-delete' && <Modal t={props.t} title={props.t('industryDataDeleteDialogTitle')} busy={busy} destructive confirmLabel={props.t('industryDataConfirmDelete')} onCancel={() => {
+      setDialog(null)
+    }} onConfirm={deleteIndustryData}>
+      <p>{props.t('industryDataDeleteDialogHint')}</p>
+    </Modal>}
+
+    {recovering && <div className={css.recoveryBackdrop} role="status" aria-live="assertive">
+      <div className={css.recoveryCard}>
+        <span className={css.recoverySpinner} aria-hidden="true" />
+        <strong>{props.t('backupImportRecoveryTitle')}</strong>
+        <span>{props.t('backupImportRecoveryHint')}</span>
+      </div>
+    </div>}
   </section>
 }

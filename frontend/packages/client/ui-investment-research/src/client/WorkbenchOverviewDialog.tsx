@@ -4,6 +4,7 @@ import { asRecord, compactMoney, money, number, productErrorText, records, text 
 import { DetailDialog, riskSource, riskSuggestions } from './DetailDialogs.tsx'
 import { parseHoldingsImport } from './holdings-import.ts'
 import { useRequestResource } from './InvestmentShell.tsx'
+import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
@@ -121,6 +122,7 @@ function PositionTable({
   onConfirmDelete?: (code: string) => void
   onCancelDelete?: () => void
 }) {
+  const { hidden: fundsHidden } = useFundsPrivacy()
   if (positions.length === 0) {
     return <div className={css.workbenchOverviewEmpty}>尚未保存持仓，当前没有可展示的明细。</div>
   }
@@ -141,10 +143,10 @@ function PositionTable({
             const price = item.costPrice
             return (
               <tr key={`${item.code}-${index}`}>
-                <th scope="row"><strong>{item.name}</strong><small>{item.code}</small></th>
-                <td><span className={css.workbenchMobileLabel}>持仓数量</span>{quantity(item.quantity)}</td>
-                <td><span className={css.workbenchMobileLabel}>成本价</span>{amount(item.costPrice)}</td>
-                {kind === 'cost' && <td><span className={css.workbenchMobileLabel}>成本金额</span>{amount(positionAmount(item, price))}</td>}
+                <th scope="row"><strong className={item.name === '名称加载中' ? css.securityNameLoading : undefined}>{item.name}</strong><small>{item.code}</small></th>
+                <td><span className={css.workbenchMobileLabel}>持仓数量</span>{privateFunds(quantity(item.quantity), fundsHidden)}</td>
+                <td><span className={css.workbenchMobileLabel}>成本价</span>{privateFunds(amount(item.costPrice), fundsHidden)}</td>
+                {kind === 'cost' && <td><span className={css.workbenchMobileLabel}>成本金额</span>{privateFunds(amount(positionAmount(item, price)), fundsHidden)}</td>}
                 {kind === 'holdings' && onEdit !== undefined && (
                   <td className={css.workbenchHoldingActions}>
                     <span className={css.workbenchMobileLabel}>操作</span>
@@ -761,12 +763,13 @@ function HoldingsEditor({
 }
 
 function CostDetail({ positions }: { positions: readonly WorkbenchPositionDetail[] }) {
+  const { hidden: fundsHidden } = useFundsPrivacy()
   const total = summedAmount(positions, item => item.costPrice)
   return (
     <>
       <dl className={css.workbenchOverviewMetricGrid}>
         <div><dt>持仓标的</dt><dd>{positions.length} 项</dd></div>
-        <div><dt>成本金额合计</dt><dd>{total === undefined ? '—' : compactMoney(total)}</dd></div>
+        <div><dt>成本金额合计</dt><dd>{privateFunds(total === undefined ? '—' : compactMoney(total), fundsHidden)}</dd></div>
       </dl>
       <PositionTable positions={positions} kind="cost" />
       {positions.some(item => item.quantity === undefined || item.costPrice === undefined) && (

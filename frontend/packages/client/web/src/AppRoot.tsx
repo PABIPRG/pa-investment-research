@@ -21,6 +21,8 @@ export interface AppRootProps {
   status: KernelSignal<LoaderStatus>
   /** Boot failure report (the settle rejection message); undefined while loading or after success. */
   error: KernelSignal<string | undefined>
+  /** Product-facing explanation for a known boot reason such as post-import recovery. */
+  loadingHint?: string | undefined
   /** Builds the real UI; called only after settled. */
   renderApp: () => ReactNode
 }
@@ -44,7 +46,7 @@ export function AppRoot(props: AppRootProps) {
           ? (
             <>
               <div className={css.spinner} />
-              <div className={css.hint}>Loading plugins…</div>
+              <div className={css.hint}>{props.loadingHint ?? 'Loading plugins…'}</div>
             </>
           )
           : (

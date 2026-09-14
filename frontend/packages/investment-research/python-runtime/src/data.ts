@@ -1117,6 +1117,7 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   },
   'industry-chain.data-status': noInput('/data/status', 'industry-chain'),
   'industry-chain.data-bootstrap': noInputPost('/data/bootstrap', 'industry-chain'),
+  'industry-chain.data-delete': noInputPost('/data/delete', 'industry-chain'),
   'industry-chain.stats': noInput('/stats', 'industry-chain'),
   'industry-chain.companies': {
     backendId: 'industry-chain',

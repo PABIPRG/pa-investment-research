@@ -188,6 +188,7 @@ export type InvestmentDataOperation =
   | 'trading-core.task-result'
   | 'industry-chain.data-status'
   | 'industry-chain.data-bootstrap'
+  | 'industry-chain.data-delete'
   | 'industry-chain.stats'
   | 'industry-chain.companies'
   | 'industry-chain.company'

@@ -23,14 +23,10 @@
 .brandMark {
   width: 44px;
   height: 44px;
-  display: grid;
-  place-items: center;
+  display: block;
   margin-bottom: 24px;
   border-radius: 14px;
-  color: var(--dsw-alias-label-primary-foreground);
-  background: var(--dsw-alias-button-primary-fill);
-  font: var(--dsw-font-s-strong-14);
-  letter-spacing: -0.02em;
+  object-fit: cover;
 }
 
 .eyebrow, .subtitle, .privacy, .message, .success { margin: 0; }

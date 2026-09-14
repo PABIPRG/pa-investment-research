@@ -34,6 +34,17 @@ describe('Web administrator login gate', () => {
     expect(screen.getByText('登录已过期，请重新登录。')).toBeTruthy()
   })
 
+  it('uses the investment product brand and icon on the login gate', () => {
+    render(React.createElement(LoginGate, {
+      initialPhase: 'ready', onLogin: async () => 'success' as const, onRetry: () => {},
+    }))
+    expect(screen.getByText('投研智能体')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '管理员登录' })).toBeTruthy()
+    expect(screen.getByRole('img', { name: '投研智能体' }).getAttribute('src'))
+      .toBe('/icons/app-icon-001/icon-192.png')
+    expect(screen.queryByText('DeepSeek Harness')).toBeNull()
+  })
+
   it('distinguishes retryable network loss from configuration and secure-transport failures', () => {
     const retry = vi.fn()
     const network = render(React.createElement(LoginGate, {

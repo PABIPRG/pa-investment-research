@@ -25,10 +25,24 @@ import type { InvestmentUiSnapshot } from '../src/client/state.ts'
 
 afterEach(() => {
   cleanup()
+  window.localStorage.clear()
   delete document.body.dataset.investmentWorkbenchActive
   delete document.body.dataset.investmentAssistantMode
   delete document.body.dataset.investmentConversationPrimary
   document.body.removeAttribute('data-ds-dark-theme')
+})
+
+it('全局资金开关默认隐藏并记住显示偏好', () => {
+  const first = renderAnalysisShell(async () => {})
+  const hiddenToggle = screen.getByRole('button', { name: '资金数据已隐藏，点击显示' })
+  expect(hiddenToggle.getAttribute('aria-pressed')).toBe('true')
+
+  fireEvent.click(hiddenToggle)
+  expect(screen.getByRole('button', { name: '资金数据已显示，点击隐藏' }).getAttribute('aria-pressed')).toBe('false')
+
+  first.unmount()
+  renderAnalysisShell(async () => {})
+  expect(screen.getByRole('button', { name: '资金数据已显示，点击隐藏' })).toBeTruthy()
 })
 
 const UI_SNAPSHOT: InvestmentUiSnapshot = {
@@ -725,7 +739,7 @@ describe('ui-investment-research apply', () => {
     })
   })
 
-  it('浮动会话创建未完成时的同模块详情导航复用同一次创建', async () => {
+  it('浮动会话创建未完成时立即切换路由，并让同模块详情复用同一次创建', async () => {
     const b = await bench()
     let resolveFloating: ((sessionId: string) => void) | undefined
     const floatingSession = new Promise<string>((resolve) => { resolveFloating = resolve })
@@ -744,11 +758,14 @@ describe('ui-investment-research apply', () => {
     sidebar.navigate('opportunity')
 
     expect(sidebar.hooks.investmentUi.getSnapshot()).toMatchObject({
-      route: 'dashboard', assistantMode: 'closed', assistantModule: 'general',
+      route: 'opportunity', assistantMode: 'closed', assistantModule: 'general',
     })
     expect(b.workspaces.startFreshSession).toHaveBeenCalledOnce()
 
     sidebar.navigate('stock-detail', { stockCode: '600519' })
+    expect(sidebar.hooks.investmentUi.getSnapshot()).toMatchObject({
+      route: 'stock-detail', selectedStockCode: '600519',
+    })
     resolveFloating?.('opportunity-session')
 
     await waitFor(() => {
@@ -871,7 +888,7 @@ describe('ui-investment-research apply', () => {
         'investment conversation surface switch failed:',
         expect.objectContaining({ message: 'primary session failed' }),
       )
-      expect(b.layout.closeDetails).toHaveBeenCalledTimes(2)
+      expect(b.layout.closeDetails).toHaveBeenCalledTimes(3)
       expect(sidebar.hooks.investmentUi.getSnapshot().route).toBe('tasks')
       expect(b.workspaces.startFreshSession).toHaveBeenCalledTimes(2)
     })

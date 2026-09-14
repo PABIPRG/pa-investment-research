@@ -54,6 +54,17 @@ def data_bootstrap():
     return result
 
 
+@app.post("/data/delete")
+def data_delete():
+    """用户显式删除本地种子数据；删除后可重新下载。"""
+    try:
+        result = seed_data_manager.delete()
+    except Exception as exc:
+        raise _data_or_503(exc)
+    graph.invalidate()
+    return result
+
+
 @app.get("/stats")
 def stats():
     try:

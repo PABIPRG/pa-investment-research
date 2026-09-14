@@ -196,6 +196,23 @@
   min-width: max-content;
 }
 
+.fundsPrivacyToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: var(--investment-control-height);
+  padding: 0 12px;
+  border: 1px solid var(--investment-line);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-base);
+  cursor: pointer;
+}
+.fundsPrivacyToggle:hover { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.fundsPrivacyToggle:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.fundsPrivacyToggle[aria-pressed='true'] { color: var(--investment-primary); background: var(--investment-selected-surface); }
+
 .themeToggle {
   flex: none;
   display: inline-flex;
@@ -458,6 +475,16 @@
 .dashboardHoldingList strong { overflow: hidden; font-size: 0.9286rem; text-overflow: ellipsis; white-space: nowrap; }
 .dashboardHoldingList b { font-size: var(--investment-font-secondary); }
 .dashboardHoldingList small { margin-top: 3px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); font-weight: 400; line-height: 1.45; overflow-wrap: anywhere; }
+.securityNameLoading { color: var(--dsw-alias-label-tertiary); animation: investment-security-name-pulse 1.4s ease-in-out infinite; }
+.securityNameLoading::after {
+  display: inline-block;
+  width: 1.4em;
+  overflow: hidden;
+  margin-inline-start: 2px;
+  content: '...';
+  vertical-align: bottom;
+  animation: investment-security-name-dots 1.2s steps(4, end) infinite;
+}
 .dashboardTextButton { margin-top: 8px; }
 
 .dashboardEventHeaderMeta { min-width: 112px; }
@@ -1579,18 +1606,26 @@
   align-items: center;
   gap: 14px 18px;
   min-width: 0;
+  height: 118px;
+  min-height: 118px;
+  box-sizing: border-box;
   padding: 18px;
-  border: 1px solid var(--dsw-alias-state-warn-secondary);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-state-warn-tertiary);
+  background: color-mix(in srgb, var(--investment-selected-surface) 32%, var(--dsw-alias-bg-base));
+  transition: border-color 160ms ease, background 160ms ease;
 }
+.industryBootstrap[data-phase='loading'] { border-color: color-mix(in srgb, var(--investment-primary) 28%, var(--dsw-alias-border-l2)); background: color-mix(in srgb, var(--investment-selected-surface) 48%, var(--dsw-alias-bg-base)); }
+.industryBootstrap[data-phase='error'] { border-color: var(--dsw-alias-state-warn-secondary); background: var(--dsw-alias-state-warn-tertiary); }
 .industryBootstrap > div { min-width: 0; }
 .industryBootstrap h2, .industryBootstrap p { margin: 0; }
 .industryBootstrap h2 { font-size: 1.0714rem; }
-.industryBootstrap p { margin-top: 7px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.6; }
-.industryBootstrap > .primaryButton { grid-column: 2; grid-row: 1; }
-.industryProgress { grid-column: 1 / -1; width: 100%; height: 8px; accent-color: var(--dsw-alias-state-business-primary); }
+.industryBootstrap p { min-height: 1.6em; margin-top: 7px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; font-variant-numeric: tabular-nums; line-height: 1.6; }
+.industryBootstrap > .primaryButton { grid-column: 2; grid-row: 1; min-width: 128px; }
+.industryProgress { grid-column: 1 / -1; width: 100%; height: 8px; overflow: hidden; box-sizing: border-box; border: 1px solid var(--investment-selected-surface); border-radius: 99px; visibility: hidden; background: var(--dsw-alias-bg-base); contain: paint; }
+.industryProgress[data-active='true'] { visibility: visible; }
+.industryProgress > span { display: block; height: 100%; border-radius: inherit; background: var(--dsw-alias-state-business-primary); transition: width 220ms ease-out; }
 
 .industryStats {
   display: grid;
@@ -2253,6 +2288,11 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 @keyframes investment-drawer-exit { to { opacity: .4; transform: translateX(18px); } }
 @keyframes investment-spin { to { transform: rotate(360deg); } }
 @keyframes investment-skeleton { to { background-position: -120% 0; } }
+@keyframes investment-security-name-pulse { 50% { opacity: .58; } }
+@keyframes investment-security-name-dots {
+  0% { width: 0; }
+  100% { width: 1.4em; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .sessionProgress::before, .workbench, .investmentWelcome, .dashboardViewPane, .pageScroll[data-assistant-layout], .opportunityWorkspace, .marketNewsRail, .evolutionStatusSummary div, .drawerBackdrop, .historyDrawer,
@@ -2261,7 +2301,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .industryGraphBackdrop, .industryGraphDialog,
   .stockLoadingMark i, .stockLoadingIdentity i, .stockLoadingMetrics i, .stockLoadingMetrics b, .stockLoadingPanel > *,
   .assistantLauncher, .assistantBackdrop, .assistantPanel, .researchFloatingBackdrop, .researchFloatingSurface,
-  .analysisTaskState[data-phase='running'] > span { animation: none; }
+  .analysisTaskState[data-phase='running'] > span, .securityNameLoading, .securityNameLoading::after { animation: none; }
   :is(.globalSearch, .searchResults button, .themeToggle, .primaryButton, .secondaryButton,
     .investmentNav button, .segmented button, .stockCard, .stockCardActive, .stockCardMain, .stockCardActions button, .codeButton,
     .importHead button, .fileButton, .importField textarea, .errorCard button, .promptGrid button,
@@ -2315,7 +2355,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 }
 
 @media (max-width: 960px) {
-  .topActions .primaryButton, .topActions .secondaryButton { flex: none; width: var(--investment-control-height); padding: 0; }
+  .topActions .primaryButton, .topActions .secondaryButton, .topActions .fundsPrivacyToggle { flex: none; width: var(--investment-control-height); padding: 0; }
   .actionLabel { display: none; }
 }
 
@@ -2353,7 +2393,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .researchStrategyPreview dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .researchStrategyPreview dl div:last-child { grid-column: 1 / -1; }
   .topActions { gap: 8px; }
-  .topActions .primaryButton, .topActions .secondaryButton, .topActions .themeToggle { width: var(--investment-touch-target); height: var(--investment-touch-target); padding: 0; }
+  .topActions .primaryButton, .topActions .secondaryButton, .topActions .fundsPrivacyToggle, .topActions .themeToggle { width: var(--investment-touch-target); height: var(--investment-touch-target); padding: 0; }
   .globalSearch { height: var(--investment-touch-target); }
   .searchResults button { min-height: var(--investment-touch-target); }
   .actionLabel { display: none; }
@@ -2457,7 +2497,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .evolutionDistribution .lifecycleNav { grid-auto-flow: column; grid-auto-columns: minmax(112px, 1fr); grid-template-columns: none; overflow-x: auto; }
   .evolutionDistribution .lifecycleNav button { border-right: 1px solid var(--dsw-alias-border-l1); }
   .moduleToolbar { gap: 8px; }
-  .industryBootstrap { grid-template-columns: 1fr; align-items: stretch; }
+  .industryBootstrap { grid-template-columns: 1fr; height: auto; align-items: stretch; }
   .industryBootstrap > .primaryButton { grid-column: 1; grid-row: auto; min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
   .industryStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .industrySearchPanel, .industryChainPanel, .industryImpactPanel { padding: 14px; }
