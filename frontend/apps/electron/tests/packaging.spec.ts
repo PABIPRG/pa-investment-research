@@ -1,6 +1,6 @@
 /** Electron packaging keeps the Python sidecar outside the application staging tree. */
 
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -11,6 +11,7 @@ import {
   commandRequiresShell,
   copyPortablePackageTree,
   createPackagerOptions,
+  createPackagerSeed,
   createPackagingPlan,
   materializePackagingWorkspaceLinks,
   packagerWithIconWarningGuard,
@@ -37,6 +38,7 @@ describe('Electron investment sidecar packaging', () => {
         electronVersion: '43.2.0',
         electronZipDir: '/tmp/electron',
         outDir: '/tmp/out',
+        packagerSeedDir: plan.packagerSeedDir,
         platform,
         sidecarDir: plan.sidecarDir,
         stagingDir: plan.stagingDir,
@@ -95,6 +97,7 @@ describe('Electron investment sidecar packaging', () => {
       electronVersion: '43.2.0',
       electronZipDir: '/tmp/electron',
       outDir: '/tmp/out',
+      packagerSeedDir: plan.packagerSeedDir,
       platform: 'win32',
       sidecarDir: plan.sidecarDir,
       stagingDir: plan.stagingDir,
@@ -114,6 +117,7 @@ describe('Electron investment sidecar packaging', () => {
       electronVersion: '43.2.0',
       electronZipDir: '/tmp/electron',
       outDir: '/tmp/out',
+      packagerSeedDir: plan.packagerSeedDir,
       platform,
       sidecarDir: plan.sidecarDir,
       stagingDir: plan.stagingDir,
@@ -132,6 +136,7 @@ describe('Electron investment sidecar packaging', () => {
       electronVersion: '43.2.0',
       electronZipDir: '/tmp/electron',
       outDir: '/tmp/out',
+      packagerSeedDir: plan.packagerSeedDir,
       platform: 'darwin',
       sidecarDir: plan.sidecarDir,
       stagingDir: plan.stagingDir,
@@ -220,7 +225,7 @@ describe('Electron investment sidecar packaging', () => {
     expect(isAbsolute(plan.sidecarDir)).toBe(true)
     expect(relative(plan.stagingDir, plan.sidecarDir)).toMatch(/^\.\./)
     expect(relative(plan.stagingDir, plan.sidecarCacheDir)).toMatch(/^\.\./)
-    expect(relative(plan.stagingDir, plan.portableStagingDir)).toMatch(/^\.\./)
+    expect(relative(plan.stagingDir, plan.packagerSeedDir)).toMatch(/^\.\./)
     const darwinPlan = createPackagingPlan('/tmp/dsh-electron-darwin-test', 'darwin', 'arm64')
     expect(darwinPlan.appSourceDir).toBe(resolve(darwinPlan.deploy.cwd, 'apps/electron'))
     expect(darwinPlan.workspaceDir).toBe(darwinPlan.deploy.cwd)
@@ -431,6 +436,7 @@ describe('Electron investment sidecar packaging', () => {
         electronVersion: '43.2.0',
         electronZipDir: '/tmp/electron',
         outDir: '/tmp/out',
+        packagerSeedDir: plan.packagerSeedDir,
         platform: 'darwin',
         sidecarDir: plan.sidecarDir,
         stagingDir: plan.stagingDir,
@@ -486,20 +492,64 @@ describe('Electron investment sidecar packaging', () => {
     }
   })
 
-  it('keeps Electron Packager from recursively dereferencing Windows package trees', () => {
-    const plan = createPackagingPlan('/tmp/dsh-electron-win32-test', 'win32', 'x64')
+  it('keeps Electron Packager away from the full Windows package tree', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-win32-seed-test-'))
+    const plan = createPackagingPlan(rootDir, 'win32', 'x64')
+    const workspacePackage = join(rootDir, 'workspace-package')
+    const packageLink = join(plan.stagingDir, 'node_modules', '@deepseek-ai', 'example')
+    const buildPath = join(rootDir, 'packaged', 'resources', 'app')
+    try {
+      await mkdir(join(plan.stagingDir, 'lib'), { recursive: true })
+      await mkdir(join(workspacePackage, 'lib'), { recursive: true })
+      await mkdir(dirname(packageLink), { recursive: true })
+      await mkdir(plan.sidecarDir, { recursive: true })
+      await mkdir(buildPath, { recursive: true })
+      await writeFile(join(plan.stagingDir, 'package.json'), JSON.stringify({
+        main: 'lib/index.js',
+        name: '@deepseek-ai/dsh-electron',
+        version: '0.2.0-alpha.2',
+      }))
+      await writeFile(join(plan.stagingDir, 'lib', 'index.js'), 'export const app = true\n')
+      await writeFile(join(workspacePackage, 'package.json'), '{"name":"@deepseek-ai/example"}')
+      await writeFile(join(workspacePackage, 'lib', 'index.js'), 'export const dependency = true\n')
+      await symlink(workspacePackage, packageLink, 'dir')
+      await writeFile(join(plan.sidecarDir, 'runtime.json'), '{"version":1}')
+      await writeFile(join(buildPath, 'seed-only.txt'), 'remove me')
 
-    const options = createPackagerOptions({
-      arch: 'x64',
-      electronVersion: '43.2.0',
-      electronZipDir: '/tmp/electron',
-      outDir: '/tmp/out',
-      platform: 'win32',
-      sidecarDir: plan.sidecarDir,
-      stagingDir: plan.stagingDir,
-    })
+      await createPackagerSeed(plan.stagingDir, plan.packagerSeedDir)
+      expect(await readdir(plan.packagerSeedDir)).toEqual(['package.json'])
 
-    expect(options.derefSymlinks).toBe(false)
+      const options = createPackagerOptions({
+        arch: 'x64',
+        electronVersion: '43.2.0',
+        electronZipDir: '/tmp/electron',
+        outDir: '/tmp/out',
+        packagerSeedDir: plan.packagerSeedDir,
+        platform: 'win32',
+        sidecarDir: plan.sidecarDir,
+        stagingDir: plan.stagingDir,
+      })
+
+      expect(options.dir).toBe(plan.packagerSeedDir)
+      expect(options.derefSymlinks).toBe(false)
+      await new Promise<void>((resolvePromise, reject) => {
+        options.afterCopy![0]!(buildPath, '43.2.0', 'win32', 'x64', (error) => {
+          if (error === undefined || error === null) resolvePromise()
+          else reject(error)
+        })
+      })
+
+      await expect(stat(join(buildPath, 'seed-only.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(await readFile(join(buildPath, 'lib', 'index.js'), 'utf8')).toBe('export const app = true\n')
+      const packagedDependency = join(buildPath, 'node_modules', '@deepseek-ai', 'example')
+      expect((await lstat(packagedDependency)).isSymbolicLink()).toBe(false)
+      expect(await readFile(join(packagedDependency, 'lib', 'index.js'), 'utf8'))
+        .toBe('export const dependency = true\n')
+      expect(await readFile(join(rootDir, 'packaged', 'resources', 'investment-python', 'runtime.json'), 'utf8'))
+        .toBe('{"version":1}')
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
   })
 
   it('ad-hoc signs macOS packages sequentially without the Node signing walker', async () => {
