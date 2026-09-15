@@ -600,6 +600,10 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     overwrite: true,
     platform: input.platform,
     prune: false,
+    // GitHub's Windows runner checks out on D: while os.tmpdir() is on C:.
+    // Build directly under outDir so Packager does not copy the full app tree
+    // again when its final cross-volume move cannot use an atomic rename.
+    ...(boundedWindowsCopy ? { tmpdir: false } : {}),
   }
 }
 

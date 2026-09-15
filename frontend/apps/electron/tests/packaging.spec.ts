@@ -501,6 +501,7 @@ describe('Electron investment sidecar packaging', () => {
         derefSymlinks: false,
         dir: plan.stagingDir,
       }))
+      expect(options.tmpdir).toBeUndefined()
       expect(options.icon).toBe(packagerIconPath('darwin'))
       expect(options.icon).toMatch(/app-icon\.icns$/)
       expect(options.osxSign).toBeUndefined()
@@ -596,6 +597,7 @@ describe('Electron investment sidecar packaging', () => {
         await rm(rootDir, { force: true, recursive: true })
       }
     },
+    15_000,
   )
 
   it('keeps Electron Packager away from the full Windows package tree', async () => {
@@ -638,6 +640,7 @@ describe('Electron investment sidecar packaging', () => {
 
       expect(options.dir).toBe(plan.packagerSeedDir)
       expect(options.derefSymlinks).toBe(false)
+      expect(options.tmpdir).toBe(false)
       await new Promise<void>((resolvePromise, reject) => {
         options.afterCopy![0]!(buildPath, '43.2.0', 'win32', 'x64', (error) => {
           if (error === undefined || error === null) resolvePromise()
