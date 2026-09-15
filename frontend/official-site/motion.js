@@ -138,11 +138,13 @@ document.addEventListener('pointerleave',()=>{pointer=[-10000,-10000];});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelAnimationFrame(raf);raf=0;}else requestFrame();});
 media.addEventListener('change',e=>{reduced=e.matches;layout();});
 for(let i=0;i<49;i++){const el=document.createElement('i');el.style.setProperty('--n',String(5+Math.sin(i*.2)*15+Math.sin(i*.09)*8));$('.wave').append(el);}
-const texts=['先明确研究对象、观察区间与走势变化，再区分已知事实和需要验证的原因。','核对公司公告与经营变化，结合行业事件、市场环境和量价表现，比较不同解释。','确认信息来源与发布时间；寻找反例；记录尚未验证的假设，避免把相关性直接当作因果。'];
+const questions=['这家公司最近有哪些重要变化？','我的持仓是否过于集中？','今天有哪些市场消息值得关注？'];
+const texts=['查看近期公告和财报，对照行业与股价表现，列出相关来源和仍需确认的信息。','查看单只股票和行业的持仓占比，结合风险偏好检查集中度。','汇总市场消息，查看事件时间、信息来源，以及与关注公司的关联。'];
 let typing=0;
 function selectMode(index,focus=false){
  cancelAnimationFrame(typing);const tabs=[...document.querySelectorAll('[role=tab]')];tabs.forEach((tab,i)=>{tab.setAttribute('aria-selected',String(i===index));tab.tabIndex=i===index?0:-1;});if(focus)tabs[index].focus();
- $('#output-label').textContent=['先把问题问清楚','沿着线索比较解释','用证据检验判断'][index];
+ $('.raw').textContent=questions[index];
+ $('#output-label').textContent=['查看公告与经营变化','检查持仓集中度','查看消息与关联公司'][index];
  $('#output').setAttribute('aria-labelledby',`tab-${index}`);$('#output').setAttribute('aria-busy','true');
  const start=performance.now(),text=texts[index];
  const type=now=>{const p=reduced?1:clamp((now-start)/1100);$('#typed').textContent=text.slice(0,Math.ceil(text.length*(1-Math.pow(1-p,3))));if(p<1)typing=requestAnimationFrame(type);else $('#output').setAttribute('aria-busy','false');};typing=requestAnimationFrame(type);
