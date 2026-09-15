@@ -61,6 +61,56 @@ interface PackagerOptionsInput {
   stagingDir: string
 }
 
+interface DescriptorRetryOptions {
+  maxRetries?: number
+  onRetry?: (error: NodeJS.ErrnoException, attempt: number, delay: number) => void
+  retryDelay?: number
+  wait?: (delay: number) => Promise<void>
+}
+
+const descriptorErrorCodes = new Set(['EMFILE', 'ENFILE'])
+const defaultDescriptorMaxRetries = 50
+const defaultDescriptorRetryDelay = 50
+
+/** Retry only transient file-descriptor exhaustion with bounded linear backoff. */
+export async function retryDescriptorOperation<T>(
+  operation: () => Promise<T>,
+  options: DescriptorRetryOptions = {},
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? defaultDescriptorMaxRetries
+  const retryDelay = options.retryDelay ?? defaultDescriptorRetryDelay
+  const wait = options.wait ?? (async (delay) => {
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, delay) })
+  })
+  let retries = 0
+  while (true) {
+    try {
+      return await operation()
+    } catch (error) {
+      const descriptorError = error instanceof Error ? error as NodeJS.ErrnoException : undefined
+      if (descriptorError?.code === undefined
+        || !descriptorErrorCodes.has(descriptorError.code)
+        || retries >= maxRetries) {
+        throw error
+      }
+      retries += 1
+      const delay = retryDelay * retries
+      options.onRetry?.(descriptorError, retries, delay)
+      await wait(delay)
+    }
+  }
+}
+
+async function retryPackagingFileOperation<T>(description: string, operation: () => Promise<T>): Promise<T> {
+  return await retryDescriptorOperation(operation, {
+    onRetry: (error, attempt, delay) => {
+      console.warn(
+        `Electron packaging: ${error.code} while ${description}; retry ${attempt}/${defaultDescriptorMaxRetries} in ${delay}ms`,
+      )
+    },
+  })
+}
+
 /**
  * Report whether Node must invoke a command through the Windows command shell.
  * @param command - Executable or command-script path.
@@ -379,27 +429,52 @@ async function copyPortablePackageEntry(
   destinationPath: string,
   ancestorDirectories: ReadonlySet<string>,
 ): Promise<void> {
-  const sourceMetadata = await lstat(sourcePath)
-  const resolvedSource = sourceMetadata.isSymbolicLink() ? await realpath(sourcePath) : sourcePath
-  const resolvedMetadata = sourceMetadata.isSymbolicLink() ? await lstat(resolvedSource) : sourceMetadata
+  const sourceMetadata = await retryPackagingFileOperation(
+    `reading metadata for ${sourcePath}`,
+    () => lstat(sourcePath),
+  )
+  const resolvedSource = sourceMetadata.isSymbolicLink()
+    ? await retryPackagingFileOperation(`resolving ${sourcePath}`, () => realpath(sourcePath))
+    : sourcePath
+  const resolvedMetadata = sourceMetadata.isSymbolicLink()
+    ? await retryPackagingFileOperation(`reading metadata for ${resolvedSource}`, () => lstat(resolvedSource))
+    : sourceMetadata
   if (resolvedMetadata.isFile()) {
-    await mkdir(dirname(destinationPath), { recursive: true })
-    await copyFile(resolvedSource, destinationPath)
-    await chmod(destinationPath, resolvedMetadata.mode)
+    await retryPackagingFileOperation(
+      `creating ${dirname(destinationPath)}`,
+      () => mkdir(dirname(destinationPath), { recursive: true }),
+    )
+    await retryPackagingFileOperation(
+      `copying ${resolvedSource} to ${destinationPath}`,
+      () => copyFile(resolvedSource, destinationPath),
+    )
+    await retryPackagingFileOperation(
+      `applying mode to ${destinationPath}`,
+      () => chmod(destinationPath, resolvedMetadata.mode),
+    )
     return
   }
   if (!resolvedMetadata.isDirectory()) {
     throw new TypeError(`deployed package contains an unsupported entry: ${sourcePath}`)
   }
 
-  const canonicalDirectory = await realpath(resolvedSource)
+  const canonicalDirectory = await retryPackagingFileOperation(
+    `resolving ${resolvedSource}`,
+    () => realpath(resolvedSource),
+  )
   if (ancestorDirectories.has(canonicalDirectory)) {
     throw new TypeError(`deployed package contains a directory-link cycle: ${sourcePath}`)
   }
   const nestedAncestors = new Set(ancestorDirectories)
   nestedAncestors.add(canonicalDirectory)
-  await mkdir(destinationPath, { mode: resolvedMetadata.mode, recursive: true })
-  const entries = await readdir(resolvedSource, { withFileTypes: true })
+  await retryPackagingFileOperation(
+    `creating ${destinationPath}`,
+    () => mkdir(destinationPath, { mode: resolvedMetadata.mode, recursive: true }),
+  )
+  const entries = await retryPackagingFileOperation(
+    `reading directory ${resolvedSource}`,
+    () => readdir(resolvedSource, { withFileTypes: true }),
+  )
   for (const entry of entries) {
     await copyPortablePackageEntry(
       join(resolvedSource, entry.name),
@@ -407,7 +482,10 @@ async function copyPortablePackageEntry(
       nestedAncestors,
     )
   }
-  await chmod(destinationPath, resolvedMetadata.mode)
+  await retryPackagingFileOperation(
+    `applying mode to ${destinationPath}`,
+    () => chmod(destinationPath, resolvedMetadata.mode),
+  )
 }
 
 /** Dereference a deployed application sequentially so Windows packaging memory stays bounded. */
@@ -420,7 +498,12 @@ export async function copyPortablePackageTree(sourceDir: string, destinationDir:
 export async function createPackagerSeed(sourceDir: string, seedDir: string): Promise<void> {
   await rm(seedDir, { force: true, recursive: true })
   await mkdir(seedDir, { recursive: true })
-  await copyFile(join(sourceDir, 'package.json'), join(seedDir, 'package.json'))
+  const sourceManifest = join(sourceDir, 'package.json')
+  const destinationManifest = join(seedDir, 'package.json')
+  await retryPackagingFileOperation(
+    `copying ${sourceManifest} to ${destinationManifest}`,
+    () => copyFile(sourceManifest, destinationManifest),
+  )
 }
 
 /** Remove the temporary package tree with Node's built-in descriptor exhaustion retries. */
@@ -438,21 +521,39 @@ export async function removePackagingRoot(
 
 /** Copy one immutable sidecar tree sequentially so large Python runtimes cannot exhaust file descriptors. */
 async function copySidecarTree(source: string, destination: string): Promise<void> {
-  const sourceStat = await lstat(source)
+  const sourceStat = await retryPackagingFileOperation(
+    `reading metadata for ${source}`,
+    () => lstat(source),
+  )
   if (sourceStat.isFile()) {
-    await copyFile(source, destination)
-    await chmod(destination, sourceStat.mode)
+    await retryPackagingFileOperation(
+      `copying ${source} to ${destination}`,
+      () => copyFile(source, destination),
+    )
+    await retryPackagingFileOperation(
+      `applying mode to ${destination}`,
+      () => chmod(destination, sourceStat.mode),
+    )
     return
   }
   if (!sourceStat.isDirectory()) {
     throw new TypeError(`investment sidecar contains an unsupported entry: ${source}`)
   }
-  await mkdir(destination, { mode: sourceStat.mode, recursive: true })
-  const entries = await readdir(source, { withFileTypes: true })
+  await retryPackagingFileOperation(
+    `creating ${destination}`,
+    () => mkdir(destination, { mode: sourceStat.mode, recursive: true }),
+  )
+  const entries = await retryPackagingFileOperation(
+    `reading directory ${source}`,
+    () => readdir(source, { withFileTypes: true }),
+  )
   for (const entry of entries) {
     await copySidecarTree(join(source, entry.name), join(destination, entry.name))
   }
-  await chmod(destination, sourceStat.mode)
+  await retryPackagingFileOperation(
+    `applying mode to ${destination}`,
+    () => chmod(destination, sourceStat.mode),
+  )
 }
 
 /**

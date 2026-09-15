@@ -20,6 +20,7 @@ import {
   packagingDirectoryLinkTarget,
   refreshPackagedSidecarDescriptor,
   removePackagingRoot,
+  retryDescriptorOperation,
   signPackagedMacApplications,
   signPackagedElectronHelpers,
   signPackagedSidecarMachO,
@@ -198,6 +199,58 @@ describe('Electron investment sidecar packaging', () => {
       recursive: true,
       retryDelay: 50,
     })
+  })
+
+  it.each(['EMFILE', 'ENFILE'] as const)('retries transient %s descriptor exhaustion with linear backoff', async (code) => {
+    const delays: number[] = []
+    const retries: Array<{ attempt: number; code: string; delay: number }> = []
+    let attempts = 0
+
+    const result = await retryDescriptorOperation(async () => {
+      attempts += 1
+      if (attempts < 3) throw Object.assign(new Error('descriptor pressure'), { code })
+      return 'copied'
+    }, {
+      maxRetries: 3,
+      onRetry: (error, attempt, delay) => { retries.push({ attempt, code: error.code!, delay }) },
+      retryDelay: 25,
+      wait: async (delay) => { delays.push(delay) },
+    })
+
+    expect(result).toBe('copied')
+    expect(attempts).toBe(3)
+    expect(delays).toEqual([25, 50])
+    expect(retries).toEqual([
+      { attempt: 1, code, delay: 25 },
+      { attempt: 2, code, delay: 50 },
+    ])
+  })
+
+  it('does not retry unrelated file-system failures', async () => {
+    const delays: number[] = []
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+
+    await expect(retryDescriptorOperation(async () => { throw denied }, {
+      wait: async (delay) => { delays.push(delay) },
+    })).rejects.toBe(denied)
+    expect(delays).toEqual([])
+  })
+
+  it('stops retrying descriptor exhaustion at the configured limit', async () => {
+    const delays: number[] = []
+    const exhausted = Object.assign(new Error('still exhausted'), { code: 'EMFILE' })
+    let attempts = 0
+
+    await expect(retryDescriptorOperation(async () => {
+      attempts += 1
+      throw exhausted
+    }, {
+      maxRetries: 2,
+      retryDelay: 10,
+      wait: async (delay) => { delays.push(delay) },
+    })).rejects.toBe(exhausted)
+    expect(attempts).toBe(3)
+    expect(delays).toEqual([10, 20])
   })
 
   it('deploys before building the current platform sidecar in isolated temporary paths', () => {
