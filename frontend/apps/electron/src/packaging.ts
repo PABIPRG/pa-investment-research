@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -399,8 +399,8 @@ async function copyPortablePackageEntry(
   const nestedAncestors = new Set(ancestorDirectories)
   nestedAncestors.add(canonicalDirectory)
   await mkdir(destinationPath, { mode: resolvedMetadata.mode, recursive: true })
-  const directory = await opendir(resolvedSource)
-  for await (const entry of directory) {
+  const entries = await readdir(resolvedSource, { withFileTypes: true })
+  for (const entry of entries) {
     await copyPortablePackageEntry(
       join(resolvedSource, entry.name),
       join(destinationPath, entry.name),
@@ -448,8 +448,8 @@ async function copySidecarTree(source: string, destination: string): Promise<voi
     throw new TypeError(`investment sidecar contains an unsupported entry: ${source}`)
   }
   await mkdir(destination, { mode: sourceStat.mode, recursive: true })
-  const directory = await opendir(source)
-  for await (const entry of directory) {
+  const entries = await readdir(source, { withFileTypes: true })
+  for (const entry of entries) {
     await copySidecarTree(join(source, entry.name), join(destination, entry.name))
   }
   await chmod(destination, sourceStat.mode)

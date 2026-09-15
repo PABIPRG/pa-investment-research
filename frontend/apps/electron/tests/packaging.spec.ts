@@ -1,9 +1,11 @@
 /** Electron packaging keeps the Python sidecar outside the application staging tree. */
 
+import { spawn } from 'node:child_process'
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import { appIdentity, packagerIconPath } from '../src/app-identity.ts'
@@ -491,6 +493,57 @@ describe('Electron investment sidecar packaging', () => {
       await rm(rootDir, { force: true, recursive: true })
     }
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'closes parent directory handles before descending through a deep package tree',
+    async () => {
+      const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-descriptor-test-'))
+      const sourceDir = join(rootDir, 'source')
+      const destinationDir = join(rootDir, 'destination')
+      try {
+        let currentDir = sourceDir
+        await mkdir(currentDir)
+        for (let depth = 0; depth < 96; depth += 1) {
+          currentDir = join(currentDir, 'd')
+          await mkdir(currentDir)
+        }
+        await writeFile(join(currentDir, 'leaf.txt'), 'bounded descriptors')
+
+        const packagingModule = pathToFileURL(join(process.cwd(), 'apps/electron/src/packaging.ts')).href
+        const childScript = [
+          `import { copyPortablePackageTree } from ${JSON.stringify(packagingModule)}`,
+          'await copyPortablePackageTree(process.env.DSH_TEST_SOURCE, process.env.DSH_TEST_DESTINATION)',
+        ].join(';')
+        const result = await new Promise<{ code: number | null; stderr: string }>((resolvePromise, reject) => {
+          const child = spawn('bash', [
+            '-c',
+            'ulimit -n 64; "$DSH_TEST_NODE" --import tsx --input-type=module -e "$DSH_TEST_SCRIPT"',
+          ], {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              DSH_TEST_DESTINATION: destinationDir,
+              DSH_TEST_NODE: process.execPath,
+              DSH_TEST_SCRIPT: childScript,
+              DSH_TEST_SOURCE: sourceDir,
+            },
+            stdio: ['ignore', 'ignore', 'pipe'],
+          })
+          let stderr = ''
+          child.stderr.setEncoding('utf8')
+          child.stderr.on('data', (chunk) => { stderr += chunk })
+          child.once('error', reject)
+          child.once('close', (code) => { resolvePromise({ code, stderr }) })
+        })
+
+        expect(result, result.stderr).toMatchObject({ code: 0 })
+        expect(await readFile(join(destinationDir, relative(sourceDir, currentDir), 'leaf.txt'), 'utf8'))
+          .toBe('bounded descriptors')
+      } finally {
+        await rm(rootDir, { force: true, recursive: true })
+      }
+    },
+  )
 
   it('keeps Electron Packager away from the full Windows package tree', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-win32-seed-test-'))
