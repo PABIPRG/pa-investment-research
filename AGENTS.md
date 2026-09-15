@@ -18,7 +18,8 @@
 
 ## Linear 项目映射
 
-- 后续所有任务追踪统一使用 Linear。
+- 本节仅适用于当前仓库；后续所有项目任务追踪统一使用 Linear。
+- 涉及需求、缺陷、技术债、发布、验收、项目风险或团队协作事项时，使用 `work-item-routing` Skill，并以本节映射为唯一依据。
 - Linear workspace: `PABIPRG`
 - Linear team: `PABIPRG`
 - Team key: `PAB`
@@ -28,6 +29,9 @@
 - 默认标签: `Feature`
 - 创建 Linear issue 前必须先展示完整草稿，并取得用户明确确认。
 - 禁止通过仓库名称猜测 Linear Project；必须使用本节记录的项目名称与 ID。若映射失效或无法访问，应停止创建并请求用户确认。
+- 项目工作必须保留 `PRD/决策 → Linear issue → 分支或 PR → 自动化验证 → UAT/受限降级证据 → 版本里程碑 → 发布或回归` 的连续链路。代码提交、PR 打开或合并均不能单独作为 Done 证据。
+- 后续改动触及已完成能力时，必须关联既有 issue 或创建明确的回归 issue；原验收失效时重开原 issue，或让回归 issue 阻塞目标版本。
+- 日报以 Linear 为管理口径，代码、CI 和 UAT 为审计口径；出现冲突时记录冲突，不得静默覆盖。
 
 ## 多 Agent 与 Git worktree
 
