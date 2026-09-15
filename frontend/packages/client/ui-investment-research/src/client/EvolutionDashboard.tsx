@@ -50,6 +50,15 @@ function performanceTone(value: unknown): 'positive' | 'negative' | undefined {
   return resolved > 0 ? 'positive' : 'negative'
 }
 
+function readinessLabel(status: Record<string, unknown>): string {
+  const days = number(status.days_of_data)
+  const minimum = number(status.min_days)
+  if (days === undefined || minimum === undefined) return '—'
+  const completed = status.ready === true || days >= minimum
+  if (completed) return `${days.toFixed(0)} 日（最低 ${minimum.toFixed(0)} 日，已达标）`
+  return `${days.toFixed(0)} 日（最低 ${minimum.toFixed(0)} 日，还差 ${Math.max(0, minimum - days).toFixed(0)} 日）`
+}
+
 interface LineageNodeProps {
   readonly sid: string
   readonly entries: ReadonlyMap<string, Record<string, unknown>>
@@ -179,7 +188,21 @@ export function EvolutionDashboard({
   const closedLoopEnabled = statusRecord.closed_loop_enabled === true
   const closedLoopTime = text(statusRecord.closed_loop_time, '15:35')
   const lifecycleEntries = openGroup === '' ? [] : records(lifecycle[openGroup])
-  const mutationEntries = records(lifecycle.mutated)
+  const mutationEntries = useMemo(() => {
+    const entries = new Map<string, Record<string, unknown>>()
+    for (const group of GROUPS) {
+      for (const entry of records(lifecycle[group])) {
+        const sid = strategyId(entry)
+        const isVariant = text(entry.source, '') === 'evolution' || text(entry.mutated_from, '') !== ''
+        if (sid !== '' && isVariant) entries.set(sid, entry)
+      }
+    }
+    for (const entry of records(lifecycle.mutated)) {
+      const sid = strategyId(entry)
+      if (sid !== '') entries.set(sid, entry)
+    }
+    return [...entries.values()]
+  }, [lifecycle])
   const lifecycleByStrategy = new Map<string, { entry: Record<string, unknown>; status: string }>()
   for (const group of ['candidate', 'active', 'watch', 'retired', 'rejected'] as const) {
     for (const entry of records(lifecycle[group])) {
@@ -214,7 +237,7 @@ export function EvolutionDashboard({
         if (sid !== '') entries.set(sid, { ...raw, lifecycle_group: group })
       }
     }
-    for (const raw of records(lifecycle.mutated)) {
+    for (const raw of mutationEntries) {
       const sid = strategyId(raw)
       if (sid !== '' && !entries.has(sid)) entries.set(sid, { ...raw, lifecycle_group: 'mutated' })
     }
@@ -237,7 +260,7 @@ export function EvolutionDashboard({
       return parent === '' || !visible.has(parent)
     })
     return { entries, children, roots }
-  }, [lifecycle])
+  }, [lifecycle, mutationEntries])
 
   return (
     <div className={`${css.pageScroll} ${css.evolutionDashboard}`}>
@@ -264,11 +287,11 @@ export function EvolutionDashboard({
             <div><dt>最近自动运行</dt><dd>{formatEvolutionTimestamp(statusRecord.recent_run_at, '尚无运行记录')}</dd></div>
             <div><dt>下次计划运行</dt><dd>{closedLoopEnabled ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${closedLoopTime}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
             <div><dt>上次自动应用</dt><dd>{formatEvolutionTimestamp(statusRecord.last_applied_at, '尚未应用')}</dd></div>
-            <div><dt>数据完成度</dt><dd>{number(statusRecord.days_of_data)?.toFixed(0) ?? '—'} / {number(statusRecord.min_days)?.toFixed(0) ?? '—'} 日</dd></div>
+            <div><dt>数据完成度</dt><dd>{readinessLabel(statusRecord)}</dd></div>
           </dl>
         </article>
         <article className={`${css.moduleCard} ${css.evolutionAttributionCard}`} aria-label="整体影子归因">
-          <div className={css.sectionHeading}><strong>整体影子归因</strong><span>{number(attributionRecord.days_of_data)?.toFixed(0) ?? '0'} 日</span></div>
+          <div className={css.sectionHeading}><strong>整体影子归因</strong><span>{number(attributionRecord.days_of_data)?.toFixed(0) ?? '—'} 日</span></div>
           <dl className={css.evolutionRuntimeMeta}>
             <div><dt>累计收益</dt><dd>{metric(overall.return_pct, '%')}</dd></div>
             <div><dt>最大回撤</dt><dd>{metric(overall.max_drawdown_pct, '%')}</dd></div>

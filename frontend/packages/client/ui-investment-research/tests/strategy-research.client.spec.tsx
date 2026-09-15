@@ -26,6 +26,27 @@ function renderStrategyPage(
 }
 
 describe('策略研究产品事实与确认流程', () => {
+  it('首次加载时不把未知策略计数显示为零', async () => {
+    let resolveStrategies!: (value: unknown) => void
+    const strategyFlight = new Promise<unknown>((resolve) => { resolveStrategies = resolve })
+    const requestData = vi.fn((request: { operation: string }) => {
+      if (request.operation === 'trading-core.strategies') return strategyFlight
+      return Promise.reject(new Error(`unexpected operation ${request.operation}`))
+    })
+
+    renderStrategyPage(requestData)
+
+    expect(screen.getByRole('button', { name: '全部 —' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '已验证通过 —' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '全部 0' })).toBeNull()
+
+    resolveStrategies({
+      items: [{ id: 'loaded-strategy', name: '加载完成策略', status: 'active', verification_status: 'passed' }],
+    })
+    expect(await screen.findByRole('button', { name: '全部 1' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '已验证通过 1' })).toBeTruthy()
+  })
+
   it('旧策略只有最近回测快照时明确提示历史未留存', async () => {
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.strategies') return {

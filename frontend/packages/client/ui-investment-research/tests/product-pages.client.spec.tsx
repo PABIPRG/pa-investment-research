@@ -720,7 +720,7 @@ describe('投研产品闭环', () => {
     expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
 
     expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
-    expect(screen.getByText(/约 25 MB/)).toBeTruthy()
+    expect(screen.getByText(/约 80 MB/)).toBeTruthy()
     expect(requestData.mock.calls.some(([request]) => request.operation === 'industry-chain.stats')).toBe(false)
     const reservedProgress = view.container.querySelector(`.${css.industryProgress}`)
     expect(reservedProgress?.getAttribute('aria-hidden')).toBe('true')

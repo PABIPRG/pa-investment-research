@@ -5,7 +5,7 @@ trading-core 无独立图数据，复用 industry-chain(:8200) 只读接口：
   - GET /graph/chain/{code}?depth_up=1&depth_down=1   → 上游供应商/下游客户（各 1 跳）
   - GET /companies?keyword={industry}&limit=50       → 同行业公司（行业模糊子串）
 
-每事件 ≤2 次子请求、timeout=1.5、proxies={}；TTL 300s 内存缓存；
+每事件 ≤2 次子请求、timeout=1.5、显式绕过环境代理；TTL 300s 内存缓存；
 :8200 连续两次请求不可达 → 记 30s backoff（期间跳过）→ 优雅降级：
 chain 挂掉时事件保持原样（不 500、不拖慢、不影响卡片/假设）。
 
@@ -24,6 +24,7 @@ from .strategies import _normalize_symbol
 logger = logging.getLogger("adapter.impact")
 
 _IC_DOWN_UNTIL = 0.0  # :8200 熔断截止时间（backoff 期间跳过扩展）
+_IC_SEED_MISSING_UNTIL = 0.0  # 数据未初始化退避，不应误报成服务不可达
 # key=event id → (ts, impact_codes, impact_industries, impact_by)
 _IMPACT_CACHE: dict[str, tuple[float, list[str], list[str], list[str]]] = {}
 
@@ -44,16 +45,43 @@ def _mark_down() -> None:
     logger.warning("industry-chain :8200 不可达，事件影响图谱降级 %ss", _DOWN_BACKOFF)
 
 
-def _chain_expand(code: str) -> tuple[list[str], list[str], bool]:
+def _seed_data_missing(response: object) -> bool:
+    if getattr(response, "status_code", None) != 503:
+        return False
+    try:
+        detail = str((response.json() or {}).get("detail") or "")
+    except Exception:  # noqa: BLE001 — 非 JSON 503 仍按普通服务故障处理
+        return False
+    return "种子数据" in detail and ("尚未下载" in detail or "未就绪" in detail)
+
+
+def _mark_seed_missing() -> None:
+    global _IC_SEED_MISSING_UNTIL
+    _IC_SEED_MISSING_UNTIL = time.time() + _DOWN_BACKOFF
+    logger.info("产业链种子数据未就绪，事件影响图谱保持原样，%ss 后重试", _DOWN_BACKOFF)
+
+
+def _seed_missing() -> bool:
+    return time.time() < _IC_SEED_MISSING_UNTIL
+
+
+def _chain_expand(code: str) -> tuple[list[str], list[str], bool | None]:
     """直连标的 → (波及代码, 展示名, 请求成功)，上下游各 1 跳。"""
     try:
         r = requests.get(
             settings.ic_url.rstrip("/") + f"/graph/chain/{code}",
             params={"depth_up": 1, "depth_down": 1},
-            timeout=_SUB_TIMEOUT, proxies={},
+            timeout=_SUB_TIMEOUT,
+            proxies={"http": None, "https": None},
         )
         r.raise_for_status()
         data = r.json() or {}
+    except requests.HTTPError as exc:
+        if _seed_data_missing(exc.response):
+            _mark_seed_missing()
+            return [], [], None
+        logger.debug("产业链扩展失败 %s: %s", code, exc)
+        return [], [], False
     except Exception as exc:  # noqa: BLE001 — :8200 挂掉不拖慢事件流
         logger.debug("产业链扩展失败 %s: %s", code, exc)
         return [], [], False
@@ -71,16 +99,23 @@ def _chain_expand(code: str) -> tuple[list[str], list[str], bool]:
     return codes, names, True
 
 
-def _industry_expand(keyword: str) -> tuple[list[str], list[str], bool]:
+def _industry_expand(keyword: str) -> tuple[list[str], list[str], bool | None]:
     """行业 → (公司代码, 公司名, 请求成功)。"""
     try:
         r = requests.get(
             settings.ic_url.rstrip("/") + "/companies",
             params={"keyword": keyword, "limit": _COMPANY_LIMIT},
-            timeout=_SUB_TIMEOUT, proxies={},
+            timeout=_SUB_TIMEOUT,
+            proxies={"http": None, "https": None},
         )
         r.raise_for_status()
         items = (r.json() or {}).get("items") or []
+    except requests.HTTPError as exc:
+        if _seed_data_missing(exc.response):
+            _mark_seed_missing()
+            return [], [], None
+        logger.debug("行业扩展失败 %s: %s", keyword, exc)
+        return [], [], False
     except Exception as exc:  # noqa: BLE001
         logger.debug("行业扩展失败 %s: %s", keyword, exc)
         return [], [], False
@@ -99,7 +134,7 @@ def _display(pairs: list[tuple[str, str]]) -> str:
     return "/".join(f"{n}({c})" if n != c else c for n, c in pairs)
 
 
-def _expand_one(ev: dict) -> tuple[dict, tuple[bool, ...]]:
+def _expand_one(ev: dict) -> tuple[dict, tuple[bool | None, ...]]:
     """单事件扩展并返回本次子请求健康结果；TTL 命中不产生健康样本。"""
     now = time.time()
     key = str(ev.get("id") or "")
@@ -112,7 +147,7 @@ def _expand_one(ev: dict) -> tuple[dict, tuple[bool, ...]]:
             "impact_industries": industries,
             "impact_by": by,
         }, ())
-    if _ic_down():
+    if _ic_down() or _seed_missing():
         return ({
             **ev,
             "impact_codes": [],
@@ -127,7 +162,7 @@ def _expand_one(ev: dict) -> tuple[dict, tuple[bool, ...]]:
     industries: list[str] = [str(x).strip() for x in (ev.get("industries") or []) if str(x or "").strip()][:1]
     codes: list[str] = []
     by: list[str] = []
-    request_health: list[bool] = []
+    request_health: list[bool | None] = []
 
     direct = next(iter(own), None)
     if direct:
@@ -138,7 +173,7 @@ def _expand_one(ev: dict) -> tuple[dict, tuple[bool, ...]]:
         if fresh:
             pairs = [(n, c) for n, c in zip(ch_names, ch_codes) if c in fresh]
             by.append(f"{direct} 产业链: " + _display(pairs))
-    if industries:
+    if industries and not _seed_missing():
         ind = industries[0]
         co_codes, co_names, healthy = _industry_expand(ind)
         request_health.append(healthy)
@@ -148,7 +183,9 @@ def _expand_one(ev: dict) -> tuple[dict, tuple[bool, ...]]:
             pairs = [(n, c) for n, c in zip(co_names, co_codes) if c in fresh]
             by.append(f"行业「{ind}」: " + _display(pairs))
 
-    _IMPACT_CACHE[key] = (now, codes, industries, by)
+    # 缺种子数据是短暂的就绪状态，不把空结果固化到 5 分钟事件缓存。
+    if None not in request_health:
+        _IMPACT_CACHE[key] = (now, codes, industries, by)
     return ({
         **ev,
         "impact_codes": codes,
@@ -171,6 +208,8 @@ def expand_events(events: list[dict] | None) -> list[dict]:
             expanded, request_health = _expand_one(e)
             out.append(expanded)
             for healthy in request_health:
+                if healthy is None:
+                    continue
                 consecutive_failures = 0 if healthy else consecutive_failures + 1
                 if consecutive_failures >= 2:
                     _mark_down()

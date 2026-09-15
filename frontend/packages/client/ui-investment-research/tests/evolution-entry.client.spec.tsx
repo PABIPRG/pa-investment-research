@@ -23,6 +23,9 @@ describe('自进化全局只读看板', () => {
         per_strategy: [{ strategy_id: 'strat-candidate', name: '候选策略', reason: '等待验证' }],
         recent_applied: [],
         counts: { candidate: 1 },
+        days_of_data: 2,
+        min_days: 5,
+        ready: false,
       }
       if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
       throw new Error(`unexpected operation ${operation}`)
@@ -41,6 +44,7 @@ describe('自进化全局只读看板', () => {
     expect(history.compareDocumentPosition(lineage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(lineage.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(distribution.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('2 日（最低 5 日，还差 3 日）')).toBeTruthy()
     expect(within(lineage).getByText('尚未发生自动进化')).toBeTruthy()
     expect(screen.getByRole('region', { name: '候选策略列表' }).className).toContain('evolutionLifecycleList')
   })
@@ -54,7 +58,6 @@ describe('自进化全局只读看板', () => {
             { strategy_id: 'strat-peer', name: '并列策略' },
           ],
           retired: [{ strategy_id: 'strat-parent', name: '源策略' }],
-          mutated: [{ strategy_id: 'strat-child', name: '子代策略', mutated_from: 'strat-parent' }],
         },
         per_strategy: [
           { strategy_id: 'strat-child', reason: '证据达标' },
@@ -78,6 +81,8 @@ describe('自进化全局只读看板', () => {
     const parent = within(peerList).getByRole('listitem', { name: /源策略.*母策略/u })
     expect(within(parent).getByRole('list', { name: '源策略的衍生策略' })).toBeTruthy()
     expect(within(parent).getByText('子代策略')).toBeTruthy()
+    expect(screen.getByText('1 个变体')).toBeTruthy()
+    expect(screen.getByText('已记录 1 个衍生变体')).toBeTruthy()
     expect(screen.getAllByText('动量跟随 · 利好')[0]?.dataset.direction).toBe('利好')
     expect(screen.getAllByText('超跌反弹 · 利空')[0]?.dataset.direction).toBe('利空')
     expect(screen.getAllByText('放量突破 · 利好')[0]?.dataset.direction).toBe('利好')
@@ -111,6 +116,9 @@ describe('自进化全局只读看板', () => {
         counts: { active: 99, mutated: 88 },
         recent_run_at: '2026-09-04T00:25:53+08:00',
         next_scheduled_run_at: '2026-09-04T15:35:00+08:00',
+        days_of_data: 9,
+        min_days: 5,
+        ready: true,
         recent_applied: [{ applied_at: '2026-09-04 00:20:00', count: 1, actions: [{ sid: 'strat-upgraded', type: 'promote', reason: '样本外证据达标' }] }],
       }
       if (operation === 'trading-core.evolution-attribution') return { overall: {}, strategies: [] }
@@ -130,6 +138,8 @@ describe('自进化全局只读看板', () => {
     expect(summary.textContent).not.toContain('变异')
     expect(screen.getByText('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
     expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
+    expect(screen.getByText('9 日（最低 5 日，已达标）')).toBeTruthy()
+    expect(screen.queryByText('9 / 5 日')).toBeNull()
     expect(screen.getByText('样本外证据达标')).toBeTruthy()
     const facts = screen.getByRole('group', { name: /升级策略.*运行状态/ })
     expect(within(facts).getAllByRole('term')).toHaveLength(5)

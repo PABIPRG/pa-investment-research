@@ -188,8 +188,8 @@ def _run_backtest_patrol() -> None:
 def _run_event_generation(store: JsonStore) -> dict:
     """Step 0：拉市场事件 → 假设 → 候选落池（EVENT_GENERATION_ENABLED 控制）。
 
-    幂等天然成立：create_candidates 按 md5(事件id+kind+排序symbols) 去重，
-    同事件同策略不重复生成，每天只产生新事件候选。事件源失败 fail-open 返回空。
+    幂等天然成立：create_candidates 同时按事件键和可执行策略语义去重，
+    同一规则不会因重复事件再次入池。事件源失败 fail-open 返回空。
     """
     from .strategies import create_candidates, fetch_events, generate_hypotheses
     events = fetch_events(limit=settings.event_generation_limit, timeout=20.0)

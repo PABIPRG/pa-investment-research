@@ -10,7 +10,7 @@
   python scripts/fetch_seed_data.py            # 下载到默认 data/seed/
   python scripts/fetch_seed_data.py --check    # 只校验 5 个文件是否齐全，不下载
 
-下载 5 个文件（共约 25MB）：
+下载 5 个文件（当前共约 80MB）：
   stats.json / companies.json / market-caps.json / view-data-all.json / network-data.json
 """
 
