@@ -27,7 +27,7 @@ interface CommandSpec {
 interface PackagingPlan {
   appSourceDir: string
   deploy: CommandSpec
-  portableStagingDir: string
+  packagerSeedDir: string
   rootDir: string
   sidecar: CommandSpec
   sidecarCacheDir: string
@@ -55,6 +55,7 @@ interface PackagerOptionsInput {
   electronVersion: string
   electronZipDir: string
   outDir: string
+  packagerSeedDir: string
   platform: NonNullable<PackagerOptions['platform']>
   sidecarDir: string
   stagingDir: string
@@ -80,7 +81,7 @@ export function commandRequiresShell(command: string, platform: NodeJS.Platform 
  */
 export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, arch: string, downloadCacheRoot?: string): PackagingPlan {
   const stagingDir = join(rootDir, 'app')
-  const portableStagingDir = join(rootDir, 'app-portable')
+  const packagerSeedDir = join(rootDir, 'packager-seed')
   const sidecarDir = join(rootDir, 'investment-python')
   const sidecarCacheDir = downloadCacheRoot
     ? resolve(downloadCacheRoot, `${platform}-${arch}`)
@@ -100,7 +101,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
       command: pnpmCommand,
       cwd: workspaceDir,
     },
-    portableStagingDir,
+    packagerSeedDir,
     rootDir,
     sidecar: {
       args: [
@@ -415,6 +416,13 @@ export async function copyPortablePackageTree(sourceDir: string, destinationDir:
   await copyPortablePackageEntry(sourceDir, destinationDir, new Set())
 }
 
+/** Give Electron Packager only the manifest it needs before the bounded afterCopy install. */
+export async function createPackagerSeed(sourceDir: string, seedDir: string): Promise<void> {
+  await rm(seedDir, { force: true, recursive: true })
+  await mkdir(seedDir, { recursive: true })
+  await copyFile(join(sourceDir, 'package.json'), join(seedDir, 'package.json'))
+}
+
 /** Remove the temporary package tree with Node's built-in descriptor exhaustion retries. */
 export async function removePackagingRoot(
   rootDir: string,
@@ -453,14 +461,15 @@ async function copySidecarTree(source: string, destination: string): Promise<voi
  * @returns Options for the existing Electron packager and signing pipeline.
  */
 export function createPackagerOptions(input: PackagerOptionsInput): PackagerOptions {
+  const boundedWindowsCopy = input.platform === 'win32'
   return {
     appBundleId: appIdentity.appBundleId,
     arch: input.arch,
     asar: false,
-    // Windows receives a sequentially dereferenced staging tree. Never ask
-    // Packager's unbounded copy walker to expand the pnpm graph itself.
+    // Windows gives Packager only a minimal seed. The afterCopy hook installs
+    // the full pnpm tree sequentially so fs-extra cannot exhaust descriptors.
     derefSymlinks: false,
-    dir: input.stagingDir,
+    dir: boundedWindowsCopy ? input.packagerSeedDir : input.stagingDir,
     electronVersion: input.electronVersion,
     electronZipDir: input.electronZipDir,
     executableName: appIdentity.executableName,
@@ -474,7 +483,13 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
     icon: packagerIconPath(input.platform),
     afterCopy: [((buildPath, _electronVersion, _platform, _arch, callback) => {
       const destination = join(dirname(buildPath), basename(input.sidecarDir))
-      copySidecarTree(input.sidecarDir, destination).then(
+      const installResources = async () => {
+        if (boundedWindowsCopy) {
+          await copyPortablePackageTree(input.stagingDir, buildPath)
+        }
+        await copySidecarTree(input.sidecarDir, destination)
+      }
+      installResources().then(
         () => { callback() },
         (reason: unknown) => { callback(reason instanceof Error ? reason : new Error(String(reason))) },
       )
@@ -677,9 +692,12 @@ async function timed<T>(phase: string, action: () => Promise<T>): Promise<T> {
   const started = Date.now()
   console.log(`Electron packaging: ${phase} started`)
   try {
-    return await action()
-  } finally {
-    console.log(`Electron packaging: ${phase} finished after ${Date.now() - started}ms`)
+    const result = await action()
+    console.log(`Electron packaging: ${phase} succeeded after ${Date.now() - started}ms`)
+    return result
+  } catch (error) {
+    console.error(`Electron packaging: ${phase} failed after ${Date.now() - started}ms`)
+    throw error
   }
 }
 
@@ -688,7 +706,6 @@ async function packageApplication(): Promise<void> {
   const plan = createPackagingPlan(rootDir, process.platform, process.arch, process.env.INVESTMENT_PYTHON_DOWNLOAD_CACHE)
   try {
     await timed('production deploy', () => run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd))
-    let packagingStagingDir = plan.stagingDir
     if (process.platform === 'darwin' || process.platform === 'win32') {
       const startedAt = Date.now()
       const materializedLinks = await materializePackagingWorkspaceLinks(
@@ -701,10 +718,9 @@ async function packageApplication(): Promise<void> {
     }
     if (process.platform === 'win32') {
       const startedAt = Date.now()
-      console.log('Electron packaging: creating bounded portable Windows staging tree')
-      await copyPortablePackageTree(plan.stagingDir, plan.portableStagingDir)
-      packagingStagingDir = plan.portableStagingDir
-      console.log(`Electron packaging: portable Windows staging completed in ${Date.now() - startedAt}ms`)
+      console.log('Electron packaging: creating minimal Windows Packager seed')
+      await createPackagerSeed(plan.stagingDir, plan.packagerSeedDir)
+      console.log(`Electron packaging: Windows Packager seed completed in ${Date.now() - startedAt}ms`)
     }
     await timed('Python sidecar', () => run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd))
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
@@ -727,8 +743,9 @@ async function packageApplication(): Promise<void> {
       electronVersion,
       electronZipDir: dirname(electronZip),
       platform: process.platform,
+      packagerSeedDir: plan.packagerSeedDir,
       sidecarDir: plan.sidecarDir,
-      stagingDir: packagingStagingDir,
+      stagingDir: plan.stagingDir,
       outDir: join(appDir, 'out'),
     })
     await validatePackagerIcon(packagerOptions)

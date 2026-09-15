@@ -44,8 +44,11 @@ jobs:
       - name: Install (immutable)
         run: pnpm install --frozen-lockfile
 
-      - name: Test release workflow guards
-        run: pnpm exec vitest run scripts/investment-release.spec.ts
+      - name: Test release and packaging guards
+        run: >-
+          pnpm exec vitest run
+          scripts/investment-release.spec.ts
+          apps/electron/tests/packaging.spec.ts
 
       - name: Type-check startup graph
         run: pnpm run typecheck:startup
