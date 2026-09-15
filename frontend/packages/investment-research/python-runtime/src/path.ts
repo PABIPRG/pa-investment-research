@@ -132,6 +132,52 @@ export function resolveBackendPaths(
   throw resolutionError(definition)
 }
 
+type CachedDescriptorVerification =
+  | Readonly<{ status: 'verified'; runtime: VerifiedInvestmentRuntime }>
+  | Readonly<{ status: 'invalid'; reason: unknown }>
+
+/**
+ * Create one backend resolver whose immutable packaged descriptor is verified once.
+ * Source checkout discovery remains live, while a bundled Runtime's complete digest
+ * scan is shared by every backend and readiness lookup for this resolver lifecycle.
+ * @param options - stable platform, filesystem, and descriptor verification facts.
+ * @returns a backend resolver with a private descriptor verification cache.
+ */
+export function createBackendPathResolver(
+  options: BackendPathResolutionOptions = {},
+): (definition: PythonBackendDefinition) => ResolvedBackendPaths {
+  const platform = options.platform ?? process.platform
+  const arch = options.arch ?? process.arch
+  const pathApi = options.pathApi ?? path
+  const verifyDescriptor = options.verifyDescriptor ?? (descriptorPath => verifyInvestmentRuntimeDescriptor(descriptorPath, {
+    platform,
+    arch,
+    pathApi,
+  }))
+  const descriptorVerifications = new Map<string, CachedDescriptorVerification>()
+  const cachedVerifyDescriptor = (descriptorPath: string): VerifiedInvestmentRuntime => {
+    const cached = descriptorVerifications.get(descriptorPath)
+    if (cached?.status === 'verified') return cached.runtime
+    if (cached?.status === 'invalid') throw cached.reason
+    try {
+      const runtime = verifyDescriptor(descriptorPath)
+      descriptorVerifications.set(descriptorPath, Object.freeze({ status: 'verified', runtime }))
+      return runtime
+    } catch (reason) {
+      descriptorVerifications.set(descriptorPath, Object.freeze({ status: 'invalid', reason }))
+      throw reason
+    }
+  }
+  const stableOptions: BackendPathResolutionOptions = Object.freeze({
+    ...options,
+    platform,
+    arch,
+    pathApi,
+    verifyDescriptor: cachedVerifyDescriptor,
+  })
+  return definition => resolveBackendPaths(definition, stableOptions)
+}
+
 function isLoopbackHost(host: string): boolean {
   return host === 'localhost' || host === '::1' || host.startsWith('127.')
 }

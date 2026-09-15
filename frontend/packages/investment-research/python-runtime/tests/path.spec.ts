@@ -1,7 +1,7 @@
 import path, { posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { resolveBackendAddress, resolveBackendPaths } from '../src/path.ts'
+import { createBackendPathResolver, resolveBackendAddress, resolveBackendPaths } from '../src/path.ts'
 import type { VerifiedInvestmentRuntime } from '../src/descriptor.ts'
 import type { PythonBackendDefinition } from '../src/types.ts'
 
@@ -17,6 +17,30 @@ function backend(overrides: Partial<PythonBackendDefinition> = {}): PythonBacken
     healthOk: { status: 'ok' },
     initCommand: { posix: './init.sh', windows: 'init.bat' },
     ...overrides,
+  }
+}
+
+function bundledRuntime(root: string): VerifiedInvestmentRuntime {
+  return {
+    root,
+    pythonExecutable: `${root}/runtime/bin/python3`,
+    sitePackages: `${root}/site-packages`,
+    projectDirs: {
+      'trading-core': `${root}/backends/dsh-trading-core`,
+      'market-watch': `${root}/backends/market-watch`,
+      'industry-chain': `${root}/backends/industry-chain`,
+    },
+    descriptor: {
+      schemaVersion: 1,
+      python: { version: '3.10.18', platform: 'linux', arch: 'x64', executable: 'runtime/bin/python3' },
+      sitePackages: 'site-packages',
+      backends: {
+        'trading-core': { projectDir: 'backends/dsh-trading-core', module: 'adapter.app:app' },
+        'market-watch': { projectDir: 'backends/market-watch', module: 'market_watch.app:app' },
+        'industry-chain': { projectDir: 'backends/industry-chain', module: 'industry_chain.app:app' },
+      },
+      files: [{ path: 'runtime/bin/python3', sha256: '0'.repeat(64) }],
+    },
   }
 }
 
@@ -232,6 +256,54 @@ describe('investment backend path resolution', () => {
       sitePackages,
       stateDir: pathApi.join(home, 'investment-research', 'industry-chain'),
     })
+  })
+
+  it('verifies one immutable bundled Runtime only once across backend and readiness resolutions', () => {
+    const root = '/opt/investment-python'
+    const descriptorPath = `${root}/runtime.json`
+    const verifyDescriptor = vi.fn(() => bundledRuntime(root))
+    const resolve = createBackendPathResolver({
+      platform: 'linux',
+      arch: 'x64',
+      pathApi: posix,
+      packageDir: '/opt/dsh/node_modules/@deepseek-ai/dsh-investment-python-runtime/lib',
+      dshHome: '/var/lib/dsh',
+      isDirectory: () => false,
+      isFile: candidate => candidate === descriptorPath,
+      verifyDescriptor,
+    })
+
+    expect(resolve(backend()).source).toBe('bundled')
+    expect(resolve(backend({
+      id: 'market-watch',
+      service: 'market-watch',
+      baseUrl: 'http://127.0.0.1:8100',
+      repositoryPath: ['backend', 'market-watch'],
+      module: 'market_watch.app:app',
+    })).source).toBe('bundled')
+    expect(resolve(backend()).source).toBe('bundled')
+    expect(verifyDescriptor).toHaveBeenCalledOnce()
+  })
+
+  it('memoizes an invalid immutable bundled Runtime until the resolver lifecycle ends', () => {
+    const descriptorPath = '/opt/investment-python/runtime.json'
+    const verifyDescriptor = vi.fn(() => {
+      throw new Error('investment Python packaged runtime is invalid (hash mismatch); reinstall the application')
+    })
+    const resolve = createBackendPathResolver({
+      platform: 'linux',
+      arch: 'x64',
+      pathApi: posix,
+      packageDir: '/opt/dsh/node_modules/@deepseek-ai/dsh-investment-python-runtime/lib',
+      dshHome: '/var/lib/dsh',
+      isDirectory: () => false,
+      isFile: candidate => candidate === descriptorPath,
+      verifyDescriptor,
+    })
+
+    expect(() => resolve(backend())).toThrow(/hash mismatch/)
+    expect(() => resolve(backend())).toThrow(/hash mismatch/)
+    expect(verifyDescriptor).toHaveBeenCalledOnce()
   })
 
   it('does not inspect a bundled descriptor after an explicit projectDir is invalid', () => {

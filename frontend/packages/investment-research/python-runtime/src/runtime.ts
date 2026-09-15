@@ -5,7 +5,7 @@ import { resolveDshHome, resolveDshInstanceLayout } from '@deepseek-ai/dsh-home-
 import { checkBackendHealth as defaultCheckHealth } from './health.ts'
 import { BackendLog, backendLogPaths, safeErrorMessage } from './log.ts'
 import type { BackendLogPaths } from './log.ts'
-import { resolveBackendAddress, resolveBackendPaths as defaultResolvePaths } from './path.ts'
+import { createBackendPathResolver as defaultCreatePathResolver, resolveBackendAddress } from './path.ts'
 import { InvestmentReadinessTracker } from './readiness.ts'
 import type { BackendReadinessState, RuntimeCredentialFact } from './readiness.ts'
 import {
@@ -291,7 +291,7 @@ export class InvestmentBackendManager {
     this.subprocess = options.subprocess
     this.config = { ...DEFAULT_CONFIG, ...options.config, dshHome: resolveDshHome(options.config?.dshHome) }
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
-    this.resolvePaths = options.resolvePaths ?? (definition => defaultResolvePaths(definition, { dshHome: this.config.dshHome }))
+    this.resolvePaths = options.resolvePaths ?? defaultCreatePathResolver({ dshHome: this.config.dshHome })
     this.resolveCredential = options.resolveCredential ?? (() => Promise.resolve(undefined))
     this.describeCredential = options.describeCredential
     this.resolveLogPaths = options.resolveLogPaths ?? backendLogPaths
