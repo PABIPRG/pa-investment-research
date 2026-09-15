@@ -133,8 +133,42 @@ const scenes=[new PointScene($('#field'),0),new PointScene($('#torus'),1)];
 function frame(now){raf=0;if(document.hidden)return;scenes.forEach(s=>s.draw((now-started)/1000));if(!reduced&&scenes.some(s=>s.visible))raf=requestAnimationFrame(frame);}
 function requestFrame(){if(!raf&&!document.hidden)raf=requestAnimationFrame(frame);}
 addEventListener('resize',layout);addEventListener('scroll',()=>{updateScroll();requestFrame();},{passive:true});
-addEventListener('pointermove',e=>{pointer=[e.clientX,e.clientY];requestFrame();},{passive:true});
-document.addEventListener('pointerleave',()=>{pointer=[-10000,-10000];});
+let touchContact=null,touchAnchor=null,touchFeedback=0,lastTouchScroll=scrollY;
+const hero=document.querySelector('.hero');
+const clearPointer=()=>{clearTimeout(touchFeedback);touchFeedback=0;touchAnchor=null;pointer=[-10000,-10000];requestFrame();};
+const releaseTouch=()=>{clearTimeout(touchFeedback);touchFeedback=setTimeout(clearPointer,650);};
+addEventListener('pointermove',e=>{
+ if(e.pointerType==='touch'){
+  if(touchContact!==e.pointerId)return;
+  touchAnchor=[e.clientX,e.clientY];pointer=[...touchAnchor];requestFrame();
+  return;
+ }
+ pointer=[e.clientX,e.clientY];requestFrame();
+},{passive:true});
+hero.addEventListener('pointerdown',e=>{
+ if(e.pointerType!=='touch')return;
+ clearPointer();touchContact=null;
+ if(!e.isPrimary||e.target.closest('a,button'))return;
+ touchContact=e.pointerId;touchAnchor=[e.clientX,e.clientY];
+ lastTouchScroll=scrollY;pointer=[...touchAnchor];requestFrame();
+},{passive:true});
+const finishTouch=e=>{
+ if(e.pointerType!=='touch'||touchContact!==e.pointerId)return;
+ touchContact=null;
+ // Native scrolling cancels pointer events; retain the disturbance during scroll.
+ releaseTouch();
+};
+addEventListener('pointerup',finishTouch,{passive:true});
+addEventListener('pointercancel',finishTouch,{passive:true});
+addEventListener('scroll',()=>{
+ if(!touchAnchor)return;
+ const rect=hero.getBoundingClientRect();
+ if(rect.bottom<=0||rect.top>=innerHeight){clearPointer();return;}
+ const delta=scrollY-lastTouchScroll;lastTouchScroll=scrollY;
+ touchAnchor[1]=Math.max(0,Math.min(innerHeight,touchAnchor[1]-delta*.35));
+ pointer=[...touchAnchor];requestFrame();releaseTouch();
+},{passive:true});
+document.addEventListener('pointerleave',()=>{if(!touchAnchor)pointer=[-10000,-10000];});
 document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelAnimationFrame(raf);raf=0;}else requestFrame();});
 media.addEventListener('change',e=>{reduced=e.matches;layout();});
 for(let i=0;i<49;i++){const el=document.createElement('i');el.style.setProperty('--n',String(5+Math.sin(i*.2)*15+Math.sin(i*.09)*8));$('.wave').append(el);}
