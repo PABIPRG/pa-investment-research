@@ -1,4 +1,5 @@
 """同步预览与提交的不可绕过行为。"""
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,49 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(provider.get_holdings(), [])
             passive.assert_called_once()
             navigation.assert_not_called()
+
+    def test_windows_passive_read_skips_a_visible_trades_table(self):
+        """成交表同样含「证券代码」，只按「含代码」认表会把成交表读成持仓表。
+
+        停在成交页时既不能给出错误的持仓，也不能报「请进入持仓页」——
+        用户已经在交易窗口里，要说清读到的是成交表。
+        """
+        from adapter.holdings_providers.base import ProviderUnavailable
+        from adapter.holdings_providers.easytrader import EasyTraderProvider
+
+        class _TradesTable:
+            @staticmethod
+            def columns():
+                return [{'text': name} for name in
+                        ['证券代码', '买卖标志', '成交价格', '成交数量', '成交日期']]
+
+            @staticmethod
+            def item_count():
+                return 1
+
+            @staticmethod
+            def get_item(row, column):
+                raise AssertionError("成交表不应被逐行读取")
+
+        class _Window:
+            @staticmethod
+            def window_text():
+                return '模拟炒股 - 同花顺'
+
+            @staticmethod
+            def descendants(class_name=None):
+                return [_TradesTable()]
+
+        fake = SimpleNamespace(Desktop=lambda backend=None: SimpleNamespace(
+            windows=lambda visible_only=True: [_Window()]))
+        provider = EasyTraderProvider(account_mode='simulated')
+
+        with patch.dict(sys.modules, {'pywinauto': fake}):
+            with self.assertRaises(ProviderUnavailable) as ctx:
+                provider._read_visible_table()
+
+        self.assertEqual(ctx.exception.code, 'navigation_required')
+        self.assertIn('成交明细表', str(ctx.exception))
 
     def test_missing_and_nonfinite_rows_are_not_partial_success(self):
         from adapter.holdings_providers.mac_ths import rows_to_items

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pydantic 模型：请求 / 状态 / 进度事件（API 契约，对应集成方案 §3.1/§3.3）"""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -36,6 +36,62 @@ class HoldingItem(BaseModel):
     ticker: str = Field(pattern=r"^\d{6}$", description="六位股票代码（如 600519）")
     quantity: float = Field(gt=0, description="持仓数量（股）")
     cost_price: float = Field(gt=0, description="持仓成本价（元）")
+
+
+class TradeItem(BaseModel):
+    """一笔成交：成交明细是事件流，不是状态快照。
+
+    与 HoldingItem 的关键区别是「同一笔会被反复读到」——重读同一段区间必须幂等，
+    而多笔真实的部分成交又可能字段完全相同。去重语义见 adapter/trade_dedup.py。
+
+    `side` 刻意不是 Literal["buy","sell"]：同花顺「买卖标志」还包括 申购/中签/送股/
+    红利入账 等非买卖流水。若在这层严格校验，表现会是「读到了但一条都存不进」。
+    归一不了的落 unclassified，原始字样保留在 side_label 供界面如实显示。
+    """
+
+    ticker: str = Field(pattern=r"^\d{6}$", description="六位股票代码")
+    name: str = Field(default="", description="证券名称（客户端提供时才有）")
+    side: Literal["buy", "sell", "unclassified"] = Field(description="买卖方向")
+    side_label: str = Field(default="", description="客户端原文（如「送股」），界面照实显示")
+    # 三个数值都用 ge=0 而不是 HoldingItem 的 gt=0：送股/红利入账这类流水没有成交价，
+    # 客户端给空值。收紧成 gt=0 会把整批入库打回，而不是只影响那几行。
+    price: float = Field(ge=0, description="成交价格（元）")
+    quantity: float = Field(ge=0, description="成交数量（股）")
+    amount: float = Field(ge=0, description="成交金额（元）")
+    traded_at: str = Field(
+        description="成交时间，ISO8601（YYYY-MM-DDTHH:MM 或 YYYY-MM-DDTHH:MM:SS）",
+    )
+    trade_id: str = Field(default="", description="客户端成交编号；可能是当日流水号，不全局唯一")
+    source: str = Field(default="", description="读到的数据源（easytrader / mac_ths）")
+    account_mode: Literal["real", "simulated"] = Field(description="账户类型")
+    occurred: int = Field(
+        default=1,
+        ge=1,
+        description="同去重键下的第几笔。多笔部分成交字段完全相同时靠它区分，不能只存集合",
+    )
+
+    @field_validator("traded_at")
+    @classmethod
+    def normalize_traded_at(cls, value: str) -> str:
+        """把分隔符统一成 ISO8601 的 T；只归一表示，不补造精度。
+
+        客户端只给到分钟就保留分钟，不会替它写成 :00——那会凭空造出秒级精度。
+        """
+        text = value.strip().replace(" ", "T")
+        reason = ""
+        if "T" not in text:
+            reason = "没有用 T 分隔出日期和时间"
+        else:
+            try:
+                datetime.fromisoformat(text)
+            except ValueError:
+                reason = "日期或时间不是合法值"
+        if reason:
+            raise ValueError(
+                f"成交时间无法识别（{reason}），应为 YYYY-MM-DDTHH:MM 或 "
+                f"YYYY-MM-DDTHH:MM:SS（实际收到：{value[:40]!r}）"
+            )
+        return text
 
 
 class HoldingsRequest(BaseModel):
@@ -75,9 +131,28 @@ class HoldingsSyncRequest(BaseModel):
 class HoldingsNativeRequest(BaseModel):
     """仅宿主私有认证入口允许的本机动作。"""
     model_config = ConfigDict(extra="forbid", strict=True)
-    action: Literal["read", "launch", "select_client"]
+    # read_trades 与 read 并列：成交读取在 Windows 上必须前台（另存为会抢焦点并可能
+    # 弹风控验证码），所以不能由网页请求触发，只能从认证宿主进来。
+    action: Literal["read", "read_trades", "launch", "select_client"]
     account_mode: Literal["real", "simulated"]
     client_path: str = Field(default="", max_length=4096)
+
+
+class TradesSyncRequest(BaseModel):
+    """成交明细同步：预览默认只读；提交必须引用后端签发的预览。
+
+    与 HoldingsSyncRequest 同形，语义差别在提交侧——持仓是整体替换，成交是去重合并。
+    """
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["preview", "commit"] = "preview"
+    preview_token: str = Field(default="", max_length=128)
+
+
+class TradesClearRequest(BaseModel):
+    """清空成交明细：同样先预览影响范围，再凭 token 提交。"""
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["preview", "commit"] = "preview"
+    preview_token: str = Field(default="", max_length=128)
 
 
 class HoldingsDetectRequest(BaseModel):

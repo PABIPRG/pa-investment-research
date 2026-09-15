@@ -32,6 +32,10 @@ class DataTransferTests(unittest.TestCase):
 
     def test_export_contains_only_selected_portable_collections(self):
         self.store.set("holdings", "default", [{"ticker": "600519", "quantity": 100}])
+        self.store.set("trades", "entries", [{
+            "ticker": "600519", "side": "buy", "price": 1680.5, "quantity": 100,
+            "amount": 168050.0, "traded_at": "2026-08-03T10:14:00", "account_mode": "simulated",
+        }])
         self.store.set("preferences", "risk_profile", "balanced")
         self.store.set("evolution_previews", "current", {"secret": "transient"})
 
@@ -40,9 +44,18 @@ class DataTransferTests(unittest.TestCase):
         self.assertEqual(snapshot["schemaVersion"], 2)
         self.assertEqual(snapshot["backend"], "trading-core")
         self.assertEqual(set(snapshot["categories"]), {"holdings"})
+        # 成交明细挂在 holdings 分类下，必须跟着导出——否则备份不含成交，
+        # 换机恢复后交易行为分析会凭空少掉一段。
         self.assertEqual(
             snapshot["categories"]["holdings"]["collections"],
-            {"holdings": {"default": [{"ticker": "600519", "quantity": 100}]}},
+            {
+                "holdings": {"default": [{"ticker": "600519", "quantity": 100}]},
+                "trades": {"entries": [{
+                    "ticker": "600519", "side": "buy", "price": 1680.5, "quantity": 100,
+                    "amount": 168050.0, "traded_at": "2026-08-03T10:14:00",
+                    "account_mode": "simulated",
+                }]},
+            },
         )
         self.assertNotIn("preferences", str(snapshot))
         self.assertNotIn("evolution_previews", str(snapshot))
@@ -463,6 +476,152 @@ class DataTransferTests(unittest.TestCase):
         invalid = client.get("/data-transfer/export", params={"categories": "credentials"}, headers=headers)
         self.assertEqual(invalid.status_code, 422)
 
+
+def _trade(**overrides):
+    payload = {
+        "ticker": "600519",
+        "side": "buy",
+        "price": 1680.5,
+        "quantity": 100.0,
+        "amount": 168050.0,
+        "traded_at": "2026-08-03T10:14:00",
+        "account_mode": "simulated",
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TradeTransferTests(unittest.TestCase):
+    """成交明细在备份/恢复里的行为。
+
+    成交与持仓同属 holdings 分类，但它是事件流：按去重键 + occurred 取并集，不能像
+    持仓那样整体覆盖。这里锁住每条规则下的实际语义。
+    """
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.store = JsonStore(Path(self.temporary.name))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _snapshot(self, trades, *, holdings=None):
+        collections = {
+            "holdings": {"default": holdings or []},
+            "trades": {"entries": trades, "imports": []},
+        }
+        return {
+            "schemaVersion": 2,
+            "backend": "trading-core",
+            "categories": {"holdings": {"collections": collections}},
+        }
+
+    def _import(self, snapshot, rule, transaction_id):
+        preview = preview_import(self.store, snapshot, {"holdings": rule})
+        prepare_import(self.store, transaction_id, snapshot, preview["currentRevision"], {"holdings": rule})
+        commit_import(self.store, transaction_id)
+        finalize_import(self.store, transaction_id)
+        return preview
+
+    def test_preview_counts_new_trades_by_dedup_key(self):
+        self.store.set("trades", "entries", [_trade()])
+        snapshot = self._snapshot([_trade(), _trade(ticker="000001", price=10.0,
+                                                    quantity=500.0, amount=5000.0)])
+
+        preview = preview_import(self.store, snapshot, {"holdings": "merge"})
+
+        self.assertEqual(preview["categories"]["holdings"]["added"], 1)
+        self.assertEqual(preview["categories"]["holdings"]["conflicts"], 0)
+
+    def test_merge_takes_the_union_without_duplicating(self):
+        self.store.set("trades", "entries", [_trade()])
+        snapshot = self._snapshot([_trade(), _trade(ticker="000001", price=10.0,
+                                                    quantity=500.0, amount=5000.0)])
+
+        self._import(snapshot, "merge", "77777777-7777-4777-8777-777777777771")
+
+        entries = self.store.get("trades", "entries")
+        self.assertEqual(
+            sorted(entry["ticker"] for entry in entries), ["000001", "600519"],
+        )
+
+    def test_use_import_replaces_local_trades(self):
+        self.store.set("trades", "entries", [_trade()])
+        snapshot = self._snapshot([_trade(ticker="000001", price=10.0, quantity=500.0,
+                                          amount=5000.0)])
+
+        self._import(snapshot, "use_import", "77777777-7777-4777-8777-777777777772")
+
+        entries = self.store.get("trades", "entries")
+        self.assertEqual([entry["ticker"] for entry in entries], ["000001"])
+
+    def test_keep_local_does_not_restore_backup_trades(self):
+        """默认规则是 keep_local，此时备份里的成交不会被恢复。
+
+        这是刻意的（与持仓同一条规则语义），但必须由预览把笔数如实报出来，
+        否则用户会以为成交已经跟着恢复了。
+        """
+        self.store.set("trades", "entries", [_trade()])
+        snapshot = self._snapshot([_trade(ticker="000001", price=10.0, quantity=500.0,
+                                          amount=5000.0)])
+
+        preview = self._import(snapshot, "keep_local", "77777777-7777-4777-8777-777777777773")
+
+        self.assertEqual(preview["categories"]["holdings"]["added"], 1)
+        entries = self.store.get("trades", "entries")
+        self.assertEqual([entry["ticker"] for entry in entries], ["600519"])
+
+    def test_reset_clears_trades_with_the_holdings_category(self):
+        self.store.set("holdings", "default", [{"ticker": "600519", "quantity": 100, "cost_price": 1500}])
+        self.store.set("trades", "entries", [_trade()])
+        revision = preview_import(self.store, export_snapshot(self.store, ["holdings"]))["currentRevision"]
+
+        prepare_reset(self.store, "88888888-8888-4888-8888-888888888881", ["holdings"], revision)
+        commit_import(self.store, "88888888-8888-4888-8888-888888888881")
+        finalize_import(self.store, "88888888-8888-4888-8888-888888888881")
+
+        self.assertEqual(self.store.all("holdings"), {})
+        self.assertEqual(self.store.all("trades"), {})
+
+    def test_round_trip_preserves_trades(self):
+        self.store.set("trades", "entries", [_trade(), _trade(ticker="000001", price=10.0,
+                                                              quantity=500.0, amount=5000.0),
+                                             _trade(trade_id="12345")])
+        exported = export_snapshot(self.store, ["holdings"])
+
+        target = JsonStore(Path(tempfile.mkdtemp(dir=self.temporary.name)))
+        preview = preview_import(target, exported, {"holdings": "merge"})
+        prepare_import(target, "88888888-8888-4888-8888-888888888882", exported,
+                       preview["currentRevision"], {"holdings": "merge"})
+        commit_import(target, "88888888-8888-4888-8888-888888888882")
+        finalize_import(target, "88888888-8888-4888-8888-888888888882")
+
+        self.assertEqual(
+            [entry["trade_id"] for entry in target.get("trades", "entries")],
+            ["", "", "12345"],
+        )
+
+    def test_snapshot_with_a_duplicated_slot_is_rejected(self):
+        """同一个 (去重键, occurred) 出现两次，说明多重集合计数自相矛盾。"""
+        duplicate = _trade(trade_id="12345", occurred=1)
+        snapshot = self._snapshot([duplicate, dict(duplicate)])
+
+        with self.assertRaises(TransferValidationError):
+            preview_import(self.store, snapshot, {"holdings": "merge"})
+
+    def test_snapshot_allows_same_key_with_distinct_occurred(self):
+        """反向锁住上一条：拆单造成的同键多笔是合法的，不能一起拒掉。"""
+        snapshot = self._snapshot([_trade(occurred=1), _trade(occurred=2)])
+
+        preview = preview_import(self.store, snapshot, {"holdings": "merge"})
+
+        self.assertEqual(preview["categories"]["holdings"]["added"], 2)
+
+    def test_snapshot_rejects_a_malformed_trade(self):
+        snapshot = self._snapshot([{"ticker": "600519", "side": "sideways"}])
+
+        with self.assertRaises(TransferValidationError):
+            preview_import(self.store, snapshot, {"holdings": "merge"})
 
 if __name__ == "__main__":
     unittest.main()

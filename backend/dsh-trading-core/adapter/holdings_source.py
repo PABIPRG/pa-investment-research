@@ -73,6 +73,45 @@ def _provider_label(provider) -> str:
 # 需要「操控本机券商客户端」的数据源，平台耦合，必须过闸门
 _CLIENT_AUTOMATION_PROVIDERS = {"easytrader", "mac_ths"}
 
+# 支持读取成交明细的数据源。本期只有客户端读表这两条路径，QMT/聚宽没有成交查询，
+# 手动录入也不产生成交。这份名单决定 provider_snapshot 是否上报 read_trades 动作，
+# 必须与各 provider 是否真的覆写 read_trades 一致——test_trades_capability 会核对。
+_TRADES_PROVIDERS: set[str] = {"easytrader", "mac_ths"}
+
+
+def trades_requires_foreground(provider_name: str) -> bool:
+    """该数据源读取成交明细是否必须前台。
+
+    Windows 的 easytrader 取成交表只能走「Ctrl+S 另存为」——给 grid 发复制命令在这个
+    客户端不生效（见 _ths_export 模块开头的实测记录），而另存为会抢焦点并可能弹风控
+    验证码，所以只有经宿主认证的原生入口能触发。macOS 走 AX 被动遍历，不需要。
+    """
+    return provider_name.strip().lower() == "easytrader"
+
+
+def trades_action_available(
+    provider_name: str, surface: str, *, profile=None
+) -> bool:
+    """是否该上报「同步成交明细」入口。
+
+    只看数据源名字是不够的，共三道闸门：
+
+    1. 数据源本身要支持读成交（QMT/聚宽/手动录入都没有）；
+    2. Windows 网页版（local-web）没有原生入口，成交读取必然以 navigation_required
+       失败，提前给出按钮等于让用户点进一个必然失败的入口；
+    3. 券商档案要有「历史成交」菜单——同是 easytrader，专用客户端内核的六家
+       （银河/华泰/五矿/海通/国金/广发）没有同花顺那套左树，只有 THS 内核才有。
+       传 None（如 mac_ths 没有券商档案）表示这道闸门不适用。
+
+    前端也拿得到 platform 与 surface，但这些后端事实留在这里，免得两处各写一份。
+    """
+    name = provider_name.strip().lower()
+    if name not in _TRADES_PROVIDERS:
+        return False
+    if profile is not None and getattr(profile, "trades_menu_path", None) is None:
+        return False
+    return not trades_requires_foreground(name) or surface == "electron"
+
 
 def platform_gate(provider_name: str) -> str | None:
     """校验数据源与当前操作系统是否匹配；不匹配时返回中文原因。
@@ -108,13 +147,17 @@ def platform_gate(provider_name: str) -> str | None:
     )
 
 
-def provider_snapshot() -> dict:
-    """只探测安装、进程和权限；不读取表格、不导航、不触发权限弹窗。"""
+def provider_snapshot(surface: str = "web") -> dict:
+    """只探测安装、进程和权限；不读取表格、不导航、不触发权限弹窗。
+
+    surface 由调用方传入（"electron" 表示有原生入口的桌面壳）。它与 platform 一起
+    决定成交读取入口是否可用，见 trades_action_available。
+    """
     name = settings.holdings_provider.strip().lower()
     platform = sys.platform if sys.platform in {"darwin", "win32"} else "unsupported"
     state = {
         "provider": name, "label": _PROVIDER_LABELS.get(name, "未知数据源"),
-        "platform": platform, "surface": "web", "available": False, "reason": None,
+        "platform": platform, "surface": surface, "available": False, "reason": None,
         "installation": "unknown", "process": "unknown", "accessibility": "not_applicable",
         "automation": "not_requested" if platform == "darwin" else "not_applicable",
         "session": "unknown", "readiness": "blocked", "blocking_reason": None,
@@ -122,6 +165,10 @@ def provider_snapshot() -> dict:
         "account_mode": str(getattr(settings, "holdings_account_mode", "simulated")),
         "supported_account_modes": _ACCOUNT_MODE_SUPPORT.get(name, ["real"]),
     }
+    # 成交能力闸门要看的券商档案；只有 easytrader 分支会填（mac_ths 没有券商档案，
+    # 留 None 表示那道闸门不适用）。
+    profile = None
+
     def blocked(code, message):
         state.update(blocking_reason=code, reason=message)
         return state
@@ -148,6 +195,7 @@ def provider_snapshot() -> dict:
     elif name == "easytrader":
         from .holdings_providers.easytrader import EasyTraderProvider
         provider = EasyTraderProvider()
+        profile = getattr(provider, "profile", None)
         path = provider._client_path()
         state["installation"] = "installed" if path and Path(path).is_file() else "unknown"
         state["process"] = "running" if provider._client_running() else "not_running"
@@ -167,6 +215,11 @@ def provider_snapshot() -> dict:
             return blocked("provider_unavailable", "当前数据源不可用，请检查配置。")
     state.update(available=True, readiness="ready")
     state["available_actions"].append("read")
+    # 成交明细只在数据源确实就绪时才上报：客户端没起来时读成交同样读不了，
+    # 提前给出动作只会让用户点进一个必然失败的入口。同理，Windows 网页版没有原生
+    # 入口，成交读取必然失败，也不上报。
+    if trades_action_available(name, surface, profile=profile):
+        state["available_actions"].append("read_trades")
     return state
 
 
@@ -401,6 +454,15 @@ def native_action(action: str, account_mode: str, client_path: str = "") -> dict
         if settings.holdings_provider not in _CLIENT_AUTOMATION_PROVIDERS:
             raise ProviderUnavailable("此数据源无需同花顺原生操作。", "unsupported_action")
         return preview_holdings(foreground=True, expected_account=account_mode)
+    if action == "read_trades":
+        # 走原生通道而不是普通 /trades/sync，是因为 Windows 的另存为会抢焦点并可能弹
+        # 风控验证码——那是需要用户本次同意的前台动作，不能由网页请求触发。
+        # 函数内 import：trades_source 反向依赖本模块的 _READ_LOCK 等，模块级会成环。
+        from .trades_source import preview_trades
+
+        if settings.holdings_provider.strip().lower() not in _TRADES_PROVIDERS:
+            raise ProviderUnavailable("当前数据源不支持读取成交明细。", "unsupported_action")
+        return preview_trades(foreground=True, expected_account=account_mode)
     if action == "select_client" and sys.platform == "win32":
         path = Path(client_path).resolve(strict=True)
         if path.name.lower() != "xiadan.exe" or not path.is_file():

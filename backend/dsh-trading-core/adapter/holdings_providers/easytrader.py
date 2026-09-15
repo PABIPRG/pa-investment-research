@@ -38,13 +38,21 @@ import math
 import sys
 
 from ..config import settings
-from ..schemas import HoldingItem
+from ..schemas import HoldingItem, TradeItem
+from ._ths_export import export_grid as _export_grid
+from ._ths_export import read_tab_separated as _read_tab_separated
+from ._ths_fields import classify_table as _classify_table
 from ._ths_fields import extract as _extract
 from ._ths_fields import normalize_ticker as _normalize_ticker
+from ._ths_trades import rows_to_trades as _rows_to_trades
 from .base import HoldingsProvider, ProviderUnavailable, current_account_mode
 from .broker_profiles import GENERIC_THS, BrokerProfile, resolve_profile
 
 log = logging.getLogger(__name__)
+
+# 「历史成交」的左树路径现在由券商档案给出（见 broker_profiles.DEFAULT_TRADES_MENU_PATH）。
+# easytrader 只封装了「当日成交」，历史成交要自己走这条路径；各贴牌版本的菜单树
+# 未必一致，所以不再写成模块级常量。
 
 
 class EasyTraderProvider(HoldingsProvider):
@@ -145,6 +153,7 @@ class EasyTraderProvider(HoldingsProvider):
             from pywinauto import Desktop
             from .mac_ths import rows_to_items
             account = self._account_mode
+            saw_trades_table = False
             windows = Desktop(backend="win32").windows(visible_only=True)
             for window in windows:
                 title = window.window_text() or ""
@@ -154,11 +163,21 @@ class EasyTraderProvider(HoldingsProvider):
                     continue
                 for table in window.descendants(class_name="SysListView32"):
                     headers = [column["text"] for column in table.columns()]
-                    if not any("代码" in header for header in headers):
+                    # 成交表同样含「证券代码」，只按「含代码」认表会把成交表读成持仓表。
+                    kind = _classify_table(headers)
+                    if kind == "trades":
+                        saw_trades_table = True
+                        continue
+                    if kind != "holdings":
                         continue
                     rows = [[table.get_item(row, column).text() for column in range(len(headers))]
                             for row in range(table.item_count())]
                     return rows_to_items(headers, rows)
+            if saw_trades_table:
+                raise ProviderUnavailable(
+                    "当前窗口显示的是成交明细表，不是持仓表。请切换到「持仓」页后重试。",
+                    "navigation_required",
+                )
         except ProviderUnavailable:
             raise
         except Exception as exc:
@@ -174,32 +193,7 @@ class EasyTraderProvider(HoldingsProvider):
         Raises:
             ProviderUnavailable: easytrader 未安装 / 客户端未运行 / 连接失败
         """
-        label = self.profile.label if self.profile else "券商客户端"
-        if sys.platform != "win32":
-            raise ProviderUnavailable(
-                "easytrader 依赖 pywinauto 操控 Win32 控件，仅支持 Windows。"
-                "macOS 请改用 HOLDINGS_PROVIDER=mac_ths（同花顺 Mac 版 + AppleScript）；"
-                "其他平台请用「导入持仓」手动维护。"
-            )
-        if not self._imported:
-            raise ProviderUnavailable(
-                "easytrader 未安装：pip install easytrader pywinauto。"
-                "详见 docs/券商接入方案.md §easytrader。"
-            )
-        if self.profile is None:
-            raise ProviderUnavailable(self._profile_error or "券商档案解析失败。")
-        client_path = self._client_path()
-        if not client_path:
-            raise ProviderUnavailable(
-                "EASYTRADER_CLIENT_PATH 未配置：需指定券商客户端的下单程序路径。"
-                f"可运行 holdings_cli.py detect 自动发现本机已装的客户端（当前档案: {label}）。"
-                "详见 docs/券商接入方案.md §easytrader。"
-            )
-        if not self._client_running():
-            raise ProviderUnavailable(
-                f"券商客户端未运行：请先启动并登录 {label} "
-                f"（{client_path}）。窗口需保持打开。"
-            )
+        self._require_client()
 
         # 连接客户端并查询持仓
         try:
@@ -211,7 +205,8 @@ class EasyTraderProvider(HoldingsProvider):
             log.error("easytrader 连接/查询失败: %s", exc, exc_info=True)
             raise ProviderUnavailable(
                 f"easytrader 连接或查询持仓失败: {exc}。"
-                f"请确认 {label} 已登录且窗口未被遮挡。"
+                f"请确认 {self.profile.label if self.profile else '券商客户端'} "
+                "已登录且窗口未被遮挡。"
             ) from exc
 
         # 字段映射 + 过滤零持仓
@@ -239,6 +234,110 @@ class EasyTraderProvider(HoldingsProvider):
         return items
 
     # ---- 内部方法 ----
+
+    def _require_client(self) -> str:
+        """前置条件检查（平台/依赖/档案/路径/进程），返回客户端路径。
+
+        持仓与成交两条读取路径共用：这两处的失败文案是用户唯一能照着做的指引，
+        复制一份迟早会分叉。
+        """
+        label = self.profile.label if self.profile else "券商客户端"
+        if sys.platform != "win32":
+            raise ProviderUnavailable(
+                "easytrader 依赖 pywinauto 操控 Win32 控件，仅支持 Windows。"
+                "macOS 请改用 HOLDINGS_PROVIDER=mac_ths（同花顺 Mac 版 + AppleScript）；"
+                "其他平台请用「导入持仓」手动维护。"
+            )
+        if not self._imported:
+            raise ProviderUnavailable(
+                "easytrader 未安装：pip install easytrader pywinauto。"
+                "详见 docs/券商接入方案.md §easytrader。"
+            )
+        if self.profile is None:
+            raise ProviderUnavailable(self._profile_error or "券商档案解析失败。")
+        client_path = self._client_path()
+        if not client_path:
+            raise ProviderUnavailable(
+                "EASYTRADER_CLIENT_PATH 未配置：需指定券商客户端的下单程序路径。"
+                f"可运行 holdings_cli.py detect 自动发现本机已装的客户端（当前档案: {label}）。"
+                "详见 docs/券商接入方案.md §easytrader。"
+            )
+        if not self._client_running():
+            raise ProviderUnavailable(
+                f"券商客户端未运行：请先启动并登录 {label} "
+                f"（{client_path}）。窗口需保持打开。"
+            )
+        return client_path
+
+    @property
+    def trades_menu_path(self) -> tuple[str, ...] | None:
+        """本档案读「历史成交」的左树路径；None = 不支持读成交。
+
+        档案没解析出来时也返回 None：连的是哪家都还不知道，谈不上按哪套菜单导航。
+        `read_trades` 与 `holdings_source.trades_action_available` 共用这一个判据，
+        免得「界面上给不给按钮」和「点了会不会真跑」两处各判一套。
+        """
+        return self.profile.trades_menu_path if self.profile is not None else None
+
+    def read_trades(self, *, foreground: bool = False) -> list[TradeItem]:
+        """读取「历史成交」表的成交明细。
+
+        Windows 上取成交表必须走「Ctrl+S 另存为」——给 grid 发复制命令在这个客户端
+        不生效，而另存为会抢焦点并可能弹风控验证码，所以是前台动作：被动调用一律
+        拒绝，由经宿主认证的原生入口带 foreground=True 调进来。
+        """
+        if sys.platform != "win32":
+            raise ProviderUnavailable("此数据源仅支持 Windows。", "unsupported_platform")
+        if self.trades_menu_path is None:
+            raise ProviderUnavailable(
+                f"{self.profile.label if self.profile else '当前券商'}不支持读取历史成交明细："
+                "专用客户端的交易界面没有同花顺那套「查询 → 历史成交」菜单，"
+                "本功能暂未接入。请在券商客户端里自行导出，或改用手动录入。",
+                "unsupported_action",
+            )
+        if not foreground:
+            raise ProviderUnavailable(
+                "读取成交明细需要把客户端切到「历史成交」页并将整表另存为文件，"
+                "过程中会短暂占用前台并可能弹出风控验证码。请在桌面端使用获准的读取入口。",
+                "navigation_required",
+            )
+        self._require_client()
+        trader = self._connect()
+        try:
+            header, rows = self._read_trade_table(trader)
+        except ProviderUnavailable:
+            raise
+        except Exception as exc:
+            log.error("easytrader 读取成交明细失败: %s", exc, exc_info=True)
+            raise ProviderUnavailable(
+                f"读取成交明细失败: {exc}。"
+                "请确认客户端已登录、窗口停在「历史成交」页且查到了数据。",
+                "read_failed",
+            ) from exc
+        items = _rows_to_trades(
+            header, rows, source=self.name, account_mode=self._account_mode
+        )
+        log.info("easytrader(%s) 读取成交明细 %d 笔", self.profile.broker_id, len(items))
+        return items
+
+    def _read_trade_table(self, trader) -> tuple[list[str], list[list[str]]]:
+        """切到「历史成交」页，把整表另存为文件后读回（临时文件用完即删）。
+
+        日期范围由用户在客户端里设定（第一期分工：客户端定范围，程序负责取整表）。
+        """
+        import tempfile
+        from pathlib import Path
+
+        trader._switch_left_menus(list(self.trades_menu_path))
+        grid = trader.main.child_window(
+            control_id=trader.config.COMMON_GRID_CONTROL_ID, class_name="CVirtualGridCtrl"
+        )
+        from ._ths_export import _process_id
+
+        with tempfile.TemporaryDirectory(prefix="pa_trades_") as folder:
+            out_path = Path(folder) / "trades.xls"
+            _export_grid(grid, out_path, pid=_process_id())
+            return _read_tab_separated(out_path)
 
     def _connect(self):
         """连接券商客户端，返回 easytrader 实例（懒初始化 + 缓存）。"""

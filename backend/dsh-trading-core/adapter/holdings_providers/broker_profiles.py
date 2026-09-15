@@ -35,6 +35,12 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- profile
 
+# 「历史成交」在客户端左树里的路径（2026-09-15 真机实测：查询[F4] → 历史成交，
+# 与「当日成交」并列，同一棵子树）。写成默认值放进档案而不是模块级常量：
+# 同花顺内核各贴牌版本的菜单树未必一致，改一家不该动到别家。
+DEFAULT_TRADES_MENU_PATH: tuple[str, ...] = ("查询[F4]", "历史成交")
+
+
 @dataclass(frozen=True)
 class BrokerProfile:
     """单个券商客户端的接入档案。"""
@@ -46,6 +52,10 @@ class BrokerProfile:
     dir_hints: tuple[str, ...]  # 安装目录名关键词（本机发现用）
     processes: tuple[str, ...]  # 运行检测的进程名
     note: str = ""              # 备注（如「需同花顺版客户端」）
+    # 读取「历史成交」的左树路径；None = 该档案不支持读成交。
+    # 专用客户端（银河/华泰等）有各自的交易界面，没有同花顺那套
+    # `查询[F4] → 历史成交` 树，所以留空——它是这个能力的唯一开关。
+    trades_menu_path: tuple[str, ...] | None = None
 
 
 def _ths(broker_id: str, label: str, hints: tuple[str, ...], note: str = "") -> BrokerProfile:
@@ -58,12 +68,17 @@ def _ths(broker_id: str, label: str, hints: tuple[str, ...], note: str = "") -> 
         dir_hints=hints,
         processes=("xiadan.exe", "hexin.exe"),
         note=note,
+        trades_menu_path=DEFAULT_TRADES_MENU_PATH,
     )
 
 
 def _client(broker_id: str, label: str, trader_type: str, hints: tuple[str, ...],
             note: str = "") -> BrokerProfile:
-    """券商专用客户端条目（easytrader 的 *_client 交易器）。"""
+    """券商专用客户端条目（easytrader 的 *_client 交易器）。
+
+    不设 trades_menu_path：这六家的界面不是同花顺内核那套，历史成交读取
+    未接入，能力闸门据此把它们挡在 `read_trades` 之外。
+    """
     return BrokerProfile(
         broker_id=broker_id,
         label=label,
@@ -165,6 +180,7 @@ GENERIC_THS = BrokerProfile(
     dir_hints=("同花顺软件", "同花顺", "hexin"),
     processes=("xiadan.exe", "hexin.exe"),
     note="通用版内置 80+ 券商账号登录，装一个即可覆盖大多数券商",
+    trades_menu_path=DEFAULT_TRADES_MENU_PATH,
 )
 GENERIC_FALLBACK = BrokerProfile(
     broker_id="ths_fallback",
@@ -174,6 +190,7 @@ GENERIC_FALLBACK = BrokerProfile(
     dir_hints=(),
     processes=("xiadan.exe",),
     note="目录名未匹配任何券商档案，按同花顺内核连接",
+    trades_menu_path=DEFAULT_TRADES_MENU_PATH,
 )
 
 ALL_BROKERS: list[BrokerProfile] = THS_BROKERS + CLIENT_BROKERS + [GENERIC_THS, GENERIC_FALLBACK]

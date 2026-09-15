@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .store import JsonStore, JsonStoreTransferBusyError
-from .schemas import HoldingItem
+from .schemas import HoldingItem, TradeItem
+from .trade_dedup import merge_trades, trade_key
+# 上限只定义在 trades_store 一处，导入而不是再写一份——两份常量迟早会分叉。
+from .trades_store import MAX_IMPORTS
 
 
 SCHEMA_VERSION = 2
@@ -45,7 +48,10 @@ CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
         "gene_archive",
         "events_ledger",
     ),
-    "holdings": ("holdings",),
+    # 成交明细挂在 holdings 分类下，而不是新开一个分类：前端 BACKUP_CATEGORIES 与
+    # 冲突规则选项都是按分类硬编码的，新分类要同步改 TS 侧多处。代价是成交只能跟着
+    # 持仓的分类规则走——选了 keep_local 就不会恢复备份里的成交，预览会如实报出笔数。
+    "holdings": ("holdings", "trades"),
     "watchlist": ("watchlist",),
     "research": ("backtests", "decisions", "reports", "briefs", "research_chat_contexts"),
     "preferences": ("preferences", "behavior"),
@@ -236,6 +242,27 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
                 raise TransferValidationError("持仓历史起点校正格式无效") from exc
             if override.get("source") != "user_corrected" or corrected.tzinfo is None:
                 raise TransferValidationError("持仓历史起点校正格式无效")
+    trades = result.get("holdings", {}).get("trades", {})
+    if trades:
+        rows = trades.get("entries", [])
+        if not isinstance(rows, list):
+            raise TransferValidationError("成交明细必须是列表")
+        try:
+            validated_trades = [TradeItem.model_validate(row) for row in rows]
+        except Exception as exc:  # noqa: BLE001 — Pydantic 细节不穿透传输边界
+            raise TransferValidationError("成交记录格式无效") from exc
+        # 与持仓不同，这里不能拒绝"键重复"：一笔委托分多笔成交、且成交时间只到分钟时，
+        # 去重键相同是合法的，靠 occurred 区分。真正非法的是同一个 (去重键, occurred)
+        # 出现两次——那意味着文档里的多重集合计数已经自相矛盾。
+        slots = set()
+        for trade in validated_trades:
+            slot = (trade_key(trade), trade.occurred)
+            if slot in slots:
+                raise TransferValidationError("成交明细包含重复的去重键与序号")
+            slots.add(slot)
+        imports = trades.get("imports", [])
+        if not isinstance(imports, list) or any(not isinstance(row, dict) for row in imports):
+            raise TransferValidationError("成交导入记录格式无效")
     watchlist = result.get("watchlist", {}).get("watchlist", {})
     if watchlist:
         rows = watchlist.get("default", [])
@@ -270,13 +297,36 @@ def _items_by_key(items: Any, key: str) -> dict[str, Any]:
     return result
 
 
+def _trade_items(document: Any) -> list[TradeItem]:
+    """把集合文档里的 entries 读成 TradeItem；坏行跳过，不让预览整个失败。"""
+    if not isinstance(document, dict):
+        return []
+    rows = document.get("entries")
+    if not isinstance(rows, list):
+        return []
+    items: list[TradeItem] = []
+    for row in rows:
+        try:
+            items.append(TradeItem.model_validate(row))
+        except Exception:  # noqa: BLE001 — 预览只需要计数，不解释坏行
+            continue
+    return items
+
+
 def _preview_category(category: str, local: dict[str, dict], incoming: dict[str, dict]) -> tuple[int, int]:
     if category == "holdings":
         local_items = _items_by_key(local.get("holdings", {}).get("default"), "ticker")
         incoming_items = _items_by_key(incoming.get("holdings", {}).get("default"), "ticker")
+        # 成交笔数直接跑一遍合并来数，而不是另写一份计数：预览报的数和提交后实际落库的
+        # 数必须永远一致，两份实现迟早会分叉。
+        outcome = merge_trades(
+            _trade_items(local.get("trades")),
+            _trade_items(incoming.get("trades")),
+        )
         return (
-            sum(1 for key in incoming_items if key not in local_items),
-            sum(1 for key, value in incoming_items.items() if key in local_items and local_items[key] != value),
+            sum(1 for key in incoming_items if key not in local_items) + len(outcome.added),
+            sum(1 for key, value in incoming_items.items() if key in local_items and local_items[key] != value)
+            + len(outcome.conflicts),
         )
     if category == "watchlist":
         local_items = set(local.get("watchlist", {}).get("default") or [])
@@ -365,6 +415,55 @@ def _merge_document(local: dict, incoming: dict, rule: str, suffix: str = "impor
             occupied.add(candidate)
             result[candidate] = _clone(value)
     return result
+
+
+def _merge_trades(local: dict, incoming: dict, rule: str) -> dict:
+    """按导入规则合并成交明细，并保持去重键 + occurred 的多重集合语义。"""
+    result = _clone(local)
+    local_entries = _trade_items(local)
+    incoming_entries = _trade_items(incoming)
+
+    if rule == "keep_local":
+        # 整块保留本地。这里不报错是因为预览已经按笔数如实告诉用户备份里有多少笔，
+        # 选 keep_local 就是明知而不恢复——与持仓同一条规则语义。
+        entries = local_entries
+    elif rule == "use_import":
+        entries = incoming_entries
+    else:
+        # merge / keep_both：成交是事件流，按去重键取并集是唯一无损的做法。
+        # 这里刻意不把 kept 的本地条目计入 added——occurred 的续号由 merge_trades 负责。
+        entries = local_entries + merge_trades(local_entries, incoming_entries).added
+
+    imports = _merge_imports(local, incoming, rule)
+    entries.sort(key=lambda trade: (
+        trade.traded_at, trade.ticker, trade.side,
+        trade.price, trade.quantity, trade.occurred,
+    ))
+    result["entries"] = [trade.model_dump() for trade in entries]
+    result["imports"] = imports
+    if rule != "keep_local" and isinstance(incoming.get("last_cleared"), dict):
+        result["last_cleared"] = _clone(incoming["last_cleared"])
+    return result
+
+
+def _merge_imports(local: dict, incoming: dict, rule: str) -> list[dict[str, Any]]:
+    """批次审计跟随 entries 的规则走：entries 从哪来，解释它的记录就从哪来。
+
+    use_import 时保留本地的审计而换掉 entries，会让日志描述一批本地并不存在的成交。
+    """
+    if rule == "keep_local":
+        source = [local]
+    elif rule == "use_import":
+        source = [incoming]
+    else:
+        source = [local, incoming]
+    rows: list[dict[str, Any]] = []
+    for document in source:
+        imports = document.get("imports") if isinstance(document, dict) else None
+        if isinstance(imports, list):
+            rows.extend(_clone(row) for row in imports if isinstance(row, dict))
+    rows.sort(key=lambda row: str(row.get("read_at") or ""))
+    return rows[-MAX_IMPORTS:]
 
 
 def _merge_holdings(local: dict, incoming: dict, rule: str) -> dict:
@@ -529,7 +628,12 @@ def _merged_documents(
             continue
         for collection, document in collections.items():
             current = local[category].get(collection, {})
-            if category == "holdings":
+            # 必须按 collection 分派，不能只看 category：trades 与 holdings 同属
+            # holdings 分类，但它是事件流（去重键 + occurred 的多重集合），
+            # 走 _merge_holdings 会被当成快照覆盖，把已有成交静默丢掉。
+            if collection == "trades":
+                writes[collection] = _merge_trades(current, document, rule)
+            elif category == "holdings":
                 writes[collection] = _merge_holdings(current, document, rule)
             elif category == "watchlist":
                 writes[collection] = _merge_watchlist(current, document, rule)
