@@ -208,6 +208,52 @@ class LikongSemantics(unittest.TestCase):
         self.assertEqual(strat["kind"], "rsi_reversal")  # 系统只做多，强转超跌反弹
 
 
+class CandidateSemanticDeduplication(unittest.TestCase):
+    def _patched(self):
+        store = JsonStore(Path(tempfile.mkdtemp()))
+        return store, mock.patch.object(S, "JsonStore", lambda: store)
+
+    def test_same_rule_from_duplicate_events_creates_one_candidate(self):
+        store, patched = self._patched()
+        events = [
+            {"id": "event-a", "summary": "同一公告", "tickers": [{"code": "688836", "name": "N宇树"}]},
+            {"id": "event-b", "summary": "同一公告", "tickers": [{"code": "688836", "name": "N宇树"}]},
+        ]
+        hypotheses = [
+            {"event_idx": index, "symbols": ["688836"], "direction": "利好",
+             "kind": "momentum", "params": {"n": 10},
+             "rationale": "新股上市首日大涨，动量效应可能延续。", "holding_window_days": 20}
+            for index in range(2)
+        ]
+
+        with patched:
+            ids = S.create_candidates(events, hypotheses)
+
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(len(store.all("strategies")), 1)
+
+    def test_different_holding_window_keeps_distinct_candidate(self):
+        store, patched = self._patched()
+        events = [
+            {"id": "event-a", "summary": "同一公告", "tickers": [{"code": "688836", "name": "N宇树"}]},
+            {"id": "event-b", "summary": "同一公告", "tickers": [{"code": "688836", "name": "N宇树"}]},
+        ]
+        hypotheses = [
+            {"event_idx": 0, "symbols": ["688836"], "direction": "利好",
+             "kind": "momentum", "params": {"n": 10}, "rationale": "动量延续。",
+             "holding_window_days": 10},
+            {"event_idx": 1, "symbols": ["688836"], "direction": "利好",
+             "kind": "momentum", "params": {"n": 10}, "rationale": "动量延续。",
+             "holding_window_days": 30},
+        ]
+
+        with patched:
+            ids = S.create_candidates(events, hypotheses)
+
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(len(store.all("strategies")), 2)
+
+
 class PromptListsNewKinds(unittest.TestCase):
     def test_prompt_mentions_new_kinds(self):
         for kind in ("breakout", "bollinger", "volume_breakout"):

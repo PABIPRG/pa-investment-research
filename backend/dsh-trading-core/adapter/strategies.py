@@ -13,6 +13,7 @@
 """
 
 import hashlib
+import json
 import logging
 import math
 import re
@@ -463,7 +464,7 @@ def fetch_events_with_status(
             response = requests.get(
                 settings.mw_url.rstrip("/") + f"/news/events?limit={limit}",
                 timeout=deadline,
-                proxies={},
+                proxies={"http": None, "https": None},
             )
             response.raise_for_status()
             payload = response.json() or {}
@@ -517,7 +518,7 @@ def fetch_events(limit: int = 20, timeout: float = 4.0) -> list[dict]:
         response = requests.get(
             settings.mw_url.rstrip("/") + f"/news/events?limit={limit}",
             timeout=deadline,
-            proxies={},
+            proxies={"http": None, "https": None},
         )
         response.raise_for_status()
         payload = response.json() or {}
@@ -1032,6 +1033,23 @@ def _clamp_params(kind: str, params: dict) -> dict:
     return {"n": max(2, min(60, int(params.get("n", default["n"]))))}
 
 
+def _candidate_semantic_key(candidate: dict) -> tuple[str, tuple[str, ...], str, str, str, int]:
+    """返回策略行为指纹；事件来源不同不应复制同一条可执行假设。"""
+    try:
+        holding_window_days = int(candidate.get("holding_window_days", 20))
+    except (TypeError, ValueError):
+        holding_window_days = 20
+    params = candidate.get("params")
+    return (
+        str(candidate.get("kind") or ""),
+        tuple(sorted(str(symbol) for symbol in candidate.get("symbols") or [])),
+        str(candidate.get("direction") or ""),
+        json.dumps(params if isinstance(params, dict) else {}, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        str(candidate.get("hypothesis") or "").strip(),
+        holding_window_days,
+    )
+
+
 def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
     """假设 → 校验 → 落 strategies 集合（status=candidate）。返回新候选 id 列表。"""
     if not hypotheses:
@@ -1085,14 +1103,22 @@ def create_candidates(events: list[dict], hypotheses: list[dict]) -> list[str]:
         }
         created = False
 
-        def insert_if_absent(current):
+        def insert_if_unique(current):
             nonlocal created
-            if current:
+            if sid in current:
+                return current
+            semantic_key = _candidate_semantic_key(candidate)
+            if any(
+                isinstance(existing, dict)
+                and _candidate_semantic_key(existing) == semantic_key
+                for existing in current.values()
+            ):
                 return current
             created = True
-            return candidate
+            current[sid] = candidate
+            return current
 
-        store.mutate("strategies", sid, insert_if_absent)
+        store.mutate_document("strategies", insert_if_unique)
         if not created:
             continue  # 去重
         ids.append(sid)

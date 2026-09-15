@@ -61,6 +61,16 @@ class _PayloadResponse:
         return self.payload
 
 
+class _SeedMissingResponse:
+    status_code = 503
+
+    def raise_for_status(self):
+        raise requests.HTTPError("seed data unavailable", response=self)
+
+    def json(self):
+        return {"detail": "产业链种子数据尚未下载，请先调用 POST /data/bootstrap"}
+
+
 class _FakeClock:
     def __init__(self, now=100.0):
         self.now = now
@@ -78,12 +88,14 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
         strategies._reset_event_cache_for_tests()
         impact._IMPACT_CACHE.clear()
         impact._IC_DOWN_UNTIL = 0.0
+        impact._IC_SEED_MISSING_UNTIL = 0.0
 
     def tearDown(self):
         risk_engine._reset_risk_cache_for_tests()
         strategies._reset_event_cache_for_tests()
         impact._IMPACT_CACHE.clear()
         impact._IC_DOWN_UNTIL = 0.0
+        impact._IC_SEED_MISSING_UNTIL = 0.0
 
     def test_one_event_expansion_failure_does_not_block_later_events(self):
         calls: list[str] = []
@@ -142,6 +154,50 @@ class PortfolioRouteLatencyTests(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertGreater(impact._IC_DOWN_UNTIL, time.time())
         self.assertEqual(len(expanded), 50)
+
+    def test_missing_seed_data_degrades_without_marking_service_unreachable(self):
+        events = [{
+            "id": "event-seed-missing",
+            "tickers": [{"code": "600372"}],
+            "industries": ["航空装备"],
+        }]
+
+        with patch.object(impact.requests, "get", return_value=_SeedMissingResponse()):
+            with self.assertLogs("adapter.impact", level="INFO") as logs:
+                expanded = impact.expand_events(events)
+
+        self.assertEqual(expanded[0]["impact_codes"], [])
+        self.assertEqual(impact._IC_DOWN_UNTIL, 0.0)
+        self.assertNotIn("event-seed-missing", impact._IMPACT_CACHE)
+        self.assertIn("产业链种子数据未就绪", "\n".join(logs.output))
+
+    def test_industry_expansion_bypasses_environment_proxy(self):
+        response = _PayloadResponse({
+            "center": {"code": "600519"},
+            "up_levels": [],
+            "down_levels": [],
+        })
+        with patch.object(impact.requests, "get", return_value=response) as get:
+            impact.expand_events([{
+                "id": "event-direct-local",
+                "tickers": [{"code": "600519"}],
+                "industries": [],
+            }])
+
+        self.assertEqual(get.call_args.kwargs["proxies"], {
+            "http": None,
+            "https": None,
+        })
+
+    def test_event_source_bypasses_environment_proxy(self):
+        with patch.object(strategies.requests, "get", return_value=_Response([])) as get, \
+             patch.object(strategies, "_expand_events", side_effect=lambda events, cached_impact: events):
+            strategies.fetch_events(limit=20)
+
+        self.assertEqual(get.call_args.kwargs["proxies"], {
+            "http": None,
+            "https": None,
+        })
 
     def test_event_cache_tracks_covered_limit_and_truncates_cache_hits(self):
         calls: list[int] = []

@@ -50,7 +50,7 @@ JSON 与最低结构校验；完整五文件全部通过后才原子发布。失
 
 打包 Runtime 把数据写入宿主提供的
 `$DSH_HOME/investment-research/industry-chain/data/seed`；源码模式仍默认使用本项目的
-`data/seed`。`/health` 只表达服务健康，不因种子数据尚未下载而失败。
+`data/seed`。当前五文件数据集约 80 MB；`/health` 只表达服务健康，不因种子数据尚未下载而失败。
 
 ## 数据出处与免责
 

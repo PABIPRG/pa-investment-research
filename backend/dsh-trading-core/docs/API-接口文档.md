@@ -798,7 +798,7 @@ POST /strategies/hypothesize
 > **规则约束**：利好 → `ma_cross`（趋势跟随）/ `momentum`（动量）/ `breakout`（通道突破）/ `volume_breakout`（放量突破）；
 > 利空 → `rsi_reversal` 或 `bollinger`（超跌反弹，系统只做多）；北交所 4/8 开头、B 股 2/9 开头代码被剔除；无 6 位可交易码的事件不生成。
 > LLM 不可用/失败 → 规则降级（利好 momentum / 利空 rsi_reversal，rationale=事件摘要）。
-> 假设生成与候选入库走同一 `event_idx` 索引，校验失败的单条丢弃、其余继续。
+> 假设生成与候选入库走同一 `event_idx` 索引，校验失败的单条丢弃、其余继续。候选在单次原子写入中按事件键和可执行策略语义去重；来源事件不同但策略类型、标的、方向、参数、假设与持有期完全相同时不会重复入池。
 
 ### 4.15 GET /strategies —— 策略池列表
 

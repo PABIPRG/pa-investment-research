@@ -1086,6 +1086,7 @@ export function StrategyResearchPage({
     counts[category] += 1
     return counts
   }, { verified: 0, unverified: 0, failed: 0, archived: 0 })
+  const strategyCountsPending = strategies.state.phase === 'loading' && strategies.state.value === undefined
   const selectedItem = items.find(item => text(item.id, '') === selectedStrategyId)
   const currentLifecycleStage = selectedItem === undefined
     ? undefined
@@ -1340,7 +1341,7 @@ export function StrategyResearchPage({
             const count = category === 'all' ? items.length : categoryCounts[category]
             return (
               <button key={category} type="button" aria-pressed={filter === category} className={filter === category ? css.segmentActive : undefined} onClick={() => { setFilter(category) }}>
-                {STRATEGY_CATEGORY_LABELS[category]} <span>{count}</span>
+                {STRATEGY_CATEGORY_LABELS[category]} <span>{strategyCountsPending ? '—' : count}</span>
               </button>
             )
           })}
@@ -3887,7 +3888,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
               ? `已完成 ${filesCompleted}/${filesTotal} 个数据文件，已下载 ${(downloadedBytes / 1024 / 1024).toFixed(1)} MB。`
               : downloadFailed
                 ? '数据未能完整下载，未完成的文件已清理。请检查网络后重试。'
-                : '产业链公司与上下游关系数据约 25 MB，仅在你明确确认后保存到本机应用数据目录。'}</p>
+                : '产业链公司与上下游关系数据约 80 MB，仅在你明确确认后保存到本机应用数据目录。'}</p>
           </div>
           <div
             className={css.industryProgress}
