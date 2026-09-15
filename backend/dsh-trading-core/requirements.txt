@@ -39,6 +39,7 @@ uvicorn[standard]
 sse-starlette
 pydantic
 apscheduler
+pywebpush
 
 # ── 可选（均有 try/except 守卫，按需安装）────────────────────────
 # pymongo      # MongoDB 缓存 / 用量记录（USE_MONGODB_STORAGE=false 时不需要）

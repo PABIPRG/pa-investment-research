@@ -19,6 +19,7 @@ import requests
 from . import llm, news, quotes
 from .config import settings
 from .store import JsonStore
+from .notification_publisher import center_enabled, market_event_event, publish_event
 
 logger = logging.getLogger("market_watch.events")
 
@@ -394,7 +395,17 @@ def event_alerts() -> dict:
         })
     alerts.sort(key=lambda a: a["time"], reverse=True)
     alerts = alerts[:50]
-    JsonStore().set("event_alerts", "latest", alerts)
+    store = JsonStore()
+    store.set("event_alerts", "latest", alerts)
+    if center_enabled():
+        delivered = set(store.get("notifications", "market_event_ids", []) or [])
+        for alert in alerts:
+            event_id = str(alert.get("id") or "")
+            if not event_id or event_id in delivered:
+                continue
+            if publish_event(market_event_event(alert)).get("ok") is True:
+                delivered.add(event_id)
+        store.set("notifications", "market_event_ids", sorted(delivered)[-500:])
     return {
         "as_of": _now(), "items": alerts,
         "watch": sorted(watch), "hold": sorted(hold),

@@ -20,6 +20,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from . import briefs, news, quotes, rules
 from .config import settings
 from .push import PusherManager
+from .notification_publisher import center_enabled, price_alert_event, publish_event
 from .store import JsonStore
 
 logger = logging.getLogger("market_watch.scheduler")
@@ -143,6 +144,7 @@ def run_watch_cycle(manual: bool = False) -> dict:
     summary = {"evaluated": 0, "triggered": [], "skipped_cooldown": 0, "skipped_cap": 0,
                "push_results": []}
     pushes: list[tuple[str, str]] = []
+    notification_events: list[dict] = []
 
     for rule in alerts:
         for code in sorted(codes):
@@ -181,6 +183,7 @@ def run_watch_cycle(manual: bool = False) -> dict:
                 summary["skipped_cap"] += 1
                 continue
             summary["triggered"].append(trig)
+            notification_events.append(price_alert_event(trig))
 
             interp = _interpret(quote, brief)
             text = _trigger_text(quote, brief)
@@ -188,7 +191,10 @@ def run_watch_cycle(manual: bool = False) -> dict:
                 text += f"\n\n> LLM解读：{interp}"
             pushes.append((f"盯盘触发 {quote['name']}", text))
 
-    if settings.push_enabled and pushes:
+    if center_enabled():
+        for event in notification_events:
+            summary["push_results"].append({"channel": "notification_center", **publish_event(event)})
+    elif settings.push_enabled and pushes:
         pm = PusherManager()
         for title, content in pushes:
             summary["push_results"].extend(pm.push(title, content))

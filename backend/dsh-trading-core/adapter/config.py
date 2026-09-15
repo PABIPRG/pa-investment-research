@@ -82,6 +82,26 @@ class Settings:
         ]
         self.serverchan_sendkey = os.getenv("SERVERCHAN_SENDKEY", "")
         self.wecom_webhook_key = os.getenv("WECOM_WEBHOOK_KEY", "")
+        # 统一通知中心（站内信始终写入；外部渠道按偏好和可用凭据投递）
+        self.notification_db_path = Path(
+            os.getenv("NOTIFICATION_DB_PATH", str(self.data_dir / "notifications.sqlite3"))
+        )
+        self.notification_internal_token = os.getenv("NOTIFICATION_INTERNAL_TOKEN", "")
+        self.notification_delivery_enabled = os.getenv("NOTIFICATION_DELIVERY_ENABLED", "true").lower() == "true"
+        self.notification_delivery_poll_seconds = float(os.getenv("NOTIFICATION_DELIVERY_POLL_SECONDS", "15"))
+        self.notification_delivery_lease_seconds = int(os.getenv("NOTIFICATION_DELIVERY_LEASE_SECONDS", "60"))
+        self.notification_delivery_max_attempts = int(os.getenv("NOTIFICATION_DELIVERY_MAX_ATTEMPTS", "5"))
+        self.notification_delivery_batch_size = int(os.getenv("NOTIFICATION_DELIVERY_BATCH_SIZE", "20"))
+        self.notification_dedupe_window_seconds = int(os.getenv("NOTIFICATION_DEDUPE_WINDOW_SECONDS", "1800"))
+        self.notification_vapid_public_key = os.getenv("NOTIFICATION_VAPID_PUBLIC_KEY", "")
+        self.notification_vapid_private_key = os.getenv("NOTIFICATION_VAPID_PRIVATE_KEY", "")
+        self.notification_vapid_subject = os.getenv("NOTIFICATION_VAPID_SUBJECT", "mailto:notifications@localhost")
+        self.notification_smtp_host = os.getenv("NOTIFICATION_SMTP_HOST", "")
+        self.notification_smtp_port = int(os.getenv("NOTIFICATION_SMTP_PORT", "587"))
+        self.notification_smtp_username = os.getenv("NOTIFICATION_SMTP_USERNAME", "")
+        self.notification_smtp_password = os.getenv("NOTIFICATION_SMTP_PASSWORD", "")
+        self.notification_smtp_from = os.getenv("NOTIFICATION_SMTP_FROM", "")
+        self.notification_email_to = os.getenv("NOTIFICATION_EMAIL_TO", "")
         # 定时调度（功能4）
         self.schedule_enabled = os.getenv("BRIEF_SCHEDULE_ENABLED", "false").lower() == "true"
         self.pre_market_time = os.getenv("BRIEF_PRE_MARKET_TIME", "08:50")

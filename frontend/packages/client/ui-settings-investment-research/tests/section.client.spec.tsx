@@ -480,12 +480,12 @@ describe('InvestmentReadinessSection', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建备份' }))
     const dialog = screen.getByRole('dialog', { name: '创建投研备份' })
     expect(dialog).toBeTruthy()
-    expect(screen.getAllByRole('checkbox')).toHaveLength(5)
+    expect(screen.getAllByRole('checkbox')).toHaveLength(6)
     fireEvent.click(within(dialog).getByRole('button', { name: '创建备份' }))
 
     await waitFor(() => {
       expect(backup.backupCreate).toHaveBeenCalledWith({
-        categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences'],
+        categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences', 'notifications'],
         reason: 'manual',
       })
     })
@@ -745,7 +745,7 @@ describe('InvestmentReadinessSection', () => {
     fireEvent.click(screen.getByRole('button', { name: '清空所选数据' }))
     await waitFor(() => {
       expect(backup.backupReset).toHaveBeenCalledWith({
-        categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences'], backupBefore: true,
+        categories: ['strategies', 'holdings', 'watchlist', 'research', 'preferences', 'notifications'], backupBefore: true,
       })
     })
   })

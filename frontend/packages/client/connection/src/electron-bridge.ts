@@ -39,6 +39,10 @@ export interface ElectronRendererBridge {
   watchShortcutActions(id: string, listener: (action: string) => void): void
   /** Remove one renderer shortcut-action listener. */
   unwatchShortcutActions(id: string): void
+  /** Subscribe to user clicks on native investment notifications. */
+  watchNativeNotifications?(id: string, listener: (notificationId: string) => void): void
+  /** Remove a native investment-notification click listener. */
+  unwatchNativeNotifications?(id: string): void
 }
 
 /** Main-world slot installed by the Electron preload. */

@@ -135,6 +135,7 @@ export class InvestmentPythonRuntime extends Service {
 
   private readonly manager: InvestmentBackendManager
   private readonly holdingsNativeToken = randomBytes(32).toString('base64url')
+  private readonly notificationInternalToken = randomBytes(32).toString('base64url')
   private readonly backups: BackupService
   private readonly deploymentSnapshot: DeploymentCapabilitySnapshot
 
@@ -167,10 +168,12 @@ export class InvestmentPythonRuntime extends Service {
           DSH_HOLDINGS_NATIVE_TOKEN: this.holdingsNativeToken,
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
+          NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
         },
         'market-watch': {
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
+          NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
         },
       },
     })
@@ -295,7 +298,11 @@ export class InvestmentPythonRuntime extends Service {
     ].includes(request.operation)) {
       return Promise.reject(new Error('云端 Web 不连接或扫描券商客户端，请使用手工录入或批量导入持仓。'))
     }
-    return requestInvestmentData(request, id => this.manager.acquire(id))
+    return requestInvestmentData(
+      request,
+      id => this.manager.acquire(id),
+      this.notificationInternalToken,
+    )
   }
 
   /**
@@ -318,6 +325,34 @@ export class InvestmentPythonRuntime extends Service {
         signal: AbortSignal.timeout(240_000),
       })
       if (!response.ok) throw new Error('本机操作失败，请重新检查客户端。')
+      return await response.json()
+    } finally {
+      await lease.release()
+    }
+  }
+
+  /** Host-only macOS notification queue operations used by Electron main. */
+  async nativeNotifications(input: {
+    action: 'claim' | 'ack' | 'nack'
+    jobId?: string
+    leaseToken?: string
+  }): Promise<unknown> {
+    const lease = await this.manager.acquire('trading-core')
+    try {
+      if (lease.ownership !== 'owned') throw new Error('系统通知需要本应用管理的本机后台。')
+      const path = input.action === 'claim'
+        ? '/internal/notification-deliveries/claim'
+        : `/internal/notification-deliveries/${encodeURIComponent(input.jobId ?? '')}/${input.action}`
+      const body = input.action === 'claim'
+        ? { channel: 'macos', limit: 10 }
+        : { leaseToken: input.leaseToken }
+      const response = await fetch(new URL(path, lease.baseUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Notification-Token': this.notificationInternalToken },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!response.ok) throw new Error(`系统通知队列操作失败（${response.status}）`)
       return await response.json()
     } finally {
       await lease.release()

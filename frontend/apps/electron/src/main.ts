@@ -11,6 +11,7 @@ import type {
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
 import { bindHoldingsNative } from './holdings-native.ts'
+import { bindNativeNotifications } from './notification-native.ts'
 import { appIdentity } from './app-identity.ts'
 import { resolveElectronProfile } from './args.ts'
 import { bindDesktopShortcuts } from './desktop-shortcuts.ts'
@@ -193,11 +194,22 @@ async function runApplication(): Promise<void> {
     })
     const holdingsRuntime = ctx.get('investmentPythonRuntime')
     const disposeHoldings = holdingsRuntime === undefined ? () => {} : bindHoldingsNative(window, request => holdingsRuntime.nativeHoldings(request))
+    const notificationRuntime = holdingsRuntime as unknown as undefined | {
+      nativeNotifications(input: {
+        action: 'claim' | 'ack' | 'nack'
+        jobId?: string
+        leaseToken?: string
+      }): Promise<unknown>
+    }
+    const disposeNotifications = notificationRuntime === undefined || PROFILE !== 'investment-research'
+      ? async () => {}
+      : bindNativeNotifications(window, request => notificationRuntime.nativeNotifications(request))
     const streamIpc = bindIpc(window.webContents, connection)
     const desktopShortcuts = bindDesktopShortcuts(window, ipcMain, ctx)
     ipc = {
       async dispose(): Promise<void> {
         await disposeHoldings()
+        await disposeNotifications()
         desktopShortcuts.dispose()
         await streamIpc.dispose()
       },

@@ -21,7 +21,9 @@ On Windows, use `init.bat`, `start_all.bat [fake|engine]`, and `verify.bat`. The
 
 ## API
 
-The service exposes analysis, holdings, market brief, watchlist, and risk-profile endpoints. Start with:
+服务提供分析、持仓、市场简报、自选、风险画像与持久通知中心接口。通知历史位于 `data/notifications.sqlite3`（打包版位于 Host 管理的状态目录），可通过“通知历史与设置”分类备份；恢复时不会迁移设备订阅，也不会重新激活未完成投递。
+
+浏览器 Web Push 需要配置 `.env.example` 中的 VAPID 变量；Server 酱、企业微信和邮件共用同一条持久投递队列。外部渠道不可用时，站内通知仍是权威记录。相关文档：
 
 - [API interface document](docs/API-接口文档.md)
 - [Frontend integration guide](docs/前端接入指南.md)

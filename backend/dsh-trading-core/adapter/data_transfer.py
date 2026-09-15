@@ -15,13 +15,14 @@ from typing import Any, Iterable
 
 from .store import JsonStore, JsonStoreTransferBusyError
 from .schemas import HoldingItem, TradeItem
+from .notifications.repository import NotificationRepository
 from .trade_dedup import merge_trades, trade_key
 # 上限只定义在 trades_store 一处，导入而不是再写一份——两份常量迟早会分叉。
 from .trades_store import MAX_IMPORTS
 
 
-SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = {1, SCHEMA_VERSION}
+SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, SCHEMA_VERSION}
 LEGACY_CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
     "strategies": (
         "strategies",
@@ -36,7 +37,7 @@ LEGACY_CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
     "research": ("backtests", "decisions", "reports", "briefs", "research_chat_contexts"),
     "preferences": ("preferences", "behavior"),
 }
-CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
+CATEGORY_COLLECTIONS_V2: dict[str, tuple[str, ...]] = {
     "strategies": (
         "strategies",
         "strategy_backtests",
@@ -56,12 +57,17 @@ CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
     "research": ("backtests", "decisions", "reports", "briefs", "research_chat_contexts"),
     "preferences": ("preferences", "behavior"),
 }
+CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
+    **CATEGORY_COLLECTIONS_V2,
+    "notifications": ("notification_center",),
+}
 DEFAULT_RULES = {
     "strategies": "keep_both",
     "holdings": "keep_local",
     "watchlist": "merge",
     "research": "keep_both",
     "preferences": "keep_local",
+    "notifications": "use_import",
 }
 ALLOWED_RULES = {"keep_both", "keep_local", "use_import", "merge"}
 TRANSACTION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
@@ -131,11 +137,20 @@ def _portable_document(collection: str, document: dict) -> dict:
     return _clone(document)
 
 
-def _snapshot_documents(store: JsonStore, categories: Iterable[str]) -> dict[str, dict[str, dict]]:
+def _snapshot_documents(
+    store: JsonStore,
+    categories: Iterable[str],
+    notification_repository: NotificationRepository | None = None,
+) -> dict[str, dict[str, dict]]:
     selected = _categories(categories)
     result: dict[str, dict[str, dict]] = {}
     with store.transaction():
         for category in selected:
+            if category == "notifications":
+                if notification_repository is None:
+                    raise TransferValidationError("通知数据仓储不可用")
+                result[category] = {"notification_center": notification_repository.export_portable()}
+                continue
             result[category] = {
                 collection: _portable_document(collection, store.all(collection))
                 for collection in CATEGORY_COLLECTIONS[category]
@@ -148,16 +163,22 @@ def _revision_for_documents(documents: dict[str, dict[str, dict]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def export_snapshot(store: JsonStore, categories: Iterable[str]) -> dict:
+def export_snapshot(
+    store: JsonStore,
+    categories: Iterable[str],
+    notification_repository: NotificationRepository | None = None,
+) -> dict:
     """导出所选分类的可迁移领域快照，不包含缓存与凭据。"""
-    documents = _snapshot_documents(store, categories)
+    documents = _snapshot_documents(store, categories, notification_repository)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "backend": "trading-core",
         "categories": {
             category: {
                 "count": sum(
-                    len(document.get("default"))
+                    len(document.get("tables", {}).get("notifications", []))
+                    if category == "notifications"
+                    else len(document.get("default"))
                     if isinstance(document.get("default"), list)
                     else len(document)
                     for document in collections.values()
@@ -189,7 +210,9 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
             raise TransferValidationError(f"{category} 分类缺少 collections")
         collections = payload["collections"]
         collection_contract = (
-            LEGACY_CATEGORY_COLLECTIONS if schema_version == 1 else CATEGORY_COLLECTIONS
+            LEGACY_CATEGORY_COLLECTIONS if schema_version == 1
+            else CATEGORY_COLLECTIONS_V2 if schema_version == 2
+            else CATEGORY_COLLECTIONS
         )
         expected = set(collection_contract[category])
         unknown = set(collections) - expected
@@ -199,6 +222,12 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
             if not isinstance(document, dict):
                 raise TransferValidationError(f"集合 {name} 必须是对象")
         result[category] = {name: _clone(document) for name, document in collections.items()}
+    notification_snapshot = result.get("notifications", {}).get("notification_center")
+    if notification_snapshot is not None:
+        try:
+            NotificationRepository.validate_portable(notification_snapshot)
+        except ValueError as exc:
+            raise TransferValidationError(str(exc)) from exc
     evolution_audit = result.get("strategies", {}).get("evolution_previews", {})
     for key, record in evolution_audit.items():
         if key == "_closed_loop_runtime":
@@ -314,6 +343,19 @@ def _trade_items(document: Any) -> list[TradeItem]:
 
 
 def _preview_category(category: str, local: dict[str, dict], incoming: dict[str, dict]) -> tuple[int, int]:
+    if category == "notifications":
+        local_rows = {
+            str(row["id"]): row
+            for row in local["notification_center"]["tables"]["notifications"]
+        }
+        incoming_rows = {
+            str(row["id"]): row
+            for row in incoming["notification_center"]["tables"]["notifications"]
+        }
+        return (
+            sum(1 for key in incoming_rows if key not in local_rows),
+            sum(1 for key, value in incoming_rows.items() if key in local_rows and local_rows[key] != value),
+        )
     if category == "holdings":
         local_items = _items_by_key(local.get("holdings", {}).get("default"), "ticker")
         incoming_items = _items_by_key(incoming.get("holdings", {}).get("default"), "ticker")
@@ -348,11 +390,12 @@ def preview_import(
     store: JsonStore,
     snapshot: Any,
     rules: dict[str, str] | None = None,
+    notification_repository: NotificationRepository | None = None,
 ) -> dict:
     """校验并预览增量导入，不写入任何当前数据。"""
     incoming = _validate_snapshot(snapshot)
     selected = tuple(incoming)
-    local = _snapshot_documents(store, selected)
+    local = _snapshot_documents(store, selected, notification_repository)
     resolved_rules = _rules(rules, selected)
     categories = {}
     for category in selected:
@@ -623,6 +666,13 @@ def _merged_documents(
     writes: dict[str, dict] = {}
     for category, collections in incoming.items():
         rule = rules[category]
+        if category == "notifications":
+            writes["notification_center"] = _clone(
+                collections["notification_center"]
+                if rule == "use_import"
+                else local[category]["notification_center"]
+            )
+            continue
         if category == "strategies":
             writes.update(_merge_strategies(local[category], collections, rule))
             continue
@@ -699,6 +749,7 @@ def prepare_import(
     snapshot: Any,
     expected_revision: str,
     rules: dict[str, str] | None = None,
+    notification_repository: NotificationRepository | None = None,
 ) -> dict:
     """校验版本并持久化精确前镜像与目标镜像，但暂不修改业务数据。"""
     transaction_id = _validate_transaction_id(transaction_id)
@@ -710,18 +761,23 @@ def prepare_import(
         if path.exists():
             transaction = _load_transaction(store, transaction_id)
             return {"status": transaction["state"], "categories": transaction["categories"]}
-        local = _snapshot_documents(store, selected)
+        local = _snapshot_documents(store, selected, notification_repository)
         if _revision_for_documents(local) != expected_revision:
             raise TransferRevisionConflict("当前数据已更新，请重新预览")
         writes = _merged_documents(local, incoming, resolved_rules)
+        before = _flatten_documents(local)
+        notification_before = before.pop("notification_center", None)
+        notification_after = writes.pop("notification_center", None)
         transaction = {
             "schemaVersion": 1,
             "transactionId": transaction_id,
             "kind": "import",
             "state": "prepared",
             "categories": list(selected),
-            "before": _flatten_documents(local),
+            "before": before,
             "after": writes,
+            "notificationBefore": notification_before,
+            "notificationAfter": notification_after,
         }
         _write_transaction(store, transaction)
         store.reserve_transfer(transaction_id)
@@ -733,6 +789,7 @@ def prepare_reset(
     transaction_id: str,
     categories: Iterable[str],
     expected_revision: str,
+    notification_repository: NotificationRepository | None = None,
 ) -> dict:
     """持久化重置事务；只准备所选可迁移集合，不触碰备份。"""
     transaction_id = _validate_transaction_id(transaction_id)
@@ -742,29 +799,48 @@ def prepare_reset(
         if path.exists():
             transaction = _load_transaction(store, transaction_id)
             return {"status": transaction["state"], "categories": transaction["categories"]}
-        local = _snapshot_documents(store, selected)
+        local = _snapshot_documents(store, selected, notification_repository)
         if _revision_for_documents(local) != expected_revision:
             raise TransferRevisionConflict("当前数据已更新，请重新预览")
         after = {
             collection: {}
             for category in selected
             for collection in CATEGORY_COLLECTIONS[category]
+            if collection != "notification_center"
         }
+        before = _flatten_documents(local)
+        notification_before = before.pop("notification_center", None)
+        notification_after = None
+        if "notifications" in selected:
+            if notification_repository is None:
+                raise TransferValidationError("通知数据仓储不可用")
+            notification_after = {
+                "schemaVersion": 1,
+                "tables": {table: [] for table in NotificationRepository.validate_portable(
+                    notification_repository.export_portable()
+                )},
+            }
         transaction = {
             "schemaVersion": 1,
             "transactionId": transaction_id,
             "kind": "reset",
             "state": "prepared",
             "categories": list(selected),
-            "before": _flatten_documents(local),
+            "before": before,
             "after": after,
+            "notificationBefore": notification_before,
+            "notificationAfter": notification_after,
         }
         _write_transaction(store, transaction)
         store.reserve_transfer(transaction_id)
     return {"status": "prepared", "categories": list(selected)}
 
 
-def commit_import(store: JsonStore, transaction_id: str) -> dict:
+def commit_import(
+    store: JsonStore,
+    transaction_id: str,
+    notification_repository: NotificationRepository | None = None,
+) -> dict:
     """幂等提交已准备事务；事务日志在 finalize 前始终保留精确前镜像。"""
     transaction_id = _validate_transaction_id(transaction_id)
     with store.transaction(transaction_id):
@@ -775,13 +851,27 @@ def commit_import(store: JsonStore, transaction_id: str) -> dict:
         if transaction.get("state") != "prepared":
             raise TransferValidationError("数据事务不能提交")
         _write_with_rollback(store, transaction["after"])
+        notification_after = transaction.get("notificationAfter")
+        if notification_after is not None:
+            if notification_repository is None:
+                _write_with_rollback(store, transaction["before"])
+                raise TransferValidationError("通知数据仓储不可用")
+            try:
+                notification_repository.replace_portable(notification_after)
+            except Exception:
+                _write_with_rollback(store, transaction["before"])
+                raise
         transaction["state"] = "committed"
         _write_transaction(store, transaction)
         status = "reset" if transaction.get("kind") == "reset" else "applied"
         return {"status": status, "categories": transaction["categories"]}
 
 
-def rollback_import(store: JsonStore, transaction_id: str) -> dict:
+def rollback_import(
+    store: JsonStore,
+    transaction_id: str,
+    notification_repository: NotificationRepository | None = None,
+) -> dict:
     """幂等恢复事务准备时的精确前镜像，并解除写入预留。"""
     transaction_id = _validate_transaction_id(transaction_id)
     with store.transaction(transaction_id):
@@ -791,6 +881,11 @@ def rollback_import(store: JsonStore, transaction_id: str) -> dict:
         transaction = _load_transaction(store, transaction_id)
         if transaction.get("state") != "rolled_back":
             _write_with_rollback(store, transaction["before"])
+            notification_before = transaction.get("notificationBefore")
+            if notification_before is not None:
+                if notification_repository is None:
+                    raise TransferValidationError("通知数据仓储不可用")
+                notification_repository.replace_portable(notification_before)
             transaction["state"] = "rolled_back"
             _write_transaction(store, transaction)
         store.release_transfer(transaction_id)
@@ -818,6 +913,7 @@ def finalize_import(store: JsonStore, transaction_id: str) -> dict:
 def recover_incomplete_transactions(
     store: JsonStore,
     coordinator_directory: str | None = None,
+    notification_repository: NotificationRepository | None = None,
 ) -> None:
     """后端启动时依据 Host 的持久提交决定完成或精确回滚未完成事务。"""
     if not store.transfer_directory.exists():
@@ -839,7 +935,7 @@ def recover_incomplete_transactions(
         if committed:
             finalize_import(store, transaction_id)
         else:
-            rollback_import(store, transaction_id)
+            rollback_import(store, transaction_id, notification_repository)
             finalize_import(store, transaction_id)
 
 
@@ -847,6 +943,7 @@ def register_data_transfer_routes(
     app: Any,
     store_factory: Any = JsonStore,
     token: str | None = None,
+    notification_repository: NotificationRepository | None = None,
 ) -> None:
     """把领域传输端点注册到 FastAPI；工厂注入使测试使用隔离数据目录。"""
     from fastapi import Header, HTTPException, Query
@@ -875,7 +972,7 @@ def register_data_transfer_routes(
     ) -> dict:
         authorize(authorization)
         selected = [value.strip() for value in categories.split(",") if value.strip()]
-        return invoke(lambda: export_snapshot(store_factory(), selected))
+        return invoke(lambda: export_snapshot(store_factory(), selected, notification_repository))
 
     @app.post("/data-transfer/preview")
     def transfer_preview(payload: dict, authorization: str | None = Header(default=None)) -> dict:
@@ -884,6 +981,7 @@ def register_data_transfer_routes(
             store_factory(),
             payload["snapshot"],
             payload.get("rules"),
+            notification_repository,
         ))
 
     @app.post("/data-transfer/prepare")
@@ -895,6 +993,7 @@ def register_data_transfer_routes(
             payload["snapshot"],
             payload["expected_revision"],
             payload.get("rules"),
+            notification_repository,
         ))
 
     @app.post("/data-transfer/reset")
@@ -905,17 +1004,18 @@ def register_data_transfer_routes(
             payload["transaction_id"],
             payload["categories"],
             payload["expected_revision"],
+            notification_repository,
         ))
 
     @app.post("/data-transfer/commit")
     def transfer_commit(payload: dict, authorization: str | None = Header(default=None)) -> dict:
         authorize(authorization)
-        return invoke(lambda: commit_import(store_factory(), payload["transaction_id"]))
+        return invoke(lambda: commit_import(store_factory(), payload["transaction_id"], notification_repository))
 
     @app.post("/data-transfer/rollback")
     def transfer_rollback(payload: dict, authorization: str | None = Header(default=None)) -> dict:
         authorize(authorization)
-        return invoke(lambda: rollback_import(store_factory(), payload["transaction_id"]))
+        return invoke(lambda: rollback_import(store_factory(), payload["transaction_id"], notification_repository))
 
     @app.post("/data-transfer/finalize")
     def transfer_finalize(payload: dict, authorization: str | None = Header(default=None)) -> dict:

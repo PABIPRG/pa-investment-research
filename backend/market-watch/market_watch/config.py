@@ -64,6 +64,12 @@ class Settings:
         ]
         self.serverchan_sendkey = os.getenv("SERVERCHAN_SENDKEY", "")
         self.wecom_webhook_key = os.getenv("WECOM_WEBHOOK_KEY", "")
+        # 统一通知中心：auto 在配置内部令牌后启用，legacy 可快速回滚到旧直推。
+        self.notification_mode = os.getenv("MW_NOTIFICATION_MODE", "auto").strip().lower()
+        if self.notification_mode not in {"auto", "center", "legacy"}:
+            raise ValueError("MW_NOTIFICATION_MODE 必须是 auto、center 或 legacy")
+        self.notification_internal_token = os.getenv("NOTIFICATION_INTERNAL_TOKEN", "")
+        self.notification_timeout = float(os.getenv("MW_NOTIFICATION_TIMEOUT", "3"))
         # 调度
         self.schedule_enabled = _true("MW_SCHEDULE_ENABLED", default=True)
         self.poll_interval = int(os.getenv("MW_POLL_INTERVAL", "30"))

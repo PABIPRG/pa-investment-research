@@ -12,6 +12,35 @@ function bodyOf(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
 }
 
 describe('investment data broker', () => {
+  it('maps notification list and read mutations to fixed trading-core routes', async () => {
+    const release = vi.fn(async () => {})
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ items: [], unreadCount: 0 }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
+
+    await requestInvestmentData({
+      operation: 'trading-core.notifications',
+      input: { view: 'unread', archived: false, limit: 8 },
+    }, acquire, 'host-secret')
+    await requestInvestmentData({
+      operation: 'trading-core.notification-read',
+      input: { notification_id: 'c709d1d2-58c1-4d08-940c-20868df4dc44', read: true },
+    }, acquire, 'host-secret')
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:8000/notifications?view=unread&archived=0&limit=8',
+      { method: 'GET', headers: { 'X-Notification-Token': 'host-secret' } },
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:8000/notifications/c709d1d2-58c1-4d08-940c-20868df4dc44/read',
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Notification-Token': 'host-secret' }, body: JSON.stringify({ read: true }) },
+    )
+  })
+
   it('maps the paged business event view to personalized cards', async () => {
     const release = vi.fn(async () => {})
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ cards: [] }), {
