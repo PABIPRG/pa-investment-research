@@ -69,10 +69,21 @@ from .schemas import (
     ResearchChatContextSaveRequest,
     ShadowRunRequest,
     StrategyRunRequest,
+    TradeItem,
+    TradesClearRequest,
+    TradesSyncRequest,
     WatchlistRequest,
 )
 from .scheduler import setup_scheduler
 from .store import JsonStore
+from .trade_profile import build_profile
+from .trades_source import (
+    EmptyTradesError,
+    commit_trades,
+    preview_clear,
+    preview_trades,
+)
+from .trades_store import load_document
 from .research_chat_context import (
     ResearchChatRevisionConflict,
     ResearchChatStrategyNotFound,
@@ -473,9 +484,13 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
         return {"items": items}
 
     @app.get("/holdings/source", response_model=dict)
-    async def holdings_source_get():
-        """当前持仓数据源的配置与可用性快照（不扫盘、不抛错）。"""
-        return await run_in_threadpool(provider_snapshot)
+    async def holdings_source_get(surface: str = Query(default="web")):
+        """当前持仓数据源的配置与可用性快照（不扫盘、不抛错）。
+
+        surface 由桌面壳传 "electron"：它决定成交读取入口是否可用——Windows 网页版
+        没有原生通道，而成交读取必须前台（见 provider_snapshot）。
+        """
+        return await run_in_threadpool(provider_snapshot, surface)
 
     @app.post("/holdings/source/detect", response_model=dict)
     async def holdings_source_detect(req: Optional[HoldingsDetectRequest] = None):
@@ -513,6 +528,66 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="原生动作需要桌面宿主授权。")
         from .holdings_source import native_action
         return await run_in_threadpool(sync_result, lambda: native_action(req.action, req.account_mode, req.client_path))
+
+    def trades_result(call):
+        """成交路由共用的异常映射；与 sync_result 同形，只多一个「空批次」分支。"""
+        try:
+            return call()
+        except ProviderUnavailable as exc:
+            return {"readiness": "partial" if exc.code == "partial_read" else "blocked",
+                    "blocking_reason": exc.code, "reason": str(exc),
+                    "automation": "required" if exc.code == "automation_required" else "not_requested",
+                    "available_actions": ["manual", "recheck"]}
+        except EmptyTradesError as exc:
+            return {"readiness": "blocked", "blocking_reason": "empty_result", "reason": str(exc)}
+        except PreviewConflict as exc:
+            return {"readiness": "blocked", "blocking_reason": "preview_conflict", "reason": str(exc)}
+        except Exception:
+            return {"readiness": "failed", "blocking_reason": "read_failed",
+                    "reason": "操作未完成，请重新检查客户端或稍后重试。"}
+
+    @app.post("/trades/sync", response_model=dict)
+    async def trades_sync_post(req: Optional[TradesSyncRequest] = None):
+        """读取成交明细只返回预览；显式 commit 才合并进本地明细。
+
+        提交是**去重合并**而不是整体替换（持仓那边是替换）：同一笔成交会被反复读到，
+        覆盖写会让每次同步都重记一遍，或者把已有历史换成本次读到的那一段。
+        """
+        request = req or TradesSyncRequest()
+        return await run_in_threadpool(
+            trades_result,
+            lambda: commit_trades(request.preview_token)
+            if request.action == "commit" else preview_trades(),
+        )
+
+    @app.post("/trades/clear", response_model=dict)
+    async def trades_clear_post(req: Optional[TradesClearRequest] = None):
+        """清空本地成交明细：先预览影响范围，再凭 token 提交。
+
+        单独一条路由而不是让 DELETE 直接删：entries 是 append-only 且无上限，清除是
+        「改变本地数据的动作」，需要可追溯记录与一次显式确认。
+        """
+        request = req or TradesClearRequest()
+        return await run_in_threadpool(
+            trades_result,
+            lambda: commit_trades(request.preview_token)
+            if request.action == "commit" else preview_clear(),
+        )
+
+    @app.get("/trades", response_model=dict)
+    async def trades_get():
+        """本地成交明细 + 批次审计 + 行为指标。不触发任何客户端读取。"""
+        def read():
+            document = load_document(JsonStore())
+            entries = [TradeItem.model_validate(row) for row in document["entries"]]
+            return {
+                "entries": document["entries"],
+                "imports": document["imports"],
+                "last_cleared": document["last_cleared"],
+                "profile": build_profile(entries, document["imports"]),
+            }
+
+        return await run_in_threadpool(read)
 
     @app.get("/holdings/user-config", response_model=dict)
     async def holdings_user_config_get():

@@ -9,7 +9,7 @@
 from abc import ABC, abstractmethod
 
 from ..config import settings
-from ..schemas import HoldingItem
+from ..schemas import HoldingItem, TradeItem
 
 
 class ProviderUnavailable(Exception):
@@ -38,6 +38,10 @@ class HoldingsProvider(ABC):
 
     name:   人类可读名，用于日志/诊断
     is_available() 为 False 时 get_holdings() 必须抛 ProviderUnavailable
+
+    成交明细是可选能力：只有客户端读表的两个数据源覆写 read_trades，
+    其余数据源沿用基类的拒绝实现。因此这两个方法是带默认实现的普通方法，
+    不是抽象方法——否则 manual/joinquant/qmt 三个子类会被一起改坏。
     """
 
     name: str = "abstract"
@@ -49,6 +53,26 @@ class HoldingsProvider(ABC):
     @abstractmethod
     def get_holdings(self) -> list[HoldingItem]:
         """返回当前持仓，空列表表示空仓。失败抛 ProviderUnavailable。"""
+
+    def get_trades(self) -> list[TradeItem]:
+        """返回能读到的成交明细，空列表表示没有成交。
+
+        与 get_holdings 对称：普通调用只允许被动读取，绝不自动激活客户端窗口。
+        """
+        return self.read_trades()
+
+    def read_trades(self, *, foreground: bool = False) -> list[TradeItem]:
+        """读取成交明细。
+
+        foreground 与 read_holdings 对齐：False 时只允许被动读取；需要前台才能取数时
+        抛 code="navigation_required"，由调用方决定是否走获准的原生入口。
+
+        Raises:
+            ProviderUnavailable: 数据源不支持成交明细（code="unsupported_action"）。
+        """
+        raise ProviderUnavailable(
+            "此数据源不支持成交明细。", "unsupported_action"
+        )
 
 
 def get_provider() -> HoldingsProvider:

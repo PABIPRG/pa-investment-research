@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
-"""同花顺 macOS 持仓读取。
+"""同花顺 macOS 持仓与成交明细读取。
 
 AXUIElement 为默认被动读取路径。权限属于实际 Python 读取进程；检测不触发
 TCC 弹窗。需要导航时返回稳定状态；只有经认证的 Electron 本次同意入口允许
 激活窗口和固定路径点击，AX 导航失败后才使用 AppleScript，并尽力恢复前台。
 表格或账户身份无法完整确认时拒绝读取，不以部分结果覆盖当前持仓。
+
+成交明细与持仓共用同一套 AX 会话（权限、账户身份校验、超时预算），差别只有
+导航路径与认表签名。**成交路径没有 AppleScript 降级**：持仓的降级脚本是针对
+「持仓」页写死并验证过的，成交页的对应脚本尚未在任何真机上跑通（闸门 4 未做），
+与其塞一份看起来能用的未验证脚本，不如让用户手动切页——见 read_trades。
 """
 
 from __future__ import annotations
@@ -16,8 +21,17 @@ import sys
 from typing import Callable
 
 from ..config import settings
-from ..schemas import HoldingItem
-from ._ths_fields import locate_columns, normalize_ticker
+from ..schemas import HoldingItem, TradeItem
+from ._ths_fields import (
+    classify_table,
+    is_blank,
+    label,
+    locate_columns,
+    normalize_ticker,
+    parse_number,
+    required_fields,
+)
+from ._ths_trades import rows_to_trades
 from .base import HoldingsProvider, ProviderUnavailable, current_account_mode
 
 log = logging.getLogger(__name__)
@@ -54,7 +68,9 @@ _ACCESSIBILITY_PERMISSION_HINT = (
     "授权后请重启投研智能体再试。"
 )
 
-# 表格定位：在若干 scroll area 中寻找表头含「代码」的持仓表
+# 表格定位：在若干 scroll area 中粗筛表头含「代码」的表，再交给 Python 侧判定。
+# AppleScript 里没法调用 classify_table，所以它只做粗筛——成交表同样含「证券代码」，
+# 最终由 rows_to_items 的表签名判定拒绝非持仓表，报错文案在 _table_mismatch_message。
 _FIELD_SEP = "\t"
 
 _APPLESCRIPT_TEMPLATE = '''
@@ -241,19 +257,38 @@ def parse_output(raw: str) -> tuple[list[str], list[list[str]]]:
     return header, rows
 
 
+def _table_mismatch_message(header: list[str], kind: str | None) -> str:
+    """按判定结果生成可操作的报错文案：读错表 / 缺列是两种不同的用户动作。"""
+    shown = " | ".join(header)
+    if kind == "trades":
+        return (
+            "当前读到的是一张成交明细表，不是持仓表。"
+            f"实际表头：{shown}。请在客户端切换到「持仓」页后重试。"
+        )
+    columns = locate_columns(header)
+    missing = [field for field in required_fields("holdings") if field not in columns]
+    if "ticker" in missing:
+        return (
+            "同花顺持仓表列名无法识别（未找到代码列）。"
+            f"实际表头：{shown}。请把这条信息反馈给开发者补充列名映射。"
+        )
+    return (
+        f"同花顺持仓表缺少必要列：{'、'.join(label(field) for field in missing)}。"
+        f"实际表头：{shown}。请把这条信息反馈给开发者补充列名映射。"
+    )
+
+
 def rows_to_items(header: list[str], rows: list[list[str]]) -> list[HoldingItem]:
     """按表头名映射列，把数据行转成 HoldingItem（过滤零持仓/坏行）。
 
     Raises:
-        MacThsScriptError: 表头里找不到代码列——通常是取错了表，
-            把实际表头回给用户便于排查。
+        MacThsScriptError: 表头不满足持仓表签名——要么取错了表（例如停在了成交页），
+            要么列名映射需要补充。两种情况都回传实际表头便于排查。
     """
+    kind = classify_table(header)
+    if kind != "holdings":
+        raise MacThsScriptError(_table_mismatch_message(header, kind))
     columns = locate_columns(header)
-    if not {"ticker", "quantity", "cost_price"}.issubset(columns):
-        raise MacThsScriptError(
-            "同花顺持仓表列名无法识别（未找到代码列）。"
-            f"实际表头：{' | '.join(header)}。请把这条信息反馈给开发者补充列名映射。"
-        )
 
     items: list[HoldingItem] = []
     for row in rows:
@@ -269,6 +304,9 @@ def rows_to_items(header: list[str], rows: list[list[str]]) -> list[HoldingItem]
                 raise ProviderUnavailable("部分持仓行无法识别，未覆盖本地持仓。", "partial_read")
             continue
         quantity_raw = cell("quantity")
+        # 刻意比 is_blank 严：这里只认字面占位符，清洗后才变空的「¥」之类仍走下面的
+        # 数值解析（→ 0.0 → 按已清仓跳过）。换成 is_blank 会把这类行从「跳过」改成
+        # 「拒绝整批」，是行为变更，不要顺手统一。
         if quantity_raw is None or quantity_raw.strip() in ("", "--", "-", "—"):
             raise ProviderUnavailable("部分持仓数量缺失，未覆盖本地持仓。", "partial_read")
         cost_raw = cell("cost_price")
@@ -286,13 +324,20 @@ def rows_to_items(header: list[str], rows: list[list[str]]) -> list[HoldingItem]
 
 
 def _to_float(raw: str | None) -> float:
-    """把客户端展示值转成 float（容忍千分位逗号、货币符号、空值）。"""
-    if raw is None:
+    """把客户端展示值转成 float；空值占位返回 0.0，脏数据抛 ValueError。
+
+    解析规则复用 _ths_fields.parse_number，与成交明细读取保持同一套清洗逻辑。
+
+    这里额外保留 ValueError：rows_to_items 靠它区分「客户端表示没有值」（按 0 处理，
+    随后被 quantity == 0 正常跳过）与「读到了脏数据」（必须拒绝整批）。
+    若把脏数据也压成 0.0，坏行会被当成已清仓静默跳过——那是丢数据，不是容错。
+    """
+    value = parse_number(raw)
+    if value is not None:
+        return value
+    if is_blank(raw):
         return 0.0
-    cleaned = str(raw).replace(",", "").replace("¥", "").replace("￥", "").strip()
-    if cleaned in ("", "--", "-", "—"):
-        return 0.0
-    return float(cleaned)
+    raise ValueError(f"无法解析数值：{raw}")
 
 
 class MacThsProvider(HoldingsProvider):
@@ -384,6 +429,63 @@ class MacThsProvider(HoldingsProvider):
                 except Exception:
                     log.warning("未能恢复原前台应用")
 
+    def get_trades(self) -> list[TradeItem]:
+        """普通调用只允许被动读取，绝不自动激活窗口。"""
+        return self.read_trades()
+
+    def read_trades(self, *, foreground: bool = False) -> list[TradeItem]:
+        """读取成交明细；被动优先，只有获准的本次同意入口才允许激活并导航。
+
+        与 read_holdings 的唯一结构差别：AX 导航失败后**不降级到 AppleScript**。
+        持仓那份降级脚本是针对「持仓」页写死且验证过的，成交页的对应脚本还没在
+        任何 Mac 真机上跑通，写一份看起来能用的反而会把失败伪装成「已尝试全部手段」。
+        这里改为明确告诉用户手动切页。
+        """
+        if self._platform != "darwin":
+            raise ProviderUnavailable("此数据源仅支持 macOS。", "unsupported_platform")
+        permission = accessibility_status()
+        if permission != "granted":
+            raise ProviderUnavailable("请先授予读取进程辅助功能权限。",
+                                      "accessibility_required" if permission == "not_granted" else "dependency_missing")
+        if not app_running(self._app_name):
+            raise ProviderUnavailable("请先打开同花顺并登录。", "client_not_running")
+        try:
+            return read_ax_trades(self._account_mode)
+        except ProviderUnavailable as exc:
+            if not foreground or exc.code != "navigation_required":
+                raise
+        from AppKit import NSWorkspace, NSApplicationActivateIgnoringOtherApps
+        workspace = NSWorkspace.sharedWorkspace()
+        previous = workspace.frontmostApplication()
+        activated = False
+        try:
+            target = next((app for app in workspace.runningApplications()
+                           if app.localizedName() == DEFAULT_APP_NAME), None)
+            if target is None:
+                raise ProviderUnavailable("同花顺已经退出。", "client_not_running")
+            if accessibility_status() != "granted":
+                raise ProviderUnavailable("读取进程的辅助功能权限已失效。", "accessibility_required")
+            target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+            activated = True
+            try:
+                return read_ax_trades(self._account_mode, navigate=True)
+            except ProviderUnavailable as exc:
+                if exc.code != "navigation_required":
+                    raise
+                path = " → ".join(trades_navigation_path(self._account_mode))
+                raise ProviderUnavailable(
+                    f"自动切换到「历史成交」页失败。请在同花顺里手动打开 {path}，"
+                    "设定好要导入的日期范围并查到数据后再读取。"
+                    f"（{exc}）",
+                    "navigation_required",
+                ) from exc
+        finally:
+            if activated and previous is not None:
+                try:
+                    previous.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                except Exception:
+                    log.warning("未能恢复原前台应用")
+
 
 def accessibility_status() -> str:
     """检查实际 Python 读取进程的 TCC 权限，不弹出授权请求。"""
@@ -394,8 +496,35 @@ def accessibility_status() -> str:
         return "unknown"
 
 
-def read_ax_table(account_mode: str, *, navigate: bool = False) -> list[HoldingItem]:
-    """被动 AX 遍历；仅获准原生调用允许固定账户路径的 AXPress。"""
+def _account_tab(account_mode: str) -> str:
+    """账户类型 → 同花顺 Mac 版上的页签名。"""
+    return "模拟" if account_mode == "simulated" else "A股"
+
+
+# 「历史成交」在 Mac 版左树里的位置：与持仓同一层级。**尚未在真机验证**（闸门 4
+# 未做）：标签取自 Windows 版客户端的同名入口，Mac 版若叫别的名字（例如分组折叠着），
+# AXPress 会找不到按钮并按 navigation_required 中止——不会点错地方，只是失败。
+TRADES_NAVIGATION_LABELS = ("交易", "股票", "历史成交")
+
+
+def trades_navigation_path(account_mode: str) -> tuple[str, ...]:
+    """成交页的 AX 导航按钮路径（账户页签按 selected 账户插入）。"""
+    return (
+        TRADES_NAVIGATION_LABELS[0],
+        _account_tab(account_mode),
+        *TRADES_NAVIGATION_LABELS[1:],
+    )
+
+
+def _ax_session(account_mode: str, *, labels: tuple[str, ...] | None, page: str):
+    """建立 AX 会话：查权限、定位进程、按需导航，返回 (节点列表, attr, walk)。
+
+    持仓与成交共用这一段。TCC 权限、超时预算、尤其是「账户身份必须被证明」这条
+    在两张表上完全一样——复制一份迟早会分叉，而漏掉账户校验的后果是读到另一个
+    账户的数据，那是错数据而不是缺数据。
+
+    labels 为 None 表示被动读取，不做任何 AXPress。
+    """
     import time
     from AppKit import NSWorkspace
     from ApplicationServices import (
@@ -426,24 +555,78 @@ def read_ax_table(account_mode: str, *, navigate: bool = False) -> list[HoldingI
                 raise ProviderUnavailable("窗口内容过多，无法完整读取。", "partial_read")
             yield current
             pending.extend(attr(current, "AXChildren") or [])
-    account = "模拟" if account_mode == "simulated" else "A股"
-    if navigate:
-        for label in ("交易", account, "股票", "持仓"):
+    if labels:
+        for label in labels:
             button = next((n for n in walk(root) if attr(n, "AXTitle") == label
                            and attr(n, "AXRole") in ("AXButton", "AXRadioButton")), None)
             if button is None or AXUIElementPerformAction(button, "AXPress") != 0:
-                raise ProviderUnavailable("请进入所选账户的持仓页。", "navigation_required")
+                raise ProviderUnavailable(f"请进入所选账户的{page}页。", "navigation_required")
     nodes = list(walk(root))
     # Passive reads must prove the selected account, not infer it from a visible tab label.
+    account = _account_tab(account_mode)
     if not any(attr(n, "AXTitle") == account and
                                  (attr(n, "AXSelected") is True or attr(n, "AXValue") == 1) for n in nodes):
-        raise ProviderUnavailable("请进入所选账户的持仓页后再读取。", "navigation_required")
+        raise ProviderUnavailable(f"请进入所选账户的{page}页后再读取。", "navigation_required")
+    return nodes, attr, walk
+
+
+def _table_values(table, attr, walk) -> list[list[str]]:
+    """一张 AXTable → 单元格文本（第 0 行是表头）。"""
+    rows = attr(table, "AXRows") or []
+    return [[str(attr(n, "AXValue") or "") for n in walk(row)
+             if attr(n, "AXRole") == "AXStaticText"] for row in rows]
+
+
+def read_ax_table(account_mode: str, *, navigate: bool = False) -> list[HoldingItem]:
+    """被动 AX 遍历；仅获准原生调用允许固定账户路径的 AXPress。"""
+    labels = ("交易", _account_tab(account_mode), "股票", "持仓") if navigate else None
+    nodes, attr, walk = _ax_session(account_mode, labels=labels, page="持仓")
+    saw_trades_table = False
     for table in nodes:
         if attr(table, "AXRole") != "AXTable":
             continue
-        rows = attr(table, "AXRows") or []
-        values = [[str(attr(n, "AXValue") or "") for n in walk(row)
-                   if attr(n, "AXRole") == "AXStaticText"] for row in rows]
-        if values and any("代码" in cell for cell in values[0]):
+        values = _table_values(table, attr, walk)
+        if not values:
+            continue
+        # 成交表同样含「证券代码」，只按「含代码」认表会把成交表当持仓表，
+        # 最终报出「未找到持仓表」这种与事实不符的提示。
+        kind = classify_table(values[0])
+        if kind == "holdings":
             return rows_to_items(values[0], values[1:])
+        if kind == "trades":
+            saw_trades_table = True
+    if saw_trades_table:
+        raise ProviderUnavailable("当前停留在成交明细页，请切换到「持仓」页后再读取。", "navigation_required")
     raise ProviderUnavailable("未找到完整持仓表格，请确认已登录并进入持仓页。", "navigation_required")
+
+
+def read_ax_trades(account_mode: str, *, navigate: bool = False) -> list[TradeItem]:
+    """被动 AX 遍历成交明细表；仅获准原生调用允许固定路径的 AXPress。
+
+    与 read_ax_table 对称，只是认表签名相反：这里要 trades 表，读到 holdings 表
+    才是「走错页」。
+    """
+    labels = trades_navigation_path(account_mode) if navigate else None
+    nodes, attr, walk = _ax_session(account_mode, labels=labels, page="历史成交")
+    saw_holdings_table = False
+    for table in nodes:
+        if attr(table, "AXRole") != "AXTable":
+            continue
+        values = _table_values(table, attr, walk)
+        if not values:
+            continue
+        kind = classify_table(values[0])
+        if kind == "trades":
+            return rows_to_trades(
+                values[0], values[1:], source="mac_ths", account_mode=account_mode
+            )
+        if kind == "holdings":
+            saw_holdings_table = True
+    if saw_holdings_table:
+        raise ProviderUnavailable(
+            "当前停留在持仓页，请切换到「历史成交」页后再读取。", "navigation_required"
+        )
+    raise ProviderUnavailable(
+        "未找到成交明细表格：请确认已登录、进入「历史成交」页且已查到数据。",
+        "navigation_required",
+    )

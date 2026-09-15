@@ -178,6 +178,27 @@ class RowsToItemsTests(unittest.TestCase):
         self.assertIn("未找到代码列", message)
         self.assertIn("名称 | 市值", message)
 
+    def test_missing_column_is_named_in_chinese(self):
+        """缺列提示要说人话，不能把内部字段键原样丢给用户。"""
+        with self.assertRaises(MacThsScriptError) as ctx:
+            rows_to_items(["证券代码", "市值"], [["600372", "1000"]])
+
+        message = str(ctx.exception)
+        self.assertIn("缺少必要列", message)
+        self.assertIn("成本价", message)
+        self.assertNotIn("cost_price", message)
+
+    def test_trades_table_is_reported_as_the_wrong_page(self):
+        """停在成交页时要直说读错了表，而不是「未找到代码列」这种误导性提示。"""
+        header = ["证券代码", "买卖标志", "成交价格", "成交数量", "成交日期"]
+        with self.assertRaises(MacThsScriptError) as ctx:
+            rows_to_items(header, [["600372", "买入", "16.21", "100", "20260901"]])
+
+        message = str(ctx.exception)
+        self.assertIn("成交明细表", message)
+        self.assertIn("持仓", message)
+        self.assertNotIn("未找到代码列", message)
+
 
 class ToFloatTests(unittest.TestCase):
     def test_tolerates_thousand_separators_currency_and_dashes(self):
@@ -188,6 +209,15 @@ class ToFloatTests(unittest.TestCase):
 
     def test_blank_placeholders_become_zero(self):
         for raw in (None, "", "--", "-", "—"):
+            self.assertEqual(_to_float(raw), 0.0)
+
+    def test_symbol_only_values_count_as_blank(self):
+        """只剩货币符号或逗号的展示值清洗后为空，按「没有值」处理而不是抛错。
+
+        判空必须与 parse_number 共用同一套清洗，否则会出现「既不算空值、
+        也解析不出数字」的缝，把本来能跳过的行升级成整批拒绝。
+        """
+        for raw in ("¥", "￥", ",", " , "):
             self.assertEqual(_to_float(raw), 0.0)
 
     def test_garbage_still_raises(self):
@@ -276,6 +306,108 @@ class MacThsProviderTests(unittest.TestCase):
         with self.assertRaises(ProviderUnavailable) as caught:
             MacThsProvider(platform='win32').get_holdings()
         self.assertEqual(caught.exception.code, 'unsupported_platform')
+
+
+class TradesNavigationTests(unittest.TestCase):
+    """成交页的导航路径是拼出来的，且「历史成交」这一段**未经真机验证**。"""
+
+    def test_path_inserts_the_account_tab(self):
+        self.assertEqual(mac_ths.trades_navigation_path('real'), ('交易', 'A股', '股票', '历史成交'))
+        self.assertEqual(mac_ths.trades_navigation_path('simulated'), ('交易', '模拟', '股票', '历史成交'))
+
+    def test_holdings_and_trades_paths_differ_only_in_the_last_step(self):
+        """两者共用「交易 → 账户 → 股票」前缀；只有末级不同，改一处不会只改一边。"""
+        self.assertEqual(mac_ths.trades_navigation_path('real')[:-1],
+                         ('交易', 'A股', '股票'))
+
+
+class MacThsTradesTests(unittest.TestCase):
+    """成交读取：被动优先、按次导航、且**没有 AppleScript 降级**。
+
+    最后一条是刻意的：持仓的降级脚本是针对「持仓」页写死并验证过的，成交页的对应
+    脚本还没在真机上跑通。与其塞一份看起来能用的未验证脚本把失败伪装成「已尝试全部
+    手段」，不如明确让用户手动切页。
+    """
+
+    def setUp(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        self.previous = Mock()
+        self.target = Mock()
+        self.target.localizedName.return_value = '同花顺'
+        workspace = Mock()
+        workspace.frontmostApplication.return_value = self.previous
+        workspace.runningApplications.return_value = [self.target]
+        self.appkit = SimpleNamespace(
+            NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace),
+            NSApplicationActivateIgnoringOtherApps=1)
+        self.runner = Mock()
+        for item in [
+            patch.dict('sys.modules', {'AppKit': self.appkit}),
+            patch.object(mac_ths, 'accessibility_status', return_value='granted'),
+            patch.object(mac_ths, 'app_running', return_value=True),
+        ]:
+            item.start()
+            self.addCleanup(item.stop)
+
+    def test_passive_read_does_not_activate_or_fall_back(self):
+        with patch.object(mac_ths, 'read_ax_trades', return_value=[]) as read:
+            MacThsProvider(platform='darwin', runner=self.runner,
+                           account_mode='real').get_trades()
+            read.assert_called_once_with('real')
+        self.runner.assert_not_called()
+        self.target.activateWithOptions_.assert_not_called()
+
+    def test_foreground_navigates_and_restores_previous(self):
+        with patch.object(mac_ths, 'read_ax_trades',
+                          side_effect=[ProviderUnavailable('导航', 'navigation_required'), []]) as read:
+            result = MacThsProvider(platform='darwin', runner=self.runner,
+                                    account_mode='real').read_trades(foreground=True)
+        self.assertEqual(result, [])
+        self.assertEqual(read.call_args.kwargs, {'navigate': True})
+        self.previous.activateWithOptions_.assert_called_once()
+
+    def test_navigation_failure_explains_the_manual_path(self):
+        """没有降级脚本，所以失败必须告诉用户手动切到哪一页。"""
+        with patch.object(mac_ths, 'read_ax_trades',
+                          side_effect=ProviderUnavailable('导航', 'navigation_required')):
+            with self.assertRaises(ProviderUnavailable) as caught:
+                MacThsProvider(platform='darwin', runner=self.runner,
+                               account_mode='real').read_trades(foreground=True)
+        self.assertEqual(caught.exception.code, 'navigation_required')
+        self.assertIn('交易 → A股 → 股票 → 历史成交', str(caught.exception))
+        self.runner.assert_not_called()
+        self.previous.activateWithOptions_.assert_called_once()
+
+    def test_non_navigation_failure_is_not_retried_in_foreground(self):
+        """partial_read 这类失败重试也还是一样，不该再抢一次前台。"""
+        with patch.object(mac_ths, 'read_ax_trades',
+                          side_effect=ProviderUnavailable('脏数据', 'partial_read')):
+            with self.assertRaises(ProviderUnavailable) as caught:
+                MacThsProvider(platform='darwin', runner=self.runner).read_trades(foreground=True)
+        self.assertEqual(caught.exception.code, 'partial_read')
+        self.target.activateWithOptions_.assert_not_called()
+
+    def test_permission_and_platform_block_before_read(self):
+        for status, code in [('not_granted', 'accessibility_required'),
+                             ('unknown', 'dependency_missing')]:
+            with patch.object(mac_ths, 'accessibility_status', return_value=status), \
+                    patch.object(mac_ths, 'read_ax_trades') as read:
+                with self.assertRaises(ProviderUnavailable) as caught:
+                    MacThsProvider(platform='darwin').read_trades(foreground=True)
+                self.assertEqual(caught.exception.code, code)
+                read.assert_not_called()
+        with self.assertRaises(ProviderUnavailable) as caught:
+            MacThsProvider(platform='win32').get_trades()
+        self.assertEqual(caught.exception.code, 'unsupported_platform')
+
+    def test_client_not_running_is_reported_before_any_read(self):
+        with patch.object(mac_ths, 'app_running', return_value=False), \
+                patch.object(mac_ths, 'read_ax_trades') as read:
+            with self.assertRaises(ProviderUnavailable) as caught:
+                MacThsProvider(platform='darwin').read_trades()
+        self.assertEqual(caught.exception.code, 'client_not_running')
+        read.assert_not_called()
 
 
 class DefaultRunnerTests(unittest.TestCase):
