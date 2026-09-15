@@ -150,6 +150,15 @@ class SyncRouteTests(unittest.TestCase):
             result = asyncio.run(self.endpoint())
         self.assertEqual(result["blocking_reason"], "empty_result")
 
+    def test_electron_owned_backend_rejects_generic_sync_without_host_token(self):
+        with patch.dict(os.environ, {
+            "DSH_HOLDINGS_NATIVE_REQUIRED": "1",
+            "DSH_HOLDINGS_NATIVE_TOKEN": "private",
+        }):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(self.endpoint(None, ""))
+        self.assertEqual(caught.exception.status_code, 403)
+
     def test_native_route_requires_private_host_token(self):
         from adapter.schemas import HoldingsNativeRequest
         endpoint = _endpoint(self.app, "/holdings/native")

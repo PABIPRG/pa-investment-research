@@ -81,4 +81,4 @@ The desktop carrier does not change model-visible content; it runs the same Web 
 
 None; the Electron layer only changes local transport and application packaging.
 
-Holdings foreground reads require consent in the main process on every invocation and return focus after completion. The preload accepts only fixed actions; executable selection uses the native picker and is limited to xiadan.exe.
+On macOS, holdings reads happen only after an explicit user click. The main process offers per-read consent or durable consent that suppresses later prompts without enabling background or scheduled reads; Settings can revoke it. Reads are cooperatively cancellable and restore application focus. The renderer receives an opaque preview session instead of the backend token, and commit requires a second native confirmation. The preload accepts only fixed actions; Windows executable selection continues to use the native picker and is limited to xiadan.exe.

@@ -1,13 +1,55 @@
-# 同花顺持仓同步引导（PAB-16）
+# Agent Note: Guided broker holdings synchronization
 
-状态：已实现，真实验收待完成。
+Status: implemented
 
-工作项：[PAB-16](https://linear.app/pabiprg/issue/PAB-16)。设计和实施证据见[实施记录](../../../../../docs/superpowers/handoffs/2026-09-11-holdings-sync-implementation.md)。
+English | [中文](2026-09-11-holdings-guided-sync.zh.md)
 
-读取与覆盖分离：POST /holdings/sync 默认只生成五分钟预览，commit 以服务端 token 确认，校验账户、来源、存储目录和当前持仓，再在原子事务中复用持仓快照保存。旧无参数请求不再写入。持仓或配置并发变化时拒绝覆盖；部分解析不作完整成功处理。
+## Problem
 
-被动读取不设置焦点、不点击控件。macOS 首先检查实际读取进程的辅助功能权限并使用 AX；只有用户在 Electron 主进程确认本次路径和影响后，宿主才通过私有认证接口允许导航。AX 导航失败后才进入 AppleScript，并按实际错误展示自动化权限。无法验证所选账户时拒绝读取。Windows 被动读取限定账户窗口，允许导航的调用保留前台句柄并在 finally 尽力返回。
+The holdings workbench needed a broker-assisted replacement flow that could not silently clear or overwrite local positions. The original guided synchronization added preview-before-commit and platform-specific navigation, but macOS still lacked durable product consent, broker execution-time attribution, an in-flight cancellation contract, and a strict boundary preventing the renderer from obtaining backend preview credentials or bypassing native consent.
 
-Web 只有人工路径引导，原生入口不在通用 RPC 映射内。Electron 原生 IPC 校验主窗口主框架，不接受页面提供的命令、URL 或应用路径；客户端路径来自本机文件选择器并限定 xiadan.exe。原生启动子进程不继承凭证变量。
+Tracked work: [PAB-16](https://linear.app/pabiprg/issue/PAB-16) and [PAB-25](https://linear.app/pabiprg/issue/PAB-25). Implementation context lives in the [PAB-16 handoff](../../../../../docs/superpowers/handoffs/2026-09-11-holdings-sync-implementation.md) and [PAB-25 plan](../../../../../docs/superpowers/plans/2026-09-15-pab25-macos-holdings-accessibility.md).
 
-真实同花顺兼容性、签名进程 TCC 归属、导航及焦点恢复尚未验证；不得以模拟契约测试、构建或通用 Web 冒烟代替真实 UAT。本次不使用 Computer Use。
+## Decision
+
+### Platform and authorization
+
+Windows retains its independent easytrader implementation and existing synchronization behavior. The PAB-25 change modifies and verifies only macOS Electron behavior; macOS verification is not presented as Windows regression evidence.
+
+macOS performs no scheduled or background holdings reads. A read starts only from an explicit user click. Product consent can be per-read or durable: durable consent is established only after native confirmation, suppresses later prompts for user-initiated reads, can be revoked in Settings, and does not replace macOS Accessibility or Automation permission.
+
+### Data and attribution
+
+Every preview carries ticker, quantity, and cost. When the client exposes a complete trade table, positions also carry broker execution time, side, quantity, and price, with `broker_detail` provenance. When complete details are unavailable, the read timestamp is an explicit `read_fallback`; the user can edit it into `user_modified`, and later fallback-only reads preserve that manual value.
+
+Snapshot identity includes the real or simulated account source. Repeated positions from the same account ignore a newly generated fallback read timestamp, but retain broker trades and user-modified attribution. An unchanged commit reuses the latest snapshot and returns `changed=false` instead of creating a duplicate business change.
+
+### Host boundary and write safety
+
+Electron rejects generic holdings preview and commit operations. The main process owns durable consent, the backend preview token, an opaque renderer session, and the final native replacement confirmation. Renderer messages are limited to fixed actions and cannot provide commands, URLs, client paths, operation ids, or backend tokens. The private backend route requires a host-only credential and an owned local backend.
+
+Empty, partial, expired, canceled, conflicting, or already-consumed previews never replace local holdings. A successful commit validates account, provider, storage root, ticker-scoped time overrides, and the unchanged local baseline before the atomic write.
+
+### Cancellation and focus
+
+The renderer can cancel an active macOS read. The main process sends a private cancellation for its own operation id and aborts the request; the backend cancellation event stops AX traversal, and the production AppleScript fallback terminates its child process. Cancellation creates no renderer session and writes no holdings. The main process attempts to restore the investment application after success, failure, or cancellation.
+
+## Testing
+
+Backend tests pin preview/commit isolation, time provenance, manual-time preservation, cancellation, incomplete-table fallback, account-aware deduplication, and macOS parsing. Electron tests pin durable consent, revocation, foreground-only initiation, opaque sessions, native confirmation, cancellation, and focus restoration. Runtime and component tests pin the non-Remote boundary, the macOS manual-only interaction, editable fallback time, settings revocation, and unchanged-preview behavior.
+
+Real signed-host validation against an installed and logged-in Tonghuashun client remains required for TCC ownership, actual AX labels, navigation, trade-table compatibility, cancellation, and focus restoration. Automated checks do not satisfy that UAT requirement; the current status and closing conditions are recorded in the [PAB-25 UAT handoff](../../../../../docs/superpowers/handoffs/2026-09-15-pab25-macos-holdings-uat.md).
+
+## Alternatives considered
+
+**Require a native prompt on every read.** This preserves a simple consent model but rejects the confirmed durable-authorization requirement. Durable consent is therefore product-scoped, explicitly revocable, and still cannot initiate a read by itself.
+
+**Expose the backend preview token to the renderer and reuse generic sync.** This was rejected because an untrusted renderer could bypass the native consent and confirmation boundary. The main process instead maps each backend token to a short-lived opaque session.
+
+**Use the read timestamp for every position.** This was rejected because broker execution time is required for attribution when details exist. Read time remains only a visible, editable fallback.
+
+**Let the holdings reader send downstream notifications directly.** This was rejected because change detection and notification delivery have separate owners. The current baseline returns deterministic `changed` and `snapshot_id` facts; position-plan and notification-center integration must consume those facts without moving delivery ownership into this module.
+
+## Consequences
+
+The macOS workflow gains an explicit, revocable trust model, broker-first time attribution, idempotent snapshots, and a cancellable host-owned write boundary. It also depends on client accessibility labels that can vary by Tonghuashun release, and source-mode TCC ownership can differ from a signed application. Until real UAT records those facts, the macOS client compatibility claim remains unverified. Position-plan and notification-center consumers are not present in this baseline and remain a separate integration step; their absence does not permit duplicate events or direct notification delivery here.

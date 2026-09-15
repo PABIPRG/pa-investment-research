@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog, riskSource, riskSuggestions } from './DetailDialogs.tsx'
@@ -336,10 +336,11 @@ function HoldingsBulkImport({
  * Chooses a persisted holdings provider, reads real holdings from its broker
  * client, and replaces the saved portfolio with them after explicit confirmation.
  */
-function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onSavingChange }: {
+function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSync, onBack, onSavingChange }: {
   requestData: RequestData
   holdingsProviders: readonly string[]
   onSync: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
+  onNativeSync: (items: readonly WorkbenchHoldingInput[]) => void
   onBack: () => void
   onSavingChange: (saving: boolean) => void
 }) {
@@ -352,15 +353,18 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onS
   const [slow, setSlow] = useState(false)
   const backButtonRef = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
+  const [reading, setReading] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [error, setError] = useState('')
   const [blocking, setBlocking] = useState('')
   const [preview, setPreview] = useState<Record<string, unknown>>()
   const [saved, setSaved] = useState(false)
+  const [authorization, setAuthorization] = useState<'once' | 'persistent'>('once')
   const [troubleshoot, setTroubleshoot] = useState(false)
   const recheckOnFocus = useRef(false)
   const alive = useRef(true)
   const native = (window as unknown as { __DSH_ELECTRON__?: {
-    holdingsAction?: (input: { action: string; account_mode: string }) => Promise<unknown>
+    holdingsAction?: (input: { action: string; account_mode: string; authorization?: 'once' | 'persistent'; session_id?: string; time_overrides?: Record<string, string> }) => Promise<unknown>
   } }).__DSH_ELECTRON__?.holdingsAction
   const reload = useCallback((): void => {
     source.run({ operation: 'trading-core.holdings-source' })
@@ -386,6 +390,12 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onS
   const platform = text(state.platform, 'linux')
   const reason = blocking || text(state.blocking_reason, '')
   const loading = source.busy || config.busy
+  useEffect(() => {
+    if (native === undefined) return
+    void native({ action: 'consent_status', account_mode: account }).then(value => {
+      setAuthorization(asRecord(value).persistent_authorization === true ? 'persistent' : 'once')
+    }).catch(() => {})
+  }, [native, account])
   useEffect(() => {
     setSlow(false)
     if (!loading) return
@@ -415,25 +425,38 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onS
   const acceptPreview = (value: unknown): void => {
     const result = asRecord(value)
     if (result.canceled === true) return
-    if (typeof result.preview_token === 'string' && records(result.items).length > 0) {
+    if ((typeof result.preview_token === 'string' || typeof result.session_id === 'string') && records(result.items).length > 0) {
       setPreview(result); setBlocking(''); setSaved(false)
     } else {
       setBlocking(text(result.blocking_reason, 'read_failed'))
       setError(text(result.reason, '读取未完成，当前持仓保持不变。'))
     }
   }
-  const read = (): void => { void run(async () => { acceptPreview(await requestData({ operation: 'trading-core.holdings-sync', input: { action: 'preview' } })) }) }
+  const read = (): void => {
+    if (native !== undefined) nativeAction('read')
+    else void run(async () => { acceptPreview(await requestData({ operation: 'trading-core.holdings-sync', input: { action: 'preview' } })) })
+  }
   const nativeAction = (action: string): void => {
     if (native === undefined) return
+    if (action === 'read') setReading(true)
     void run(async () => {
       if (action !== 'read') recheckOnFocus.current = true
-      const value = await native({ action, account_mode: account })
+      const value = await native({ action, account_mode: account, ...(action === 'read' ? { authorization } : {}),
+        ...(action === 'commit' || action === 'discard' ? { session_id: text(preview?.session_id, '') } : {}) })
       if (action === 'read') acceptPreview(value)
+      else if (action === 'revoke_consent') setAuthorization('once')
       else {
         const result = asRecord(value)
         if (result.blocking_reason) { setBlocking(text(result.blocking_reason, '')); setError(text(result.reason, '操作未完成。')) }
         reload()
       }
+    }).finally(() => { if (alive.current && action === 'read') { setReading(false); setCancelling(false) } })
+  }
+  const cancelRead = (): void => {
+    if (native === undefined || !reading || cancelling) return
+    setCancelling(true)
+    void native({ action: 'cancel_read', account_mode: account }).catch(failure => {
+      if (alive.current) setError(productErrorText(failure))
     })
   }
   const download = (): void => {
@@ -444,11 +467,33 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onS
   const confirm = (): void => {
     if (preview === undefined) return
     void run(async () => {
-      await onSync(text(preview.preview_token, ''))
+      if (native !== undefined) {
+        const timeOverrides = Object.fromEntries(items.flatMap(item => item.time_source === 'user_modified'
+          ? [[text(item.ticker, ''), text(item.position_time, '')]] : []))
+        const result = asRecord(await native({ action: 'commit', account_mode: account, session_id: text(preview.session_id, ''), time_overrides: timeOverrides }))
+        if (result.canceled === true) return
+        if (result.blocking_reason) throw new Error(text(result.reason, '持仓未保存，请重新读取。'))
+        const committed = records(result.items).flatMap(item => {
+          const ticker = text(item.ticker, '')
+          const quantity = number(item.quantity)
+          const costPrice = number(item.cost_price)
+          return ticker && quantity !== undefined && costPrice !== undefined ? [{ ticker, quantity, cost_price: costPrice }] : []
+        })
+        onNativeSync(committed)
+      } else await onSync(text(preview.preview_token, ''))
       setSaved(true)
     })
   }
   const items = records(preview?.items)
+  const updateFallbackTime = (ticker: string, value: string): void => {
+    setPreview(current => current === undefined ? current : {
+      ...current,
+      changed: true,
+      items: records(current.items).map(item => text(item.ticker, '') === ticker
+        ? { ...item, position_time: value, time_source: 'user_modified', time_source_label: '用户修改' }
+        : item),
+    })
+  }
   return <section className={css.workbenchSyncPanel} aria-label="从券商同步持仓">
     <div className={css.workbenchImportHeader}>
       <div><span>账户选择 → 客户端准备 → 预览确认</span></div>
@@ -471,6 +516,15 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onS
         <span>运行状态 <strong>{state.process === 'running' ? '运行中' : state.process === 'not_running' ? '未启动' : '待确认'}</strong></span>
         <span>读取权限 <strong>{state.accessibility === 'granted' ? '已授权' : permission ? '待授权' : '待确认'}</strong></span>
       </div>
+      {native !== undefined && platform === 'darwin' && <fieldset className={css.syncAuthorization}>
+        <legend>主动读取授权</legend>
+        <label><input type="radio" name="holdings-authorization" checked={authorization === 'once'} disabled={busy} onChange={() => {
+          setAuthorization('once')
+          if (authorization === 'persistent') nativeAction('revoke_consent')
+        }} />每次询问</label>
+        <label><input type="radio" name="holdings-authorization" checked={authorization === 'persistent'} disabled={busy} onChange={() => { setAuthorization('persistent') }} />长期允许主动读取</label>
+        <p>{authorization === 'persistent' ? '以后仍须由你点击读取，但不再重复询问；应用不会定时或在后台自动读取。' : '每次切换到同花顺前都会询问。'}</p>
+      </fieldset>}
       {missing && <>
         <button type="button" className={css.primaryButton} disabled={busy} onClick={download}>前往官网下载 {platform === 'darwin' ? 'Mac' : 'Windows'} 版</button>
         <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={reload}>已安装，重新检测</button>
@@ -503,12 +557,27 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onBack, onS
       {state.available !== true && !navigation && <p className={css.syncHint}>完成上方准备后即可读取；确认预览前不会修改本地持仓。</p>}
       {native === undefined && <p>Web 版请在同花顺手动进入上述路径，完成后返回读取。浏览器不会自动切换同花顺或保证恢复焦点。</p>}
       {navigation && native !== undefined && <div className={css.workbenchImportGuide}><strong>后台读取未完成</strong><span>继续时会先弹窗说明访问路径、窗口切换和返回行为，取得本次同意后再操作。</span><button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('read') }}>查看本次切换说明</button></div>}
-      {preview === undefined && !(navigation && native) && <button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual' || (state.available !== true && !navigation)} onClick={read}>{busy ? '正在读取持仓…' : native ? '读取持仓预览' : '我已打开持仓页，开始读取'}</button>}
+      {preview === undefined && !(navigation && native) && <button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual' || (state.available !== true && !navigation)} onClick={read}>{reading ? (cancelling ? '正在取消读取…' : '正在读取持仓…') : native ? '读取持仓' : '我已打开持仓页，开始读取'}</button>}
+      {reading && native !== undefined && <button type="button" className={css.secondaryButton} disabled={cancelling} onClick={cancelRead}>{cancelling ? '正在取消…' : '取消读取'}</button>}
       {preview !== undefined && <div className={css.workbenchImportPreview}>
         <div><strong>{saved ? '已同步持仓' : '持仓预览 · 尚未保存'}</strong><span>{text(preview.account_label, accountLabel)} · 当前 {String(preview.previous_count)} 条 → {items.length} 条</span></div>
         <p>来源：{text(preview.label, '同花顺')} · 读取时间：{text(preview.read_at, '—')} · 预览有效期 5 分钟</p>
-        <div className={css.workbenchImportTableWrap}><table><thead><tr><th>股票代码</th><th>数量（股）</th><th>成本价（元）</th></tr></thead><tbody>{items.map((item, index) => <tr key={`${text(item.ticker, '')}-${index}`}><td>{text(item.ticker, '—')}</td><td>{number(item.quantity)?.toLocaleString('zh-CN') ?? '—'}</td><td>{number(item.cost_price)?.toLocaleString('zh-CN') ?? '—'}</td></tr>)}</tbody></table></div>
-        {saved ? <><strong>本次同步记录</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p><button type="button" className={css.primaryButton} onClick={onBack}>完成</button></> : <><p>确认后整体替换本地持仓并重新计算组合风险；空结果不会清空持仓。</p><button type="button" className={css.primaryButton} disabled={busy} onClick={confirm}>确认替换 {items.length} 条持仓</button><button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { setPreview(undefined); setError('') }}>取消预览</button></>}
+        <div className={css.workbenchImportTableWrap}><table><thead><tr><th>股票代码</th><th>数量（股）</th><th>成本价（元）</th><th>时间来源</th></tr></thead><tbody>{items.map((item, index) => {
+          const ticker = text(item.ticker, '')
+          const trades = records(item.trades)
+          const sourceLabel = text(item.time_source_label, '读取时间兜底')
+          return <Fragment key={`${ticker}-${index}`}>
+            <tr><td>{ticker || '—'}</td><td>{number(item.quantity)?.toLocaleString('zh-CN') ?? '—'}</td><td>{number(item.cost_price)?.toLocaleString('zh-CN') ?? '—'}</td><td>{sourceLabel}</td></tr>
+            <tr className={css.holdingTradeDetail}><td colSpan={4}><details><summary>{trades.length > 0 ? `查看 ${trades.length} 笔成交明细` : '未取得成交明细'}</summary>
+              {trades.length > 0
+                ? <table aria-label={`${ticker} 成交明细`}><thead><tr><th>券商成交时间</th><th>方向</th><th>数量</th><th>成交价</th></tr></thead><tbody>{trades.map((trade, tradeIndex) => <tr key={`${text(trade.executed_at, '')}-${tradeIndex}`}><td>{text(trade.executed_at, '—')}</td><td>{trade.side === 'buy' ? '买入' : trade.side === 'sell' ? '卖出' : '未知'}</td><td>{number(trade.quantity)?.toLocaleString('zh-CN') ?? '—'}</td><td>{number(trade.price)?.toLocaleString('zh-CN') ?? '—'}</td></tr>)}</tbody></table>
+                : <label className={css.holdingFallbackTime}><span>{sourceLabel}</span><input aria-label={`${ticker} 持仓归因时间`} type="datetime-local" value={text(item.position_time, '').slice(0, 16)} onChange={event => { updateFallbackTime(ticker, event.target.value) }} /></label>}
+            </details></td></tr>
+          </Fragment>
+        })}</tbody></table></div>
+        {saved ? <><strong>本次同步记录</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p><button type="button" className={css.primaryButton} onClick={onBack}>完成</button></>
+          : preview.changed === false ? <><p role="status">持仓无变化，不会创建重复快照或变更记录。</p><button type="button" className={css.primaryButton} onClick={() => { if (native !== undefined) nativeAction('discard'); onBack() }}>完成</button></>
+            : <><p>确认后整体替换本地持仓并重新计算组合风险；空结果不会清空持仓。</p><button type="button" className={css.primaryButton} disabled={busy} onClick={confirm}>确认替换 {items.length} 条持仓</button><button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { if (native !== undefined) nativeAction('discard'); setPreview(undefined); setError('') }}>取消预览</button></>}
       </div>}
     </div>
     {(error || source.state.error || config.state.error) && <div className={css.workbenchImportErrors} role="alert"><strong>当前操作未完成</strong><span>{error || source.state.error || config.state.error}</span><span>本地持仓保持不变；可重新读取或改用手动录入。</span></div>}
@@ -715,6 +784,10 @@ function HoldingsEditor({
           requestData={requestData}
           holdingsProviders={holdingsProviders}
           onSync={applySyncedHoldings}
+          onNativeSync={(items) => {
+            setSavedSnapshot(items)
+            setNotice(`已同步 ${items.length} 条持仓，工作台数据正在刷新。`)
+          }}
           onBack={returnToView}
           onSavingChange={(value) => { setSaving(value); onSavingChange(value) }}
         />

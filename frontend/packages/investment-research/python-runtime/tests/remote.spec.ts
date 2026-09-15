@@ -95,6 +95,15 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(runtime.readiness().backends[0]?.runtimeLogPath).toMatch(/backend\.log$/)
   })
 
+  it('rejects generic holdings preview and commit on the Electron surface', async () => {
+    const runtime = runtimeWith(undefined, 'electron')
+
+    await expect(runtime.requestData({ operation: 'trading-core.holdings-sync', input: { action: 'preview' } }))
+      .rejects.toThrow(/桌面宿主授权入口/)
+    await expect(runtime.requestData({ operation: 'trading-core.holdings-sync', input: { action: 'commit', preview_token: 'secret' } }))
+      .rejects.toThrow(/桌面宿主授权入口/)
+  })
+
   it('maps a cloud storage failure to a stable safe Remote error without exposing its Host path', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'investment-cloud-error-'))
     roots.push(dshHome)

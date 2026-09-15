@@ -623,8 +623,14 @@ def create_app(
             return {"readiness": "failed", "blocking_reason": "read_failed", "reason": "操作未完成，请重新检查客户端或改用手动录入。"}
 
     @app.post("/holdings/sync", response_model=dict)
-    async def holdings_sync_post(req: Optional[HoldingsSyncRequest] = None):
+    async def holdings_sync_post(req: Optional[HoldingsSyncRequest] = None,
+                                 x_holdings_native: str = Header(default="")):
         """读取只返回预览；显式 commit 才保存，旧无参数请求不再写入。"""
+        if os.environ.get("DSH_HOLDINGS_NATIVE_REQUIRED") == "1":
+            import secrets
+            token = os.environ.get("DSH_HOLDINGS_NATIVE_TOKEN", "")
+            if not token or not secrets.compare_digest(token, x_holdings_native):
+                raise HTTPException(status_code=403, detail="Electron 持仓操作需要桌面宿主授权。")
         request = req or HoldingsSyncRequest()
         result = await run_in_threadpool(sync_result, lambda: commit_holdings(request.preview_token)
                                          if request.action == "commit" else preview_holdings())
@@ -640,7 +646,16 @@ def create_app(
         if not token or not secrets.compare_digest(token, x_holdings_native):
             raise HTTPException(status_code=403, detail="原生动作需要桌面宿主授权。")
         from .holdings_source import native_action
-        return await run_in_threadpool(sync_result, lambda: native_action(req.action, req.account_mode, req.client_path))
+        result = await run_in_threadpool(sync_result, lambda: native_action(
+            req.action, req.account_mode, req.client_path, req.preview_token,
+            req.time_overrides, req.operation_id
+        ))
+        if req.action == "commit" or result.get("readiness") in {"blocked", "partial", "failed"}:
+            publish_holdings_notification(
+                result,
+                str(result.get("label") or settings.holdings_provider),
+            )
+        return result
 
     def trades_result(call):
         """成交路由共用的异常映射；与 sync_result 同形，只多一个「空批次」分支。"""

@@ -2649,6 +2649,15 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 .syncPermissionGuide { display: grid; gap: 12px; padding: 16px; border-radius: 12px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-size: 0.8571rem; line-height: 1.5; }
 .syncPermissionGuide > span, .syncHint { color: var(--dsw-alias-label-secondary); }
 .syncActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.syncAuthorization { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 8px 16px; margin: 0; padding: 12px 0; border: 0; border-block-end: 1px solid var(--dsw-alias-border-l1); }
+.syncAuthorization legend { margin-block-end: 8px; color: var(--dsw-alias-label-primary); font-weight: 600; }
+.syncAuthorization label { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; }
+.syncAuthorization p { grid-column: 1 / -1; margin: 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+.holdingTradeDetail > td { padding-block: 4px 12px; background: var(--dsw-alias-bg-layer-1); }
+.holdingTradeDetail summary { min-height: 36px; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.holdingTradeDetail table { margin-block-start: 8px; }
+.holdingFallbackTime { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.holdingFallbackTime input { min-height: 36px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 6px 8px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; }
 .syncHelpButton { justify-self: start; border: 0; padding: 4px 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; text-decoration: underline; cursor: pointer; }
 .syncHelpButton:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: 4px; }
 @media (max-width: 768px) { .syncActions > button { flex: 1 1 auto; } }

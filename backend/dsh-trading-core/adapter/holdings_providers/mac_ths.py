@@ -18,10 +18,11 @@ import logging
 import math
 import subprocess
 import sys
+import time
 from typing import Callable
 
 from ..config import settings
-from ..schemas import HoldingItem, TradeItem
+from ..schemas import HoldingItem, HoldingTrade, TradeItem
 from ._ths_fields import (
     classify_table,
     is_blank,
@@ -31,7 +32,7 @@ from ._ths_fields import (
     parse_number,
     required_fields,
 )
-from ._ths_trades import rows_to_trades
+from ._ths_trades import rows_to_trades as parse_trade_rows
 from .base import HoldingsProvider, ProviderUnavailable, current_account_mode
 
 log = logging.getLogger(__name__)
@@ -185,6 +186,36 @@ def default_runner(script: str) -> tuple[int, str, str]:
         timeout=settings.mac_ths_timeout,
     )
     return proc.returncode, proc.stdout, proc.stderr
+
+
+def _default_runner_with_cancel(script: str, cancelled: Callable[[], bool]) -> tuple[int, str, str]:
+    """运行 osascript，并在用户取消时终止其子进程。"""
+    proc = subprocess.Popen(
+        ["/usr/bin/osascript", "-e", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + settings.mac_ths_timeout
+    while True:
+        if cancelled():
+            proc.terminate()
+            try:
+                proc.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+            raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            proc.kill()
+            proc.communicate()
+            raise subprocess.TimeoutExpired(proc.args, settings.mac_ths_timeout)
+        try:
+            stdout, stderr = proc.communicate(timeout=min(0.1, remaining))
+            return proc.returncode, stdout, stderr
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def osascript_available() -> bool:
@@ -370,7 +401,11 @@ class MacThsProvider(HoldingsProvider):
         """普通调用只允许被动读取，绝不自动激活窗口。"""
         return self.read_holdings()
 
-    def read_holdings(self, *, foreground: bool = False) -> list[HoldingItem]:
+    def read_holdings(self, *, foreground: bool = False,
+                      cancelled: Callable[[], bool] | None = None) -> list[HoldingItem]:
+        cancelled = cancelled or (lambda: False)
+        if cancelled():
+            raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
         if self._platform != "darwin":
             raise ProviderUnavailable("此数据源仅支持 macOS。", "unsupported_platform")
         permission = accessibility_status()
@@ -379,11 +414,15 @@ class MacThsProvider(HoldingsProvider):
                                       "accessibility_required" if permission == "not_granted" else "dependency_missing")
         if not app_running(self._app_name):
             raise ProviderUnavailable("请先打开同花顺并登录。", "client_not_running")
+        passive: list[HoldingItem] | None = None
         try:
-            return read_ax_table(self._account_mode)
+            passive = read_ax_table(self._account_mode, cancelled=cancelled)
         except ProviderUnavailable as exc:
             if not foreground or exc.code != "navigation_required":
                 raise
+        if not foreground:
+            assert passive is not None
+            return passive
         from AppKit import NSWorkspace, NSApplicationActivateIgnoringOtherApps
         workspace = NSWorkspace.sharedWorkspace()
         previous = workspace.frontmostApplication()
@@ -398,12 +437,16 @@ class MacThsProvider(HoldingsProvider):
             target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
             activated = True
             try:
-                return read_ax_table(self._account_mode, navigate=True)
+                return read_ax_table(self._account_mode, navigate=True, cancelled=cancelled)
             except ProviderUnavailable as exc:
                 if exc.code != "navigation_required":
                     raise
             # Apple Events are used only after an actual AX navigation failure.
-            code, stdout, stderr = self._runner(apple_script(DEFAULT_APP_NAME, self._account_mode))
+            script = apple_script(DEFAULT_APP_NAME, self._account_mode)
+            code, stdout, stderr = (_default_runner_with_cancel(script, cancelled)
+                                    if self._runner is default_runner else self._runner(script))
+            if cancelled():
+                raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
             message = stderr or stdout
             if any(marker in message for marker in _AUTOMATION_PERMISSION_MARKERS):
                 raise ProviderUnavailable("辅助功能已授权；本次降级读取需要自动化权限。", "automation_required")
@@ -516,7 +559,13 @@ def trades_navigation_path(account_mode: str) -> tuple[str, ...]:
     )
 
 
-def _ax_session(account_mode: str, *, labels: tuple[str, ...] | None, page: str):
+def _ax_session(
+    account_mode: str,
+    *,
+    labels: tuple[str, ...] | None,
+    page: str,
+    cancelled: Callable[[], bool] | None = None,
+):
     """建立 AX 会话：查权限、定位进程、按需导航，返回 (节点列表, attr, walk)。
 
     持仓与成交共用这一段。TCC 权限、超时预算、尤其是「账户身份必须被证明」这条
@@ -525,7 +574,7 @@ def _ax_session(account_mode: str, *, labels: tuple[str, ...] | None, page: str)
 
     labels 为 None 表示被动读取，不做任何 AXPress。
     """
-    import time
+    cancelled = cancelled or (lambda: False)
     from AppKit import NSWorkspace
     from ApplicationServices import (
         AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
@@ -541,6 +590,8 @@ def _ax_session(account_mode: str, *, labels: tuple[str, ...] | None, page: str)
     AXUIElementSetMessagingTimeout(root, 1.0)
     deadline = time.monotonic() + settings.mac_ths_timeout
     def attr(node, key):
+        if cancelled():
+            raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
         if time.monotonic() > deadline:
             raise ProviderUnavailable("读取超时，请重试。", "read_timeout")
         code, value = AXUIElementCopyAttributeValue(node, key, None)
@@ -557,6 +608,8 @@ def _ax_session(account_mode: str, *, labels: tuple[str, ...] | None, page: str)
             pending.extend(attr(current, "AXChildren") or [])
     if labels:
         for label in labels:
+            if cancelled():
+                raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
             button = next((n for n in walk(root) if attr(n, "AXTitle") == label
                            and attr(n, "AXRole") in ("AXButton", "AXRadioButton")), None)
             if button is None or AXUIElementPerformAction(button, "AXPress") != 0:
@@ -577,11 +630,41 @@ def _table_values(table, attr, walk) -> list[list[str]]:
              if attr(n, "AXRole") == "AXStaticText"] for row in rows]
 
 
-def read_ax_table(account_mode: str, *, navigate: bool = False) -> list[HoldingItem]:
+def _attach_holding_trades(
+    holdings: list[HoldingItem], trades: list[TradeItem]
+) -> list[HoldingItem]:
+    """把成交事件投影到持仓；无法构成持仓明细的零价流水不伪造成交。"""
+    grouped: dict[str, list[HoldingTrade]] = {}
+    for trade in trades:
+        if trade.quantity <= 0 or trade.price <= 0:
+            continue
+        grouped.setdefault(trade.ticker, []).append(
+            HoldingTrade(
+                executed_at=trade.traded_at,
+                side=trade.side if trade.side in {"buy", "sell"} else "unknown",
+                quantity=trade.quantity,
+                price=trade.price,
+            )
+        )
+    return [
+        item.model_copy(update={"trades": grouped.get(item.ticker, [])})
+        for item in holdings
+    ]
+
+
+def read_ax_table(
+    account_mode: str,
+    *,
+    navigate: bool = False,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[HoldingItem]:
     """被动 AX 遍历；仅获准原生调用允许固定账户路径的 AXPress。"""
     labels = ("交易", _account_tab(account_mode), "股票", "持仓") if navigate else None
-    nodes, attr, walk = _ax_session(account_mode, labels=labels, page="持仓")
+    nodes, attr, walk = _ax_session(
+        account_mode, labels=labels, page="持仓", cancelled=cancelled
+    )
     saw_trades_table = False
+    holdings: list[HoldingItem] | None = None
     for table in nodes:
         if attr(table, "AXRole") != "AXTable":
             continue
@@ -592,22 +675,49 @@ def read_ax_table(account_mode: str, *, navigate: bool = False) -> list[HoldingI
         # 最终报出「未找到持仓表」这种与事实不符的提示。
         kind = classify_table(values[0])
         if kind == "holdings":
-            return rows_to_items(values[0], values[1:])
+            holdings = rows_to_items(values[0], values[1:])
+            break
         if kind == "trades":
             saw_trades_table = True
+    if holdings is not None:
+        if not navigate:
+            return holdings
+        try:
+            trades = read_ax_trades(
+                account_mode, navigate=True, cancelled=cancelled
+            )
+        except ProviderUnavailable as exc:
+            if exc.code in {
+                "read_cancelled",
+                "accessibility_required",
+                "read_timeout",
+                "client_not_running",
+            }:
+                raise
+            # 成交明细是增强信息；客户端版本不支持自动定位时仍保留持仓，
+            # 后续由预览层以本次读取时间作为明确的 fallback。
+            return holdings
+        return _attach_holding_trades(holdings, trades)
     if saw_trades_table:
         raise ProviderUnavailable("当前停留在成交明细页，请切换到「持仓」页后再读取。", "navigation_required")
     raise ProviderUnavailable("未找到完整持仓表格，请确认已登录并进入持仓页。", "navigation_required")
 
 
-def read_ax_trades(account_mode: str, *, navigate: bool = False) -> list[TradeItem]:
+def read_ax_trades(
+    account_mode: str,
+    *,
+    navigate: bool = False,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[TradeItem]:
     """被动 AX 遍历成交明细表；仅获准原生调用允许固定路径的 AXPress。
 
     与 read_ax_table 对称，只是认表签名相反：这里要 trades 表，读到 holdings 表
     才是「走错页」。
     """
     labels = trades_navigation_path(account_mode) if navigate else None
-    nodes, attr, walk = _ax_session(account_mode, labels=labels, page="历史成交")
+    nodes, attr, walk = _ax_session(
+        account_mode, labels=labels, page="历史成交", cancelled=cancelled
+    )
     saw_holdings_table = False
     for table in nodes:
         if attr(table, "AXRole") != "AXTable":
@@ -617,7 +727,7 @@ def read_ax_trades(account_mode: str, *, navigate: bool = False) -> list[TradeIt
             continue
         kind = classify_table(values[0])
         if kind == "trades":
-            return rows_to_trades(
+            return parse_trade_rows(
                 values[0], values[1:], source="mac_ths", account_mode=account_mode
             )
         if kind == "holdings":

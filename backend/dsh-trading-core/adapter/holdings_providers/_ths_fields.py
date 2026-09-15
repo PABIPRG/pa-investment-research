@@ -80,7 +80,6 @@ TABLE_SIGNATURES: dict[str, tuple[str, ...]] = {
     "holdings": ("ticker", "quantity", "cost_price"),
 }
 
-
 def extract(row: dict, target: str) -> float | str | None:
     """从「列名 → 值」的行字典中按候选列名提取值。
 

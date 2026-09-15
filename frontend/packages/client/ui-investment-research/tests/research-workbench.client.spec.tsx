@@ -1290,13 +1290,14 @@ describe('研究工作台', () => {
     expect(requestData.mock.calls.some(([r]) => r.operation === 'trading-core.holdings-sync')).toBe(false)
   })
 
-  it('Electron 后台失败后只展示本次切换入口，取消不保存', async () => {
-    const native = vi.fn().mockResolvedValue({ canceled: true })
+  it('macOS Electron 只从用户主动入口调用原生读取，取消不保存', async () => {
+    const native = vi.fn(async (input: { action: string }) => input.action === 'consent_status'
+      ? { persistent_authorization: false }
+      : { canceled: true })
     Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
     try {
       const requestData = vi.fn(async (request: InvestmentDataRequest) => {
         if (request.operation === 'trading-core.holdings-source') return { provider: 'mac_ths', available: true }
-        if (request.operation === 'trading-core.holdings-sync') return { blocking_reason: 'navigation_required', reason: '请进入持仓页。' }
         return completeResponse(request.operation)
       })
       const view = renderWorkbench(requestData)
@@ -1304,15 +1305,78 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       const dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-      const read = await within(dialog).findByRole('button', { name: '读取持仓预览' })
+      const read = await within(dialog).findByRole('button', { name: '读取持仓' })
       await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
       fireEvent.click(read)
-      const next = await within(dialog).findByRole('button', { name: '查看本次切换说明' })
-      expect(native).not.toHaveBeenCalled()
-      fireEvent.click(next)
-      await waitFor(() => { expect(native).toHaveBeenCalledWith({ action: 'read', account_mode: 'simulated' }) })
+      await waitFor(() => { expect(native).toHaveBeenCalledWith({ action: 'read', account_mode: 'simulated', authorization: 'once' }) })
       expect(within(dialog).queryByText(/确认替换/)).toBeNull()
       expect(requestData.mock.calls.some(([r]) => r.input?.action === 'commit')).toBe(false)
+      expect(requestData.mock.calls.some(([r]) => r.operation === 'trading-core.holdings-sync')).toBe(false)
+    } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
+  })
+
+  it('macOS Electron 读取过程中可以取消且不进入预览', async () => {
+    const read = Promise.withResolvers<unknown>()
+    const native = vi.fn(async (input: { action: string }) => {
+      if (input.action === 'consent_status') return { persistent_authorization: false }
+      if (input.action === 'cancel_read') { read.resolve({ canceled: true }); return { canceled: true } }
+      if (input.action === 'read') return read.promise
+      return {}
+    })
+    Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+    try {
+      const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
+        ? { provider: 'mac_ths', platform: 'darwin', available: true }
+        : completeResponse(request.operation))
+      const view = renderWorkbench(requestData)
+      await view.findByText('白酒板块经营数据改善')
+      fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+      const dialog = view.getByRole('dialog', { name: '持仓明细' })
+      fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+      fireEvent.click(await within(dialog).findByRole('button', { name: '读取持仓' }))
+      fireEvent.click(await within(dialog).findByRole('button', { name: '取消读取' }))
+
+      await waitFor(() => { expect(native).toHaveBeenCalledWith({ action: 'cancel_read', account_mode: 'simulated' }) })
+      await waitFor(() => { expect(within(dialog).getByRole('button', { name: '读取持仓' })).toBeTruthy() })
+      expect(within(dialog).queryByText('持仓预览 · 尚未保存')).toBeNull()
+    } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
+  })
+
+  it('长期授权仍由用户主动读取，并把用户修改的兜底时间交给原生确认提交', async () => {
+    const native = vi.fn(async (input: { action: string }) => {
+      if (input.action === 'consent_status') return { persistent_authorization: true }
+      if (input.action === 'read') return {
+        session_id: 'opaque-session', previous_count: 1, read_at: '2026-09-15T01:00:00Z',
+        items: [{ ticker: '000001', quantity: 100, cost_price: 12.5, position_time: '2026-09-15T01:00:00Z', time_source: 'read_fallback', time_source_label: '读取时间兜底', trades: [] }],
+      }
+      if (input.action === 'commit') return { saved: 1, items: [{ ticker: '000001', quantity: 100, cost_price: 12.5 }] }
+      return {}
+    })
+    Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+    try {
+      const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
+        ? { provider: 'mac_ths', platform: 'darwin', available: true }
+        : completeResponse(request.operation))
+      const view = renderWorkbench(requestData)
+      await view.findByText('白酒板块经营数据改善')
+      fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+      const dialog = view.getByRole('dialog', { name: '持仓明细' })
+      fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+      const persistent = await within(dialog).findByRole<HTMLInputElement>('radio', { name: '长期允许主动读取' })
+      await waitFor(() => { expect(persistent.checked).toBe(true) })
+      fireEvent.click(within(dialog).getByRole('button', { name: '读取持仓' }))
+      fireEvent.click(await within(dialog).findByText('未取得成交明细'))
+      const time = await within(dialog).findByLabelText<HTMLInputElement>('000001 持仓归因时间')
+      fireEvent.change(time, { target: { value: '2026-09-14T14:30' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: '确认替换 1 条持仓' }))
+      await waitFor(() => {
+        expect(native).toHaveBeenCalledWith({
+          action: 'commit', account_mode: 'simulated', session_id: 'opaque-session',
+          time_overrides: { '000001': '2026-09-14T14:30' },
+        })
+      })
+      expect(await within(dialog).findByText('已同步持仓')).toBeTruthy()
+      expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings-sync')).toBe(false)
     } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
   })
 

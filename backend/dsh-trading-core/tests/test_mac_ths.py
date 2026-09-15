@@ -14,10 +14,12 @@ from unittest.mock import patch
 from adapter import holdings_source
 from adapter.holdings_providers import mac_ths
 from adapter.holdings_providers.base import ProviderUnavailable
+from adapter.schemas import HoldingItem, TradeItem
 from adapter.holdings_providers.mac_ths import (
     DEFAULT_APP_NAME,
     MacThsProvider,
     MacThsScriptError,
+    _attach_holding_trades,
     _to_float,
     apple_script,
     default_runner,
@@ -200,6 +202,43 @@ class RowsToItemsTests(unittest.TestCase):
         self.assertNotIn("未找到代码列", message)
 
 
+class AttachHoldingTradesTests(unittest.TestCase):
+    def test_groups_broker_trades_by_ticker_and_preserves_execution_time(self):
+        holdings = [HoldingItem(ticker="600519", quantity=80, cost_price=1498)]
+        trades = [
+            TradeItem(
+                ticker="600519", side="buy", price=1500.5, quantity=100,
+                amount=150050, traded_at="2026-09-15T09:31:02",
+                source="mac_ths", account_mode="real",
+            ),
+            TradeItem(
+                ticker="600519", side="sell", price=1510, quantity=20,
+                amount=30200, traded_at="2026-09-15T10:02:03",
+                source="mac_ths", account_mode="real",
+            ),
+        ]
+
+        result = _attach_holding_trades(holdings, trades)
+
+        self.assertEqual(len(result[0].trades), 2)
+        self.assertEqual(result[0].trades[0].executed_at, "2026-09-15T09:31:02")
+        self.assertEqual(result[0].trades[0].side, "buy")
+        self.assertEqual(result[0].trades[1].side, "sell")
+
+    def test_zero_price_non_trade_flow_is_not_fabricated_as_a_holding_trade(self):
+        holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
+        trades = [
+            TradeItem(
+                ticker="600519", side="unclassified", side_label="送股",
+                price=0, quantity=10, amount=0,
+                traded_at="2026-09-15T10:02:03", source="mac_ths",
+                account_mode="real",
+            )
+        ]
+
+        self.assertEqual(_attach_holding_trades(holdings, trades)[0].trades, [])
+
+
 class ToFloatTests(unittest.TestCase):
     def test_tolerates_thousand_separators_currency_and_dashes(self):
         self.assertEqual(_to_float("11,000"), 11000.0)
@@ -251,7 +290,8 @@ class MacThsProviderTests(unittest.TestCase):
         runner = Mock()
         with patch.object(mac_ths, 'read_ax_table', return_value=[]) as read:
             MacThsProvider(platform='darwin', runner=runner).get_holdings()
-            read.assert_called_once_with('simulated')
+            self.assertEqual(read.call_args.args, ('simulated',))
+            self.assertTrue(callable(read.call_args.kwargs['cancelled']))
         runner.assert_not_called()
         self.target.activateWithOptions_.assert_not_called()
 
@@ -266,7 +306,8 @@ class MacThsProviderTests(unittest.TestCase):
         with patch.object(mac_ths, 'read_ax_table', side_effect=[ProviderUnavailable('导航', 'navigation_required'), []]) as read:
             result = MacThsProvider(platform='darwin', account_mode='real').read_holdings(foreground=True)
         self.assertEqual(result, [])
-        self.assertEqual(read.call_args.kwargs, {'navigate': True})
+        self.assertTrue(read.call_args.kwargs['navigate'])
+        self.assertTrue(callable(read.call_args.kwargs['cancelled']))
         self.previous.activateWithOptions_.assert_called_once()
 
     def test_only_actual_fallback_requests_automation_and_restores(self):

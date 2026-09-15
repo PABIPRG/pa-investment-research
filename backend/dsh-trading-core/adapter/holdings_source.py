@@ -20,6 +20,7 @@ holdings_cli.py 提供的是命令行入口，本模块把其中 detect/sync 的
 from __future__ import annotations
 
 import asyncio
+import copy
 import sys
 import time
 import secrets
@@ -31,7 +32,7 @@ from .config import settings
 from .holdings_providers import get_provider
 from .holdings_providers.base import ProviderUnavailable, current_account_mode
 from .holdings_providers.broker_profiles import discover_clients
-from .portfolio_performance import record_holdings_snapshot
+from .portfolio_performance import holdings_snapshot_matches, record_holdings_snapshot
 from .store import JsonStore
 
 # discover_clients 扫盘结果缓存：(写入时间, 投影后列表)。UI 永远用默认 roots，无需分键。
@@ -375,13 +376,22 @@ _PREVIEWS: dict[str, dict] = {}
 _PREVIEW_LOCK = threading.Lock()
 _PREVIEW_TTL = 300
 _READ_LOCK = threading.Lock()
+_NATIVE_READS: dict[str, threading.Event] = {}
+_NATIVE_READS_LOCK = threading.Lock()
 
 
-def preview_holdings(*, foreground: bool = False, expected_account: str | None = None) -> dict:
+def _cancelled(cancelled) -> None:
+    if cancelled is not None and cancelled():
+        raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
+
+
+def preview_holdings(*, foreground: bool = False, expected_account: str | None = None,
+                     cancelled=None) -> dict:
     """读取预览不落盘；foreground 仅由经宿主认证的原生入口传入。"""
     if not _READ_LOCK.acquire(blocking=False):
         raise ProviderUnavailable("另一次持仓读取正在进行，请稍后重试。", "busy")
     try:
+        _cancelled(cancelled)
         mode = current_account_mode()
         name = settings.holdings_provider
         if expected_account is not None and expected_account != mode:
@@ -392,21 +402,47 @@ def preview_holdings(*, foreground: bool = False, expected_account: str | None =
         provider = get_provider()
         store = JsonStore()
         previous = store.get("holdings", "default", []) or []
-        if name in _CLIENT_AUTOMATION_PROVIDERS:
+        if name == "mac_ths":
+            items = provider.read_holdings(foreground=foreground, cancelled=cancelled)
+        elif name in _CLIENT_AUTOMATION_PROVIDERS:
             items = provider.read_holdings(foreground=foreground)
         else:
             items = provider.get_holdings()
+        _cancelled(cancelled)
         if not items:
             raise EmptyHoldingsError("没有读到持仓，当前持仓保持不变。请确认账户与持仓页后重试。")
         if mode != current_account_mode() or name != settings.holdings_provider:
             raise ProviderUnavailable("读取期间账户或数据源发生变化，请重试。", "account_changed")
-        payload = [item.model_dump() for item in items]
+        read_at = datetime.now(timezone.utc).isoformat()
+        previous_by_ticker = {item.get("ticker"): item for item in previous if isinstance(item, dict)}
+        payload = []
+        for item in items:
+            value = item.model_dump()
+            trades = value.get("trades") or []
+            if trades:
+                value["position_time"] = max(str(trade["executed_at"]) for trade in trades)
+                value["time_source"] = "broker_detail"
+                value["time_source_label"] = "券商明细"
+            else:
+                value["position_time"] = read_at
+                value["time_source"] = "read_fallback"
+                value["time_source_label"] = "读取时间兜底"
+                previous_item = previous_by_ticker.get(value["ticker"])
+                if previous_item and previous_item.get("time_source") == "user_modified":
+                    value["position_time"] = previous_item.get("position_time")
+                    value["time_source"] = "user_modified"
+                    value["time_source_label"] = "用户修改"
+            payload.append(value)
         token = secrets.token_urlsafe(32)
         result = {"preview_token": token, "items": payload, "previous_count": len(previous),
                   "account_mode": mode, "account_label": _ACCOUNT_LABELS[mode], "provider": name,
-                  "label": _provider_label(provider), "read_at": datetime.now(timezone.utc).isoformat(),
+                  "label": _provider_label(provider), "read_at": read_at,
                   "expires_in_seconds": _PREVIEW_TTL, "readiness": "preview", "session": "ready",
                   "surface": "electron" if foreground else "web", "platform": sys.platform}
+        history = store.get("holdings", "snapshots", []) or []
+        latest = history[-1] if history else None
+        result["changed"] = not holdings_snapshot_matches(latest, payload, "broker_" + mode)
+        _cancelled(cancelled)
         with _PREVIEW_LOCK:
             now = time.monotonic()
             for key in list(_PREVIEWS):
@@ -421,39 +457,87 @@ def preview_holdings(*, foreground: bool = False, expected_account: str | None =
         _READ_LOCK.release()
 
 
-def commit_holdings(token: str) -> dict:
+def commit_holdings(token: str, time_overrides: dict[str, str] | None = None) -> dict:
     """在同一存储事务内校验预览基线并保存；token 成功后仅可使用一次。"""
     with _READ_LOCK:
         with _PREVIEW_LOCK:
             preview = _PREVIEWS.get(token)
             if preview is None or preview["expires"] <= time.monotonic():
                 raise PreviewConflict("预览已过期或已使用，请重新读取。")
-            result = preview["result"]
+            result = copy.deepcopy(preview["result"])
             store = JsonStore()
             if (result["account_mode"] != current_account_mode()
                     or result["provider"] != settings.holdings_provider
                     or preview["root"] != str(store.base_dir.resolve())):
                 raise PreviewConflict("账户、数据源或数据目录已变化，请重新读取。")
+            if time_overrides:
+                for item in result["items"]:
+                    replacement = time_overrides.get(item["ticker"])
+                    if replacement is not None and item.get("time_source") != "broker_detail":
+                        item["position_time"] = replacement
+                        item["time_source"] = "user_modified"
+                        item["time_source_label"] = "用户修改"
+            previous_by_ticker = {item.get("ticker"): item for item in preview["previous"] if isinstance(item, dict)}
+            for item in result["items"]:
+                previous_item = previous_by_ticker.get(item["ticker"])
+                if (item.get("time_source") == "read_fallback" and previous_item
+                        and previous_item.get("time_source") == "user_modified"):
+                    item["position_time"] = previous_item.get("position_time")
+                    item["time_source"] = "user_modified"
+                    item["time_source_label"] = "用户修改"
             with store.transaction():
                 if (store.get("holdings", "default", []) or []) != preview["previous"]:
                     raise PreviewConflict("本地持仓已变化，请重新读取并确认替换范围。")
+                history = store.get("holdings", "snapshots", []) or []
+                previous_snapshot_id = history[-1].get("snapshot_id") if history else None
                 snapshot = record_holdings_snapshot(store, result["items"], "broker_" + result["account_mode"])
             del _PREVIEWS[token]
-            return {**result, "saved": len(result["items"]), "snapshot_id": snapshot["snapshot_id"] if snapshot else None}
+            return {**result, "saved": len(result["items"]), "snapshot_id": snapshot["snapshot_id"] if snapshot else None,
+                    "changed": bool(snapshot and snapshot["snapshot_id"] != previous_snapshot_id)}
 
 
-def native_action(action: str, account_mode: str, client_path: str = "") -> dict:
+def native_action(action: str, account_mode: str, client_path: str = "", preview_token: str = "",
+                  time_overrides: dict[str, str] | None = None, operation_id: str = "") -> dict:
     """仅认证宿主可调用；启动路径经过固定应用名校验。"""
     import subprocess
     import os
     env = {key: value for key, value in os.environ.items()
            if not any(marker in key.upper() for marker in ("KEY", "SECRET", "TOKEN", "PASSWORD"))}
+    if action == "cancel_read":
+        if not operation_id:
+            raise ProviderUnavailable("读取任务标识无效，请重试。", "invalid_operation")
+        with _NATIVE_READS_LOCK:
+            event = _NATIVE_READS.get(operation_id)
+            if event is None:
+                event = threading.Event()
+                _NATIVE_READS[operation_id] = event
+                while len(_NATIVE_READS) > 64:
+                    del _NATIVE_READS[next(iter(_NATIVE_READS))]
+            event.set()
+        return {"canceled": True}
     if account_mode != current_account_mode():
         raise ProviderUnavailable("账户选择已变化，请重试。", "account_changed")
     if action == "read":
         if settings.holdings_provider not in _CLIENT_AUTOMATION_PROVIDERS:
             raise ProviderUnavailable("此数据源无需同花顺原生操作。", "unsupported_action")
-        return preview_holdings(foreground=True, expected_account=account_mode)
+        if not operation_id:
+            raise ProviderUnavailable("读取任务标识无效，请重试。", "invalid_operation")
+        event = threading.Event()
+        with _NATIVE_READS_LOCK:
+            if operation_id in _NATIVE_READS:
+                pending = _NATIVE_READS[operation_id]
+                if pending.is_set():
+                    del _NATIVE_READS[operation_id]
+                    raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
+                raise ProviderUnavailable("读取任务标识重复，请重试。", "invalid_operation")
+            _NATIVE_READS[operation_id] = event
+        try:
+            return preview_holdings(foreground=True, expected_account=account_mode,
+                                    cancelled=event.is_set)
+        finally:
+            with _NATIVE_READS_LOCK:
+                if _NATIVE_READS.get(operation_id) is event:
+                    del _NATIVE_READS[operation_id]
     if action == "read_trades":
         # 走原生通道而不是普通 /trades/sync，是因为 Windows 的另存为会抢焦点并可能弹
         # 风控验证码——那是需要用户本次同意的前台动作，不能由网页请求触发。
@@ -463,6 +547,10 @@ def native_action(action: str, account_mode: str, client_path: str = "") -> dict
         if settings.holdings_provider.strip().lower() not in _TRADES_PROVIDERS:
             raise ProviderUnavailable("当前数据源不支持读取成交明细。", "unsupported_action")
         return preview_trades(foreground=True, expected_account=account_mode)
+    if action == "commit":
+        if not preview_token:
+            raise PreviewConflict("预览已过期，请重新读取。")
+        return commit_holdings(preview_token, time_overrides)
     if action == "select_client" and sys.platform == "win32":
         path = Path(client_path).resolve(strict=True)
         if path.name.lower() != "xiadan.exe" or not path.is_file():

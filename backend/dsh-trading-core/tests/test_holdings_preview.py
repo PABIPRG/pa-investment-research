@@ -1,13 +1,16 @@
 """同步预览与提交的不可绕过行为。"""
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 
 from adapter import holdings_source as source
-from adapter.schemas import HoldingItem
+from adapter.schemas import HoldingItem, HoldingTrade
+from adapter.holdings_providers.base import ProviderUnavailable
 from adapter.store import JsonStore
 
 
@@ -30,10 +33,40 @@ class PreviewTests(unittest.TestCase):
     def test_preview_never_writes_and_commit_consumes_token(self):
         preview = source.preview_holdings()
         self.assertEqual(self.store.get("holdings", "default", []), [])
+        self.assertEqual(preview["items"][0]["time_source"], "read_fallback")
+        self.assertEqual(preview["items"][0]["position_time"], preview["read_at"])
         result = source.commit_holdings(preview["preview_token"])
         self.assertEqual(result["saved"], 1)
+        self.assertTrue(result["changed"])
         with self.assertRaises(source.PreviewConflict):
             source.commit_holdings(preview["preview_token"])
+
+    def test_broker_trade_time_takes_precedence_over_read_fallback(self):
+        self.item = HoldingItem(
+            ticker="600519", quantity=100, cost_price=1500,
+            trades=[HoldingTrade(executed_at="2026-09-15 09:31:02", side="buy", quantity=100, price=1500)],
+        )
+        self.provider.get_holdings = lambda: [self.item]
+
+        preview = source.preview_holdings()
+
+        self.assertEqual(preview["items"][0]["time_source"], "broker_detail")
+        self.assertEqual(preview["items"][0]["position_time"], "2026-09-15 09:31:02")
+
+    def test_repeated_fallback_read_is_unchanged_and_preserves_user_time(self):
+        first = source.preview_holdings()
+        committed = source.commit_holdings(first["preview_token"], {"600519": "2026-09-14T14:30"})
+        self.assertTrue(committed["changed"])
+
+        repeated = source.preview_holdings()
+        self.assertFalse(repeated["changed"])
+        self.assertEqual(repeated["items"][0]["time_source"], "user_modified")
+        result = source.commit_holdings(repeated["preview_token"])
+
+        self.assertFalse(result["changed"])
+        self.assertEqual(result["items"][0]["time_source"], "user_modified")
+        self.assertEqual(result["items"][0]["position_time"], "2026-09-14T14:30")
+        self.assertEqual(len(self.store.get("holdings", "snapshots", [])), 1)
 
     def test_changed_holdings_and_account_reject_commit(self):
         preview = source.preview_holdings()
@@ -53,6 +86,46 @@ class PreviewTests(unittest.TestCase):
         self.provider.get_holdings = lambda: []
         with self.assertRaises(source.EmptyHoldingsError):
             source.preview_holdings()
+
+    def test_native_read_can_be_cancelled_without_creating_a_preview(self):
+        started = threading.Event()
+        failures = []
+
+        def read_holdings(*, foreground=False, cancelled=None):
+            self.assertTrue(foreground)
+            started.set()
+            while not cancelled():
+                time.sleep(0.001)
+            raise ProviderUnavailable("已取消读取", "read_cancelled")
+
+        self.provider.name = "mac_ths"
+        self.provider.read_holdings = read_holdings
+
+        def read():
+            try:
+                source.native_action("read", "simulated", operation_id="cancel-me")
+            except Exception as exc:
+                failures.append(exc)
+
+        with patch.object(source.settings, "holdings_provider", "mac_ths"):
+            worker = threading.Thread(target=read)
+            worker.start()
+            self.assertTrue(started.wait(1))
+            self.assertEqual(source.native_action("cancel_read", "simulated", operation_id="cancel-me"), {"canceled": True})
+            worker.join(1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(failures[0].code, "read_cancelled")
+
+    def test_cancel_arriving_before_native_read_prevents_the_read(self):
+        self.provider.name = "mac_ths"
+        self.provider.read_holdings = lambda **kwargs: self.fail("canceled read reached provider")
+        with patch.object(source.settings, "holdings_provider", "mac_ths"):
+            self.assertEqual(source.native_action("cancel_read", "simulated", operation_id="cancel-first"), {"canceled": True})
+            with self.assertRaises(ProviderUnavailable) as caught:
+                source.native_action("read", "simulated", operation_id="cancel-first")
+        self.assertEqual(caught.exception.code, "read_cancelled")
 
 class PermissionTests(unittest.TestCase):
     def test_denied_accessibility_does_not_read_or_navigate(self):
@@ -123,7 +196,9 @@ class ReadinessTests(unittest.TestCase):
             windows=lambda visible_only=True: [_Window()]))
         provider = EasyTraderProvider(account_mode='simulated')
 
-        with patch.dict(sys.modules, {'pywinauto': fake}):
+        with patch.dict(sys.modules, {'pywinauto': fake}), patch(
+            'adapter.holdings_providers.easytrader.sys.platform', 'win32'
+        ):
             with self.assertRaises(ProviderUnavailable) as ctx:
                 provider._read_visible_table()
 

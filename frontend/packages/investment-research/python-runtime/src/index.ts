@@ -166,6 +166,7 @@ export class InvestmentPythonRuntime extends Service {
       dataTransferEnvironment: {
         'trading-core': {
           DSH_HOLDINGS_NATIVE_TOKEN: this.holdingsNativeToken,
+          ...(this.deploymentSnapshot.nativeHoldings ? { DSH_HOLDINGS_NATIVE_REQUIRED: '1' } : {}),
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
           NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
@@ -289,6 +290,9 @@ export class InvestmentPythonRuntime extends Service {
    */
   @Remote('request-data')
   requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue> {
+    if (this.deployment().nativeHoldings && request.operation === 'trading-core.holdings-sync') {
+      return Promise.reject(new Error('Electron 持仓读取与确认必须使用桌面宿主授权入口。'))
+    }
     if (!this.deployment().brokerSync && [
       'trading-core.holdings-source',
       'trading-core.holdings-detect',
@@ -309,20 +313,21 @@ export class InvestmentPythonRuntime extends Service {
    * Run one native holdings operation after the Electron main process obtained consent.
    * This method is deliberately absent from the Remote registry.
    * @param input - fixed action and account; client path comes only from the native picker.
-   * @returns backend readiness or a read-only preview.
+   * @param signal - optional cancellation owned by the Electron main process.
+   * @returns backend readiness, preview, cancellation, or commit result.
    */
-  async nativeHoldings(input: { action: 'read' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; client_path?: string }): Promise<unknown> {
+  async nativeHoldings(input: { action: 'read' | 'read_trades' | 'cancel_read' | 'commit' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; operation_id?: string; preview_token?: string; time_overrides?: Record<string, string>; client_path?: string }, signal?: AbortSignal): Promise<unknown> {
     if (!this.deployment().nativeHoldings) {
       throw new Error('当前部署不提供原生持仓操作。')
     }
-    const lease = await this.manager.acquire('trading-core')
+    const lease = await this.manager.acquire('trading-core', signal)
     try {
       if (lease.ownership !== 'owned') throw new Error('原生持仓操作需要本应用管理的本机后台。')
       const response = await fetch(new URL('/holdings/native', lease.baseUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Holdings-Native': this.holdingsNativeToken },
         body: JSON.stringify(input),
-        signal: AbortSignal.timeout(240_000),
+        signal: signal === undefined ? AbortSignal.timeout(240_000) : AbortSignal.any([signal, AbortSignal.timeout(240_000)]),
       })
       if (!response.ok) throw new Error('本机操作失败，请重新检查客户端。')
       return await response.json()
