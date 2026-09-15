@@ -7,3 +7,4 @@ export const SHORTCUT_ACTION_CHANNEL = 'dsh:electron:shortcut-action'
 export const SHORTCUT_CAPTURE_CHANNEL = 'dsh:electron:shortcut-capture'
 
 export const HOLDINGS_NATIVE_CHANNEL = 'dsh:electron:holdings'
+export const NOTIFICATION_OPEN_CHANNEL = 'dsh:electron:notification-open'

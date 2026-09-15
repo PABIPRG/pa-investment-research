@@ -17,7 +17,7 @@ import { downloadBackup } from './backup-download.ts'
 import type { InvestmentReadinessKey } from './locales.ts'
 import css from './DataBackupSection.module.css'
 
-const ALL_CATEGORIES: BackupCategory[] = ['strategies', 'holdings', 'watchlist', 'research', 'preferences']
+const ALL_CATEGORIES: BackupCategory[] = ['strategies', 'holdings', 'watchlist', 'research', 'preferences', 'notifications']
 
 export interface DataBackupSectionProps {
   t: (key: InvestmentReadinessKey) => string
@@ -115,6 +115,7 @@ function categoryLabel(category: BackupCategory, t: DataBackupSectionProps['t'])
     watchlist: 'backupCategoryWatchlist',
     research: 'backupCategoryResearch',
     preferences: 'backupCategoryPreferences',
+    notifications: 'backupCategoryNotifications',
   }
   return t(keys[category])
 }
@@ -129,7 +130,7 @@ function reasonLabel(reason: BackupReason, t: DataBackupSectionProps['t']): stri
 }
 
 function ruleOptions(category: BackupCategory): BackupConflictRule[] {
-  if (category === 'holdings' || category === 'preferences') return ['keep_local', 'use_import']
+  if (category === 'holdings' || category === 'preferences' || category === 'notifications') return ['keep_local', 'use_import']
   if (category === 'watchlist') return ['merge', 'keep_local', 'use_import']
   return ['keep_both', 'keep_local', 'use_import']
 }

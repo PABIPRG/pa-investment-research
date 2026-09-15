@@ -76,6 +76,13 @@ from .schemas import (
 )
 from .scheduler import setup_scheduler
 from .store import JsonStore
+from .config import settings
+from .notifications.api import register_notification_routes
+from .notifications.channels import build_delivery_adapters
+from .notifications.delivery import NotificationDeliveryWorker
+from .notifications.models import NotificationEvent
+from .notifications.repository import NotificationRepository
+from .notifications.service import NotificationService
 from .trade_profile import build_profile
 from .trades_source import (
     EmptyTradesError,
@@ -323,7 +330,10 @@ async def lifespan(app: FastAPI):
     from .strategies import reconcile_completed_backtests
 
     recovery_store = JsonStore()
-    recover_incomplete_transactions(recovery_store)
+    recover_incomplete_transactions(
+        recovery_store,
+        notification_repository=app.state.notification_service.repository,
+    )
     recovered = bt.recover_tasks(recovery_store)
     shadow_recovered = shadow_task_ledger.recover_tasks(recovery_store)
     reconciled = reconcile_completed_backtests(recovery_store)
@@ -369,7 +379,10 @@ async def lifespan(app: FastAPI):
     if shadow_recovered["interrupted"]:
         logger.info("影子验证任务恢复: %s", shadow_recovered)
     # 功能4：定时盘前/盘后简报（BRIEF_SCHEDULE_ENABLED=false 时返回 None）
-    sched = setup_scheduler()
+    sched = setup_scheduler(
+        notification_worker=getattr(app.state, "notification_worker", None),
+        notification_service=getattr(app.state, "notification_service", None),
+    )
     app.state.scheduler = sched
     logger.info("适配器启动完成（runners=%s）", {k: v.name for k, v in app.state.manager.registry.items()})
     yield
@@ -377,13 +390,109 @@ async def lifespan(app: FastAPI):
         sched.shutdown(wait=False)
 
 
-def create_app(report_store: ReportStore | None = None) -> FastAPI:
+def create_app(
+    report_store: ReportStore | None = None,
+    notification_service: NotificationService | None = None,
+    notification_internal_token: str | None = None,
+) -> FastAPI:
     manager = TaskManager(registry=_build_registry(), report_store=report_store)
     portfolio_price_cache = PortfolioPriceHistoryCache(load_portfolio_prices)
 
+    if notification_service is None:
+        channel_defaults = {
+            category: {"browser": True, "macos": True}
+            for category in ("market_risk", "holding_plan", "holdings_sync", "research")
+        }
+        if settings.push_enabled:
+            for category in channel_defaults.values():
+                for channel in settings.push_channels or ("serverchan", "wecom"):
+                    if channel in {"serverchan", "wecom"}:
+                        category[channel] = True
+        if settings.notification_email_to:
+            for category in channel_defaults.values():
+                category["email"] = True
+        notification_service = NotificationService(
+            NotificationRepository(settings.notification_db_path),
+            channel_defaults=channel_defaults,
+            channel_destinations={
+                "serverchan": "configured",
+                "wecom": "configured",
+                "email": settings.notification_email_to or "configured",
+                "browser": "subscribers",
+                "macos": "subscribers",
+            },
+            dedupe_window_seconds=settings.notification_dedupe_window_seconds,
+        )
+
     app = FastAPI(title="TradingAgents Adapter", version="0.1.0", lifespan=lifespan)
     app.state.manager = manager
-    register_data_transfer_routes(app)
+    app.state.notification_service = notification_service
+    app.state.notification_worker = None
+    if settings.notification_delivery_enabled:
+        app.state.notification_worker = NotificationDeliveryWorker(
+            notification_service.repository,
+            build_delivery_adapters(notification_service.repository, settings),
+            lease_seconds=settings.notification_delivery_lease_seconds,
+            max_attempts=settings.notification_delivery_max_attempts,
+            batch_size=settings.notification_delivery_batch_size,
+        )
+    register_notification_routes(
+        app,
+        notification_service,
+        internal_token=(
+            settings.notification_internal_token
+            if notification_internal_token is None
+            else notification_internal_token
+        ),
+        vapid_public_key=settings.notification_vapid_public_key,
+    )
+    register_data_transfer_routes(
+        app,
+        notification_repository=notification_service.repository,
+    )
+
+    def publish_holdings_notification(result: dict, source_name: str) -> None:
+        """持仓事实提交后发布；通知失败不得回滚已经完成的持仓事务。"""
+        try:
+            snapshot_id = str(result.get("snapshot_id") or "")
+            if snapshot_id:
+                notification_service.publish(NotificationEvent.from_mapping({
+                    "eventId": f"holdings-snapshot:{snapshot_id}",
+                    "schemaVersion": 1,
+                    "type": "holdings.snapshot.changed.v1",
+                    "producer": "trading-core.holdings",
+                    "occurredAt": str(result.get("effective_at") or datetime.now(timezone.utc).isoformat()),
+                    "subject": {"kind": "holdings-sync", "id": snapshot_id},
+                    "payload": {
+                        "syncRunId": snapshot_id,
+                        "sourceName": source_name,
+                        "changeSummary": f"已保存 {int(result.get('saved') or 0)} 条持仓",
+                    },
+                }))
+                return
+            readiness = str(result.get("readiness") or "")
+            reason_code = str(result.get("blocking_reason") or "")
+            if readiness not in {"blocked", "partial", "failed"} or not reason_code:
+                return
+            action_required = reason_code in {
+                "automation_required", "accessibility_required", "empty_result", "preview_conflict",
+            }
+            now = datetime.now(timezone.utc)
+            notification_service.publish(NotificationEvent.from_mapping({
+                "eventId": f"holdings-sync:{source_name}:{reason_code}:{now.strftime('%Y%m%d%H%M')}",
+                "schemaVersion": 1,
+                "type": "holdings.sync.action_required.v1" if action_required else "holdings.sync.failed.v1",
+                "producer": "trading-core.holdings",
+                "occurredAt": now.isoformat(),
+                "subject": {"kind": "holdings-sync", "id": source_name},
+                "payload": {
+                    "sourceName": source_name,
+                    "reasonCode": reason_code,
+                    **({} if action_required else {"retryable": True}),
+                },
+            }))
+        except Exception:  # noqa: BLE001 — 通知失败不改变持仓接口的既有成功/失败语义
+            logger.exception("持仓事实写入统一通知中心失败")
 
     # dsh 插件（Node/TS）跨进程调用，放开跨域
     app.add_middleware(
@@ -466,6 +575,7 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
                 "snapshot_id": snapshot["snapshot_id"],
                 "effective_at": snapshot["effective_at"],
             })
+        publish_holdings_notification(result, req.source)
         return result
 
     @app.get("/holdings", response_model=dict)
@@ -516,8 +626,11 @@ def create_app(report_store: ReportStore | None = None) -> FastAPI:
     async def holdings_sync_post(req: Optional[HoldingsSyncRequest] = None):
         """读取只返回预览；显式 commit 才保存，旧无参数请求不再写入。"""
         request = req or HoldingsSyncRequest()
-        return await run_in_threadpool(sync_result, lambda: commit_holdings(request.preview_token)
-                                       if request.action == "commit" else preview_holdings())
+        result = await run_in_threadpool(sync_result, lambda: commit_holdings(request.preview_token)
+                                         if request.action == "commit" else preview_holdings())
+        if request.action == "commit" or result.get("readiness") in {"blocked", "partial", "failed"}:
+            publish_holdings_notification(result, str(result.get("label") or settings.holdings_provider))
+        return result
 
     @app.post("/holdings/native", response_model=dict)
     async def holdings_native_post(req: HoldingsNativeRequest, x_holdings_native: str = Header(default="")):

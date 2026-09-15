@@ -4,7 +4,7 @@ import type {
 
 interface RequestSpec {
   readonly backendId: InvestmentBackendId
-  readonly method: 'GET' | 'POST' | 'PUT'
+  readonly method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   /** Local learning facts must never be sent to a configured external backend. */
   readonly localOnly?: boolean
   readonly path: (input: Readonly<Record<string, unknown>>) => string
@@ -823,6 +823,97 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
       return `/reports/${reportIdentifier(input, 'report_id')}`
     },
   },
+  'trading-core.notifications': {
+    backendId: 'trading-core',
+    method: 'GET',
+    localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['view', 'archived', 'category', 'severity', 'delivery', 'limit', 'cursor'])
+      return query('/notifications', {
+        view: oneOf(input, 'view', ['all', 'unread', 'actionable']) ?? 'all',
+        archived: optionalBoolean(input, 'archived') ?? false,
+        category: oneOf(input, 'category', ['market_risk', 'holding_plan', 'holdings_sync', 'research']),
+        severity: oneOf(input, 'severity', ['action_required', 'important', 'information']),
+        delivery: oneOf(input, 'delivery', ['pending', 'leased', 'retry_wait', 'sent', 'failed', 'suppressed', 'cancelled']),
+        limit: integer(input, 'limit', 50, 1, 100),
+        cursor: optionalString(input, 'cursor'),
+      })
+    },
+  },
+  'trading-core.notification': {
+    backendId: 'trading-core', method: 'GET', localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['notification_id'])
+      return `/notifications/${pathIdentifier(input, 'notification_id')}`
+    },
+  },
+  'trading-core.notification-read': {
+    backendId: 'trading-core', method: 'PATCH', localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['notification_id', 'read'])
+      return `/notifications/${pathIdentifier(input, 'notification_id')}/read`
+    },
+    body: input => ({ read: optionalBoolean(input, 'read') ?? true }),
+  },
+  'trading-core.notification-archive': {
+    backendId: 'trading-core', method: 'PATCH', localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['notification_id', 'archived'])
+      return `/notifications/${pathIdentifier(input, 'notification_id')}/archive`
+    },
+    body: input => ({ archived: optionalBoolean(input, 'archived') ?? true }),
+  },
+  'trading-core.notifications-read-all': { ...noInputPost('/notifications/read-all', 'trading-core'), localOnly: true },
+  'trading-core.notifications-bulk-read': {
+    backendId: 'trading-core', method: 'POST', localOnly: true, path: () => '/notifications/bulk-read',
+    body: (input) => {
+      knownKeys(input, ['notification_ids', 'read'])
+      const notificationIds = optionalStringArray(input, 'notification_ids') ?? []
+      return { notificationIds, read: optionalBoolean(input, 'read') ?? true }
+    },
+  },
+  'trading-core.notification-preferences': localNoInput('/notifications/preferences'),
+  'trading-core.notification-preference-update': {
+    backendId: 'trading-core', method: 'PUT', localOnly: true, path: () => '/notifications/preferences',
+    body: (input) => {
+      knownKeys(input, ['category', 'channel', 'enabled'])
+      const enabled = optionalBoolean(input, 'enabled')
+      if (enabled === undefined) throw new TypeError('investment data: enabled is required')
+      return {
+        category: oneOf(input, 'category', ['market_risk', 'holding_plan', 'holdings_sync', 'research'], true),
+        channel: oneOf(input, 'channel', ['browser', 'macos', 'serverchan', 'wecom', 'email'], true),
+        enabled,
+      }
+    },
+  },
+  'trading-core.notification-capabilities': localNoInput('/notifications/capabilities'),
+  'trading-core.notification-subscribe': {
+    backendId: 'trading-core', method: 'POST', localOnly: true, path: () => '/notifications/subscriptions',
+    body: (input) => {
+      knownKeys(input, ['channel', 'device_id', 'subscription'])
+      return {
+        channel: oneOf(input, 'channel', ['browser', 'macos'], true),
+        deviceId: stringValue(input, 'device_id'),
+        subscription: record(input.subscription, 'subscription'),
+      }
+    },
+  },
+  'trading-core.notification-unsubscribe': {
+    backendId: 'trading-core', method: 'DELETE', localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['channel', 'device_id'])
+      const channel = oneOf(input, 'channel', ['browser', 'macos'], true)
+      return `/notifications/subscriptions/${channel}/${pathIdentifier(input, 'device_id')}`
+    },
+  },
+  'trading-core.notification-delivery-retry': {
+    backendId: 'trading-core', method: 'POST', localOnly: true,
+    path: (input) => {
+      knownKeys(input, ['notification_id', 'channel'])
+      const channel = oneOf(input, 'channel', ['browser', 'macos', 'serverchan', 'wecom', 'email'], true)
+      return `/notifications/${pathIdentifier(input, 'notification_id')}/deliveries/${channel}/retry`
+    },
+  },
   'trading-core.strategies': {
     backendId: 'trading-core',
     method: 'GET',
@@ -1196,6 +1287,7 @@ export async function requestInvestmentData(
     ownership?: 'owned' | 'attached' | 'external'
     release(): Promise<void>
   }>,
+  notificationToken?: string,
 ): Promise<InvestmentJsonValue> {
   const spec = SPECS[request.operation]
   if (spec === undefined) {
@@ -1209,11 +1301,16 @@ export async function requestInvestmentData(
     if (spec.localOnly === true && lease.ownership === 'external') {
       throw new Error(`investment data: ${request.operation} requires a local backend`)
     }
+    const headers = {
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(request.operation.startsWith('trading-core.notification') && notificationToken
+        ? { 'X-Notification-Token': notificationToken }
+        : {}),
+    }
     const response = await fetch(`${lease.baseUrl}${path}`, {
       method: spec.method,
-      ...(body === undefined
-        ? {}
-        : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      ...(Object.keys(headers).length === 0 ? {} : { headers }),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 2_000)

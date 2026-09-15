@@ -39,6 +39,7 @@ import { ResearchFloatingSurface } from './ResearchFloatingSurface.tsx'
 import { MarketNewsPanel } from './MarketNewsPanel.tsx'
 import { SecurityResearchContent } from './SecurityResearchContent.tsx'
 import { SurfaceResizeIcon } from './SurfaceResizeIcon.tsx'
+import { NotificationCenter } from './NotificationCenter.tsx'
 import { FundsPrivacyProvider, privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import { createResearchResourceStore } from './research-resource.ts'
 import type { ResearchResourceStore } from './research-resource.ts'
@@ -1413,6 +1414,7 @@ function InvestmentShellContent({
       <header className={css.topbar}>
         <GlobalStockSearch requestData={requestData} navigate={navigate} trackTelemetry={trackTelemetry} />
         <div className={css.topActions} role="group" aria-label="页面操作">
+          <NotificationCenter requestData={requestData} navigate={navigate} />
           <button
             type="button"
             className={css.fundsPrivacyToggle}

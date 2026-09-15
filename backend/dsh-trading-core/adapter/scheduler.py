@@ -14,7 +14,7 @@
 import logging
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -33,7 +33,7 @@ _TIMEZONE = os.getenv("TIMEZONE", "Asia/Shanghai")
 _CLOSED_LOOP_LOCK = threading.Lock()
 
 
-def _run_brief_job(period: str) -> None:
+def _run_brief_job(period: str, notification_service=None) -> None:
     """一次定时简报：判交易日 → 幂等 → 生成 → 推送。"""
     from .brief_engine import BriefRunner, _is_trading_day  # lazy: fake 模式不需要 openai
     store = JsonStore()
@@ -53,13 +53,45 @@ def _run_brief_job(period: str) -> None:
         res = BriefRunner().run({"period": period, "scope": "all"}, lambda m: None)
     except Exception as exc:  # noqa: BLE001
         logger.error("简报生成失败: %s", exc)
+        if notification_service is not None:
+            try:
+                from .notifications.models import NotificationEvent
+
+                notification_service.publish(NotificationEvent.from_mapping({
+                    "eventId": f"brief:{key}:failed",
+                    "schemaVersion": 1,
+                    "type": "research.brief.failed.v1",
+                    "producer": "trading-core.scheduler",
+                    "occurredAt": datetime.now(timezone.utc).isoformat(),
+                    "subject": {"kind": "report", "id": key},
+                    "payload": {"briefName": f"A股{period}简报", "reasonCode": "generation_failed"},
+                }))
+            except Exception as notification_exc:  # noqa: BLE001 — 通知失败不覆盖简报原始结果
+                logger.error("简报失败事件写入统一通知中心失败: %s", notification_exc)
         return
 
     md = (res.get("signal") or {}).get("summary") or ""
     label = {"pre_market": "盘前", "post_market": "盘后"}.get(period, period)
     title = f"📊 A股{label}简报 · {today}"
-    results = PusherManager().push(title, md)
-    logger.info("推送完成: %s", results)
+    if notification_service is not None:
+        try:
+            from .notifications.models import NotificationEvent
+
+            notification_service.publish(NotificationEvent.from_mapping({
+                "eventId": f"brief:{key}:completed",
+                "schemaVersion": 1,
+                "type": "research.brief.completed.v1",
+                "producer": "trading-core.scheduler",
+                "occurredAt": datetime.now(timezone.utc).isoformat(),
+                "subject": {"kind": "report", "id": key},
+                "payload": {"briefId": key, "briefName": f"A股{label}简报", "summary": md},
+            }))
+            logger.info("简报已写入统一通知中心: %s", key)
+        except Exception as exc:  # noqa: BLE001 — 通知失败不改变简报已生成事实
+            logger.error("简报写入统一通知中心失败: %s", exc)
+    else:
+        results = PusherManager().push(title, md)
+        logger.info("推送完成: %s", results)
 
 
 def _parse_hhmm(s: str) -> tuple[int, int]:
@@ -208,7 +240,7 @@ def _run_event_generation(store: JsonStore) -> dict:
     return {"n_events": len(events), "n_hypotheses": len(hypotheses), "candidates": ids}
 
 
-def _run_closed_loop_job() -> None:
+def _run_closed_loop_job(notification_service=None) -> None:
     """全自动自进化闭环的调度入口：交易日 gate → 当日单次幂等 → 锁内跑一轮。
 
     每个交易日至多跑一轮；任一环节异常不拖垮整轮，进度由日志 + 推送日报留痕。
@@ -231,18 +263,19 @@ def _run_closed_loop_job() -> None:
         logger.info("自进化闭环已在运行中，跳过本轮")
         return
     try:
-        _run_closed_loop_once(store, today)
+        _run_closed_loop_once(store, today, notification_service)
     finally:
         _CLOSED_LOOP_LOCK.release()
 
 
-def _run_closed_loop_once(store: JsonStore, today: str) -> None:
+def _run_closed_loop_once(store: JsonStore, today: str, notification_service=None) -> None:
     """跑一轮完整闭环：拉事件生成候选 → shadow → 自动进化 → 候选回测激活 → 推送。
 
     候选首测先落持久化 pending，再由后台 runner 执行；任务一旦 completed 即激活，
     verification_status 只表达验证结论，不作为生命周期开关。not_passed 按产品约定排除复测。
     """
-    run_at = datetime.now(ZoneInfo(_TIMEZONE)).isoformat(timespec="seconds")
+    run_at_value = datetime.now(ZoneInfo(_TIMEZONE))
+    run_at = run_at_value.isoformat(timespec="seconds")
     logger.info("🔁 自进化闭环（%s）…", today)
     lines: list[str] = []
     # Step -1：每日刷新主基准收盘 + 最小 regime 判定（P0.3/P0.5 接线，默认非致命）。
@@ -338,14 +371,15 @@ def _run_closed_loop_once(store: JsonStore, today: str) -> None:
         logger.error("闭环候选验证失败: %s", exc)
         lines.append(f"候选验证：失败 {exc}")
 
-    # Step D：推送闭环日报（通道未配则 no-op，不影响闭环）
-    try:
-        from .push import PusherManager
-        md = "\n".join(lines) or "（本轮无记录）"
-        results = PusherManager().push(f"📈 自进化闭环日报 · {today}", md)
-        logger.info("闭环日报推送完成: %s", results)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("闭环日报推送失败: %s", exc)
+    md = "\n".join(lines) or "（本轮无记录）"
+    if notification_service is None:
+        # 旧入口保留为回滚路径；统一通知中心启用时不重复直推。
+        try:
+            from .push import PusherManager
+            results = PusherManager().push(f"📈 自进化闭环日报 · {today}", md)
+            logger.info("闭环日报推送完成: %s", results)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("闭环日报推送失败: %s", exc)
 
     try:
         from . import evolution as evolution_module
@@ -358,27 +392,60 @@ def _run_closed_loop_once(store: JsonStore, today: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001 — 运行留痕失败不反向破坏已完成闭环
         logger.error("闭环运行时间留痕失败: %s", exc)
+        return
+
+    if notification_service is not None:
+        try:
+            from .notifications.models import NotificationEvent
+
+            notification_service.publish(NotificationEvent.from_mapping({
+                "eventId": f"closed-loop:{today}:completed",
+                "schemaVersion": 1,
+                "type": "evolution.closed_loop.completed.v1",
+                "producer": "trading-core.scheduler",
+                "occurredAt": run_at_value.astimezone(timezone.utc).isoformat(),
+                "subject": {"kind": "evolution", "id": today},
+                "payload": {"runId": today, "summary": md},
+            }))
+            logger.info("闭环日报已写入统一通知中心: %s", today)
+        except Exception as exc:  # noqa: BLE001 — 通知失败不得回滚业务留痕
+            logger.error("闭环日报写入统一通知中心失败: %s", exc)
 
 
-def setup_scheduler(*, now: datetime | None = None) -> BackgroundScheduler | None:
+def setup_scheduler(
+    *, now: datetime | None = None, notification_worker=None, notification_service=None
+) -> BackgroundScheduler | None:
     """按 BRIEF / SHADOW / CLOSED_LOOP / AUTO_RETEST 开关决定是否挂载；全关返回 None。"""
     if not settings.schedule_enabled and not settings.shadow_schedule_enabled \
-            and not settings.closed_loop_enabled and not settings.auto_retest_enabled:
+            and not settings.closed_loop_enabled and not settings.auto_retest_enabled \
+            and notification_worker is None:
         logger.info("简报/影子/闭环/自动回测调度全关，跳过定时调度")
         return None
 
     sched = BackgroundScheduler(timezone=_TIMEZONE)
+
+    if notification_worker is not None:
+        sched.add_job(
+            notification_worker.run_once,
+            "interval",
+            seconds=max(1.0, settings.notification_delivery_poll_seconds),
+            id="notification_delivery",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info("通知投递 worker 已启动，轮询间隔 %.1f 秒", settings.notification_delivery_poll_seconds)
 
     if settings.schedule_enabled:
         pre_h, pre_m = _parse_hhmm(settings.pre_market_time)
         post_h, post_m = _parse_hhmm(settings.post_market_time)
         sched.add_job(
             _run_brief_job, CronTrigger(hour=pre_h, minute=pre_m),
-            args=["pre_market"], id="brief_pre_market", replace_existing=True,
+            args=["pre_market", notification_service], id="brief_pre_market", replace_existing=True,
         )
         sched.add_job(
             _run_brief_job, CronTrigger(hour=post_h, minute=post_m),
-            args=["post_market"], id="brief_post_market", replace_existing=True,
+            args=["post_market", notification_service], id="brief_post_market", replace_existing=True,
         )
         logger.info("🕗 定时简报已启动: %s:%02d 盘前 / %s:%02d 盘后", pre_h, pre_m, post_h, post_m)
 
@@ -393,7 +460,7 @@ def setup_scheduler(*, now: datetime | None = None) -> BackgroundScheduler | Non
     if settings.closed_loop_enabled:
         c_h, c_m = _parse_hhmm(settings.closed_loop_time)
         sched.add_job(
-            _run_closed_loop_job, CronTrigger(hour=c_h, minute=c_m),
+            _run_closed_loop_job, CronTrigger(hour=c_h, minute=c_m), args=[notification_service],
             id="closed_loop_daily", replace_existing=True,
         )
         logger.info("🔁 定时自进化闭环已启动: %s:%02d", c_h, c_m)
@@ -403,6 +470,7 @@ def setup_scheduler(*, now: datetime | None = None) -> BackgroundScheduler | Non
             sched.add_job(
                 _run_closed_loop_job,
                 DateTrigger(run_date=run_at, timezone=ZoneInfo(_TIMEZONE)),
+                args=[notification_service],
                 id="closed_loop_startup_catchup",
                 replace_existing=True,
             )

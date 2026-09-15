@@ -11,7 +11,7 @@ const MAX_ARCHIVE_ENTRIES = 256
 export const MAX_BACKUP_COMPRESSED_BYTES = 64 * 1024 * 1024
 const MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
 const DOMAIN_PATH_PATTERN = /^domains\/[a-z0-9][a-z0-9-]*\.json$/
-const BACKUP_CATEGORIES = ['strategies', 'holdings', 'watchlist', 'research', 'preferences'] as const
+const BACKUP_CATEGORIES = ['strategies', 'holdings', 'watchlist', 'research', 'preferences', 'notifications'] as const
 const BACKUP_REASONS = ['manual', 'pre-import', 'pre-reset'] as const
 const SUPPORTED_DOMAIN_IDS = ['trading-core', 'market-watch'] as const
 const SUPPORTED_DOMAINS = new Set<string>(SUPPORTED_DOMAIN_IDS)
@@ -23,6 +23,7 @@ export type BackupCategory =
   | 'watchlist'
   | 'research'
   | 'preferences'
+  | 'notifications'
 
 /** User-visible reason recorded in the archive manifest and filename. */
 export type BackupReason = 'manual' | 'pre-import' | 'pre-reset'
@@ -78,6 +79,7 @@ const CATEGORY_LABELS: Record<BackupCategory, string> = {
   watchlist: '自选',
   research: '研究记录',
   preferences: '偏好',
+  notifications: '通知',
 }
 
 const REASON_LABELS: Partial<Record<BackupReason, string>> = {

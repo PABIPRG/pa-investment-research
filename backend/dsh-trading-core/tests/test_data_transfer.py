@@ -4,6 +4,7 @@
 import tempfile
 import unittest
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from adapter.data_transfer import (
@@ -20,6 +21,9 @@ from adapter.data_transfer import (
     rollback_import,
 )
 from adapter.store import JsonStore, JsonStoreTransferBusyError
+from adapter.notifications.models import NotificationEvent
+from adapter.notifications.repository import NotificationRepository
+from adapter.notifications.service import NotificationService
 
 
 class DataTransferTests(unittest.TestCase):
@@ -29,6 +33,70 @@ class DataTransferTests(unittest.TestCase):
 
     def tearDown(self):
         self.temporary.cleanup()
+
+    def test_notification_backup_restores_history_without_reactivating_delivery_or_devices(self):
+        now = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
+        source_repository = NotificationRepository(Path(self.temporary.name) / "source-notifications.sqlite3")
+        source = NotificationService(
+            source_repository,
+            now=lambda: now,
+            channel_defaults={"market_risk": {"browser": True}},
+            channel_destinations={"browser": "subscribers"},
+        )
+        source.save_subscription(
+            channel="browser",
+            device_id="source-device",
+            endpoint="https://push.example/source",
+            subscription={"endpoint": "https://push.example/source", "keys": {"p256dh": "a", "auth": "b"}},
+        )
+        source.publish(NotificationEvent.from_mapping({
+            "eventId": "price-600519-20260915",
+            "schemaVersion": 1,
+            "type": "market.price_alert.triggered.v1",
+            "producer": "test",
+            "occurredAt": now.isoformat(),
+            "subject": {"kind": "security", "id": "600519"},
+            "payload": {
+                "securityName": "贵州茅台",
+                "ruleName": "价格提醒",
+                "condition": "价格高于 1500",
+            },
+        }))
+        snapshot = export_snapshot(self.store, ["notifications"], source_repository)
+        portable = snapshot["categories"]["notifications"]["collections"]["notification_center"]
+        self.assertEqual(snapshot["categories"]["notifications"]["count"], 1)
+        self.assertNotIn("notification_subscriptions", portable["tables"])
+        self.assertEqual(portable["tables"]["delivery_jobs"][0]["status"], "cancelled")
+        self.assertIsNone(portable["tables"]["delivery_jobs"][0]["lease_token"])
+
+        target_repository = NotificationRepository(Path(self.temporary.name) / "target-notifications.sqlite3")
+        target_repository.save_subscription(
+            channel="browser",
+            device_id="target-device",
+            endpoint="https://push.example/target",
+            subscription={"endpoint": "https://push.example/target", "keys": {"p256dh": "c", "auth": "d"}},
+            now=now,
+        )
+        preview = preview_import(self.store, snapshot, notification_repository=target_repository)
+        prepare_import(
+            self.store,
+            "abababab-abab-4bab-8bab-abababababab",
+            snapshot,
+            preview["currentRevision"],
+            notification_repository=target_repository,
+        )
+        commit_import(
+            self.store,
+            "abababab-abab-4bab-8bab-abababababab",
+            target_repository,
+        )
+        finalize_import(self.store, "abababab-abab-4bab-8bab-abababababab")
+
+        self.assertEqual(target_repository.count("notifications"), 1)
+        self.assertEqual(target_repository.count("delivery_jobs"), 1)
+        self.assertEqual(target_repository.active_subscriptions("browser")[0]["deviceId"], "target-device")
+        restored_id = target_repository.list(view="all", archived=False)["items"][0]["id"]
+        self.assertEqual(target_repository.get(restored_id)["deliverySummary"], {"browser": "cancelled"})
 
     def test_export_contains_only_selected_portable_collections(self):
         self.store.set("holdings", "default", [{"ticker": "600519", "quantity": 100}])
@@ -41,7 +109,7 @@ class DataTransferTests(unittest.TestCase):
 
         snapshot = export_snapshot(self.store, ["holdings"])
 
-        self.assertEqual(snapshot["schemaVersion"], 2)
+        self.assertEqual(snapshot["schemaVersion"], 3)
         self.assertEqual(snapshot["backend"], "trading-core")
         self.assertEqual(set(snapshot["categories"]), {"holdings"})
         # 成交明细挂在 holdings 分类下，必须跟着导出——否则备份不含成交，
@@ -89,7 +157,7 @@ class DataTransferTests(unittest.TestCase):
         snapshot = export_snapshot(self.store, ["strategies"])
         collections = snapshot["categories"]["strategies"]["collections"]
 
-        self.assertEqual(snapshot["schemaVersion"], 2)
+        self.assertEqual(snapshot["schemaVersion"], 3)
         self.assertEqual(collections["gene_archive"], {"retired-alpha": {"sid": "retired-alpha"}})
         self.assertEqual(collections["events_ledger"], {"政策|利好": {"pool_id": "政策|利好"}})
         audit = collections["evolution_previews"]

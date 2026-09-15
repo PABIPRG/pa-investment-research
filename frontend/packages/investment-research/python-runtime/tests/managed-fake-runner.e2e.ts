@@ -163,6 +163,9 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     expect(dataTransferToken).toEqual(expect.any(String))
     const holdingsNativeToken = byModule.get('adapter.app:app')?.env?.DSH_HOLDINGS_NATIVE_TOKEN
     expect(holdingsNativeToken).toEqual(expect.any(String))
+    const notificationInternalToken = byModule.get('adapter.app:app')?.env?.NOTIFICATION_INTERNAL_TOKEN
+    expect(notificationInternalToken).toEqual(expect.any(String))
+    expect(byModule.get('market_watch.app:app')?.env?.NOTIFICATION_INTERNAL_TOKEN).toBe(notificationInternalToken)
     expect(byModule.get('adapter.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'trading-visible',
       DEEPSEEK_API_KEY: CANARY,
@@ -171,6 +174,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
       DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'trading-core'),
+      NOTIFICATION_INTERNAL_TOKEN: notificationInternalToken,
     })
     expect(byModule.get('market_watch.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'market-visible',
@@ -179,6 +183,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
       DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'market-watch'),
+      NOTIFICATION_INTERNAL_TOKEN: notificationInternalToken,
     })
     expect(byModule.get('industry_chain.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'industry-visible',
@@ -187,6 +192,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     expect(specs.flatMap(spec => spec.argv)).not.toContain(CANARY)
     expect(specs.flatMap(spec => spec.argv)).not.toContain(dataTransferToken)
     expect(specs.flatMap(spec => spec.argv)).not.toContain(holdingsNativeToken)
+    expect(specs.flatMap(spec => spec.argv)).not.toContain(notificationInternalToken)
 
     for (const id of ['trading-core', 'market-watch', 'industry-chain'] as const) {
       await expect(access(ownedBackendStatePath(home, id))).resolves.toBeUndefined()
@@ -195,10 +201,12 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       expect(log).not.toContain(CANARY)
       expect(log).not.toContain(dataTransferToken)
       expect(log).not.toContain(holdingsNativeToken)
+      expect(log).not.toContain(notificationInternalToken)
     }
     expect(JSON.stringify(runtime.readiness())).not.toContain(CANARY)
     expect(JSON.stringify(runtime.readiness())).not.toContain(dataTransferToken)
     expect(JSON.stringify(runtime.readiness())).not.toContain(holdingsNativeToken)
+    expect(JSON.stringify(runtime.readiness())).not.toContain(notificationInternalToken)
 
     await Promise.all(leases.map(lease => lease.release()))
     for (const definition of [trading, market, industry]) {

@@ -8,6 +8,7 @@ import type {
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import {
   HOLDINGS_NATIVE_CHANNEL,
+  NOTIFICATION_OPEN_CHANNEL,
   STREAM_CLOSE_CHANNEL,
   STREAM_EVENT_CHANNEL,
   STREAM_OPEN_CHANNEL,
@@ -22,6 +23,7 @@ interface StreamEnvelope {
 
 const streamListeners = new Map<string, (event: ElectronStreamEvent) => void>()
 const shortcutListeners = new Map<string, (action: string) => void>()
+const notificationListeners = new Map<string, (notificationId: string) => void>()
 
 ipcRenderer.on(STREAM_EVENT_CHANNEL, (_event, value: unknown) => {
   if (!isStreamEnvelope(value)) return
@@ -34,6 +36,13 @@ ipcRenderer.on(STREAM_EVENT_CHANNEL, (_event, value: unknown) => {
 ipcRenderer.on(SHORTCUT_ACTION_CHANNEL, (_event, value: unknown) => {
   if (typeof value !== 'string') return
   for (const listener of shortcutListeners.values()) listener(value)
+})
+
+ipcRenderer.on(NOTIFICATION_OPEN_CHANNEL, (_event, value: unknown) => {
+  if (typeof value !== 'object' || value === null) return
+  const notificationId = (value as { notificationId?: unknown }).notificationId
+  if (typeof notificationId !== 'string' || notificationId === '') return
+  for (const listener of notificationListeners.values()) listener(notificationId)
 })
 
 const bridge: ElectronRendererBridge = {
@@ -58,6 +67,13 @@ const bridge: ElectronRendererBridge = {
   },
   unwatchShortcutActions(id: string): void {
     shortcutListeners.delete(id)
+  },
+  watchNativeNotifications(id: string, listener: (notificationId: string) => void): void {
+    if (notificationListeners.has(id)) throw new Error(`dsh-electron preload: duplicate notification listener ${JSON.stringify(id)}`)
+    notificationListeners.set(id, listener)
+  },
+  unwatchNativeNotifications(id: string): void {
+    notificationListeners.delete(id)
   },
 }
 
