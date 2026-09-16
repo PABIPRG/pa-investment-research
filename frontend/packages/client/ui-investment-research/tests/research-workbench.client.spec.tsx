@@ -1468,6 +1468,7 @@ describe('研究工作台', () => {
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
     fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
+    expect(within(dialog).getByText('或点击选择 CSV / TSV / TXT / XLS / XLSX 文件')).toBeTruthy()
 
     const textarea = within(dialog).getByRole<HTMLTextAreaElement>('textbox', { name: '持仓导入内容' })
     fireEvent.change(textarea, { target: { value: '股票代码,数量,成本价\n600519,0,1500' } })

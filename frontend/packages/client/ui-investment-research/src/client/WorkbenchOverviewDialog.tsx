@@ -270,7 +270,7 @@ function HoldingsBulkImport({
         }}
       >
         <strong>拖放持仓文件到这里</strong>
-        <span>或点击选择 CSV / TSV / TXT 文件</span>
+        <span>或点击选择 CSV / TSV / TXT / XLS / XLSX 文件</span>
         <input
           ref={fileInputRef}
           type="file"
