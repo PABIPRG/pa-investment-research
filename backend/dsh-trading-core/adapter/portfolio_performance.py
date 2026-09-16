@@ -31,15 +31,41 @@ def _timestamp(value: datetime | None) -> str:
 
 
 def _positions(value: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    normalized = [
-        {
+    normalized = []
+    for item in value:
+        position = {
             "ticker": str(item["ticker"]),
             "quantity": float(item["quantity"]),
             "cost_price": float(item["cost_price"]),
         }
-        for item in value
-    ]
+        for key in ("trades", "position_time", "time_source"):
+            if item.get(key) not in (None, [], ""):
+                position[key] = item[key]
+        normalized.append(position)
     return sorted(normalized, key=lambda item: item["ticker"])
+
+
+def _dedupe_positions(value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """忽略每次读取都会变化的兜底时间，但保留券商明细和用户校正语义。"""
+    projected = []
+    for item in value:
+        position = {
+            "ticker": item["ticker"], "quantity": item["quantity"], "cost_price": item["cost_price"],
+        }
+        if item.get("trades"):
+            position["trades"] = item["trades"]
+        if item.get("time_source") == "user_modified":
+            position["time_source"] = "user_modified"
+            position["position_time"] = item.get("position_time")
+        projected.append(position)
+    return projected
+
+
+def holdings_snapshot_matches(snapshot: dict[str, Any] | None, positions: list[dict[str, Any]], source: str) -> bool:
+    """判断持仓业务内容、账户来源和用户校正时间是否与最新快照一致。"""
+    if snapshot is None or snapshot.get("source") != source:
+        return False
+    return _dedupe_positions(snapshot.get("positions") or []) == _dedupe_positions(_positions(positions))
 
 
 def _snapshot(
@@ -49,7 +75,7 @@ def _snapshot(
     previous_snapshot_id: str | None,
 ) -> dict[str, Any]:
     payload = json.dumps(
-        {"effective_at": effective_at, "positions": positions},
+        {"effective_at": effective_at, "source": source, "positions": positions},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -96,7 +122,7 @@ def record_holdings_snapshot(
             if legacy_positions:
                 history.append(_snapshot(legacy_positions, "legacy_seed", at, None))
         latest = history[-1] if history else None
-        if latest is not None and latest.get("positions") == normalized:
+        if holdings_snapshot_matches(latest, normalized, source):
             committed = dict(latest)
         elif normalized or latest is not None:
             committed = _snapshot(

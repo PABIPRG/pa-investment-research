@@ -241,7 +241,8 @@ class ReadPathTests(TradesPreviewTestCase):
                 return list(items)
 
         with patch.object(source, "get_provider", lambda: Provider()), \
-                patch.object(source.settings, "holdings_provider", "easytrader"):
+                patch.object(source.settings, "holdings_provider", "easytrader"), \
+                patch.object(source.sys, "platform", "win32"):
             preview = source.preview_trades(foreground=True)
 
         self.assertEqual(calls, [True])

@@ -30,12 +30,26 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class HoldingTrade(BaseModel):
+    """券商返回的一笔成交明细。"""
+
+    executed_at: str = Field(min_length=1, description="券商成交时间")
+    side: Literal["buy", "sell", "unknown"] = Field(default="unknown", description="成交方向")
+    quantity: float = Field(gt=0, description="成交数量（股）")
+    price: float = Field(gt=0, description="成交价格（元）")
+
+
 class HoldingItem(BaseModel):
-    """单只持仓：代码 + 数量 + 成本价（手动结构化输入）。"""
+    """单只持仓及可选的券商成交归因。"""
 
     ticker: str = Field(pattern=r"^\d{6}$", description="六位股票代码（如 600519）")
     quantity: float = Field(gt=0, description="持仓数量（股）")
     cost_price: float = Field(gt=0, description="持仓成本价（元）")
+    trades: list[HoldingTrade] = Field(default_factory=list, description="可取得的逐笔成交明细")
+    position_time: Optional[str] = Field(default=None, description="当前持仓采用的归因时间")
+    time_source: Optional[Literal["broker_detail", "read_fallback", "user_modified"]] = Field(
+        default=None, description="归因时间来源"
+    )
 
 
 class TradeItem(BaseModel):
@@ -133,8 +147,13 @@ class HoldingsNativeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     # read_trades 与 read 并列：成交读取在 Windows 上必须前台（另存为会抢焦点并可能
     # 弹风控验证码），所以不能由网页请求触发，只能从认证宿主进来。
-    action: Literal["read", "read_trades", "launch", "select_client"]
+    action: Literal[
+        "read", "read_trades", "cancel_read", "commit", "launch", "select_client"
+    ]
     account_mode: Literal["real", "simulated"]
+    operation_id: str = Field(default="", max_length=128)
+    preview_token: str = Field(default="", max_length=128)
+    time_overrides: dict[str, str] = Field(default_factory=dict)
     client_path: str = Field(default="", max_length=4096)
 
 

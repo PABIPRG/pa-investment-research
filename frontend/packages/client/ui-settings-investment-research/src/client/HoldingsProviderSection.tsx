@@ -41,6 +41,10 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [persistentAuthorization, setPersistentAuthorization] = useState(false)
+  const native = (window as unknown as { __DSH_ELECTRON__?: {
+    holdingsAction?: (input: { action: string; account_mode: 'real' | 'simulated' }) => Promise<unknown>
+  } }).__DSH_ELECTRON__?.holdingsAction
 
   useEffect(() => {
     if (props.brokerSync === false) {
@@ -67,6 +71,14 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
     )
     return () => { alive = false }
   }, [props.brokerSync, requestData, t])
+
+  useEffect(() => {
+    if (native === undefined || currentPlatform() !== 'darwin') return
+    void native({ action: 'consent_status', account_mode: 'simulated' }).then(value => {
+      setPersistentAuthorization(typeof value === 'object' && value !== null
+        && (value as { persistent_authorization?: unknown }).persistent_authorization === true)
+    }).catch(() => {})
+  }, [native])
 
   const allowed = props.providers === undefined ? undefined : new Set(props.providers)
   const availableOptions = OPTIONS.filter(option => option.value === effective
@@ -121,6 +133,15 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
         </select>
         <small>{t(props.brokerSync === false ? 'providerCloudHint' : 'providerHint')}</small>
       </label>
+      {native !== undefined && currentPlatform() === 'darwin' && <div className={css.authorizationRow}>
+        <div><strong>同花顺主动读取授权</strong><span>{persistentAuthorization ? '长期授权已开启；应用仍不会定时或在后台自动读取。' : '当前每次切换到同花顺前都会询问。'}</span></div>
+        {persistentAuthorization && <button type="button" disabled={saving} onClick={() => {
+          setSaving(true); setError(''); setNotice('')
+          void native({ action: 'revoke_consent', account_mode: 'simulated' }).then(() => {
+            setPersistentAuthorization(false); setNotice('已关闭同花顺长期读取授权。'); setSaving(false)
+          }, () => { setError('无法关闭长期读取授权，请稍后重试。'); setSaving(false) })
+        }}>关闭长期授权</button>}
+      </div>}
       {notice !== '' && <p className={css.success} role="status">{notice}</p>}
       {error !== '' && <p className={css.error} role="alert">{error}</p>}
     </section>

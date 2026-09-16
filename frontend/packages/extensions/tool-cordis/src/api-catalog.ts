@@ -788,10 +788,10 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'The backend\'s lossless JSON response.',
       },
       {
-        signature: 'async nativeHoldings(input: { action: \'read\' | \'launch\' | \'select_client\'; account_mode: \'real\' | \'simulated\'; client_path?: string }): Promise<unknown>',
+        signature: 'async nativeHoldings(input: { action: \'read\' | \'read_trades\' | \'cancel_read\' | \'commit\' | \'launch\' | \'select_client\'; account_mode: \'real\' | \'simulated\'; operation_id?: string; preview_token?: string; time_overrides?: Record<string, string>; client_path?: string }, signal?: AbortSignal): Promise<unknown>',
         description: 'Run one native holdings operation after the Electron main process obtained consent. This method is deliberately absent from the Remote registry.',
-        parameters: [{ name: 'input', description: 'fixed action and account; client path comes only from the native picker.' }],
-        returns: 'backend readiness or a read-only preview.',
+        parameters: [{ name: 'input', description: 'fixed action and account; client path comes only from the native picker.' }, { name: 'signal', description: 'optional cancellation owned by the Electron main process.' }],
+        returns: 'backend readiness, preview, cancellation, or commit result.',
       },
       {
         signature: '@Remote(\'backup-describe\') async backupDescribe(): Promise<BackupDescription>',

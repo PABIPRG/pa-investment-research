@@ -62,7 +62,7 @@ class PortfolioSnapshotTests(unittest.TestCase):
             self.store, self.positions, "manual", self.at_0900
         )
         duplicate = record_holdings_snapshot(
-            self.store, list(reversed(self.positions)), "api", self.at_1000
+            self.store, list(reversed(self.positions)), "manual", self.at_1000
         )
         changed = record_holdings_snapshot(
             self.store, self.changed_positions, "bulk_import", self.at_1100
@@ -74,6 +74,14 @@ class PortfolioSnapshotTests(unittest.TestCase):
         self.assertEqual(changed["previous_snapshot_id"], first["snapshot_id"])
         self.assertEqual(changed["source"], "bulk_import")
         self.assertEqual(self.store.get("holdings", "default"), self.changed_positions)
+
+    def test_identical_rows_from_real_and_simulated_accounts_are_distinct_snapshots(self):
+        first = record_holdings_snapshot(self.store, self.positions, "broker_real", self.at_0900)
+        simulated = record_holdings_snapshot(self.store, self.positions, "broker_simulated", self.at_1000)
+
+        self.assertNotEqual(simulated["snapshot_id"], first["snapshot_id"])
+        self.assertEqual(simulated["previous_snapshot_id"], first["snapshot_id"])
+        self.assertEqual(len(list_portfolio_snapshots(self.store)), 2)
 
     def test_legacy_seed_uses_migration_time_and_is_created_only_once(self):
         self.store.set("holdings", "default", self.positions)

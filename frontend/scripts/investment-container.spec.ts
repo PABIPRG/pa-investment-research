@@ -39,16 +39,24 @@ async function containerModule<T>(name: string): Promise<T> {
 }
 
 describe('investment container delivery contract', () => {
-  it('pins the Linux Python archive and exact requirements content', async () => {
+  it('pins every Python requirement source and target lock', async () => {
     const lock = JSON.parse(await readFile(join(frontendDir, 'config', 'investment-python-runtime-lock.json'), 'utf8')) as {
+      requirements: Record<string, string>
       targets: Record<string, { archiveSha256: string; archiveUrl: string; requirementsLock: string; requirementsSha256: string }>
+    }
+    for (const [path, expected] of Object.entries(lock.requirements)) {
+      const source = await readFile(join(repoRoot, ...path.split('/')))
+      expect(createHash('sha256').update(source).digest('hex'), path).toBe(expected)
+    }
+    for (const [target, targetLock] of Object.entries(lock.targets)) {
+      const requirements = await readFile(join(repoRoot, ...targetLock.requirementsLock.split('/')))
+      expect(createHash('sha256').update(requirements).digest('hex'), target).toBe(targetLock.requirementsSha256)
     }
     const linux = lock.targets['linux-x64']!
     const requirements = await readFile(join(repoRoot, ...linux.requirementsLock.split('/')))
 
     expect(linux.archiveUrl).toContain('cpython-3.10.20%2B20260718-x86_64-unknown-linux-gnu-install_only.tar.gz')
     expect(linux.archiveSha256).toBe('9c28d8017eeaf692f24dbaf26fd4679ce496c7f58e48b897d278739661794e37')
-    expect(createHash('sha256').update(requirements).digest('hex')).toBe(linux.requirementsSha256)
     expect(requirements.toString('utf8')).not.toMatch(/^pyobjc-/mu)
   })
 

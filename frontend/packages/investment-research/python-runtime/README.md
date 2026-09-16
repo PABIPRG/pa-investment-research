@@ -85,4 +85,4 @@ None; business plugins own every model-visible contribution after their backend 
 - **One active and one previous log** — rotation is size-based at open time; long-running children do not rotate mid-process.
 - **Online SQLite backup is deployment-supplied** — the migration primitive enforces use of a consistency callback but does not assume a particular SQLite executable; container and native launchers must bind an available backup implementation.
 
-Holdings sync returns a read-only preview valid for five minutes; commit requires its token and rejects changed accounts, providers, or local holdings. Native actions use a host-private credential and a non-Remote method restricted to owned local backends.
+Holdings sync returns a read-only preview valid for five minutes; commit requires its token and rejects changed accounts, providers, or local holdings. On Electron, generic holdings sync is rejected: the main process owns consent, opaque preview sessions, commit confirmation, and cooperative cancellation, while the backend preview token remains host-only. Native actions use a host-private credential and a non-Remote method restricted to owned local backends.

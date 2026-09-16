@@ -171,9 +171,10 @@ assertCapability(backendId: InvestmentBackendId, use: InvestmentCapabilityUse): 
  * Run one native holdings operation after the Electron main process obtained consent.
  * This method is deliberately absent from the Remote registry.
  * @param input - fixed action and account; client path comes only from the native picker.
- * @returns backend readiness or a read-only preview.
+ * @param signal - optional cancellation owned by the Electron main process.
+ * @returns backend readiness, preview, cancellation, or commit result.
  */
-async nativeHoldings(input: { action: 'read' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; client_path?: string }): Promise<unknown>
+async nativeHoldings(input: { action: 'read' | 'cancel_read' | 'commit' | 'launch' | 'select_client'; account_mode: 'real' | 'simulated'; operation_id?: string; preview_token?: string; time_overrides?: Record<string, string>; client_path?: string }, signal?: AbortSignal): Promise<unknown>
 
 /**
  * Read user-visible backup configuration without exposing internal upload paths.

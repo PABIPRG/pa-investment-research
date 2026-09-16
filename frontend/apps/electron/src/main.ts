@@ -1,6 +1,7 @@
 /** Electron application main process: boots the Host tree, binds IPC, and opens the local renderer. */
 
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
 import type { IpcMainEvent, WebContents } from 'electron'
 import { healProfilesModuleFallback, loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
@@ -10,7 +11,7 @@ import type {
   ElectronStreamKind,
 } from '@deepseek-ai/dsh-client-connection/electron-bridge'
 import type { HostFrame, MuxFrame, RpcRequest, ServerRequest } from '@deepseek-ai/dsh-host-apiproxy'
-import { bindHoldingsNative } from './holdings-native.ts'
+import { bindHoldingsNative, createHoldingsConsentStore } from './holdings-native.ts'
 import { bindNativeNotifications } from './notification-native.ts'
 import { appIdentity } from './app-identity.ts'
 import { resolveElectronProfile } from './args.ts'
@@ -193,7 +194,12 @@ async function runApplication(): Promise<void> {
       },
     })
     const holdingsRuntime = ctx.get('investmentPythonRuntime')
-    const disposeHoldings = holdingsRuntime === undefined ? () => {} : bindHoldingsNative(window, request => holdingsRuntime.nativeHoldings(request))
+    const holdingsConsent = await createHoldingsConsentStore(join(app.getPath('userData'), 'holdings-consent.json'))
+    const disposeHoldings = holdingsRuntime === undefined ? () => {} : bindHoldingsNative(
+      window,
+      (request, signal) => holdingsRuntime.nativeHoldings(request, signal),
+      holdingsConsent,
+    )
     const notificationRuntime = holdingsRuntime as unknown as undefined | {
       nativeNotifications(input: {
         action: 'claim' | 'ack' | 'nack'

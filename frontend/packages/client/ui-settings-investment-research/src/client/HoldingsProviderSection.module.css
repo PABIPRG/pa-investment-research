@@ -58,6 +58,37 @@
   line-height: 20px;
 }
 
+.authorizationRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.authorizationRow > div {
+  display: grid;
+  gap: 4px;
+}
+
+.authorizationRow span {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 0.9286rem;
+  line-height: 1.4286rem;
+}
+
+.authorizationRow button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+
 .success,
 .error {
   margin-top: 8px;
@@ -80,5 +111,10 @@
 
   .selectRow small {
     grid-column: 1;
+  }
+
+  .authorizationRow {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

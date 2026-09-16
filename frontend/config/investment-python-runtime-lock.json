@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "requirements": {
-    "backend/dsh-trading-core/requirements.txt": "a80d521233cde3e13a3c72a15a7e6a348f2ac785f1f393b0cc471404c5a572dc",
+    "backend/dsh-trading-core/requirements.txt": "89a9515f7779b3745dbf6725f33287e73cef504cd263bb0b1c1c343adae57491",
     "backend/industry-chain/requirements.txt": "e22996d7b257e1a574dacbfdc9427dc45f5924a6445c35c6740ad2265caeee28",
     "backend/market-watch/requirements.txt": "8ccd6f579039edeb2efba69301f4cd4d626b10b41f79a60cc820ab8af51fd39c"
   },
@@ -13,7 +13,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-arm64.txt",
-      "requirementsSha256": "3160ac807bfe822f7a02540ce21a6aebaa713980e4741dca0f3d09fe03a18e7f"
+      "requirementsSha256": "0a7ff90282759e8f6b9d7a4fcd8795c7b71aa1e3a475001610295df46d275d84"
     },
     "darwin-x64": {
       "pythonVersion": "3.10.20",
@@ -22,7 +22,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-x64.txt",
-      "requirementsSha256": "3160ac807bfe822f7a02540ce21a6aebaa713980e4741dca0f3d09fe03a18e7f"
+      "requirementsSha256": "0a7ff90282759e8f6b9d7a4fcd8795c7b71aa1e3a475001610295df46d275d84"
     },
     "linux-x64": {
       "pythonVersion": "3.10.20",
@@ -31,7 +31,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/linux-x64.txt",
-      "requirementsSha256": "eb340ca64f897c6d61c97f06fa05f30908ddf1d22c5c4946bbaecb94e507ff58"
+      "requirementsSha256": "c83995ca6ffea1f985b42f68891280013d8549b3e58c92697e7876bc13484930"
     },
     "win32-x64": {
       "pythonVersion": "3.10.20",
@@ -40,7 +40,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/python.exe",
       "requirementsLock": "frontend/config/investment-python-requirements/win32-x64.txt",
-      "requirementsSha256": "170d4c40cb62dcdc6605f65cac254f44784c10197300f02414edb8fa668b6458"
+      "requirementsSha256": "440ce0c730c4a3c2b98e597e991ca4290171b6631d25e681708eecb09b096364"
     }
   }
 }
