@@ -1,4 +1,4 @@
-import { read, utils } from 'xlsx'
+import { read, utils } from 'xlsx/xlsx.mjs'
 
 export interface HoldingImportItem {
   [key: string]: string | number
