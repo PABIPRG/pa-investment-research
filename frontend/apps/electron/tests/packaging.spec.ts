@@ -21,6 +21,8 @@ import {
   refreshPackagedSidecarDescriptor,
   removePackagingRoot,
   retryDescriptorOperation,
+  resolveMacCodesignIdentity,
+  sealPackagedSidecarReadOnly,
   signPackagedMacApplications,
   signPackagedElectronHelpers,
   signPackagedSidecarMachO,
@@ -28,6 +30,16 @@ import {
 } from '../src/packaging.ts'
 
 describe('Electron investment sidecar packaging', () => {
+  it('prefers an explicit stable macOS signing identity over ad-hoc signing', () => {
+    expect(resolveMacCodesignIdentity({
+      CSC_NAME: 'Developer ID Application: fallback',
+      DSH_MAC_CODESIGN_IDENTITY: 'Developer ID Application: 投研智能体',
+    })).toBe('Developer ID Application: 投研智能体')
+    expect(resolveMacCodesignIdentity({ CSC_NAME: 'Developer ID Application: fallback' }))
+      .toBe('Developer ID Application: fallback')
+    expect(resolveMacCodesignIdentity({})).toBe('-')
+  })
+
   it.each([
     { arch: 'arm64', extension: '.icns', platform: 'darwin', resolver: 'mac.js' },
     { arch: 'x64', extension: '.icns', platform: 'darwin', resolver: 'mac.js' },
@@ -666,12 +678,14 @@ describe('Electron investment sidecar packaging', () => {
     const refreshed: string[] = []
     const signedHelpers: string[] = []
     const signedSidecars: string[] = []
+    const sealedSidecars: string[] = []
     const runCommand = async (command: string, args: string[], cwd: string) => {
       calls.push({ args, command, cwd })
     }
     const refreshDescriptor = async (appPath: string) => { refreshed.push(appPath) }
     const signSidecar = async (appPath: string) => { signedSidecars.push(appPath) }
     const signHelpers = async (appPath: string) => { signedHelpers.push(appPath) }
+    const sealSidecar = async (appPath: string) => { sealedSidecars.push(appPath) }
     const firstPackage = `/tmp/out/${appIdentity.name}-darwin-arm64`
     const secondPackage = `/tmp/out/${appIdentity.name}-darwin-x64`
     const firstApp = join(firstPackage, `${appIdentity.name}.app`)
@@ -679,6 +693,7 @@ describe('Electron investment sidecar packaging', () => {
 
     await signPackagedMacApplications(
       [firstPackage, secondPackage], 'darwin', runCommand, refreshDescriptor, signSidecar, signHelpers,
+      sealSidecar, '-',
     )
 
     expect(calls).toEqual([
@@ -715,11 +730,44 @@ describe('Electron investment sidecar packaging', () => {
 
     await signPackagedMacApplications(
       [firstPackage], 'win32', runCommand, refreshDescriptor, signSidecar, signHelpers,
+      sealSidecar, '-',
     )
     expect(calls).toHaveLength(4)
     expect(refreshed).toHaveLength(2)
     expect(signedHelpers).toHaveLength(2)
     expect(signedSidecars).toHaveLength(2)
+    expect(sealedSidecars).toEqual([firstApp, secondApp])
+  })
+
+  it('seals the packaged sidecar read-only without removing executable bits', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-sidecar-seal-test-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    const executable = join(sidecarRoot, 'runtime', 'bin', 'python3')
+    const source = join(sidecarRoot, 'backends', 'dsh-trading-core', 'adapter', 'app.py')
+    try {
+      await mkdir(dirname(executable), { recursive: true })
+      await mkdir(dirname(source), { recursive: true })
+      await writeFile(executable, 'python')
+      await writeFile(source, 'app')
+      await chmod(executable, 0o755)
+      await chmod(source, 0o600)
+      await chmod(sidecarRoot, 0o700)
+
+      await sealPackagedSidecarReadOnly(appPath)
+
+      expect((await stat(executable)).mode & 0o777).toBe(0o555)
+      expect((await stat(source)).mode & 0o777).toBe(0o444)
+      expect((await stat(sidecarRoot)).mode & 0o777).toBe(0o555)
+    } finally {
+      await chmod(sidecarRoot, 0o755).catch(() => undefined)
+      await chmod(join(sidecarRoot, 'runtime'), 0o755).catch(() => undefined)
+      await chmod(join(sidecarRoot, 'runtime', 'bin'), 0o755).catch(() => undefined)
+      await chmod(join(sidecarRoot, 'backends'), 0o755).catch(() => undefined)
+      await chmod(join(sidecarRoot, 'backends', 'dsh-trading-core'), 0o755).catch(() => undefined)
+      await chmod(join(sidecarRoot, 'backends', 'dsh-trading-core', 'adapter'), 0o755).catch(() => undefined)
+      await rm(rootDir, { force: true, recursive: true })
+    }
   })
 
   it('signs every Electron helper with local library validation disabled', async () => {

@@ -35,7 +35,7 @@
 
 源码启动会从本安装包向上查找 `backend/dsh-trading-core`、`backend/market-watch` 与 `backend/industry-chain`。使用 `pnpm run investment:python:init` 按固定顺序初始化三个环境，再用 `pnpm run investment:python:verify` 执行只读检查。industry-chain 的初始化和验证都不会下载种子数据；首次下载仍是独立的用户确认产品操作。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
 
-每个 backend 都按严格优先级解析：显式绝对项目／解释器组合最高，其次是源码 checkout 中对应的 backend 与环境，最后是 Electron `Resources/investment-python/runtime.json` sidecar。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单，只能包含位于 `adapter.app:app` 的 `trading-core`、位于 `market_watch.app:app` 的 `market-watch` 与位于 `industry_chain.app:app` 的 `industry-chain`；每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内，缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
+每个 backend 都按严格优先级解析：显式绝对项目／解释器组合最高，其次是 Electron `Resources/investment-python/runtime.json` sidecar，最后是源码 checkout 中对应的 backend 与环境。因此即使 `.app` 目录位于源码 checkout 内，打包应用也会使用其已签名的 bundled Runtime。无效的显式候选会直接失败，不会降级。bundled descriptor 是封闭清单，只能包含位于 `adapter.app:app` 的 `trading-core`、位于 `market_watch.app:app` 的 `market-watch` 与位于 `industry_chain.app:app` 的 `industry-chain`；每个普通文件都必须带 SHA-256 列出，路径必须留在 sidecar 根目录内，缺失、多余、符号链接或被修改的文件都会在 Python 启动前报告安装损坏。打包启动完全离线，绝不安装或修复依赖。
 
 trading backend 会把显式设置的 `ADAPTER_RUNNER` 转发给 owned 子进程。backend scheduler（调度器）与 push（推送）设置仍归 Python 端所有；随附 profile 保持股票分析的对话内推送关闭（`enableInChatPush: false`），也不会把这些设置解释为 profile 组合维度。
 

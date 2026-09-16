@@ -1,7 +1,8 @@
 /** Electron application main process: boots the Host tree, binds IPC, and opens the local renderer. */
 
+import { appendFile, mkdir } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } from 'electron'
 import type { IpcMainEvent, WebContents } from 'electron'
 import { healProfilesModuleFallback, loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
@@ -24,6 +25,7 @@ import {
   STREAM_EVENT_CHANNEL,
   STREAM_OPEN_CHANNEL,
 } from './ipc.ts'
+import { formatStartupError, presentStartupFailure } from './startup-error.ts'
 
 const ELECTRON_PATCH = fileURLToPath(new URL('../electron.patch.yml', import.meta.url))
 const RENDERER_DIR = fileURLToPath(new URL('../renderer/', import.meta.url))
@@ -49,15 +51,15 @@ function errorCode(error: unknown): string | undefined {
     : undefined
 }
 
-function startupFailureMessage(error: unknown): string {
-  const detail = error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error)
-  if (detail.includes('has a healthy process left by a previous managed runtime')) {
-    return '检测到之前的投研实例仍占用后台。请先关闭旧的 Web 或 Electron 实例，然后重试。'
+async function recordStartupFailure(error: unknown): Promise<string | undefined> {
+  try {
+    const logPath = join(app.getPath('logs'), 'startup.log')
+    await mkdir(dirname(logPath), { recursive: true })
+    await appendFile(logPath, `[${new Date().toISOString()}]\n${formatStartupError(error)}\n\n`, 'utf8')
+    return logPath
+  } catch {
+    return undefined
   }
-  if (errorCode(error) === 'DSH_INVESTMENT_INSTANCE_STOP_FAILED') {
-    return '旧实例未能正常停止。请先关闭旧的 Web 或 Electron 实例，然后重试。'
-  }
-  return '投研组件加载失败。请查看启动终端中的具体错误后重试。'
 }
 
 // Privilege registration is a pre-readiness call, so it belongs to module
@@ -237,12 +239,14 @@ async function runApplication(): Promise<void> {
       app.quit()
       return
     }
-    process.stderr.write(`${startupFailureMessage(error)}\n${error instanceof Error ? error.message : String(error)}\n`)
+    const logPath = await recordStartupFailure(error)
+    const failure = presentStartupFailure(error, logPath)
+    process.stderr.write(`${failure.message}\n${formatStartupError(error)}\n`)
     await dialog.showMessageBox({
       type: 'error',
       title: '投研智能体启动失败',
-      message: startupFailureMessage(error),
-      detail: error instanceof Error ? error.message : String(error),
+      message: failure.message,
+      detail: failure.detail,
       buttons: ['关闭'],
       defaultId: 0,
       noLink: true,
