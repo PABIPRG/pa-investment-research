@@ -40,6 +40,7 @@ import { MarketNewsPanel } from './MarketNewsPanel.tsx'
 import { SecurityResearchContent } from './SecurityResearchContent.tsx'
 import { SurfaceResizeIcon } from './SurfaceResizeIcon.tsx'
 import { NotificationCenter } from './NotificationCenter.tsx'
+import { PositionRiskDialog, PositionRiskPlanCell, positionRiskPlanMap } from './PositionRiskControls.tsx'
 import { FundsPrivacyProvider, privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import { createResearchResourceStore } from './research-resource.ts'
 import type { ResearchResourceStore } from './research-resource.ts'
@@ -2633,6 +2634,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   const [notice, setNotice] = useState('')
   const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown>>()
   const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
+  const [positionRiskEditor, setPositionRiskEditor] = useState<{ ticker?: string; name?: string }>()
   const holdingsSection = useRef<HTMLElement>(null)
   const riskSection = useRef<HTMLElement>(null)
   const holdings = useRequestResource(requestData)
@@ -2642,6 +2644,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   const watchlist = useRequestResource(requestData)
   const coreWatchlist = useRequestResource(requestData)
   const quotes = useRequestResource(requestData)
+  const positionRiskPlans = useRequestResource(requestData)
   const [removingWatch, setRemovingWatch] = useState('')
 
   useEffect(() => {
@@ -2654,13 +2657,15 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
     })
     watchlist.run({ operation: 'market-watch.watchlist' })
     coreWatchlist.run({ operation: 'trading-core.watchlist' })
-  }, [alerts.run, coreWatchlist.run, events.run, holdings.run, nonce, risk.run, watchlist.run])
+    positionRiskPlans.run({ operation: 'trading-core.position-risk' })
+  }, [alerts.run, coreWatchlist.run, events.run, holdings.run, nonce, positionRiskPlans.run, risk.run, watchlist.run])
 
   const positions = records(asRecord(holdings.state.value).items)
   useQuotePolling(quotes, holdings.state.value, nonce)
 
   const quoteItems = records(asRecord(quotes.state.value).items)
   const quoteMap = new Map(quoteItems.map(item => [text(item.code, ''), item] as const))
+  const positionPlanMap = positionRiskPlanMap(positionRiskPlans.state.value)
   const quoteSecurityNames = Object.fromEntries(quoteItems.flatMap((item) => {
     const code = text(item.code, '').trim()
     const name = text(item.name, '').trim()
@@ -2697,7 +2702,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
     ? rawCoreTickers.filter((item): item is string => typeof item === 'string')
     : []
   const equalWeight = number(summary.equal_weight)
-  const resources = [holdings.state, risk.state, alerts.state, events.state, watchlist.state, coreWatchlist.state]
+  const resources = [holdings.state, risk.state, alerts.state, events.state, watchlist.state, coreWatchlist.state, positionRiskPlans.state]
   const busy = resources.some(resource => resource.phase === 'loading' || resource.phase === 'refreshing')
 
   const removeWatch = async (code: string): Promise<void> => {
@@ -2810,7 +2815,11 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
         <section ref={holdingsSection} tabIndex={-1} className={css.tableCard} aria-busy={holdings.busy} aria-labelledby="holdings-title">
           <div className={css.sectionHeading}>
             <strong id="holdings-title">当前持仓</strong>
-            <ResourceLabel state={holdings.state} settled={`${positions.length} 项`} />
+            <div className={css.positionRiskHeadingActions}>
+              <ResourceLabel state={positionRiskPlans.state} settled="止盈止损已解析" />
+              <button type="button" className={css.secondaryButton} onClick={() => { setPositionRiskEditor({}) }}>全局止盈止损</button>
+              <ResourceLabel state={holdings.state} settled={`${positions.length} 项`} />
+            </div>
           </div>
           {holdings.state.error !== '' && (
             <ErrorCard
@@ -2825,7 +2834,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
             <>
               <div className={css.tableWrap}>
                 <table>
-                  <thead><tr><th>股票代码</th><th>名称</th><th>数量</th><th>持仓成本</th><th>现价</th><th>市值</th></tr></thead>
+                  <thead><tr><th>股票代码</th><th>名称</th><th>数量</th><th>持仓成本</th><th>现价</th><th>市值</th><th>止盈止损</th></tr></thead>
                   <tbody>
                     {positions.map((row, index) => {
                       const code = text(row.ticker, '')
@@ -2847,6 +2856,12 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                         <td>{privateFunds(money(row.cost_price), fundsHidden)}</td>
                         <td>{money(price)}</td>
                         <td>{privateFunds(money(marketValue), fundsHidden)}</td>
+                        <td>
+                          <PositionRiskPlanCell
+                            plan={positionPlanMap.get(code)}
+                            onEdit={() => { setPositionRiskEditor({ ticker: code, name }) }}
+                          />
+                        </td>
                       </tr>
                     })}
                   </tbody>
@@ -2995,6 +3010,15 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
             setNotice(`已导入 ${count} 条持仓，持仓与风险数据已刷新。`)
             setNonce(value => value + 1)
           }}
+        />
+      )}
+      {positionRiskEditor !== undefined && (
+        <PositionRiskDialog
+          requestData={requestData}
+          ticker={positionRiskEditor.ticker}
+          name={positionRiskEditor.name}
+          onClose={() => { setPositionRiskEditor(undefined) }}
+          onChanged={() => { setNonce(value => value + 1) }}
         />
       )}
       {selectedRisk !== undefined && (

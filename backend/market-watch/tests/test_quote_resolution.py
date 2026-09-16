@@ -80,7 +80,11 @@ class QuoteResolutionTests(unittest.TestCase):
 
         rows = quotes.cache().get_quotes(["600519"])
 
-        self.assertEqual(rows, [{"code": "600519", "name": "贵州茅台", "price": 1450.0}])
+        self.assertEqual(rows[0]["code"], "600519")
+        self.assertEqual(rows[0]["price"], 1450.0)
+        self.assertEqual(rows[0]["freshness"], "stale")
+        self.assertEqual(rows[0]["quote_source"], "last_good_cache")
+        self.assertIn("observed_at", rows[0])
 
     @patch("market_watch.quotes._sina_hq", return_value={})
     @patch("market_watch.quotes._ulist", return_value={})
@@ -99,9 +103,12 @@ class QuoteResolutionTests(unittest.TestCase):
     def test_success_refreshes_last_good(self, ulist, sina):
         ulist.return_value = {"600519": {"code": "600519", "name": "贵州茅台", "price": 1450.0}}
 
-        quotes.cache().get_quotes(["600519"])
+        rows = quotes.cache().get_quotes(["600519"])
 
         self.assertIn("600519", quotes._last_good)
+        self.assertEqual(rows[0]["freshness"], "fresh")
+        self.assertEqual(rows[0]["quote_source"], "eastmoney")
+        self.assertIn("observed_at", rows[0])
 
 
 if __name__ == "__main__":

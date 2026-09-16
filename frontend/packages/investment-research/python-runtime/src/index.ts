@@ -136,6 +136,7 @@ export class InvestmentPythonRuntime extends Service {
   private readonly manager: InvestmentBackendManager
   private readonly holdingsNativeToken = randomBytes(32).toString('base64url')
   private readonly notificationInternalToken = randomBytes(32).toString('base64url')
+  private readonly positionRiskToken = randomBytes(32).toString('base64url')
   private readonly backups: BackupService
   private readonly deploymentSnapshot: DeploymentCapabilitySnapshot
 
@@ -170,11 +171,13 @@ export class InvestmentPythonRuntime extends Service {
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
           NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
+          DSH_POSITION_RISK_TOKEN: this.positionRiskToken,
         },
         'market-watch': {
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
           NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
+          DSH_POSITION_RISK_TOKEN: this.positionRiskToken,
         },
       },
     })

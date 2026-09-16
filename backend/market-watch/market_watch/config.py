@@ -120,6 +120,8 @@ class Settings:
         # 后台预热轮询间隔（秒）。远小于 event_ttl，保证 /news/events 恒命中缓存秒回。
         self.event_warm_interval = float(os.getenv("MW_EVENT_WARM_INTERVAL", "45"))
         self.trading_core_url = os.getenv("MW_TRADING_CORE", "http://127.0.0.1:8000")
+        self.position_risk_token = os.getenv("DSH_POSITION_RISK_TOKEN", "")
+        self.position_risk_timeout = float(os.getenv("POSITION_RISK_SYNC_TIMEOUT", "2"))
         # 事件驱动 · 定向个股新闻（按持仓+自选逐只拉东财搜索，直标注 code，不走 LLM；频率受 event_ttl 限，无需独立 TTL）
         self.directed_news_enabled = _true("MW_DIRECTED_NEWS_ENABLED", default=True)
         self.directed_news_per_stock = int(os.getenv("MW_DIRECTED_NEWS_PER_STOCK", "3"))

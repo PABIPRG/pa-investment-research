@@ -17,7 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from . import briefs, news, quotes, rules
+from . import briefs, news, position_risk, quotes, rules
 from .config import settings
 from .push import PusherManager
 from .notification_publisher import center_enabled, price_alert_event, publish_event
@@ -130,12 +130,15 @@ def run_watch_cycle(manual: bool = False) -> dict:
 
     store = JsonStore()
     alerts = [r for r in store.get("alerts", "default", []) if r.get("enabled", True)]
+    position_rules = position_risk.list_rules(store)
     watchlist = store.get("watchlist", "default", []) or []
     codes = {w["code"] for w in watchlist}
     # 规则可带独立 ticker（不在自选也能盯），汇总需要评估的代码
     for a in alerts:
         if a.get("ticker"):
             codes.add(a["ticker"])
+    for rule in position_rules:
+        codes.add(rule["ticker"])
 
     quotes_map = {q["code"]: q for q in quotes.cache().get_quotes(sorted(codes))}
     now = datetime.now(ZoneInfo(settings.timezone))
@@ -198,6 +201,9 @@ def run_watch_cycle(manual: bool = False) -> dict:
         pm = PusherManager()
         for title, content in pushes:
             summary["push_results"].extend(pm.push(title, content))
+    summary["position_risk"] = position_risk.evaluate_and_deliver(
+        store, list(quotes_map.values())
+    )
     return summary
 
 

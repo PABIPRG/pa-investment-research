@@ -21,8 +21,8 @@ from .trade_dedup import merge_trades, trade_key
 from .trades_store import MAX_IMPORTS
 
 
-SCHEMA_VERSION = 3
-SUPPORTED_SCHEMA_VERSIONS = {1, 2, SCHEMA_VERSION}
+SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSIONS = {1, 2, 3, SCHEMA_VERSION}
 LEGACY_CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
     "strategies": (
         "strategies",
@@ -57,9 +57,17 @@ CATEGORY_COLLECTIONS_V2: dict[str, tuple[str, ...]] = {
     "research": ("backtests", "decisions", "reports", "briefs", "research_chat_contexts"),
     "preferences": ("preferences", "behavior"),
 }
-CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
+CATEGORY_COLLECTIONS_V3: dict[str, tuple[str, ...]] = {
     **CATEGORY_COLLECTIONS_V2,
     "notifications": ("notification_center",),
+}
+CATEGORY_COLLECTIONS: dict[str, tuple[str, ...]] = {
+    **CATEGORY_COLLECTIONS_V3,
+    "holdings": (
+        *CATEGORY_COLLECTIONS_V2["holdings"],
+        "position_risk_config",
+        "position_risk_runtime",
+    ),
 }
 DEFAULT_RULES = {
     "strategies": "keep_both",
@@ -209,11 +217,12 @@ def _validate_snapshot(snapshot: Any) -> dict[str, dict[str, dict]]:
         if not isinstance(payload, dict) or not isinstance(payload.get("collections"), dict):
             raise TransferValidationError(f"{category} 分类缺少 collections")
         collections = payload["collections"]
-        collection_contract = (
-            LEGACY_CATEGORY_COLLECTIONS if schema_version == 1
-            else CATEGORY_COLLECTIONS_V2 if schema_version == 2
-            else CATEGORY_COLLECTIONS
-        )
+        collection_contract = {
+            1: LEGACY_CATEGORY_COLLECTIONS,
+            2: CATEGORY_COLLECTIONS_V2,
+            3: CATEGORY_COLLECTIONS_V3,
+            4: CATEGORY_COLLECTIONS,
+        }[schema_version]
         expected = set(collection_contract[category])
         unknown = set(collections) - expected
         if unknown:
@@ -683,7 +692,7 @@ def _merged_documents(
             # 走 _merge_holdings 会被当成快照覆盖，把已有成交静默丢掉。
             if collection == "trades":
                 writes[collection] = _merge_trades(current, document, rule)
-            elif category == "holdings":
+            elif category == "holdings" and collection == "holdings":
                 writes[collection] = _merge_holdings(current, document, rule)
             elif category == "watchlist":
                 writes[collection] = _merge_watchlist(current, document, rule)
@@ -944,6 +953,7 @@ def register_data_transfer_routes(
     store_factory: Any = JsonStore,
     token: str | None = None,
     notification_repository: NotificationRepository | None = None,
+    on_committed: Any = None,
 ) -> None:
     """把领域传输端点注册到 FastAPI；工厂注入使测试使用隔离数据目录。"""
     from fastapi import Header, HTTPException, Query
@@ -1010,7 +1020,14 @@ def register_data_transfer_routes(
     @app.post("/data-transfer/commit")
     def transfer_commit(payload: dict, authorization: str | None = Header(default=None)) -> dict:
         authorize(authorization)
-        return invoke(lambda: commit_import(store_factory(), payload["transaction_id"], notification_repository))
+        def commit() -> dict:
+            store = store_factory()
+            result = commit_import(store, payload["transaction_id"], notification_repository)
+            if on_committed is not None and "holdings" in result.get("categories", []):
+                result["position_risk"] = on_committed(store)
+            return result
+
+        return invoke(commit)
 
     @app.post("/data-transfer/rollback")
     def transfer_rollback(payload: dict, authorization: str | None = Header(default=None)) -> dict:

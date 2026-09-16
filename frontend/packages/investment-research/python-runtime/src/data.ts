@@ -52,6 +52,32 @@ function optionalBoolean(input: Readonly<Record<string, unknown>>, key: string):
   return value
 }
 
+function positionRiskTicker(input: Readonly<Record<string, unknown>>): string {
+  const ticker = stringValue(input, 'ticker')
+  if (!/^\d{6}$/.test(ticker)) throw new TypeError('investment data: ticker must be exactly six digits')
+  return ticker
+}
+
+function positionRiskTarget(value: unknown, label: string): Readonly<Record<string, unknown>> {
+  const target = record(value, label)
+  knownKeys(target, ['enabled', 'mode', 'value'])
+  const enabled = optionalBoolean(target, 'enabled') ?? true
+  const mode = oneOf(target, 'mode', ['percent', 'price']) ?? 'percent'
+  const amount = optionalNumber(target, 'value')
+  if (enabled && (amount === undefined || amount <= 0)) {
+    throw new TypeError(`investment data: ${label}.value must be a positive number`)
+  }
+  return { enabled, mode, value: enabled ? amount : null }
+}
+
+function optionalPositionRiskTime(input: Readonly<Record<string, unknown>>, key: string): string | undefined {
+  const value = optionalString(input, key)
+  if (value !== undefined && Number.isNaN(Date.parse(value))) {
+    throw new TypeError(`investment data: ${key} must be an ISO date-time`)
+  }
+  return value
+}
+
 function optionalStringArray(input: Readonly<Record<string, unknown>>, key: string): string[] | undefined {
   const value = input[key]
   if (value === undefined) return undefined
@@ -594,6 +620,70 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
         use_saved: optionalBoolean(input, 'use_saved') ?? true,
         ...(riskProfile === undefined ? {} : { risk_profile: riskProfile }),
       }
+    },
+  },
+  'trading-core.position-risk': {
+    backendId: 'trading-core',
+    method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['ticker'])
+      const ticker = optionalString(input, 'ticker')
+      if (ticker === undefined) return '/position-risk/effective'
+      if (!/^\d{6}$/.test(ticker)) throw new TypeError('investment data: ticker must be exactly six digits')
+      return query('/position-risk/effective', { ticker })
+    },
+  },
+  'trading-core.position-risk-global-save': {
+    backendId: 'trading-core', method: 'PUT', path: () => '/position-risk/config/global',
+    body: (input) => {
+      knownKeys(input, ['take_profit', 'stop_loss', 'effective_at', 'expires_at', 'confirmed'])
+      if (input.confirmed !== true) throw new TypeError('investment data: confirmed must be true')
+      const effectiveAt = optionalPositionRiskTime(input, 'effective_at')
+      const expiresAt = optionalPositionRiskTime(input, 'expires_at')
+      return {
+        take_profit: positionRiskTarget(input.take_profit, 'take_profit'),
+        stop_loss: positionRiskTarget(input.stop_loss, 'stop_loss'),
+        ...(effectiveAt === undefined ? {} : { effective_at: effectiveAt }),
+        ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
+        confirmed: true,
+      }
+    },
+  },
+  'trading-core.position-risk-override-save': {
+    backendId: 'trading-core', method: 'PUT',
+    path: input => `/position-risk/overrides/${positionRiskTicker(input)}`,
+    body: (input) => {
+      knownKeys(input, ['ticker', 'monitoring_disabled', 'take_profit', 'stop_loss', 'effective_at', 'expires_at', 'confirmed'])
+      if (input.confirmed !== true) throw new TypeError('investment data: confirmed must be true')
+      const disabled = optionalBoolean(input, 'monitoring_disabled') ?? false
+      const effectiveAt = optionalPositionRiskTime(input, 'effective_at')
+      const expiresAt = optionalPositionRiskTime(input, 'expires_at')
+      return {
+        monitoring_disabled: disabled,
+        ...(disabled ? {} : {
+          take_profit: positionRiskTarget(input.take_profit, 'take_profit'),
+          stop_loss: positionRiskTarget(input.stop_loss, 'stop_loss'),
+        }),
+        ...(effectiveAt === undefined ? {} : { effective_at: effectiveAt }),
+        ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
+        confirmed: true,
+      }
+    },
+  },
+  'trading-core.position-risk-override-delete': {
+    backendId: 'trading-core', method: 'DELETE',
+    path: (input) => {
+      knownKeys(input, ['ticker'])
+      return `/position-risk/overrides/${positionRiskTicker(input)}`
+    },
+  },
+  'trading-core.position-risk-rearm': {
+    backendId: 'trading-core', method: 'POST',
+    path: (input) => {
+      knownKeys(input, ['ticker', 'kind'])
+      const ticker = positionRiskTicker(input)
+      const kind = oneOf(input, 'kind', ['take_profit', 'stop_loss'], true)
+      return `/position-risk/activations/${ticker}/${kind}/rearm`
     },
   },
   'trading-core.portfolio-performance': {

@@ -109,7 +109,7 @@ class DataTransferTests(unittest.TestCase):
 
         snapshot = export_snapshot(self.store, ["holdings"])
 
-        self.assertEqual(snapshot["schemaVersion"], 3)
+        self.assertEqual(snapshot["schemaVersion"], 4)
         self.assertEqual(snapshot["backend"], "trading-core")
         self.assertEqual(set(snapshot["categories"]), {"holdings"})
         # 成交明细挂在 holdings 分类下，必须跟着导出——否则备份不含成交，
@@ -123,6 +123,8 @@ class DataTransferTests(unittest.TestCase):
                     "amount": 168050.0, "traded_at": "2026-08-03T10:14:00",
                     "account_mode": "simulated",
                 }]},
+                "position_risk_config": {},
+                "position_risk_runtime": {},
             },
         )
         self.assertNotIn("preferences", str(snapshot))
@@ -157,7 +159,7 @@ class DataTransferTests(unittest.TestCase):
         snapshot = export_snapshot(self.store, ["strategies"])
         collections = snapshot["categories"]["strategies"]["collections"]
 
-        self.assertEqual(snapshot["schemaVersion"], 3)
+        self.assertEqual(snapshot["schemaVersion"], 4)
         self.assertEqual(collections["gene_archive"], {"retired-alpha": {"sid": "retired-alpha"}})
         self.assertEqual(collections["events_ledger"], {"政策|利好": {"pool_id": "政策|利好"}})
         audit = collections["evolution_previews"]
@@ -184,6 +186,15 @@ class DataTransferTests(unittest.TestCase):
         preview = preview_import(self.store, snapshot)
 
         self.assertEqual(preview["categories"]["holdings"]["added"], 1)
+
+    def test_position_risk_facts_are_portable_with_holdings(self):
+        self.store.set("position_risk_config", "global", {"version": 1, "confirmed": True})
+        self.store.set("position_risk_runtime", "triggers", {"hit-1": {"ticker": "600519"}})
+
+        collections = export_snapshot(self.store, ["holdings"])["categories"]["holdings"]["collections"]
+
+        self.assertEqual(collections["position_risk_config"]["global"]["version"], 1)
+        self.assertIn("hit-1", collections["position_risk_runtime"]["triggers"])
 
     def test_import_rejects_malformed_history_start_override(self):
         snapshot = export_snapshot(self.store, ["holdings"])

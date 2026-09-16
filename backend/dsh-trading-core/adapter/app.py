@@ -13,6 +13,7 @@ import logging
 import math
 import os
 import socket
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from typing import Literal, Optional
@@ -44,6 +45,7 @@ from .portfolio_performance import (
     set_history_start_override,
 )
 from .portfolio_price_cache import PortfolioPriceHistoryCache
+from . import position_risk
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .schemas import (
@@ -64,6 +66,9 @@ from .schemas import (
     PersonalizedFeedbackRequest,
     PersonalizedInteractionRequest,
     PortfolioHistoryStartRequest,
+    PositionRiskGlobalRequest,
+    PositionRiskOverrideRequest,
+    PositionRiskPriceHitRequest,
     EvolutionRunRequest,
     RiskProfileRequest,
     ResearchChatContextSaveRequest,
@@ -394,9 +399,15 @@ def create_app(
     report_store: ReportStore | None = None,
     notification_service: NotificationService | None = None,
     notification_internal_token: str | None = None,
+    position_risk_rule_port: position_risk.MarketPriceRulePort | None = None,
 ) -> FastAPI:
     manager = TaskManager(registry=_build_registry(), report_store=report_store)
     portfolio_price_cache = PortfolioPriceHistoryCache(load_portfolio_prices)
+    risk_rule_port = position_risk_rule_port or position_risk.HttpMarketPriceRulePort(
+        settings.mw_url,
+        settings.position_risk_token,
+        settings.position_risk_timeout,
+    )
 
     if notification_service is None:
         channel_defaults = {
@@ -449,6 +460,7 @@ def create_app(
     register_data_transfer_routes(
         app,
         notification_repository=notification_service.repository,
+        on_committed=lambda store: position_risk.reconcile(store, risk_rule_port),
     )
 
     def publish_holdings_notification(result: dict, source_name: str) -> None:
@@ -575,6 +587,9 @@ def create_app(
                 "snapshot_id": snapshot["snapshot_id"],
                 "effective_at": snapshot["effective_at"],
             })
+        result["position_risk"] = await run_in_threadpool(
+            position_risk.reconcile, store, risk_rule_port
+        )
         publish_holdings_notification(result, req.source)
         return result
 
@@ -632,11 +647,113 @@ def create_app(
             if not token or not secrets.compare_digest(token, x_holdings_native):
                 raise HTTPException(status_code=403, detail="Electron 持仓操作需要桌面宿主授权。")
         request = req or HoldingsSyncRequest()
-        result = await run_in_threadpool(sync_result, lambda: commit_holdings(request.preview_token)
-                                         if request.action == "commit" else preview_holdings())
+        def call():
+            result = commit_holdings(request.preview_token) \
+                if request.action == "commit" else preview_holdings()
+            if request.action == "commit":
+                result["position_risk"] = position_risk.reconcile(JsonStore(), risk_rule_port)
+            return result
+
+        result = await run_in_threadpool(sync_result, call)
         if request.action == "commit" or result.get("readiness") in {"blocked", "partial", "failed"}:
             publish_holdings_notification(result, str(result.get("label") or settings.holdings_provider))
         return result
+
+    # ---- 持仓止盈止损计划 -------------------------------------------------
+
+    @app.get("/position-risk/config/global", response_model=dict)
+    def position_risk_global_get():
+        store = JsonStore()
+        document = position_risk.config_document(store)
+        return {
+            "configured": isinstance(document.get("global"), dict),
+            "config": document.get("global"),
+            "suggestion": position_risk.explicit_kyc_suggestion(store),
+        }
+
+    @app.put("/position-risk/config/global", response_model=dict)
+    async def position_risk_global_put(req: PositionRiskGlobalRequest):
+        store = JsonStore()
+        suggestion = position_risk.explicit_kyc_suggestion(store)
+        try:
+            return await run_in_threadpool(
+                position_risk.save_global_config,
+                store,
+                req.model_dump(mode="json"),
+                risk_rule_port,
+                suggestion.get("profile") if suggestion else None,
+            )
+        except position_risk.PositionRiskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/position-risk/effective", response_model=dict)
+    def position_risk_effective_get(
+        ticker: Optional[str] = Query(default=None, pattern=r"^\d{6}$"),
+    ):
+        store = JsonStore()
+        document = position_risk.config_document(store)
+        if ticker is not None:
+            return {
+                "item": position_risk.effective_plan(store, ticker),
+                "global": document.get("global"),
+                "suggestion": position_risk.explicit_kyc_suggestion(store),
+            }
+        items = position_risk.effective_plans(store)
+        return {
+            "count": len(items),
+            "items": items,
+            "global": document.get("global"),
+            "suggestion": position_risk.explicit_kyc_suggestion(store),
+        }
+
+    @app.put("/position-risk/overrides/{ticker}", response_model=dict)
+    async def position_risk_override_put(
+        req: PositionRiskOverrideRequest,
+        ticker: str = ApiPath(pattern=r"^\d{6}$"),
+    ):
+        try:
+            return await run_in_threadpool(
+                position_risk.save_override,
+                JsonStore(),
+                ticker,
+                req.model_dump(mode="json"),
+                risk_rule_port,
+            )
+        except position_risk.PositionRiskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete("/position-risk/overrides/{ticker}", response_model=dict)
+    async def position_risk_override_delete(
+        ticker: str = ApiPath(pattern=r"^\d{6}$"),
+    ):
+        return await run_in_threadpool(
+            position_risk.delete_override, JsonStore(), ticker, risk_rule_port
+        )
+
+    @app.post("/position-risk/activations/{ticker}/{kind}/rearm", response_model=dict)
+    async def position_risk_rearm(
+        ticker: str = ApiPath(pattern=r"^\d{6}$"),
+        kind: Literal["take_profit", "stop_loss"] = ApiPath(),
+    ):
+        try:
+            return await run_in_threadpool(
+                position_risk.rearm, JsonStore(), ticker, kind, risk_rule_port
+            )
+        except position_risk.PositionRiskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/internal/position-risk/price-hits", response_model=dict)
+    def position_risk_price_hit(
+        req: PositionRiskPriceHitRequest,
+        x_position_risk_token: str = Header(default=""),
+    ):
+        token = settings.position_risk_token
+        if not token or not secrets.compare_digest(token, x_position_risk_token):
+            raise HTTPException(status_code=403, detail="内部价格命中回调未授权")
+        try:
+            return position_risk.accept_price_hit(JsonStore(), req.model_dump(mode="json"))
+        except position_risk.PositionRiskValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/holdings/native", response_model=dict)
     async def holdings_native_post(req: HoldingsNativeRequest, x_holdings_native: str = Header(default="")):
@@ -1497,7 +1614,7 @@ def create_app(
 
     @app.get("/risk/alerts", response_model=dict)
     def risk_alerts():
-        """Q：风险预警中心（组合+影子+事件+画像四源聚合，按严重度高>中>低排序）。"""
+        """Q：风险预警中心（含持仓止盈止损触发，按严重度高>中>低排序）。"""
         from . import risk_engine
 
         return risk_engine.risk_alerts()

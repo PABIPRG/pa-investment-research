@@ -22,7 +22,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -497,10 +497,18 @@ def _quote_map(codes: list[str]) -> dict[str, dict]:
     """批量取价（东财 ulist 为主，漏掉的码逐批用新浪补位）。
     不做全量 `or` 降级：ulist 成功但缺个别码时（新股/代码差异/基金）仍用新浪补齐，
     避免个别持仓永远 '—'。两源皆缺的码返回时由 _stale_fill 决定是否兜底旧价。"""
-    m = {code: row for code, row in _ulist(codes).items() if _usable_quote(row)}
+    m = {
+        code: {**row, "quote_source": "eastmoney"}
+        for code, row in _ulist(codes).items()
+        if _usable_quote(row)
+    }
     missing = [c for c in codes if c not in m]
     if missing:
-        m.update({code: row for code, row in _sina_hq(missing).items() if _usable_quote(row)})
+        m.update({
+            code: {**row, "quote_source": "sina"}
+            for code, row in _sina_hq(missing).items()
+            if _usable_quote(row)
+        })
     return m
 
 
@@ -508,15 +516,25 @@ def _stale_fill(codes: list[str], m: dict[str, dict]) -> dict[str, dict]:
     """成功价记入 _last_good；两源皆缺的码回填最近一次成功价（限 quote_stale_ttl）。
     超窗不回填，由调用方按缺省处理（前端降级 '—'）。"""
     now = time.time()
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     for c in codes:
         row = m.get(c)
         if _usable_quote(row):
-            _last_good[c] = (now, row)
+            fresh = {**row, "freshness": "fresh", "observed_at": observed_at}
+            m[c] = fresh
+            _last_good[c] = (now, fresh)
         else:
             m.pop(c, None)
             hit = _last_good.get(c)
             if hit and (now - hit[0]) <= settings.quote_stale_ttl:
-                m[c] = hit[1]
+                m[c] = {
+                    **hit[1],
+                    "quote_source": hit[1].get("quote_source") or "last_good_cache",
+                    "observed_at": hit[1].get("observed_at") or datetime.fromtimestamp(
+                        hit[0], timezone.utc
+                    ).isoformat(timespec="seconds"),
+                    "freshness": "stale",
+                }
     return m
 
 
