@@ -20,7 +20,7 @@ macOS performs no scheduled or background holdings reads. A read starts only fro
 
 ### Data and attribution
 
-Every preview carries ticker, quantity, and cost. When the client exposes a complete trade table, positions also carry broker execution time, side, quantity, and price, with `broker_detail` provenance. When complete details are unavailable, the read timestamp is an explicit `read_fallback`; the user can edit it into `user_modified`, and later fallback-only reads preserve that manual value.
+Every preview carries ticker, quantity, and cost. When the client exposes details in its current historical-trade query range, positions also carry broker execution time, side, quantity, and price, with `broker_detail` provenance; the UI also states that this range has not yet been proven to cover the position's complete formation history. When details are unavailable, the read timestamp is an explicit `read_fallback`; the user can edit it into `user_modified`, and later fallback-only reads preserve that manual value.
 
 Snapshot identity includes the real or simulated account source. Repeated positions from the same account ignore a newly generated fallback read timestamp, but retain broker trades and user-modified attribution. An unchanged commit reuses the latest snapshot and returns `changed=false` instead of creating a duplicate business change.
 
@@ -28,15 +28,17 @@ Snapshot identity includes the real or simulated account source. Repeated positi
 
 Electron rejects generic holdings preview and commit operations. The main process owns durable consent, the backend preview token, an opaque renderer session, and the final native replacement confirmation. Renderer messages are limited to fixed actions and cannot provide commands, URLs, client paths, operation ids, or backend tokens. The private backend route requires a host-only credential and an owned local backend.
 
-Empty, partial, expired, canceled, conflicting, or already-consumed previews never replace local holdings. A successful commit validates account, provider, storage root, ticker-scoped time overrides, and the unchanged local baseline before the atomic write.
+Empty holdings, missing required fields, expired, canceled, conflicting, or already-consumed previews never replace local holdings. When only trade details are incomplete, verified holdings remain visible with an explicit read-time fallback and the real reason; replacement still requires an explicit user confirmation. A successful commit validates account, provider, storage root, ticker-scoped time overrides, and the unchanged local baseline before the atomic write.
 
 ### Cancellation and focus
 
 The renderer can cancel an active macOS read. The main process sends a private cancellation for its own operation id and aborts the request; the backend cancellation event stops AX traversal, and the production AppleScript fallback terminates its child process. Cancellation creates no renderer session and writes no holdings. The main process attempts to restore the investment application after success, failure, or cancellation.
 
+macOS AX navigation no longer treats a successful `AXPress` return as proof that the page changed. Each step re-traverses the visible windows and proceeds only when the selected account and target table are proven in the same window. Ambiguous duplicate controls and captcha, login/unlock, agreement, or risk dialogs stop safely instead of triggering guessed clicks.
+
 ## Testing
 
-Backend tests pin preview/commit isolation, time provenance, manual-time preservation, cancellation, incomplete-table fallback, account-aware deduplication, and macOS parsing. Electron tests pin durable consent, revocation, foreground-only initiation, opaque sessions, native confirmation, cancellation, and focus restoration. Runtime and component tests pin the non-Remote boundary, the macOS manual-only interaction, editable fallback time, settings revocation, and unchanged-preview behavior.
+Backend tests pin preview/commit isolation, time provenance, manual-time preservation, cancellation, stepwise navigation, same-window account/table verification, incomplete-table fallback, account-aware deduplication, and macOS parsing. Electron tests pin durable consent, revocation, foreground-only initiation, opaque sessions, native confirmation, cancellation, and focus restoration. Runtime and component tests pin the non-Remote boundary, the macOS manual-only interaction, partial-success messaging, editable fallback time, settings revocation, and unchanged-preview behavior.
 
 Real signed-host validation against an installed and logged-in Tonghuashun client remains required for TCC ownership, actual AX labels, navigation, trade-table compatibility, cancellation, and focus restoration. Automated checks do not satisfy that UAT requirement; the current status and closing conditions are recorded in the [PAB-25 UAT handoff](../../../../../docs/superpowers/handoffs/2026-09-15-pab25-macos-holdings-uat.md).
 

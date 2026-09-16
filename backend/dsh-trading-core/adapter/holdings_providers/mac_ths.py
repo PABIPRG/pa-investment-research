@@ -4,11 +4,12 @@
 AXUIElement 为默认被动读取路径。权限属于实际 Python 读取进程；检测不触发
 TCC 弹窗。需要导航时返回稳定状态；只有经认证的 Electron 本次同意入口允许
 激活窗口和固定路径点击，AX 导航失败后才使用 AppleScript，并尽力恢复前台。
-表格或账户身份无法完整确认时拒绝读取，不以部分结果覆盖当前持仓。
+持仓表或账户身份无法完整确认时拒绝读取；仅成交明细失败时保留已验证
+持仓，并返回可见的部分成功状态。
 
 成交明细与持仓共用同一套 AX 会话（权限、账户身份校验、超时预算），差别只有
-导航路径与认表签名。**成交路径没有 AppleScript 降级**：持仓的降级脚本是针对
-「持仓」页写死并验证过的，成交页的对应脚本尚未在任何真机上跑通（闸门 4 未做），
+导航路径与认表签名。**成交路径没有 AppleScript 降级**：持仓的降级脚本针对
+「持仓」页写死，但它也不构成真机验收证据；成交页的对应脚本尚未在任何真机上跑通（闸门 4 未做），
 与其塞一份看起来能用的未验证脚本，不如让用户手动切页——见 read_trades。
 """
 
@@ -19,7 +20,8 @@ import math
 import subprocess
 import sys
 import time
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, Literal
 
 from ..config import settings
 from ..schemas import HoldingItem, HoldingTrade, TradeItem
@@ -42,6 +44,18 @@ DEFAULT_APP_NAME = "同花顺"
 
 # AppleScript 运行器签名：(脚本正文) -> (returncode, stdout, stderr)
 ScriptRunner = Callable[[str], "tuple[int, str, str]"]
+
+
+@dataclass(frozen=True)
+class MacHoldingsReadResult:
+    """一次 macOS 持仓读取及成交明细覆盖状态。"""
+
+    items: list[HoldingItem]
+    details_status: Literal["not_requested", "available", "empty", "unavailable"]
+    details_reason: str = ""
+    details_code: str = ""
+    details_scope: Literal["not_requested", "current_query", "unknown"] = "not_requested"
+
 
 # TCC 会分别拒绝 Apple Events(-1743) 和辅助功能(-25211)，两者的授权入口不同。
 _AUTOMATION_PERMISSION_MARKERS = (
@@ -403,6 +417,18 @@ class MacThsProvider(HoldingsProvider):
 
     def read_holdings(self, *, foreground: bool = False,
                       cancelled: Callable[[], bool] | None = None) -> list[HoldingItem]:
+        """兼容 HoldingsProvider 的列表接口。"""
+        return self.read_holdings_result(
+            foreground=foreground, cancelled=cancelled
+        ).items
+
+    def read_holdings_result(
+        self,
+        *,
+        foreground: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> MacHoldingsReadResult:
+        """读取持仓并保留成交明细未完成的真实原因。"""
         cancelled = cancelled or (lambda: False)
         if cancelled():
             raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
@@ -414,9 +440,13 @@ class MacThsProvider(HoldingsProvider):
                                       "accessibility_required" if permission == "not_granted" else "dependency_missing")
         if not app_running(self._app_name):
             raise ProviderUnavailable("请先打开同花顺并登录。", "client_not_running")
-        passive: list[HoldingItem] | None = None
+        passive: MacHoldingsReadResult | None = None
         try:
-            passive = read_ax_table(self._account_mode, cancelled=cancelled)
+            passive = read_ax_holdings_result(
+                self._account_mode,
+                cancelled=cancelled,
+                app_name=self._app_name,
+            )
         except ProviderUnavailable as exc:
             if not foreground or exc.code != "navigation_required":
                 raise
@@ -429,7 +459,7 @@ class MacThsProvider(HoldingsProvider):
         activated = False
         try:
             target = next((app for app in workspace.runningApplications()
-                           if app.localizedName() == DEFAULT_APP_NAME), None)
+                           if app.localizedName() == self._app_name), None)
             if target is None:
                 raise ProviderUnavailable("同花顺已经退出。", "client_not_running")
             if accessibility_status() != "granted":
@@ -437,12 +467,17 @@ class MacThsProvider(HoldingsProvider):
             target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
             activated = True
             try:
-                return read_ax_table(self._account_mode, navigate=True, cancelled=cancelled)
+                return read_ax_holdings_result(
+                    self._account_mode,
+                    navigate=True,
+                    cancelled=cancelled,
+                    app_name=self._app_name,
+                )
             except ProviderUnavailable as exc:
                 if exc.code != "navigation_required":
                     raise
             # Apple Events are used only after an actual AX navigation failure.
-            script = apple_script(DEFAULT_APP_NAME, self._account_mode)
+            script = apple_script(self._app_name, self._account_mode)
             code, stdout, stderr = (_default_runner_with_cancel(script, cancelled)
                                     if self._runner is default_runner else self._runner(script))
             if cancelled():
@@ -456,7 +491,15 @@ class MacThsProvider(HoldingsProvider):
                 raise ProviderUnavailable("读取失败，请检查登录、验证码或客户端弹窗。", "read_failed")
             try:
                 header, rows = parse_output(stdout)
-                return rows_to_items(header, rows)
+                return MacHoldingsReadResult(
+                    items=rows_to_items(header, rows),
+                    details_status="unavailable",
+                    details_reason=(
+                        "AX 自动导航未完成；已通过兼容路径读取持仓，但成交明细未读取。"
+                    ),
+                    details_code="compatibility_fallback",
+                    details_scope="unknown",
+                )
             except MacThsScriptError as exc:
                 raise ProviderUnavailable(str(exc), "read_failed") from exc
         except subprocess.TimeoutExpired as exc:
@@ -480,7 +523,7 @@ class MacThsProvider(HoldingsProvider):
         """读取成交明细；被动优先，只有获准的本次同意入口才允许激活并导航。
 
         与 read_holdings 的唯一结构差别：AX 导航失败后**不降级到 AppleScript**。
-        持仓那份降级脚本是针对「持仓」页写死且验证过的，成交页的对应脚本还没在
+        持仓那份降级脚本是针对「持仓」页写死的兼容路径，成交页的对应脚本还没在
         任何 Mac 真机上跑通，写一份看起来能用的反而会把失败伪装成「已尝试全部手段」。
         这里改为明确告诉用户手动切页。
         """
@@ -493,7 +536,7 @@ class MacThsProvider(HoldingsProvider):
         if not app_running(self._app_name):
             raise ProviderUnavailable("请先打开同花顺并登录。", "client_not_running")
         try:
-            return read_ax_trades(self._account_mode)
+            return read_ax_trades(self._account_mode, app_name=self._app_name)
         except ProviderUnavailable as exc:
             if not foreground or exc.code != "navigation_required":
                 raise
@@ -503,7 +546,7 @@ class MacThsProvider(HoldingsProvider):
         activated = False
         try:
             target = next((app for app in workspace.runningApplications()
-                           if app.localizedName() == DEFAULT_APP_NAME), None)
+                           if app.localizedName() == self._app_name), None)
             if target is None:
                 raise ProviderUnavailable("同花顺已经退出。", "client_not_running")
             if accessibility_status() != "granted":
@@ -511,7 +554,9 @@ class MacThsProvider(HoldingsProvider):
             target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
             activated = True
             try:
-                return read_ax_trades(self._account_mode, navigate=True)
+                return read_ax_trades(
+                    self._account_mode, navigate=True, app_name=self._app_name
+                )
             except ProviderUnavailable as exc:
                 if exc.code != "navigation_required":
                     raise
@@ -564,15 +609,14 @@ def _ax_session(
     *,
     labels: tuple[str, ...] | None,
     page: str,
+    expected_kind: Literal["holdings", "trades"],
     cancelled: Callable[[], bool] | None = None,
+    app_name: str = DEFAULT_APP_NAME,
 ):
-    """建立 AX 会话：查权限、定位进程、按需导航，返回 (节点列表, attr, walk)。
+    """建立 AX 会话并验证同一窗口内的账户与目标表格。
 
-    持仓与成交共用这一段。TCC 权限、超时预算、尤其是「账户身份必须被证明」这条
-    在两张表上完全一样——复制一份迟早会分叉，而漏掉账户校验的后果是读到另一个
-    账户的数据，那是错数据而不是缺数据。
-
-    labels 为 None 表示被动读取，不做任何 AXPress。
+    AXPress 只表示动作已投递，不表示页面已经切换。每一步重新读取可见窗口；最终只有
+    所选账户和目标表格出现在同一个窗口时才返回。labels 为 None 时只做被动验证。
     """
     cancelled = cancelled or (lambda: False)
     from AppKit import NSWorkspace
@@ -580,15 +624,20 @@ def _ax_session(
         AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
         AXUIElementPerformAction, AXUIElementSetMessagingTimeout,
     )
+    try:
+        from ApplicationServices import AXUIElementCopyActionNames
+    except ImportError:  # pragma: no cover - older PyObjC falls back to role checks
+        AXUIElementCopyActionNames = None
     if accessibility_status() != "granted":
         raise ProviderUnavailable("请先授予读取进程辅助功能权限。", "accessibility_required")
     target = next((app for app in NSWorkspace.sharedWorkspace().runningApplications()
-                   if app.localizedName() == DEFAULT_APP_NAME), None)
+                   if app.localizedName() == app_name), None)
     if target is None:
         raise ProviderUnavailable("同花顺未运行。", "client_not_running")
     root = AXUIElementCreateApplication(target.processIdentifier())
     AXUIElementSetMessagingTimeout(root, 1.0)
     deadline = time.monotonic() + settings.mac_ths_timeout
+
     def attr(node, key):
         if cancelled():
             raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
@@ -596,6 +645,7 @@ def _ax_session(
             raise ProviderUnavailable("读取超时，请重试。", "read_timeout")
         code, value = AXUIElementCopyAttributeValue(node, key, None)
         return value if code == 0 else None
+
     def walk(node):
         pending = [node]
         count = 0
@@ -606,21 +656,175 @@ def _ax_session(
                 raise ProviderUnavailable("窗口内容过多，无法完整读取。", "partial_read")
             yield current
             pending.extend(attr(current, "AXChildren") or [])
-    if labels:
-        for label in labels:
-            if cancelled():
-                raise ProviderUnavailable("已取消读取，当前持仓保持不变。", "read_cancelled")
-            button = next((n for n in walk(root) if attr(n, "AXTitle") == label
-                           and attr(n, "AXRole") in ("AXButton", "AXRadioButton")), None)
-            if button is None or AXUIElementPerformAction(button, "AXPress") != 0:
-                raise ProviderUnavailable(f"请进入所选账户的{page}页。", "navigation_required")
-    nodes = list(walk(root))
-    # Passive reads must prove the selected account, not infer it from a visible tab label.
+
+    def windows():
+        found = [window for window in (attr(root, "AXWindows") or [])
+                 if attr(window, "AXMinimized") is not True]
+        if not found:
+            return [root]
+        return sorted(
+            found,
+            key=lambda window: (
+                attr(window, "AXFocused") is True,
+                attr(window, "AXMain") is True,
+            ),
+            reverse=True,
+        )
+
+    def node_labels(node) -> set[str]:
+        values = []
+        for key in ("AXTitle", "AXDescription", "AXValue"):
+            value = attr(node, key)
+            if isinstance(value, str) and value.strip():
+                values.append(value.strip())
+        return set(values)
+
+    def action_names(node) -> set[str]:
+        if AXUIElementCopyActionNames is not None:
+            try:
+                code, values = AXUIElementCopyActionNames(node, None)
+                if code == 0:
+                    return set(values or [])
+            except (TypeError, ValueError):
+                pass
+        if attr(node, "AXRole") in {
+            "AXButton", "AXRadioButton", "AXTab", "AXMenuItem", "AXRow",
+        }:
+            return {"AXPress"}
+        return set()
+
+    def navigation_control(label: str):
+        candidates = []
+        for window in windows():
+            for node in walk(window):
+                if label not in node_labels(node):
+                    continue
+                candidate = node
+                depth = 0
+                while candidate is not None and depth <= 4:
+                    if ("AXPress" in action_names(candidate)
+                            and attr(candidate, "AXEnabled") is not False
+                            and attr(candidate, "AXHidden") is not True):
+                        score = (
+                            4 * int(attr(window, "AXFocused") is True)
+                            + 3 * int(attr(window, "AXMain") is True)
+                            + 2 * int(attr(candidate, "AXTitle") == label)
+                            + int(candidate is node)
+                        )
+                        candidates.append((score, candidate))
+                        break
+                    candidate = attr(candidate, "AXParent")
+                    depth += 1
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        best_score = candidates[0][0]
+        best = []
+        for score, candidate in candidates:
+            if score != best_score:
+                break
+            # 同一 AX 控件可能作为“带文案按钮”和“文案节点的可点击父级”
+            # 被发现两次。PyObjC 不保证两次返回相同的 Python wrapper，因此
+            # 用 AXUIElement/CF 相等性去重，不使用 id() 制造假歧义。
+            if not any(candidate == existing for existing in best):
+                best.append(candidate)
+        if len(best) != 1:
+            raise ProviderUnavailable(
+                f"同花顺中存在多个无法区分的“{label}”入口，未自动点击。",
+                "navigation_ambiguous",
+            )
+        return best[0]
+
+    def modal_blocker() -> str | None:
+        for window in windows():
+            if (attr(window, "AXModal") is not True
+                    and attr(window, "AXSubrole") not in {"AXDialog", "AXSystemDialog"}):
+                continue
+            text = " ".join(
+                value
+                for node in walk(window)
+                for value in node_labels(node)
+            )
+            if "验证码" in text:
+                return "同花顺正在等待验证码，请在客户端完成后重试。"
+            if "密码" in text or "登录" in text:
+                return "同花顺交易模块需要登录或解锁，请在客户端完成后重试。"
+            if "协议" in text or "风险" in text:
+                return "同花顺正在等待协议或风险提示确认，请在客户端处理后重试。"
+        return None
+
+    def reject_modal_blocker() -> None:
+        blocker = modal_blocker()
+        if blocker is not None:
+            raise ProviderUnavailable(blocker, "client_interaction_required")
+
     account = _account_tab(account_mode)
-    if not any(attr(n, "AXTitle") == account and
-                                 (attr(n, "AXSelected") is True or attr(n, "AXValue") == 1) for n in nodes):
-        raise ProviderUnavailable(f"请进入所选账户的{page}页后再读取。", "navigation_required")
-    return nodes, attr, walk
+
+    def ready_context():
+        for window in windows():
+            nodes = list(walk(window))
+            selected = any(
+                account in node_labels(node)
+                and (attr(node, "AXSelected") is True
+                     or attr(node, "AXValue") == 1
+                     or attr(node, "AXValue") == "1")
+                for node in nodes
+            )
+            if not selected:
+                continue
+            for node in nodes:
+                if attr(node, "AXRole") != "AXTable":
+                    continue
+                values = _table_values(node, attr, walk)
+                if values and classify_table(values[0]) == expected_kind:
+                    return nodes
+        return None
+
+    def wait_for(probe, description: str):
+        while True:
+            # 弹窗出现时先停止；不能先在被遮挡的主窗口中寻找并点击入口。
+            reject_modal_blocker()
+            value = probe()
+            if value is not None:
+                return value
+            if time.monotonic() >= deadline:
+                raise ProviderUnavailable(
+                    f"自动切换到{page}页未完成（等待{description}超时）。",
+                    "navigation_required",
+                )
+            time.sleep(0.08)
+
+    reject_modal_blocker()
+    current = ready_context()
+    if current is not None:
+        return current, attr, walk
+    if labels:
+        for index, label in enumerate(labels):
+            later_labels = labels[index + 1:]
+
+            def target_or_later():
+                target_control = navigation_control(label)
+                if target_control is not None:
+                    return ("target", target_control)
+                for later_label in later_labels:
+                    later = navigation_control(later_label)
+                    if later is not None:
+                        return ("later", later)
+                return None
+
+            kind, control = wait_for(target_or_later, f'“{label}”入口')
+            if kind == "later":
+                continue
+            if AXUIElementPerformAction(control, "AXPress") != 0:
+                raise ProviderUnavailable(
+                    f"无法点击同花顺中的“{label}”，请手动进入所选账户的{page}页。",
+                    "navigation_required",
+                )
+        nodes = wait_for(ready_context, f"所选账户的{page}表格")
+        return nodes, attr, walk
+    raise ProviderUnavailable(
+        f"请进入所选账户的{page}页后再读取。", "navigation_required"
+    )
 
 
 def _table_values(table, attr, walk) -> list[list[str]]:
@@ -652,19 +856,24 @@ def _attach_holding_trades(
     ]
 
 
-def read_ax_table(
+def _read_ax_holdings_only(
     account_mode: str,
     *,
     navigate: bool = False,
     cancelled: Callable[[], bool] | None = None,
+    app_name: str = DEFAULT_APP_NAME,
 ) -> list[HoldingItem]:
-    """被动 AX 遍历；仅获准原生调用允许固定账户路径的 AXPress。"""
+    """读取并验证持仓表；不在此函数内切换成交页。"""
     labels = ("交易", _account_tab(account_mode), "股票", "持仓") if navigate else None
     nodes, attr, walk = _ax_session(
-        account_mode, labels=labels, page="持仓", cancelled=cancelled
+        account_mode,
+        labels=labels,
+        page="持仓",
+        expected_kind="holdings",
+        cancelled=cancelled,
+        app_name=app_name,
     )
     saw_trades_table = False
-    holdings: list[HoldingItem] | None = None
     for table in nodes:
         if attr(table, "AXRole") != "AXTable":
             continue
@@ -675,32 +884,89 @@ def read_ax_table(
         # 最终报出「未找到持仓表」这种与事实不符的提示。
         kind = classify_table(values[0])
         if kind == "holdings":
-            holdings = rows_to_items(values[0], values[1:])
-            break
+            return rows_to_items(values[0], values[1:])
         if kind == "trades":
             saw_trades_table = True
-    if holdings is not None:
-        if not navigate:
-            return holdings
-        try:
-            trades = read_ax_trades(
-                account_mode, navigate=True, cancelled=cancelled
-            )
-        except ProviderUnavailable as exc:
-            if exc.code in {
-                "read_cancelled",
-                "accessibility_required",
-                "read_timeout",
-                "client_not_running",
-            }:
-                raise
-            # 成交明细是增强信息；客户端版本不支持自动定位时仍保留持仓，
-            # 后续由预览层以本次读取时间作为明确的 fallback。
-            return holdings
-        return _attach_holding_trades(holdings, trades)
     if saw_trades_table:
         raise ProviderUnavailable("当前停留在成交明细页，请切换到「持仓」页后再读取。", "navigation_required")
     raise ProviderUnavailable("未找到完整持仓表格，请确认已登录并进入持仓页。", "navigation_required")
+
+
+def read_ax_holdings_result(
+    account_mode: str,
+    *,
+    navigate: bool = False,
+    cancelled: Callable[[], bool] | None = None,
+    app_name: str = DEFAULT_APP_NAME,
+) -> MacHoldingsReadResult:
+    """读取持仓，并把成交页失败保留为可见的部分成功元数据。"""
+    holdings = _read_ax_holdings_only(
+        account_mode,
+        navigate=navigate,
+        cancelled=cancelled,
+        app_name=app_name,
+    )
+    if not navigate:
+        return MacHoldingsReadResult(
+            items=holdings,
+            details_status="unavailable",
+            details_reason=(
+                "当前只验证并读取了持仓页；成交明细需要在桌面端主动读取，"
+                "或先手动进入历史成交页。"
+            ),
+            details_code="foreground_required_for_details",
+            details_scope="unknown",
+        )
+    try:
+        trades = read_ax_trades(
+            account_mode,
+            navigate=True,
+            cancelled=cancelled,
+            app_name=app_name,
+        )
+    except ProviderUnavailable as exc:
+        if exc.code in {
+            "read_cancelled",
+            "accessibility_required",
+            "client_not_running",
+        }:
+            raise
+        return MacHoldingsReadResult(
+            items=holdings,
+            details_status="unavailable",
+            details_reason=str(exc),
+            details_code=exc.code,
+            details_scope="unknown",
+        )
+    if not trades:
+        return MacHoldingsReadResult(
+            items=holdings,
+            details_status="empty",
+            details_reason="历史成交表已打开，但当前查询范围没有成交记录。",
+            details_scope="current_query",
+        )
+    return MacHoldingsReadResult(
+        items=_attach_holding_trades(holdings, trades),
+        details_status="available",
+        details_reason="已读取同花顺当前历史成交查询范围内的明细。",
+        details_scope="current_query",
+    )
+
+
+def read_ax_table(
+    account_mode: str,
+    *,
+    navigate: bool = False,
+    cancelled: Callable[[], bool] | None = None,
+    app_name: str = DEFAULT_APP_NAME,
+) -> list[HoldingItem]:
+    """兼容列表调用；详细状态由 read_ax_holdings_result 返回。"""
+    return read_ax_holdings_result(
+        account_mode,
+        navigate=navigate,
+        cancelled=cancelled,
+        app_name=app_name,
+    ).items
 
 
 def read_ax_trades(
@@ -708,6 +974,7 @@ def read_ax_trades(
     *,
     navigate: bool = False,
     cancelled: Callable[[], bool] | None = None,
+    app_name: str = DEFAULT_APP_NAME,
 ) -> list[TradeItem]:
     """被动 AX 遍历成交明细表；仅获准原生调用允许固定路径的 AXPress。
 
@@ -716,7 +983,12 @@ def read_ax_trades(
     """
     labels = trades_navigation_path(account_mode) if navigate else None
     nodes, attr, walk = _ax_session(
-        account_mode, labels=labels, page="历史成交", cancelled=cancelled
+        account_mode,
+        labels=labels,
+        page="历史成交",
+        expected_kind="trades",
+        cancelled=cancelled,
+        app_name=app_name,
     )
     saw_holdings_table = False
     for table in nodes:

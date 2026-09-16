@@ -524,7 +524,7 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
       <label className={css.sourceSelect}><span>持仓数据源</span><select aria-label="持仓数据源" value={provider} disabled={busy || loading} onChange={event => { change({ HOLDINGS_PROVIDER: event.target.value }) }}>
         {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select></label>
-      <p role="status">{loading ? (slow ? '检测耗时较长，最多等待 12 秒。你也可以先手动录入。' : '正在检测客户端与权限，请稍候…') : state.available === true ? '已具备读取条件；读取时仍需确认账户与登录状态。' : text(state.reason, '请选择数据源并检查客户端。')}</p>
+      <p role="status">{loading ? (slow ? '检测耗时较长，最多等待 12 秒。你也可以先手动录入。' : '正在检测客户端与权限，请稍候…') : state.available === true ? '基础条件已满足；实际交易页面、账户和表格将在读取时逐项确认。' : text(state.reason, '请选择数据源并检查客户端。')}</p>
       <div className={css.syncStatusList} aria-label="检测结果">
         <span>客户端 <strong>{state.installation === 'installed' ? '已安装' : state.installation === 'missing' ? '未安装' : '待确认'}</strong></span>
         <span>运行状态 <strong>{state.process === 'running' ? '运行中' : state.process === 'not_running' ? '未启动' : '待确认'}</strong></span>
@@ -576,6 +576,18 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
       {preview !== undefined && <div className={css.workbenchImportPreview}>
         <div><strong>{saved ? '已同步持仓' : '持仓预览 · 尚未保存'}</strong><span>{text(preview.account_label, accountLabel)} · 当前 {String(preview.previous_count)} 条 → {items.length} 条</span></div>
         <p>来源：{text(preview.label, '同花顺')} · 读取时间：{text(preview.read_at, '—')} · 预览有效期 5 分钟</p>
+        {text(asRecord(preview.details).status, '') === 'unavailable' && <div className={css.workbenchImportGuide} role="status">
+          <strong>持仓已读取，成交明细未完成</strong>
+          <span>{text(asRecord(preview.details).reason, '成交明细读取失败。')} 当前使用读取时间兜底，可逐只修改后再确认。</span>
+        </div>}
+        {text(asRecord(preview.details).status, '') === 'empty' && <div className={css.workbenchImportGuide} role="status">
+          <strong>当前查询范围没有成交明细</strong>
+          <span>{text(asRecord(preview.details).reason, '历史成交表没有返回记录。')} 当前使用读取时间兜底，可逐只修改后再确认。</span>
+        </div>}
+        {text(asRecord(preview.details).status, '') === 'available' && asRecord(preview.details).scope === 'current_query' && <div className={css.workbenchImportGuide} role="status">
+          <strong>已读取当前查询范围的成交明细</strong>
+          <span>成交时间来自同花顺当前历史成交查询结果；尚未证明该范围覆盖当前持仓的全部形成过程。</span>
+        </div>}
         <div className={css.workbenchImportTableWrap}><table><thead><tr><th>股票代码</th><th>数量（股）</th><th>成本价（元）</th><th>时间来源</th></tr></thead><tbody>{items.map((item, index) => {
           const ticker = text(item.ticker, '')
           const trades = records(item.trades)

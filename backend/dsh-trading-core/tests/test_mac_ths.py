@@ -9,6 +9,7 @@ AppleScript 的实际控件路径仍需在装有同花顺 Mac 版的机器上人
 import asyncio
 import subprocess
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from adapter import holdings_source
@@ -17,8 +18,10 @@ from adapter.holdings_providers.base import ProviderUnavailable
 from adapter.schemas import HoldingItem, TradeItem
 from adapter.holdings_providers.mac_ths import (
     DEFAULT_APP_NAME,
+    MacHoldingsReadResult,
     MacThsProvider,
     MacThsScriptError,
+    _ax_session,
     _attach_holding_trades,
     _to_float,
     apple_script,
@@ -288,22 +291,25 @@ class MacThsProviderTests(unittest.TestCase):
     def test_passive_read_does_not_activate_or_use_applescript(self):
         from unittest.mock import Mock
         runner = Mock()
-        with patch.object(mac_ths, 'read_ax_table', return_value=[]) as read:
+        read_result = MacHoldingsReadResult(items=[], details_status='not_requested')
+        with patch.object(mac_ths, 'read_ax_holdings_result', return_value=read_result) as read:
             MacThsProvider(platform='darwin', runner=runner).get_holdings()
             self.assertEqual(read.call_args.args, ('simulated',))
             self.assertTrue(callable(read.call_args.kwargs['cancelled']))
+            self.assertEqual(read.call_args.kwargs['app_name'], '同花顺')
         runner.assert_not_called()
         self.target.activateWithOptions_.assert_not_called()
 
     def test_passive_failure_requires_navigation_without_activating(self):
-        with patch.object(mac_ths, 'read_ax_table', side_effect=ProviderUnavailable('导航', 'navigation_required')):
+        with patch.object(mac_ths, 'read_ax_holdings_result', side_effect=ProviderUnavailable('导航', 'navigation_required')):
             with self.assertRaises(ProviderUnavailable) as caught:
                 MacThsProvider(platform='darwin').get_holdings()
         self.assertEqual(caught.exception.code, 'navigation_required')
         self.target.activateWithOptions_.assert_not_called()
 
     def test_foreground_uses_ax_first_and_restores_previous(self):
-        with patch.object(mac_ths, 'read_ax_table', side_effect=[ProviderUnavailable('导航', 'navigation_required'), []]) as read:
+        read_result = MacHoldingsReadResult(items=[], details_status='empty')
+        with patch.object(mac_ths, 'read_ax_holdings_result', side_effect=[ProviderUnavailable('导航', 'navigation_required'), read_result]) as read:
             result = MacThsProvider(platform='darwin', account_mode='real').read_holdings(foreground=True)
         self.assertEqual(result, [])
         self.assertTrue(read.call_args.kwargs['navigate'])
@@ -313,7 +319,7 @@ class MacThsProviderTests(unittest.TestCase):
     def test_only_actual_fallback_requests_automation_and_restores(self):
         for code, output, error in [(1, '', '-1743'), (0, 'ERR\t-1743', '')]:
             with self.subTest(code=code):
-                with patch.object(mac_ths, 'read_ax_table', side_effect=ProviderUnavailable('导航', 'navigation_required')):
+                with patch.object(mac_ths, 'read_ax_holdings_result', side_effect=ProviderUnavailable('导航', 'navigation_required')):
                     provider = MacThsProvider(platform='darwin', runner=lambda script: (code, output, error))
                     with self.assertRaises(ProviderUnavailable) as caught:
                         provider.read_holdings(foreground=True)
@@ -327,7 +333,7 @@ class MacThsProviderTests(unittest.TestCase):
             (lambda script: (1, '', 'failure'), 'read_failed'),
         ]
         for runner, expected in cases:
-            with patch.object(mac_ths, 'read_ax_table', side_effect=ProviderUnavailable('导航', 'navigation_required')):
+            with patch.object(mac_ths, 'read_ax_holdings_result', side_effect=ProviderUnavailable('导航', 'navigation_required')):
                 provider = MacThsProvider(platform='darwin', runner=runner)
                 if expected:
                     with self.assertRaises(ProviderUnavailable) as caught:
@@ -339,7 +345,7 @@ class MacThsProviderTests(unittest.TestCase):
 
     def test_permission_and_platform_block_before_read(self):
         for status, code in [('not_granted', 'accessibility_required'), ('unknown', 'dependency_missing')]:
-            with patch.object(mac_ths, 'accessibility_status', return_value=status), patch.object(mac_ths, 'read_ax_table') as read:
+            with patch.object(mac_ths, 'accessibility_status', return_value=status), patch.object(mac_ths, 'read_ax_holdings_result') as read:
                 with self.assertRaises(ProviderUnavailable) as caught:
                     MacThsProvider(platform='darwin').read_holdings(foreground=True)
                 self.assertEqual(caught.exception.code, code)
@@ -360,6 +366,245 @@ class TradesNavigationTests(unittest.TestCase):
         """两者共用「交易 → 账户 → 股票」前缀；只有末级不同，改一处不会只改一边。"""
         self.assertEqual(mac_ths.trades_navigation_path('real')[:-1],
                          ('交易', 'A股', '股票'))
+
+
+class AxNavigationSessionTests(unittest.TestCase):
+    """AX 导航必须等待真实页面状态，不能把 AXPress 成功当作切页完成。"""
+
+    @staticmethod
+    def _text(value):
+        return {"AXRole": "AXStaticText", "AXValue": value, "AXChildren": []}
+
+    def test_navigation_waits_for_same_window_account_and_holdings_table(self):
+        actions = []
+        root = {"AXRole": "AXApplication"}
+        window = {
+            "AXRole": "AXWindow", "AXMain": True, "AXFocused": True,
+            "AXChildren": [],
+        }
+        root["AXWindows"] = [window]
+
+        header = {
+            "AXRole": "AXRow", "AXChildren": [
+                self._text("证券代码"), self._text("股票余额"), self._text("成本价"),
+            ],
+        }
+        row = {
+            "AXRole": "AXRow", "AXChildren": [
+                self._text("600519"), self._text("100"), self._text("1500"),
+            ],
+        }
+        table = {"AXRole": "AXTable", "AXRows": [header, row], "AXChildren": []}
+
+        def control(title, continuation):
+            node = {"AXRole": "AXButton", "AXTitle": title, "AXActions": ["AXPress"]}
+            node["press"] = continuation
+            return node
+
+        account = control("A股", lambda: None)
+        account["AXSelected"] = True
+        holding = control("持仓", lambda: window.update(AXChildren=[account, table]))
+        stock = control("股票", lambda: window.update(AXChildren=[account, holding]))
+        account["press"] = lambda: window.update(AXChildren=[account, stock])
+        trade = control("交易", lambda: window.update(AXChildren=[account]))
+        window["AXChildren"] = [trade]
+
+        def attr(node, key, _):
+            return (0, node[key]) if key in node else (1, None)
+
+        def perform(node, action):
+            actions.append(node.get("AXTitle"))
+            node["press"]()
+            return 0
+
+        application_services = SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementCopyAttributeValue=attr,
+            AXUIElementCopyActionNames=lambda node, _: (0, node.get("AXActions", [])),
+            AXUIElementPerformAction=perform,
+            AXUIElementSetMessagingTimeout=lambda node, timeout: None,
+        )
+        target = SimpleNamespace(localizedName=lambda: "同花顺", processIdentifier=lambda: 42)
+        workspace = SimpleNamespace(runningApplications=lambda: [target])
+        appkit = SimpleNamespace(NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace))
+
+        with patch.dict('sys.modules', {
+            'ApplicationServices': application_services,
+            'AppKit': appkit,
+        }), patch.object(mac_ths, 'accessibility_status', return_value='granted'), \
+                patch.object(mac_ths.settings, 'mac_ths_timeout', 0.2):
+            nodes, _, _ = _ax_session(
+                'real', labels=('交易', 'A股', '股票', '持仓'),
+                page='持仓', expected_kind='holdings',
+            )
+
+        self.assertEqual(actions, ['交易', 'A股', '股票', '持仓'])
+        self.assertIn(table, nodes)
+
+    def test_selected_account_in_another_window_does_not_validate_the_table(self):
+        account_window = {
+            "AXRole": "AXWindow", "AXMain": True,
+            "AXChildren": [{
+                "AXRole": "AXRadioButton", "AXTitle": "A股", "AXSelected": True,
+                "AXChildren": [],
+            }],
+        }
+        table_window = {
+            "AXRole": "AXWindow", "AXChildren": [{
+                "AXRole": "AXTable", "AXRows": [{
+                    "AXRole": "AXRow", "AXChildren": [
+                        self._text("证券代码"), self._text("股票余额"), self._text("成本价"),
+                    ],
+                }], "AXChildren": [],
+            }],
+        }
+        root = {"AXRole": "AXApplication", "AXWindows": [account_window, table_window]}
+
+        def attr(node, key, _):
+            return (0, node[key]) if key in node else (1, None)
+
+        application_services = SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementCopyAttributeValue=attr,
+            AXUIElementCopyActionNames=lambda node, _: (0, node.get("AXActions", [])),
+            AXUIElementPerformAction=lambda node, action: 0,
+            AXUIElementSetMessagingTimeout=lambda node, timeout: None,
+        )
+        target = SimpleNamespace(localizedName=lambda: "同花顺", processIdentifier=lambda: 42)
+        workspace = SimpleNamespace(runningApplications=lambda: [target])
+        appkit = SimpleNamespace(NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace))
+
+        with patch.dict('sys.modules', {
+            'ApplicationServices': application_services,
+            'AppKit': appkit,
+        }), patch.object(mac_ths, 'accessibility_status', return_value='granted'), \
+                patch.object(mac_ths.settings, 'mac_ths_timeout', 0.01):
+            with self.assertRaises(ProviderUnavailable) as caught:
+                _ax_session(
+                    'real', labels=None, page='持仓', expected_kind='holdings',
+                )
+
+        self.assertEqual(caught.exception.code, 'navigation_required')
+
+    def test_ambiguous_navigation_controls_are_not_clicked(self):
+        first = {
+            "AXRole": "AXButton", "AXTitle": "交易", "AXIdentifier": "first",
+            "AXActions": ["AXPress"],
+        }
+        second = {
+            "AXRole": "AXButton", "AXTitle": "交易", "AXIdentifier": "second",
+            "AXActions": ["AXPress"],
+        }
+        window = {
+            "AXRole": "AXWindow", "AXMain": True, "AXFocused": True,
+            "AXChildren": [first, second],
+        }
+        root = {"AXRole": "AXApplication", "AXWindows": [window]}
+        actions = []
+
+        def attr(node, key, _):
+            return (0, node[key]) if key in node else (1, None)
+
+        application_services = SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementCopyAttributeValue=attr,
+            AXUIElementCopyActionNames=lambda node, _: (0, node.get("AXActions", [])),
+            AXUIElementPerformAction=lambda node, action: actions.append(node),
+            AXUIElementSetMessagingTimeout=lambda node, timeout: None,
+        )
+        target = SimpleNamespace(localizedName=lambda: "同花顺", processIdentifier=lambda: 42)
+        workspace = SimpleNamespace(runningApplications=lambda: [target])
+        appkit = SimpleNamespace(NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace))
+
+        with patch.dict('sys.modules', {
+            'ApplicationServices': application_services,
+            'AppKit': appkit,
+        }), patch.object(mac_ths, 'accessibility_status', return_value='granted'), \
+                patch.object(mac_ths.settings, 'mac_ths_timeout', 0.05):
+            with self.assertRaises(ProviderUnavailable) as caught:
+                _ax_session(
+                    'real', labels=('交易',), page='持仓', expected_kind='holdings',
+                )
+
+        self.assertEqual(caught.exception.code, 'navigation_ambiguous')
+        self.assertEqual(actions, [])
+
+    def test_captcha_dialog_stops_navigation_before_any_click(self):
+        trade = {"AXRole": "AXButton", "AXTitle": "交易", "AXActions": ["AXPress"]}
+        main = {
+            "AXRole": "AXWindow", "AXMain": True, "AXFocused": True,
+            "AXChildren": [trade],
+        }
+        dialog = {
+            "AXRole": "AXWindow", "AXModal": True, "AXSubrole": "AXDialog",
+            "AXChildren": [self._text("请输入验证码")],
+        }
+        root = {"AXRole": "AXApplication", "AXWindows": [main, dialog]}
+        actions = []
+
+        def attr(node, key, _):
+            return (0, node[key]) if key in node else (1, None)
+
+        application_services = SimpleNamespace(
+            AXUIElementCreateApplication=lambda pid: root,
+            AXUIElementCopyAttributeValue=attr,
+            AXUIElementCopyActionNames=lambda node, _: (0, node.get("AXActions", [])),
+            AXUIElementPerformAction=lambda node, action: actions.append(node) or 0,
+            AXUIElementSetMessagingTimeout=lambda node, timeout: None,
+        )
+        target = SimpleNamespace(localizedName=lambda: "同花顺", processIdentifier=lambda: 42)
+        workspace = SimpleNamespace(runningApplications=lambda: [target])
+        appkit = SimpleNamespace(NSWorkspace=SimpleNamespace(sharedWorkspace=lambda: workspace))
+
+        with patch.dict('sys.modules', {
+            'ApplicationServices': application_services,
+            'AppKit': appkit,
+        }), patch.object(mac_ths, 'accessibility_status', return_value='granted'), \
+                patch.object(mac_ths.settings, 'mac_ths_timeout', 0.05):
+            with self.assertRaises(ProviderUnavailable) as caught:
+                _ax_session(
+                    'real', labels=('交易',), page='持仓', expected_kind='holdings',
+                )
+
+        self.assertEqual(caught.exception.code, 'client_interaction_required')
+        self.assertIn('验证码', str(caught.exception))
+        self.assertEqual(actions, [])
+
+
+class MacHoldingsReadResultTests(unittest.TestCase):
+    def test_passive_read_makes_missing_trade_details_explicit(self):
+        holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
+        with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
+                patch.object(mac_ths, 'read_ax_trades') as trades:
+            result = mac_ths.read_ax_holdings_result('real')
+
+        self.assertEqual(result.items, holdings)
+        self.assertEqual(result.details_status, 'unavailable')
+        self.assertEqual(result.details_code, 'foreground_required_for_details')
+        self.assertEqual(result.details_scope, 'unknown')
+        trades.assert_not_called()
+
+    def test_detail_failure_is_preserved_as_partial_metadata(self):
+        holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
+        with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
+                patch.object(mac_ths, 'read_ax_trades', side_effect=ProviderUnavailable(
+                    '没有找到历史成交入口', 'navigation_required')):
+            result = mac_ths.read_ax_holdings_result('real', navigate=True)
+
+        self.assertIsInstance(result, MacHoldingsReadResult)
+        self.assertEqual(result.items, holdings)
+        self.assertEqual(result.details_status, 'unavailable')
+        self.assertEqual(result.details_code, 'navigation_required')
+        self.assertIn('历史成交', result.details_reason)
+
+    def test_verified_empty_trade_table_is_distinct_from_navigation_failure(self):
+        holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
+        with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
+                patch.object(mac_ths, 'read_ax_trades', return_value=[]):
+            result = mac_ths.read_ax_holdings_result('real', navigate=True)
+
+        self.assertEqual(result.details_status, 'empty')
+        self.assertEqual(result.details_scope, 'current_query')
 
 
 class MacThsTradesTests(unittest.TestCase):
@@ -395,7 +640,7 @@ class MacThsTradesTests(unittest.TestCase):
         with patch.object(mac_ths, 'read_ax_trades', return_value=[]) as read:
             MacThsProvider(platform='darwin', runner=self.runner,
                            account_mode='real').get_trades()
-            read.assert_called_once_with('real')
+            read.assert_called_once_with('real', app_name='同花顺')
         self.runner.assert_not_called()
         self.target.activateWithOptions_.assert_not_called()
 
@@ -405,7 +650,7 @@ class MacThsTradesTests(unittest.TestCase):
             result = MacThsProvider(platform='darwin', runner=self.runner,
                                     account_mode='real').read_trades(foreground=True)
         self.assertEqual(result, [])
-        self.assertEqual(read.call_args.kwargs, {'navigate': True})
+        self.assertEqual(read.call_args.kwargs, {'navigate': True, 'app_name': '同花顺'})
         self.previous.activateWithOptions_.assert_called_once()
 
     def test_navigation_failure_explains_the_manual_path(self):

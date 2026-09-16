@@ -1380,6 +1380,43 @@ describe('研究工作台', () => {
     } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
   })
 
+  it('持仓成功但成交页导航失败时明确展示部分成功与真实原因', async () => {
+    const native = vi.fn(async (input: { action: string }) => {
+      if (input.action === 'consent_status') return { persistent_authorization: false }
+      if (input.action === 'read') return {
+        session_id: 'partial-session', readiness: 'partial', previous_count: 1,
+        read_at: '2026-09-16T01:00:00Z',
+        details: {
+          status: 'unavailable', code: 'navigation_required', scope: 'unknown',
+          reason: '自动切换到历史成交页失败，请处理同花顺弹窗后重试。',
+        },
+        items: [{
+          ticker: '000001', quantity: 100, cost_price: 12.5,
+          position_time: '2026-09-16T01:00:00Z', time_source: 'read_fallback',
+          time_source_label: '读取时间兜底', trades: [],
+        }],
+      }
+      return {}
+    })
+    Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+    try {
+      const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
+        ? { provider: 'mac_ths', platform: 'darwin', available: true }
+        : completeResponse(request.operation))
+      const view = renderWorkbench(requestData)
+      await view.findByText('白酒板块经营数据改善')
+      fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+      const dialog = view.getByRole('dialog', { name: '持仓明细' })
+      fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+      fireEvent.click(await within(dialog).findByRole('button', { name: '读取持仓' }))
+
+      expect(await within(dialog).findByText('持仓已读取，成交明细未完成')).toBeTruthy()
+      expect(within(dialog).getByText(/自动切换到历史成交页失败/)).toBeTruthy()
+      expect(within(dialog).getByText(/当前使用读取时间兜底/)).toBeTruthy()
+      expect(within(dialog).getByRole('button', { name: '确认替换 1 条持仓' })).toBeTruthy()
+    } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
+  })
+
   it('未安装提供官方下载、重新检测和手动退路', async () => {
     const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
       ? { provider: 'mac_ths', platform: 'darwin', available: false, blocking_reason: 'client_missing' }

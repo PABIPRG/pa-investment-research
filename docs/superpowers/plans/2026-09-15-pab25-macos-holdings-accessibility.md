@@ -11,7 +11,7 @@
 | 进入同步流程 | `HoldingsSyncPanel` | 组件持有准备、预览和错误状态 | 缺少授权模式与成交明细 | 扩展 | `WorkbenchOverviewDialog.tsx` |
 | 检查客户端与系统权限 | `/holdings/source`、Electron 系统设置动作 | 后端只读探测；主进程打开固定系统设置 | 产品授权未与系统权限分开 | 组合 | `holdings_source.py`、`holdings-native.ts` |
 | 主动读取 | Electron `holdingsAction` → 非 Remote `nativeHoldings` → `/holdings/native` | 后端预览缓存持有真实 token；读取不落盘 | 首次被动读取仍可经通用 Remote 绕过主进程；无长期授权 | 扩展 | `python-runtime/src/index.ts`、`holdings-native.ts` |
-| 读取成交明细 | macOS AX 表格遍历 | 当前只返回持仓三字段 | 缺少明细表定位、时间来源和兜底 | 扩展 | `mac_ths.py`、`schemas.py` |
+| 读取持仓与成交明细 | macOS AX 表格遍历 | 能解析两类表格，但旧导航只以 `AXPress` 成功判定切页成功 | 缺少真实页面状态验证、明细范围说明和部分成功语义 | 扩展 | `mac_ths.py`、`holdings_source.py`、`schemas.py` |
 | 预览并确认 | 五分钟预览、基线冲突检查、快照保存 | 后端持有预览 token 并在提交点写入 | Renderer 可见真实 token，Electron 提交没有主进程仲裁 | 扩展 | `holdings_source.py`、`HoldingsSyncPanel` |
 | 无变化处理 | `record_holdings_snapshot` 复用最新快照 | 当前持仓仍被写入，调用方无法区分无变化 | 缺少显式 `changed` 结果及账户/来源语义 | 扩展 | `portfolio_performance.py` |
 | Windows 同步 | `easytrader` 独立 provider | Windows 既有自动化链路 | 本机无法真实回归 | 复用 | 本次不改实现；只做契约测试并记录未回归 |
@@ -23,7 +23,7 @@
 1. 先用聚焦测试固定主进程授权、Renderer 隔离、预览提交和取消/超时行为。
 2. 将 Electron 读取与提交统一收口到主进程私有链路；Renderer 只接收不透明会话标识和展示数据。
 3. 增加持久化产品授权：默认每次询问，长期授权需由原生确认建立，关闭后立即生效；系统辅助功能权限保持独立。
-4. 扩展 macOS AX 解析，读取可识别的成交明细；无明细时生成明确标注的读取时间兜底，并允许预览阶段修改。
+4. 扩展 macOS AX 解析与导航：每次操作后重新遍历窗口，必须在同一窗口同时证明所选账户和目标表格；成交明细失败不伪装为完整成功，而是保留已验证持仓并返回具体原因。无明细时生成明确标注的读取时间兜底，并允许预览阶段修改。
 5. 扩展预览和快照语义，区分平台、数据源、账户和组合；无变化不发布重复业务变更。
 6. 在现有同步面板内完成授权选择、进度、可展开成交明细、时间来源编辑及全部失败状态，不新建平行页面。
 7. 运行后端、Electron、Runtime 和组件聚焦测试，再运行主题检查与适用的 GUI/Web 门禁。
@@ -31,4 +31,4 @@
 
 ## 回滚与验证
 
-变更不迁移或删除已有持仓。新字段保持可选，旧持仓仍可读取；任何空、部分、过期、取消或冲突结果都不得提交。若真实 macOS UAT 证明当前 Python 读取进程的 TCC 身份不稳定，停止发布并改用签名 helper 或主进程原生 AX 桥接，不用文案掩盖权限身份问题。
+变更不迁移或删除已有持仓。新字段保持可选，旧持仓仍可读取；任何空持仓、必填字段缺失、过期、取消或冲突结果都不得提交。仅成交明细未完成时，使用明确标注且可修改的读取时间兜底，继续交由用户确认。若真实 macOS UAT 证明当前 Python 读取进程的 TCC 身份不稳定，停止发布并改用签名 helper 或主进程原生 AX 桥接，不用文案掩盖权限身份问题。

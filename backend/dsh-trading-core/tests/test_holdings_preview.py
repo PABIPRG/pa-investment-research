@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from adapter import holdings_source as source
 from adapter.schemas import HoldingItem, HoldingTrade
 from adapter.holdings_providers.base import ProviderUnavailable
+from adapter.holdings_providers.mac_ths import MacHoldingsReadResult
 from adapter.store import JsonStore
 
 
@@ -52,6 +53,25 @@ class PreviewTests(unittest.TestCase):
 
         self.assertEqual(preview["items"][0]["time_source"], "broker_detail")
         self.assertEqual(preview["items"][0]["position_time"], "2026-09-15 09:31:02")
+
+    def test_mac_detail_navigation_failure_is_an_explicit_partial_preview(self):
+        self.provider.name = "mac_ths"
+        self.provider.read_holdings_result = lambda **kwargs: MacHoldingsReadResult(
+            items=[self.item],
+            details_status="unavailable",
+            details_reason="自动切换到历史成交页失败。",
+            details_code="navigation_required",
+            details_scope="unknown",
+        )
+
+        with patch.object(source.settings, "holdings_provider", "mac_ths"):
+            preview = source.preview_holdings(foreground=True)
+
+        self.assertEqual(preview["readiness"], "partial")
+        self.assertEqual(preview["details"]["status"], "unavailable")
+        self.assertEqual(preview["details"]["code"], "navigation_required")
+        self.assertIn("历史成交", preview["details"]["reason"])
+        self.assertEqual(preview["items"][0]["time_source"], "read_fallback")
 
     def test_repeated_fallback_read_is_unchanged_and_preserves_user_time(self):
         first = source.preview_holdings()
@@ -131,7 +151,7 @@ class PermissionTests(unittest.TestCase):
     def test_denied_accessibility_does_not_read_or_navigate(self):
         from adapter.holdings_providers.mac_ths import MacThsProvider
         with patch('adapter.holdings_providers.mac_ths.accessibility_status', return_value='not_granted'), \
-             patch('adapter.holdings_providers.mac_ths.read_ax_table') as reader:
+             patch('adapter.holdings_providers.mac_ths.read_ax_holdings_result') as reader:
             with self.assertRaises(Exception) as error:
                 MacThsProvider(platform='darwin').read_holdings(foreground=True)
             self.assertEqual(error.exception.code, 'accessibility_required')
