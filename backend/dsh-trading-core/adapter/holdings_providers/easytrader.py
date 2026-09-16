@@ -309,8 +309,11 @@ class EasyTraderProvider(HoldingsProvider):
             raise
         except Exception as exc:
             log.error("easytrader 读取成交明细失败: %s", exc, exc_info=True)
+            # pywinauto 的 ElementNotVisible 之类异常 str() 是空的，直接插值会拼出
+            # 「失败: 。」这种什么也没说的文案，所以没消息时退回异常类型名。
+            detail = str(exc).strip() or type(exc).__name__
             raise ProviderUnavailable(
-                f"读取成交明细失败: {exc}。"
+                f"读取成交明细失败: {detail}。"
                 "请确认客户端已登录、窗口停在「历史成交」页且查到了数据。",
                 "read_failed",
             ) from exc
@@ -334,7 +337,12 @@ class EasyTraderProvider(HoldingsProvider):
         )
         from ._ths_export import _process_id
 
-        with tempfile.TemporaryDirectory(prefix="pa_trades_") as folder:
+        # ignore_cleanup_errors：客户端另存为之后仍握着文件句柄（2026-09-16 真机实测
+        # WinError 32），清理失败会把一次**已经成功**的读取整个报成 read_failed——
+        # 数据都读进内存了，不该毁在删临时文件上。残留文件交给系统清理 TEMP。
+        with tempfile.TemporaryDirectory(
+            prefix="pa_trades_", ignore_cleanup_errors=True
+        ) as folder:
             out_path = Path(folder) / "trades.xls"
             _export_grid(grid, out_path, pid=_process_id())
             return _read_tab_separated(out_path)
