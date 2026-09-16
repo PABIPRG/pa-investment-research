@@ -774,6 +774,7 @@ describe('InvestmentBackendManager', () => {
     'PYTHONDONTWRITEBYTECODE',
     'DSH_DATA_TRANSFER_TOKEN',
     'DSH_DATA_TRANSFER_COORDINATOR_DIR',
+    'DSH_POSITION_RISK_TOKEN',
   ])('reserves the bundled Runtime environment key %s', async (key) => {
     const { manager } = await harness()
     expect(() => manager.register({ ...definition, managedEnv: { [key]: 'override' } })).toThrow(/reserved/)

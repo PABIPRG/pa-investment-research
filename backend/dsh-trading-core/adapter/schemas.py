@@ -135,6 +135,88 @@ class HoldingsSaveRequest(BaseModel):
     )
 
 
+class PositionRiskTargetRequest(BaseModel):
+    """单个止盈或止损目标；百分比使用 0-1 小数。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    enabled: bool = True
+    mode: Literal["percent", "price"] = "percent"
+    value: Optional[float] = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_enabled_value(self):
+        if self.enabled and self.value is None:
+            raise ValueError("启用目标时必须提供 value")
+        return self
+
+
+class PositionRiskGlobalRequest(BaseModel):
+    """确认一份全局止盈止损配置。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    take_profit: PositionRiskTargetRequest
+    stop_loss: PositionRiskTargetRequest
+    effective_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    confirmed: Literal[True]
+
+    @field_validator("effective_at", "expires_at", mode="before")
+    @classmethod
+    def parse_times(cls, value):
+        if value is None or isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+class PositionRiskOverrideRequest(BaseModel):
+    """确认一份完整单股覆盖，或明确关闭该股票监控。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    monitoring_disabled: bool = False
+    take_profit: Optional[PositionRiskTargetRequest] = None
+    stop_loss: Optional[PositionRiskTargetRequest] = None
+    effective_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    confirmed: Literal[True]
+
+    @field_validator("effective_at", "expires_at", mode="before")
+    @classmethod
+    def parse_times(cls, value):
+        if value is None or isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+    @model_validator(mode="after")
+    def validate_complete_override(self):
+        if not self.monitoring_disabled and (self.take_profit is None or self.stop_loss is None):
+            raise ValueError("单股配置必须完整提供止盈和止损")
+        return self
+
+
+class PositionRiskPriceHitRequest(BaseModel):
+    """market-watch 回传的确定性价格命中。"""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    event_id: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9._:@-]+$")
+    ticker: str = Field(pattern=r"^\d{6}$")
+    kind: Literal["take_profit", "stop_loss"]
+    rule_id: str = Field(min_length=1, max_length=160)
+    config_scope: Literal["global", "override"]
+    config_version: int = Field(ge=1)
+    generation: int = Field(ge=1)
+    price: float = Field(gt=0)
+    observed_at: datetime
+    quote_source: str = Field(min_length=1, max_length=80)
+    freshness: Literal["fresh", "stale"]
+
+    @field_validator("observed_at", mode="before")
+    @classmethod
+    def parse_observed_at(cls, value):
+        if isinstance(value, datetime):
+            return value
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
 class HoldingsSyncRequest(BaseModel):
     """预览默认只读；提交必须引用后端签发的预览。"""
     model_config = ConfigDict(extra="forbid", strict=True)

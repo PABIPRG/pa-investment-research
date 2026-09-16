@@ -112,6 +112,8 @@ class Settings:
         self.deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
         # 二期：事件→策略（事件源 + 影子验证）
         self.mw_url = os.getenv("MW_URL", "http://127.0.0.1:8100")
+        self.position_risk_token = os.getenv("DSH_POSITION_RISK_TOKEN", "")
+        self.position_risk_timeout = float(os.getenv("POSITION_RISK_SYNC_TIMEOUT", "2"))
         self.event_cache_ttl = float(os.getenv("EVENT_CACHE_TTL", "60"))
         self.event_stale_ttl = float(os.getenv("EVENT_STALE_TTL", "900"))
         self.event_failure_backoff = float(os.getenv("EVENT_FAILURE_BACKOFF", "2"))

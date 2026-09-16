@@ -166,6 +166,8 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     const notificationInternalToken = byModule.get('adapter.app:app')?.env?.NOTIFICATION_INTERNAL_TOKEN
     expect(notificationInternalToken).toEqual(expect.any(String))
     expect(byModule.get('market_watch.app:app')?.env?.NOTIFICATION_INTERNAL_TOKEN).toBe(notificationInternalToken)
+    const positionRiskToken = byModule.get('adapter.app:app')?.env?.DSH_POSITION_RISK_TOKEN
+    expect(positionRiskToken).toEqual(expect.any(String))
     expect(byModule.get('adapter.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'trading-visible',
       DEEPSEEK_API_KEY: CANARY,
@@ -173,6 +175,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_HOLDINGS_NATIVE_TOKEN: holdingsNativeToken,
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
+      DSH_POSITION_RISK_TOKEN: positionRiskToken,
       DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'trading-core'),
       NOTIFICATION_INTERNAL_TOKEN: notificationInternalToken,
     })
@@ -182,6 +185,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DEEPSEEK_API_KEY: CANARY,
       DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
       DSH_DATA_TRANSFER_COORDINATOR_DIR: join(home, 'investment-research', 'transfer-transactions'),
+      DSH_POSITION_RISK_TOKEN: positionRiskToken,
       DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'market-watch'),
       NOTIFICATION_INTERNAL_TOKEN: notificationInternalToken,
     })
@@ -193,6 +197,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
     expect(specs.flatMap(spec => spec.argv)).not.toContain(dataTransferToken)
     expect(specs.flatMap(spec => spec.argv)).not.toContain(holdingsNativeToken)
     expect(specs.flatMap(spec => spec.argv)).not.toContain(notificationInternalToken)
+    expect(specs.flatMap(spec => spec.argv)).not.toContain(positionRiskToken)
 
     for (const id of ['trading-core', 'market-watch', 'industry-chain'] as const) {
       await expect(access(ownedBackendStatePath(home, id))).resolves.toBeUndefined()

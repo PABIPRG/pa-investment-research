@@ -915,6 +915,70 @@
 .importActions .secondaryButton { height: var(--investment-control-height); }
 .importNotice { margin-bottom: 14px; padding: 11px 13px; border: 1px solid var(--dsw-alias-state-success-secondary); border-radius: 9px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: 0.8571rem; }
 
+.positionRiskCell {
+  display: grid;
+  min-width: 232px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'state action' 'values action';
+  align-items: center;
+  gap: 7px 14px;
+  text-align: left;
+}
+.positionRiskState { grid-area: state; display: flex; min-width: 0; align-items: center; gap: 8px; }
+.positionRiskState > strong {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 99px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2);
+  font-size: 0.7857rem;
+  line-height: 1.5;
+}
+.positionRiskSource { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
+.positionRiskCell[data-status='active'] .positionRiskState > strong { color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); }
+.positionRiskCell[data-status='sync_error'] .positionRiskState > strong { color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); }
+.positionRiskCell[data-status='triggered'] .positionRiskState > strong { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
+.positionRiskValues { grid-area: values; display: flex; min-width: 0; gap: 14px; margin: 0; }
+.positionRiskValues > div { display: flex; min-width: 0; align-items: baseline; gap: 5px; }
+.positionRiskValues dt { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.5; }
+.positionRiskValues dd { margin: 0; color: var(--dsw-alias-label-primary); font-size: 0.8571rem; font-variant-numeric: tabular-nums; line-height: 1.5; }
+.positionRiskAdjust {
+  grid-area: action;
+  min-width: 52px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  color: var(--investment-primary);
+  background: var(--dsw-alias-bg-base);
+  font: inherit;
+  font-size: 0.7857rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+.positionRiskAdjust:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.positionRiskAdjust:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.positionRiskAdjust:active { background: var(--dsw-alias-interactive-bg-active); transform: translateY(1px); }
+.positionRiskHeadingActions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.positionRiskHeadingActions .secondaryButton { height: 30px; }
+.positionRiskLoading { min-height: 180px; display: grid; place-items: center; color: var(--dsw-alias-label-tertiary); }
+.positionRiskForm { display: grid; gap: 14px; }
+.positionRiskSuggestion, .positionRiskNotice, .positionRiskRearm { display: flex; flex-direction: column; gap: 4px; padding: 12px 13px; border: 1px solid var(--dsw-alias-state-business-primary); border-radius: 10px; background: var(--dsw-alias-state-business-tertiary); }
+.positionRiskSuggestion span, .positionRiskNotice, .positionRiskRearm span { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
+.positionRiskSuggestion small { color: var(--dsw-alias-label-tertiary); }
+.positionRiskScope { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.positionRiskScope label { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 11px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); cursor: pointer; }
+.positionRiskScope label:has(input:checked) { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.positionRiskTargets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.positionRiskTarget { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; }
+.positionRiskTarget legend { padding: 0 5px; font-weight: 700; }
+.positionRiskToggle { display: flex; align-items: center; gap: 7px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
+.positionRiskTargetFields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px; margin-top: 10px; }
+.positionRiskTargetFields label > span { display: block; margin-bottom: 5px; color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; }
+.positionRiskTargetFields select, .positionRiskTargetFields input { width: 100%; height: var(--investment-control-height); box-sizing: border-box; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; }
+.positionRiskRearm > div { display: flex; gap: 8px; margin-top: 5px; }
+.positionRiskDisclaimer { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.6; }
+
 .riskSummary, .loadingSkeleton, .errorCard {
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 12px;
@@ -2452,6 +2516,9 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .detailDialogActions .primaryButton, .detailDialogActions .secondaryButton { flex: 1 1 auto; min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
   .detailDialogHeader button { width: var(--investment-touch-target); height: var(--investment-touch-target); }
   .workbenchOverviewMetricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .positionRiskTargets, .positionRiskScope { grid-template-columns: 1fr; }
+  .positionRiskHeadingActions { flex-wrap: wrap; }
+  .positionRiskCell { width: min(260px, calc(100% - 88px)); min-width: 0; grid-template-areas: 'state action' 'values values'; }
   .workbenchOverviewTableWrap { overflow: visible; border: 0; }
   .workbenchOverviewTable { min-width: 0; }
   .workbenchOverviewTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }

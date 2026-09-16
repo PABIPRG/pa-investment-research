@@ -112,6 +112,7 @@ export function riskSource(source: string): { label: string; explanation: string
     strategy: { label: '策略验证引擎', explanation: '依据策略回测或影子验证的生命周期证据生成。' },
     shadow: { label: '影子验证账户', explanation: '依据纸面账户的持仓、净值与运行结果生成，不涉及真实交易。' },
     event: { label: '关联事件引擎', explanation: '依据事件与持仓、自选或生效策略的关联关系生成。' },
+    position_plan: { label: '持仓止盈止损', explanation: '依据用户已确认的持仓计划与新鲜行情确定性触发，仅作提醒。' },
   }
   return map[source] ?? { label: source === '' ? '风险预警服务' : source, explanation: '由后端风险预警服务返回，页面未补造指标。' }
 }
@@ -126,6 +127,7 @@ export function riskSuggestions(item: Record<string, unknown>): string[] {
   else result.push('保持观察，在风险指标或关联事件变化后重新评估。')
   if (source === 'profile') result.push('确认当前投资画像与风险预算是否仍符合你的真实目标；画像不匹配时先调整预算口径。')
   if (source === 'strategy' || source === 'shadow') result.push('回看策略假设、样本外证据和影子验证结果，避免只依据单次信号决策。')
+  if (source === 'position_plan') result.push('核对触发价、激活时成本与最新持仓；提醒不会自动执行交易。')
   if (codes.length > 0) result.push(`逐一复核关联标的 ${codes.join('、')} 的仓位、流动性和最新事件。`)
   return result
 }
@@ -139,6 +141,7 @@ function riskImpacts(item: Record<string, unknown>): string[] {
   if (strategyId !== '') result.push(`关联策略 ${strategyId} 的验证结论或生命周期动作需要复核。`)
   if (source === 'portfolio' || source === 'profile') result.push('该预警会影响当前组合风险预算判断，但页面不会据此自动调整持仓。')
   if (source === 'event') result.push('事件数据可能影响相关标的与策略判断，需结合事件时点和来源继续核验。')
+  if (source === 'position_plan') result.push('该提醒来自已确认的固定目标价；后续成本变化不会自动重算，也不会自动调整持仓。')
   return result.length === 0 ? ['后端未返回明确影响对象，当前仅作为风险复核提醒。'] : result
 }
 

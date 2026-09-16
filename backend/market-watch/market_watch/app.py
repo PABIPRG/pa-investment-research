@@ -11,17 +11,18 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from . import briefs, events, news, quotes, rules, scanner, scheduler
+from . import briefs, events, news, position_risk, quotes, rules, scanner, scheduler
 from .config import settings
 from .data_transfer import recover_incomplete_transactions, register_data_transfer_routes
 from .indicators import compute_indicators, summarize
 from .schemas import (
-    AlertRule, BriefRequest, QuotesBatchRequest, ScanRequest, SecurityDetailRequest, TechSignalRequest,
+    AlertRule, BriefRequest, PositionRiskRuleRequest, QuotesBatchRequest, ScanRequest,
+    SecurityDetailRequest, TechSignalRequest,
     WatchAddRequest, WatchRemoveRequest,
 )
 from .store import JsonStore
@@ -43,6 +44,16 @@ register_data_transfer_routes(app, lambda: store)
 
 def _list(key: str, default: list | None = None) -> list:
     return store.get(key, "default", [] if default is None else default)
+
+
+def _authorize_position_risk(token: str) -> None:
+    import secrets
+
+    if (
+        not settings.position_risk_token
+        or not secrets.compare_digest(settings.position_risk_token, token)
+    ):
+        raise HTTPException(status_code=403, detail="内部持仓计划规则未授权")
 
 
 # ---- 自选 ---------------------------------------------------------------
@@ -110,6 +121,33 @@ def watchlist_get():
 
 
 # ---- 盯盘规则 ------------------------------------------------------------
+
+
+@app.put("/internal/position-risk-rules/{ticker}/{kind}")
+def position_risk_rule_upsert(
+    req: PositionRiskRuleRequest,
+    ticker: str,
+    kind: str,
+    x_position_risk_token: str = Header(default=""),
+):
+    _authorize_position_risk(x_position_risk_token)
+    payload = req.model_dump()
+    if payload["ticker"] != ticker or payload["kind"] != kind:
+        raise HTTPException(status_code=422, detail="路径与规则目标不一致")
+    try:
+        rule = position_risk.upsert_rule(store, payload)
+    except position_risk.PositionRiskRuleError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "rule": rule}
+
+
+@app.delete("/internal/position-risk-rules/{rule_id:path}")
+def position_risk_rule_delete(
+    rule_id: str,
+    x_position_risk_token: str = Header(default=""),
+):
+    _authorize_position_risk(x_position_risk_token)
+    return {"ok": True, "removed": position_risk.delete_rule(store, rule_id), "id": rule_id}
 
 
 @app.get("/alerts")

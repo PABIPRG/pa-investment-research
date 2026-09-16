@@ -33,6 +33,8 @@ class DataTransferTests(unittest.TestCase):
         self.store.set("events", "latest", [{"item_id": "cache-only"}])
         self.store.set("news", "latest", "cache-only")
         self.store.set("state", "triggers", ["cache-only"])
+        self.store.set("position_risk_rules", "position-risk:600519:take_profit", {"target_price": 1800})
+        self.store.set("position_risk_deliveries", "pending-hit", {"ticker": "600519"})
 
         snapshot = export_snapshot(self.store, ["watchlist"])
 
@@ -46,6 +48,7 @@ class DataTransferTests(unittest.TestCase):
             },
         )
         self.assertNotIn("cache-only", str(snapshot))
+        self.assertNotIn("position_risk", str(snapshot))
 
     def test_preview_and_default_import_merge_codes_and_deduplicate_same_alert(self):
         local_watch = {"code": "600519", "name": "贵州茅台", "added_at": "local"}

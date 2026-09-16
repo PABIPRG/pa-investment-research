@@ -4,7 +4,7 @@
 轻量确定性实现，无实时行情调用（同步 def 路由，避免阻塞事件循环）：
   - N：等权组合风险 = 持仓数 → 单股权重 / HHI 集中度 / 影子回撤波动，
        对比 risk_profiles.profile()["risk_budget"] 预算上限；
-  - Q：聚合 4 源预警 = 组合(N) + 影子(I) + 事件(F) + 画像(K)，按严重度排序。
+  - Q：聚合 5 源预警 = 组合(N) + 影子(I) + 事件(F) + 画像(K) + 持仓计划，按严重度排序。
 
 复用 personalize 私有函数（_holdings_codes/_watchlist_codes/_active_strategies/
 _shadow_snapshot/_classify/_risk_level），breach 形状与 holdings_runner 的
@@ -281,7 +281,7 @@ def _compute_portfolio_risk(store, profile_key: str) -> dict:
 
 
 def risk_alerts(store=None) -> dict:
-    """Q 风险预警中心：聚合 4 源（组合 N / 影子 I / 事件 F / 画像 K），按严重度排序。
+    """Q 风险预警中心：聚合 5 源（组合/影子/事件/画像/持仓计划），按严重度排序。
 
     每项 {id, source, severity, title, detail, codes[], ts, strategy_id?}。
     """
@@ -433,6 +433,11 @@ def risk_alerts(store=None) -> dict:
         "strategy_id": None,
         "ts": _now(),
     })
+
+    # 5) 持仓计划：只投影 trading-core 已原子接受的触发，不读取行情侧暂存。
+    from .position_risk import trigger_alert_items
+
+    items.extend(trigger_alert_items(store))
 
     # V→Q：反馈只用于效果归因；任何来源的风险严重度都不受内容偏好影响。
     for it in items:

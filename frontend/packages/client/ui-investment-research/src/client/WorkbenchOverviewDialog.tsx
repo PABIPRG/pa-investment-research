@@ -1,10 +1,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog, riskSource, riskSuggestions } from './DetailDialogs.tsx'
 import { parseHoldingsImport } from './holdings-import.ts'
 import { useRequestResource } from './InvestmentShell.tsx'
 import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
+import { PositionRiskDialog, PositionRiskPlanCell, positionRiskPlanMap } from './PositionRiskControls.tsx'
 import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
@@ -111,13 +113,15 @@ function summedAmount(
 }
 
 function PositionTable({
-  positions, kind, saving, pendingDelete, onEdit, onRequestDelete, onConfirmDelete, onCancelDelete,
+  positions, kind, saving, pendingDelete, positionPlans, onEdit, onEditRisk, onRequestDelete, onConfirmDelete, onCancelDelete,
 }: {
   positions: readonly WorkbenchPositionDetail[]
   kind: 'holdings' | 'cost'
   saving?: boolean
   pendingDelete?: string
   onEdit?: (item: WorkbenchPositionDetail) => void
+  positionPlans?: Map<string, Record<string, unknown>>
+  onEditRisk?: (item: WorkbenchPositionDetail) => void
   onRequestDelete?: (code: string) => void
   onConfirmDelete?: (code: string) => void
   onCancelDelete?: () => void
@@ -135,6 +139,7 @@ function PositionTable({
             <th scope="col">持仓数量</th>
             <th scope="col">成本价</th>
             {kind === 'cost' && <th scope="col">成本金额</th>}
+            {kind === 'holdings' && onEditRisk !== undefined && <th scope="col">止盈止损</th>}
             {kind === 'holdings' && onEdit !== undefined && <th scope="col">操作</th>}
           </tr>
         </thead>
@@ -147,6 +152,15 @@ function PositionTable({
                 <td><span className={css.workbenchMobileLabel}>持仓数量</span>{privateFunds(quantity(item.quantity), fundsHidden)}</td>
                 <td><span className={css.workbenchMobileLabel}>成本价</span>{privateFunds(amount(item.costPrice), fundsHidden)}</td>
                 {kind === 'cost' && <td><span className={css.workbenchMobileLabel}>成本金额</span>{privateFunds(amount(positionAmount(item, price)), fundsHidden)}</td>}
+                {kind === 'holdings' && onEditRisk !== undefined && (
+                  <td>
+                    <span className={css.workbenchMobileLabel}>止盈止损</span>
+                    <PositionRiskPlanCell
+                      plan={positionPlans?.get(item.code)}
+                      onEdit={() => { onEditRisk(item) }}
+                    />
+                  </td>
+                )}
                 {kind === 'holdings' && onEdit !== undefined && (
                   <td className={css.workbenchHoldingActions}>
                     <span className={css.workbenchMobileLabel}>操作</span>
@@ -585,12 +599,15 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
 }
 
 function HoldingsEditor({
-  positions, requestData, brokerSync, holdingsProviders, onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
+  positions, requestData, brokerSync, holdingsProviders, positionPlans, onEditRisk,
+  onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
 }: {
   positions: readonly WorkbenchPositionDetail[]
   requestData: RequestData
   brokerSync: boolean
   holdingsProviders: readonly string[]
+  positionPlans: Map<string, Record<string, unknown>>
+  onEditRisk: (item?: WorkbenchPositionDetail) => void
   onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
   onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onSavingChange: (saving: boolean) => void
@@ -753,6 +770,12 @@ function HoldingsEditor({
             <div><strong>持仓标的</strong><span>{effectivePositions.length} 项</span></div>
             <div className={css.workbenchHoldingToolbarActions}>
               {brokerSync && <button type="button" className={css.secondaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginSync}>从券商同步持仓</button>}
+              <button
+                type="button"
+                className={css.secondaryButton}
+                disabled={saving || editDraft !== undefined || pendingDelete !== ''}
+                onClick={() => { onEditRisk() }}
+              >全局止盈止损</button>
               <button ref={importButtonRef} type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
             </div>
           </div>
@@ -771,6 +794,8 @@ function HoldingsEditor({
           <PositionTable
             positions={effectivePositions}
             kind="holdings"
+            positionPlans={positionPlans}
+            onEditRisk={onEditRisk}
             saving={saving}
             pendingDelete={pendingDelete}
             onEdit={beginEdit}
@@ -1023,52 +1048,80 @@ export function WorkbenchOverviewDialog({
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
   const [holdingFlow, setHoldingFlow] = useState<'view' | 'import' | 'sync'>('view')
+  const [positionRiskEditor, setPositionRiskEditor] = useState<WorkbenchPositionDetail | null>()
+  const positionRisk = useRequestResource(requestData)
+  useEffect(() => {
+    if (kind === 'holdings') positionRisk.run({ operation: 'trading-core.position-risk' })
+  }, [kind, positionRisk.run])
+  const positionPlans = positionRiskPlanMap(positionRisk.state.value)
   const syncing = kind === 'holdings' && holdingFlow === 'sync'
   const close = (): void => { if (!holdingSaving) onClose() }
+  let dialogContent: ReactNode
+  if (kind === 'holdings' || kind === 'cost') {
+    if (!holdingsState.loaded) {
+      dialogContent = resourceMessage(holdingsState, '持仓详情')
+    } else if (kind === 'holdings') {
+      dialogContent = <>
+        {retainedResourceWarning(holdingsState, '持仓')}
+        <HoldingsEditor
+          positions={positions}
+          requestData={requestData}
+          brokerSync={brokerSync}
+          positionPlans={positionPlans}
+          onEditRisk={(item) => { setPositionRiskEditor(item ?? null) }}
+          onSaveHoldings={onSaveHoldings}
+          holdingsProviders={holdingsProviders}
+          onSyncHoldings={onSyncHoldings}
+          onSavingChange={setHoldingSaving}
+          onFlowChange={setHoldingFlow}
+        />
+      </>
+    } else {
+      dialogContent = <>
+        {retainedResourceWarning(holdingsState, '持仓')}
+        <CostDetail positions={positions} />
+      </>
+    }
+  } else if (kind === 'risk-profile') {
+    dialogContent = riskState.loaded
+      ? <>{retainedResourceWarning(riskState, '组合风险')}<RiskProfileDetail risk={risk} riskAsOf={riskAsOf} /></>
+      : resourceMessage(riskState, '风险画像')
+  } else {
+    dialogContent = <RiskCenterDetail
+      risk={risk}
+      alerts={alerts}
+      riskAsOf={riskAsOf}
+      alertsAsOf={alertsAsOf}
+      alertsDegraded={alertsDegraded}
+      alertsDegradedReason={alertsDegradedReason}
+      holdingsState={holdingsState}
+      riskState={riskState}
+      alertsState={alertsState}
+      onOpenAlert={onOpenAlert}
+    />
+  }
   return (
-    <DetailDialog
-      title={syncing ? '同步同花顺持仓' : copy.title}
-      description={syncing ? '选择账户，完成准备后读取预览；确认后才会替换本地持仓。' : copy.description}
-      {...(syncing ? {} : { eyebrow: '投研概览' })}
-      wide
-      onClose={close}
-      closeDisabled={holdingSaving}
-      actions={<button type="button" className={css.secondaryButton} disabled={holdingSaving} onClick={close}>关闭</button>}
-    >
-      {kind === 'holdings' || kind === 'cost'
-        ? holdingsState.loaded
-          ? <>
-              {retainedResourceWarning(holdingsState, '持仓')}
-              {kind === 'holdings'
-                ? <HoldingsEditor
-                    positions={positions}
-                    requestData={requestData}
-                    brokerSync={brokerSync}
-                    holdingsProviders={holdingsProviders}
-                    onSaveHoldings={onSaveHoldings}
-                    onSyncHoldings={onSyncHoldings}
-                    onSavingChange={setHoldingSaving}
-                    onFlowChange={setHoldingFlow}
-                  />
-                : <CostDetail positions={positions} />}
-            </>
-          : resourceMessage(holdingsState, '持仓详情')
-        : kind === 'risk-profile'
-          ? riskState.loaded
-            ? <>{retainedResourceWarning(riskState, '组合风险')}<RiskProfileDetail risk={risk} riskAsOf={riskAsOf} /></>
-            : resourceMessage(riskState, '风险画像')
-          : <RiskCenterDetail
-              risk={risk}
-              alerts={alerts}
-              riskAsOf={riskAsOf}
-              alertsAsOf={alertsAsOf}
-              alertsDegraded={alertsDegraded}
-              alertsDegradedReason={alertsDegradedReason}
-              holdingsState={holdingsState}
-              riskState={riskState}
-              alertsState={alertsState}
-              onOpenAlert={onOpenAlert}
-            />}
-    </DetailDialog>
+    <>
+      <DetailDialog
+        title={syncing ? '同步同花顺持仓' : copy.title}
+        description={syncing ? '选择账户，完成准备后读取预览；确认后才会替换本地持仓。' : copy.description}
+        {...(syncing ? {} : { eyebrow: '投研概览' })}
+        wide
+        onClose={close}
+        closeDisabled={holdingSaving}
+        actions={<button type="button" className={css.secondaryButton} disabled={holdingSaving} onClick={close}>关闭</button>}
+      >
+        {dialogContent}
+      </DetailDialog>
+      {positionRiskEditor !== undefined && (
+        <PositionRiskDialog
+          requestData={requestData}
+          ticker={positionRiskEditor?.code}
+          name={positionRiskEditor?.name}
+          onClose={() => { setPositionRiskEditor(undefined) }}
+          onChanged={() => { positionRisk.run({ operation: 'trading-core.position-risk' }) }}
+        />
+      )}
+    </>
   )
 }

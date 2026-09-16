@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode, type ComponentProps } from 'react'
 import { OpportunityPage, PortfolioPage, safeExternalNewsUrl } from '../src/client/InvestmentShell.tsx'
+import { PositionRiskPlanCell } from '../src/client/PositionRiskControls.tsx'
 import css from '../src/client/InvestmentShell.module.css'
 
 const primaryRouteSurfaceClass = css.primaryRouteSurface
@@ -35,6 +36,33 @@ function deferred<T>(): Deferred<T> {
 }
 
 afterEach(cleanup)
+
+describe('持仓止盈止损摘要', () => {
+  it('按状态、配置来源、目标价格和操作分层展示', () => {
+    const onEdit = vi.fn()
+    render(
+      <PositionRiskPlanCell
+        plan={{
+          source: 'global',
+          status: 'active',
+          targets: {
+            take_profit: { resolved_price: 15 },
+            stop_loss: { resolved_price: 11.25 },
+          },
+        }}
+        onEdit={onEdit}
+      />,
+    )
+
+    expect(screen.getByText('监控中')).toBeTruthy()
+    expect(screen.getByText('继承全局')).toBeTruthy()
+    const values = screen.getByText('止盈').parentElement
+    expect(values?.textContent).toBe('止盈¥15.00')
+    expect(screen.getByText('止损').parentElement?.textContent).toBe('止损¥11.25')
+    fireEvent.click(screen.getByRole('button', { name: '调整' }))
+    expect(onEdit).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('投研数据页慢请求状态', () => {
   it('为代码占位的持仓补全证券名称，并保留代码作为次级信息', async () => {
@@ -524,7 +552,7 @@ describe('投研数据页慢请求状态', () => {
     expect(screen.getByText('浦发银行')).toBeTruthy()
     expect(screen.getByRole('status').textContent).toContain('正在更新持仓数据')
     fireEvent.click(busyButton)
-    expect(requestData).toHaveBeenCalledTimes(14)
+    expect(requestData).toHaveBeenCalledTimes(16)
 
     await act(async () => {
       nextHoldings.resolve({ items: [{ ticker: '000001', name: '平安银行', quantity: 200, cost_price: 11 }] })
@@ -539,7 +567,7 @@ describe('投研数据页慢请求状态', () => {
     const alert = screen.getByRole('alert')
     expect(alert.textContent).toContain('组合风险更新失败')
     expect(alert.textContent).toContain('risk engine unavailable')
-    expect(screen.getByRole('status').textContent).toContain('已显示 6/6 项')
+    expect(screen.getByRole('status').textContent).toContain('已显示 7/7 项')
   })
 
   it('筛选切换以新一代结果为准，晚到响应不会覆盖当前列表', async () => {
@@ -595,6 +623,7 @@ describe('投研数据页慢请求状态', () => {
       if (request.operation === 'trading-core.personalized-cards') return events.promise
       if (request.operation === 'market-watch.watchlist') return Promise.resolve({ items: [] })
       if (request.operation === 'trading-core.watchlist') return Promise.resolve({ tickers: [] })
+      if (request.operation === 'trading-core.position-risk') return Promise.resolve({ items: [], suggestion: {} })
       throw new Error(`unexpected operation ${request.operation}`)
     })
 
@@ -604,13 +633,14 @@ describe('投研数据页慢请求状态', () => {
       </StrictMode>,
     )
 
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(6) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(7) })
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-portfolio')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.risk-alerts')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.personalized-cards')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'market-watch.watchlist')).toHaveLength(1)
     expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.watchlist')).toHaveLength(1)
+    expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.position-risk')).toHaveLength(1)
 
     await act(async () => {
       holdings.resolve({ items: [{ ticker: '600036', name: '招商银行', quantity: 100, cost_price: 40 }] })
@@ -621,7 +651,7 @@ describe('投研数据页慢请求状态', () => {
 
     await screen.findByText('招商银行')
     expect(screen.getByText('平衡')).toBeTruthy()
-    expect(screen.getByRole('status').textContent).toContain('共 6/6 项可用')
+    expect(screen.getByRole('status').textContent).toContain('共 7/7 项可用')
   })
 
   it('A-B-A 筛选复用仍未完成的 A flight，并由最后一次 A 选择接收结果', async () => {
@@ -750,5 +780,47 @@ describe('投研数据页慢请求状态', () => {
     expect(cells[5]!.textContent).toBe('—')
     expect(screen.getByText('总资产现价').nextElementSibling?.textContent).toBe('—')
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('在持仓模块确认画像建议后保存全局止盈止损配置', async () => {
+    const requestData = requestDataWithMarketNews(async (request) => {
+      if (request.operation === 'trading-core.holdings') {
+        return { items: [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }] }
+      }
+      if (request.operation === 'trading-core.risk-portfolio') return { profile_label: '稳健型', summary: { n_positions: 1 }, breaches: [] }
+      if (request.operation === 'trading-core.risk-alerts') return { items: [] }
+      if (request.operation === 'trading-core.personalized-cards') return { items: [] }
+      if (request.operation === 'market-watch.watchlist') return { items: [] }
+      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
+      if (request.operation === 'market-watch.quotes-batch') return { items: [] }
+      if (request.operation === 'trading-core.position-risk') {
+        return {
+          items: [{ ticker: '600519', source: 'global', status: 'unconfigured', targets: {} }],
+          global: null,
+          suggestion: { profile: 'balanced', take_profit_pct: 0.12, stop_loss_pct: 0.06 },
+        }
+      }
+      if (request.operation === 'trading-core.position-risk-global-save') return { sync_status: 'synced' }
+      return {}
+    })
+
+    render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '全局止盈止损' }))
+    const dialog = await screen.findByRole('dialog', { name: '全局止盈止损' })
+    expect(within(dialog).getByText('balanced 画像建议')).toBeTruthy()
+    expect(within(dialog).getByText('止盈 +12% · 止损 -6%')).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认并启用全局配置' }))
+
+    await waitFor(() => {
+      expect(requestData).toHaveBeenCalledWith({
+        operation: 'trading-core.position-risk-global-save',
+        input: {
+          take_profit: { enabled: true, mode: 'percent', value: 0.12 },
+          stop_loss: { enabled: true, mode: 'percent', value: 0.06 },
+          confirmed: true,
+        },
+      })
+    })
   })
 })

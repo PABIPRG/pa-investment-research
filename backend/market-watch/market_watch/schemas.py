@@ -69,3 +69,18 @@ class SecurityDetailRequest(BaseModel):
 class BriefRequest(BaseModel):
     period: str = Field(default="pre", description="pre=盘前 / post=盘后")
     manual: bool = Field(default=False, description="true 绕交易日守卫（仅测试）")
+
+
+class PositionRiskRuleRequest(BaseModel):
+    """trading-core 写入的派生价格规则；领域模块继续做交叉字段校验。"""
+
+    id: str = Field(min_length=1, max_length=160)
+    ticker: str = Field(pattern=r"^\d{6}$")
+    kind: str
+    operator: str
+    target_price: float = Field(gt=0)
+    config_scope: str
+    config_version: int = Field(ge=1)
+    generation: int = Field(ge=1)
+    effective_at: str | None = None
+    expires_at: str | None = None

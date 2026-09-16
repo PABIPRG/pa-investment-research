@@ -197,6 +197,34 @@ describe('investment data broker', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
+  it('maps position risk reads and sparse override mutations to fixed routes', async () => {
+    const release = vi.fn(async () => {})
+    const calls: Array<[string, RequestInit | undefined]> = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init])
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    }))
+    const acquire = async () => ({ baseUrl: 'http://127.0.0.1:8000', release })
+
+    await requestInvestmentData({ operation: 'trading-core.position-risk' }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.position-risk-override-save',
+      input: { ticker: '600519', monitoring_disabled: true, confirmed: true },
+    }, acquire)
+    await requestInvestmentData({
+      operation: 'trading-core.position-risk-override-delete', input: { ticker: '600519' },
+    }, acquire)
+
+    expect(calls).toEqual([
+      ['http://127.0.0.1:8000/position-risk/effective', { method: 'GET' }],
+      ['http://127.0.0.1:8000/position-risk/overrides/600519', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monitoring_disabled: true, confirmed: true }),
+      }],
+      ['http://127.0.0.1:8000/position-risk/overrides/600519', { method: 'DELETE' }],
+    ])
+  })
+
   it('rejects unsafe or non-string codes before acquiring the backend', async () => {
     const acquire = vi.fn()
     await expect(requestInvestmentData({
