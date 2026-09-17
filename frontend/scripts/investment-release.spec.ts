@@ -58,7 +58,7 @@ describe('investment release contract', () => {
     } finally { rmSync(fixture, { recursive: true, force: true }) }
   })
 
-  it.skipIf(process.platform === 'win32')('disables automatic dependency repair before every packaging gate', () => {
+  it.skipIf(process.platform === 'win32')('restores development dependencies before every packaging gate', () => {
     const fixture = mkdtempSync(resolve(tmpdir(), 'investment-package-entry-'))
     try {
       const scripts = resolve(fixture, 'scripts')
@@ -73,7 +73,17 @@ describe('investment release contract', () => {
       writeFileSync(resolve(fakeBin, 'node'), '#!/bin/sh\nprintf "darwin-arm64\\n"\n', { mode: 0o755 })
       writeFileSync(
         resolve(fakeBin, 'pnpm'),
-        '#!/bin/sh\nprintf "%s|%s\\n" "${pnpm_config_verify_deps_before_run-}" "$*" >> "$PNPM_CALLS"\n',
+        [
+          '#!/bin/sh',
+          'printf "%s|%s\\n" "${pnpm_config_verify_deps_before_run-}" "$*" >> "$PNPM_CALLS"',
+          'if [ "$*" = "--config.confirmModulesPurge=false install --frozen-lockfile --prod=false" ]; then',
+          '  mkdir -p node_modules/.bin',
+          '  : > node_modules/.bin/tsx',
+          'elif [ "$*" = "run constraints" ]; then',
+          '  test -f node_modules/.bin/tsx || exit 91',
+          'fi',
+          '',
+        ].join('\n'),
         { mode: 0o755 },
       )
 
@@ -89,6 +99,7 @@ describe('investment release contract', () => {
 
       expect(result.status, result.stderr).toBe(0)
       expect(readFileSync(calls, 'utf8')).toBe([
+        'warn|--config.confirmModulesPurge=false install --frozen-lockfile --prod=false',
         'warn|run constraints',
         'warn|run make:electron',
         '',
