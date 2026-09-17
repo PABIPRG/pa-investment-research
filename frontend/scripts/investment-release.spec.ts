@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { delimiter, resolve } from 'node:path'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 import {
@@ -55,6 +55,44 @@ describe('investment release contract', () => {
       })
       expect(result.stderr).toBe('')
       expect(result.status).toBe(0)
+    } finally { rmSync(fixture, { recursive: true, force: true }) }
+  })
+
+  it.skipIf(process.platform === 'win32')('disables automatic dependency repair before every packaging gate', () => {
+    const fixture = mkdtempSync(resolve(tmpdir(), 'investment-package-entry-'))
+    try {
+      const scripts = resolve(fixture, 'scripts')
+      const frontend = resolve(fixture, 'frontend')
+      const fakeBin = resolve(fixture, 'fake-bin')
+      const calls = resolve(fixture, 'pnpm-calls.txt')
+      mkdirSync(scripts)
+      mkdirSync(frontend)
+      mkdirSync(fakeBin)
+      const packageScript = resolve(scripts, 'package-investment-electron.sh')
+      writeFileSync(packageScript, readFileSync(resolve(repositoryRoot, 'scripts/package-investment-electron.sh')))
+      writeFileSync(resolve(fakeBin, 'node'), '#!/bin/sh\nprintf "darwin-arm64\\n"\n', { mode: 0o755 })
+      writeFileSync(
+        resolve(fakeBin, 'pnpm'),
+        '#!/bin/sh\nprintf "%s|%s\\n" "${pnpm_config_verify_deps_before_run-}" "$*" >> "$PNPM_CALLS"\n',
+        { mode: 0o755 },
+      )
+
+      const result = spawnSync('bash', [packageScript], {
+        cwd: fixture,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+          PNPM_CALLS: calls,
+        },
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(readFileSync(calls, 'utf8')).toBe([
+        'warn|run constraints',
+        'warn|run make:electron',
+        '',
+      ].join('\n'))
     } finally { rmSync(fixture, { recursive: true, force: true }) }
   })
 

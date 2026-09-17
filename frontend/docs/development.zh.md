@@ -21,7 +21,7 @@
 pnpm install
 ```
 
-安装过程还会通过 `scripts/install-lefthook.mjs` 配置 worktree 本地的 Lefthook 钩子和 `dsh-translation-pairing` Git 合并驱动。[worktree 本地钩子 Agent Note](../.agents/notes/implemented/process/2026-07-27-worktree-local-lefthook.md) 负责钩子路径的安全约定；[自动配对合并 Agent Note](../.agents/notes/implemented/process/2026-08-08-automatic-translation-pairing-merges.md) 负责合并驱动。
+安装过程还会通过 `scripts/install-lefthook.mjs` 配置 worktree 本地的 Lefthook 钩子和 `dsh-translation-pairing` Git 合并驱动。production-only 依赖树缺少 Lefthook 二进制文件时会跳过这项开发配置；二进制文件存在时，包解析或安装失败仍会导致命令失败。[worktree 本地钩子 Agent Note](../.agents/notes/implemented/process/2026-07-27-worktree-local-lefthook.md) 负责钩子路径的安全约定；[自动配对合并 Agent Note](../.agents/notes/implemented/process/2026-08-08-automatic-translation-pairing-merges.md) 负责合并驱动。
 
 如果依赖是从缓存恢复或 `postinstall` 被跳过而导致任一集成缺失，请手动安装：
 

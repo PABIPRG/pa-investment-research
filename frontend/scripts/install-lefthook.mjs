@@ -689,14 +689,14 @@ function probePairingMergeDriver(root) {
 
 async function main() {
   if (process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true') return
-  const { default: lefthookPackage } = await import('lefthook/package.json', { with: { type: 'json' } })
-  if (typeof lefthookPackage.bin?.lefthook !== 'string') return
   const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' })
   if (probe.status !== 0) return
   const root = stripGitLineTerminator(probe.stdout)
   const isWindows = process.platform === 'win32'
   const lefthook = join(root, 'node_modules', '.bin', isWindows ? 'lefthook.cmd' : 'lefthook')
   if (!existsSync(lefthook)) return
+  const { default: lefthookPackage } = await import('lefthook/package.json', { with: { type: 'json' } })
+  if (typeof lefthookPackage.bin?.lefthook !== 'string') return
 
   assertSupportedGit(root)
   const gitDirectory = stripGitLineTerminator(git(['rev-parse', '--absolute-git-dir'], root).stdout)

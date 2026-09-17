@@ -212,6 +212,43 @@ function runInstaller(
 }
 
 describe('worktree-local Lefthook installer', { timeout: 30_000 }, () => {
+  it('skips a production checkout without the Lefthook package or binary', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-lefthook-production-'))
+    fixtures.push(root)
+    const standaloneInstaller = join(root, 'install-lefthook.mjs')
+    writeFileSync(standaloneInstaller, readFileSync(installer))
+    const init = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' })
+    expect(init.status, init.stderr).toBe(0)
+
+    const result = spawnSync(process.execPath, [standaloneInstaller], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, CI: 'false', GITHUB_ACTIONS: 'false' },
+    })
+
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+  })
+
+  it('reports a missing Lefthook package when its binary is present', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-lefthook-broken-install-'))
+    fixtures.push(root)
+    const standaloneInstaller = join(root, 'install-lefthook.mjs')
+    writeFileSync(standaloneInstaller, readFileSync(installer))
+    const init = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' })
+    expect(init.status, init.stderr).toBe(0)
+    write(join(root, 'node_modules/.bin', process.platform === 'win32' ? 'lefthook.cmd' : 'lefthook'), '')
+
+    const result = spawnSync(process.execPath, [standaloneInstaller], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, CI: 'false', GITHUB_ACTIONS: 'false' },
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("Cannot find package 'lefthook'")
+  })
+
   for (const [label, extraEnv] of [
     ['CI', { CI: 'true' }],
     ['GitHub Actions', { GITHUB_ACTIONS: 'true' }],
