@@ -1,3 +1,5 @@
+import { read, utils } from 'xlsx/xlsx.mjs'
+
 export interface HoldingImportItem {
   [key: string]: string | number
   ticker: string
@@ -13,7 +15,7 @@ export interface HoldingImportResult {
 const HEADER_ALIASES = {
   ticker: new Set(['ticker', 'code', 'symbol', '股票代码', '证券代码', '代码']),
   quantity: new Set(['quantity', 'qty', 'shares', '持仓数量', '数量', '股票余额', '股份余额']),
-  cost_price: new Set(['cost_price', 'cost', 'avg_cost', 'average_cost', '成本价', '持仓成本', '成本']),
+  cost_price: new Set(['cost_price', 'cost', 'avg_cost', 'average_cost', '成本价', '参考成本价', '成本均价', '持仓成本', '成本']),
 } as const
 
 function normalizeHeader(value: string) {
@@ -84,16 +86,31 @@ export function parseHoldingsImport(source: string): HoldingImportResult {
   const first = lines[0]
   if (first === undefined) return { items: [], errors: [] }
 
-  const delimiter = detectDelimiter(first.value)
-  const firstCells = splitLine(first.value, delimiter)
-  const headerIndexes = {
-    ticker: findHeaderIndex(firstCells, HEADER_ALIASES.ticker),
-    quantity: findHeaderIndex(firstCells, HEADER_ALIASES.quantity),
-    cost_price: findHeaderIndex(firstCells, HEADER_ALIASES.cost_price),
+  let delimiter = detectDelimiter(first.value)
+  let headerLineIndex = -1
+  let headerIndexes = { ticker: -1, quantity: -1, cost_price: -1 }
+  let partialHeader = false
+  for (let index = 0; index < Math.min(lines.length, 20); index += 1) {
+    const row = lines[index]
+    if (row === undefined) continue
+    const candidateDelimiter = detectDelimiter(row.value)
+    const cells = splitLine(row.value, candidateDelimiter)
+    const candidateIndexes = {
+      ticker: findHeaderIndex(cells, HEADER_ALIASES.ticker),
+      quantity: findHeaderIndex(cells, HEADER_ALIASES.quantity),
+      cost_price: findHeaderIndex(cells, HEADER_ALIASES.cost_price),
+    }
+    const recognized = Object.values(candidateIndexes).filter(cellIndex => cellIndex >= 0).length
+    if (recognized === 3) {
+      delimiter = candidateDelimiter
+      headerLineIndex = index
+      headerIndexes = candidateIndexes
+      break
+    }
+    partialHeader ||= recognized > 0
   }
-  const recognizedHeaders = Object.values(headerIndexes).filter(index => index >= 0).length
-  const hasHeader = recognizedHeaders > 0
-  if (hasHeader && recognizedHeaders < 3) {
+  const hasHeader = headerLineIndex >= 0
+  if (!hasHeader && partialHeader) {
     return { items: [], errors: ['表头必须同时包含股票代码、数量和成本价。'] }
   }
 
@@ -101,7 +118,7 @@ export function parseHoldingsImport(source: string): HoldingImportResult {
   const errors: string[] = []
   const seen = new Set<string>()
 
-  for (const row of lines.slice(hasHeader ? 1 : 0)) {
+  for (const row of lines.slice(hasHeader ? headerLineIndex + 1 : 0)) {
     const cells = splitLine(row.value, delimiter)
     const fallbackOffset = cells.length >= 4 ? cells.length - 2 : 1
     const tickerCell = cells[hasHeader ? headerIndexes.ticker : 0] ?? ''
@@ -132,6 +149,23 @@ export function parseHoldingsImport(source: string): HoldingImportResult {
     items.push({ ticker, quantity, cost_price: costPrice })
   }
 
-  if (hasHeader && lines.length === 1) errors.push('表格中没有可导入的持仓数据。')
+  if (hasHeader && lines.length === headerLineIndex + 1) errors.push('表格中没有可导入的持仓数据。')
   return { items, errors }
+}
+
+export function holdingsWorkbookToDelimitedText(data: ArrayBuffer | Uint8Array): string {
+  const workbook = read(data, { type: 'array', cellDates: false, dense: true })
+  const sheetName = workbook.SheetNames[0]
+  if (sheetName === undefined) throw new Error('工作簿中没有可导入的工作表。')
+  const sheet = workbook.Sheets[sheetName]
+  if (sheet === undefined) throw new Error('无法读取工作簿中的首个工作表。')
+  return utils.sheet_to_csv(sheet, { FS: '\t', RS: '\n', blankrows: false })
+}
+
+export function parseHoldingsWorkbook(data: ArrayBuffer | Uint8Array): HoldingImportResult {
+  try {
+    return parseHoldingsImport(holdingsWorkbookToDelimitedText(data))
+  } catch {
+    return { items: [], errors: ['无法读取 Excel 文件，请确认文件未损坏且包含持仓表格。'] }
+  }
 }

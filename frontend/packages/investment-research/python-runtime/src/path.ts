@@ -94,18 +94,6 @@ export function resolveBackendPaths(
   const packageDir = options.packageDir ?? PACKAGE_DIR
   let cursor = packageDir
   while (true) {
-    const projectDir = pathApi.join(cursor, ...definition.repositoryPath)
-    const pythonExecutable = sourceInterpreter(projectDir, platform, pathApi)
-    if (isDirectory(projectDir) && isFile(pythonExecutable)) {
-      return { source: 'source', projectDir, pythonExecutable }
-    }
-    const parent = pathApi.dirname(cursor)
-    if (parent === cursor) break
-    cursor = parent
-  }
-
-  cursor = packageDir
-  while (true) {
     const descriptorPath = pathApi.join(cursor, 'investment-python', 'runtime.json')
     if (isFile(descriptorPath)) {
       if (options.dshHome === undefined || !pathApi.isAbsolute(options.dshHome)) {
@@ -123,6 +111,18 @@ export function resolveBackendPaths(
         sitePackages: bundled.sitePackages,
         stateDir: pathApi.join(options.dshHome, 'investment-research', definition.id),
       }
+    }
+    const parent = pathApi.dirname(cursor)
+    if (parent === cursor) break
+    cursor = parent
+  }
+
+  cursor = packageDir
+  while (true) {
+    const projectDir = pathApi.join(cursor, ...definition.repositoryPath)
+    const pythonExecutable = sourceInterpreter(projectDir, platform, pathApi)
+    if (isDirectory(projectDir) && isFile(pythonExecutable)) {
+      return { source: 'source', projectDir, pythonExecutable }
     }
     const parent = pathApi.dirname(cursor)
     if (parent === cursor) break

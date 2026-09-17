@@ -46,7 +46,7 @@ export const QUOTE_RETRY_MS = 8_000
 export const QUOTE_RETRY_MAX = 2
 
 const TECHNICAL_LOCATION_ERROR = /https?:\/\/|(?:^|\s)(?:\/Users|\/private|\/var|\/tmp)\/|[A-Z]:\\/iu
-const TECHNICAL_RUNTIME_ERROR = /Traceback|Runtime log:|investment Python backend|\b(?:ENOENT|ECONNREFUSED)\b|\bat\s+\S+\s+\(/iu
+const TECHNICAL_RUNTIME_ERROR = /Traceback|Runtime log:|investment (?:Python backend|Runtime Client)|request-data failed|Remote operation failed|\b(?:ENOENT|ECONNREFUSED)\b|\bat\s+\S+\s+\(/iu
 
 function containsTechnicalError(value: string): boolean {
   return TECHNICAL_LOCATION_ERROR.test(value) || TECHNICAL_RUNTIME_ERROR.test(value)
@@ -70,6 +70,11 @@ export function productErrorText(
     } catch {
       // Non-JSON backend bodies remain covered by the technical-text guard.
     }
+  }
+  const remoteFailure = raw.match(/investment Runtime Client:\s*\S+\s+failed:\s*([^:]+):\s*(.+)$/su)
+  if (remoteFailure !== null && remoteFailure[1]?.trim() !== 'internal') {
+    const message = remoteFailure[2]?.trim() ?? ''
+    if (message !== '' && !containsTechnicalError(message)) return message.slice(0, 240)
   }
   return containsTechnicalError(raw) ? fallback : raw.slice(0, 240)
 }

@@ -36,7 +36,8 @@
   "scripts": { "bundle": "tsdown", "watch": "tsdown --watch" },
   "license": "MIT",
   "dependencies": {
-    "echarts": "^5.6.0"
+    "echarts": "^5.6.0",
+    "xlsx": "0.18.5"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:^",

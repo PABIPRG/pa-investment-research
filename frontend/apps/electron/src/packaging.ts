@@ -677,8 +677,16 @@ async function run(command: string, args: string[], cwd: string): Promise<void> 
 
 type RunCommand = (command: string, args: string[], cwd: string) => Promise<void>
 type RefreshDescriptor = (appPath: string) => Promise<void>
-type SignHelpers = (appPath: string, runCommand: RunCommand) => Promise<void>
-type SignSidecar = (appPath: string, runCommand: RunCommand) => Promise<void>
+type SealSidecar = (appPath: string) => Promise<void>
+type SignHelpers = (appPath: string, runCommand: RunCommand, identity?: string) => Promise<void>
+type SignSidecar = (appPath: string, runCommand: RunCommand, identity?: string) => Promise<void>
+
+/** Use a stable macOS signing identity when release credentials are available. */
+export function resolveMacCodesignIdentity(environment: NodeJS.ProcessEnv = process.env): string {
+  return environment.DSH_MAC_CODESIGN_IDENTITY?.trim()
+    || environment.CSC_NAME?.trim()
+    || '-'
+}
 
 const MACH_O_MAGICS = new Set([
   'cafebabe', 'cafebabf', 'cefaedfe', 'cffaedfe',
@@ -719,6 +727,28 @@ export async function refreshPackagedSidecarDescriptor(appPath: string): Promise
   await writeFile(descriptorPath, `${JSON.stringify({ ...descriptor, files }, undefined, 2)}\n`, 'utf8')
 }
 
+/**
+ * Remove write bits from the packaged Python Runtime after signing and hash refresh.
+ * The sidecar is immutable application code; sealing it prevents Python caches or
+ * ad-hoc diagnostics from silently invalidating its closed runtime descriptor.
+ */
+export async function sealPackagedSidecarReadOnly(appPath: string): Promise<void> {
+  const sidecarRoot = join(resolve(appPath), 'Contents', 'Resources', 'investment-python')
+  const seal = async (candidate: string): Promise<void> => {
+    const metadata = await lstat(candidate)
+    if (metadata.isSymbolicLink()) throw new TypeError(`packaged sidecar contains a symbolic link: ${candidate}`)
+    if (metadata.isDirectory()) {
+      const entries = await readdir(candidate, { withFileTypes: true })
+      for (const entry of entries) await seal(join(candidate, entry.name))
+      await chmod(candidate, 0o555)
+      return
+    }
+    if (!metadata.isFile()) throw new TypeError(`packaged sidecar contains an unsupported entry: ${candidate}`)
+    await chmod(candidate, 0o444 | (metadata.mode & 0o111))
+  }
+  await seal(sidecarRoot)
+}
+
 async function isMachOFile(path: string): Promise<boolean> {
   const handle = await open(path, 'r')
   try {
@@ -730,8 +760,12 @@ async function isMachOFile(path: string): Promise<boolean> {
   }
 }
 
-/** Ad-hoc sign every native Python runtime or extension module with one identity. */
-export async function signPackagedSidecarMachO(appPath: string, runCommand: RunCommand = run): Promise<void> {
+/** Sign every native Python runtime or extension module with one identity. */
+export async function signPackagedSidecarMachO(
+  appPath: string,
+  runCommand: RunCommand = run,
+  identity: string = resolveMacCodesignIdentity(),
+): Promise<void> {
   const sidecarRoot = join(resolve(appPath), 'Contents', 'Resources', 'investment-python')
   const files: string[] = []
   const pending = [sidecarRoot]
@@ -748,12 +782,16 @@ export async function signPackagedSidecarMachO(appPath: string, runCommand: RunC
   }
   files.sort()
   for (const file of files) {
-    await runCommand('codesign', ['--force', '--sign', '-', file], dirname(file))
+    await runCommand('codesign', ['--force', '--sign', identity, file], dirname(file))
   }
 }
 
 /** Sign Electron helper processes with local-development library loading enabled. */
-export async function signPackagedElectronHelpers(appPath: string, runCommand: RunCommand = run): Promise<void> {
+export async function signPackagedElectronHelpers(
+  appPath: string,
+  runCommand: RunCommand = run,
+  identity: string = resolveMacCodesignIdentity(),
+): Promise<void> {
   const frameworksDir = join(resolve(appPath), 'Contents', 'Frameworks')
   const helpers: string[] = []
   const frameworks = await opendir(frameworksDir)
@@ -763,13 +801,13 @@ export async function signPackagedElectronHelpers(appPath: string, runCommand: R
   helpers.sort()
   for (const helper of helpers) {
     await runCommand('codesign', [
-      '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', '-', helper,
+      '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', identity, helper,
     ], dirname(helper))
   }
 }
 
 /**
- * Ad-hoc sign packaged macOS applications without recursively opening the app's
+ * Sign packaged macOS applications without recursively opening the app's
  * entire pnpm tree in Node. The system codesign traversal keeps descriptor use bounded.
  */
 export async function signPackagedMacApplications(
@@ -779,16 +817,19 @@ export async function signPackagedMacApplications(
   refreshDescriptor: RefreshDescriptor = refreshPackagedSidecarDescriptor,
   signSidecar: SignSidecar = signPackagedSidecarMachO,
   signHelpers: SignHelpers = signPackagedElectronHelpers,
+  sealSidecar: SealSidecar = sealPackagedSidecarReadOnly,
+  identity: string = resolveMacCodesignIdentity(),
 ): Promise<void> {
   if (platform !== 'darwin') return
   for (const packagePath of packagePaths) {
     const appPath = resolve(packagePath, `${appIdentity.name}.app`)
-    await runCommand('codesign', ['--force', '--deep', '--sign', '-', appPath], dirname(appPath))
-    await signHelpers(appPath, runCommand)
-    await signSidecar(appPath, runCommand)
+    await runCommand('codesign', ['--force', '--deep', '--sign', identity, appPath], dirname(appPath))
+    await signHelpers(appPath, runCommand, identity)
+    await signSidecar(appPath, runCommand, identity)
     await refreshDescriptor(appPath)
+    await sealSidecar(appPath)
     await runCommand('codesign', [
-      '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', '-', appPath,
+      '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', identity, appPath,
     ], dirname(appPath))
   }
 }
@@ -810,6 +851,11 @@ async function packageApplication(): Promise<void> {
   const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-'))
   const plan = createPackagingPlan(rootDir, process.platform, process.arch, process.env.INVESTMENT_PYTHON_DOWNLOAD_CACHE)
   try {
+    // Build the sidecar while workspace development tools are still present.
+    // pnpm deploy --prod records a production-only workspace state; invoking
+    // the tsx-backed sidecar script afterwards can otherwise purge tsx before
+    // the script starts.
+    await timed('Python sidecar', () => run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd))
     await timed('production deploy', () => run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd))
     if (process.platform === 'darwin' || process.platform === 'win32') {
       const startedAt = Date.now()
@@ -827,7 +873,6 @@ async function packageApplication(): Promise<void> {
       await createPackagerSeed(plan.stagingDir, plan.packagerSeedDir)
       console.log(`Electron packaging: Windows Packager seed completed in ${Date.now() - startedAt}ms`)
     }
-    await timed('Python sidecar', () => run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd))
     const electronPackage: unknown = JSON.parse(await readFile(electronPackagePath, 'utf8'))
     if (typeof electronPackage !== 'object' || electronPackage === null
       || typeof (electronPackage as { version?: unknown }).version !== 'string') {
@@ -865,6 +910,15 @@ async function packageApplication(): Promise<void> {
       ], workspaceDir)
     }
     await timed('macOS signing', () => signPackagedMacApplications(appPaths, process.platform))
+    for (const packagePath of appPaths) {
+      const resources = process.platform === 'darwin'
+        ? join(packagePath, `${appIdentity.name}.app`, 'Contents', 'Resources')
+        : join(packagePath, 'resources')
+      await timed('packaged sidecar verification', () => run(process.execPath, [
+        join(workspaceDir, 'scripts', 'smoke-investment-python-sidecar.ts'),
+        '--root', join(resources, 'investment-python'),
+      ], workspaceDir))
+    }
   } finally {
     await removePackagingRoot(plan.rootDir)
   }

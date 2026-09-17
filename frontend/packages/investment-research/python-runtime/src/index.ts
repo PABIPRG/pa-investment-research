@@ -50,6 +50,33 @@ function backupRemote<T>(operation: () => T, fallback: string): T {
   }
 }
 
+const DATA_TECHNICAL_ERROR = /https?:\/\/|(?:^|\s)(?:\/Users|\/private|\/var|\/tmp)\/|Traceback|Runtime log:|\b(?:ENOENT|ECONNREFUSED)\b|\bat\s+\S+\s+\(/iu
+
+function backendBusinessDetail(error: unknown): string | undefined {
+  const raw = error instanceof Error ? error.message : String(error)
+  const responseBody = raw.match(/failed with HTTP \d+:\s*(.+)$/su)?.[1]
+  if (responseBody === undefined) return undefined
+  try {
+    const decoded = JSON.parse(responseBody) as unknown
+    if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) return undefined
+    const detail = Reflect.get(decoded, 'detail')
+    if (typeof detail !== 'string') return undefined
+    const message = detail.trim()
+    if (message === '' || DATA_TECHNICAL_ERROR.test(message)) return undefined
+    return message.slice(0, 240)
+  } catch {
+    return undefined
+  }
+}
+
+function investmentDataRemoteFailure(error: unknown, message: string): TypertRemoteFailure<RemoteFailure> {
+  return new TypertRemoteFailure({
+    code: 'remote-rejected',
+    message,
+    details: {},
+  }, error)
+}
+
 export { checkBackendHealth } from './health.ts'
 export type { BackendHealthOptions } from './health.ts'
 export { resolveBackendAddress, resolveBackendPaths } from './path.ts'
@@ -310,6 +337,11 @@ export class InvestmentPythonRuntime extends Service {
       id => this.manager.acquire(id),
       this.notificationInternalToken,
     )
+      .catch((error: unknown) => {
+        const detail = backendBusinessDetail(error)
+        if (detail === undefined) throw error
+        throw investmentDataRemoteFailure(error, detail)
+      })
   }
 
   /**

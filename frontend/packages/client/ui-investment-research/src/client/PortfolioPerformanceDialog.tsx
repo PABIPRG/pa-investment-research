@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { asRecord, compactMoney, money, number, records, text } from './data.ts'
+import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
 import { PortfolioPerformanceChart } from './PortfolioPerformanceChart.tsx'
 import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
@@ -152,6 +152,9 @@ export function PortfolioPerformanceDialog({
   const displayedContributions = isCostMethod
     ? contributions.filter(item => number(item.current_cost) !== undefined)
     : contributions
+  const errorMessage = error === '数据服务暂不可用，请稍后重试。'
+    ? '历史行情暂不可用，请稍后重试。'
+    : productErrorText(error, '历史行情暂不可用，请稍后重试。')
 
   const saveHistoryStart = async (effectiveDate: string | null): Promise<void> => {
     if (historySaving) return
@@ -220,7 +223,7 @@ export function PortfolioPerformanceDialog({
       <div className={css.performanceContent} role="region" aria-label="组合收益内容">
       {error !== '' && (
         <div className={css.performanceError} role="alert" data-retained={loaded || undefined}>
-          <div><strong>组合收益暂不可用</strong><p>{error}</p></div>
+          <div><strong>组合收益暂不可用</strong><p>{errorMessage}</p></div>
           <button type="button" onClick={onRetry}>重试</button>
         </div>
       )}

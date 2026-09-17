@@ -3,32 +3,13 @@ import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog, riskSource, riskSuggestions } from './DetailDialogs.tsx'
-import { parseHoldingsImport } from './holdings-import.ts'
+import { holdingsWorkbookToDelimitedText, parseHoldingsImport } from './holdings-import.ts'
 import { useRequestResource } from './InvestmentShell.tsx'
 import { privateFunds, useFundsPrivacy } from './funds-privacy.tsx'
 import { PositionRiskDialog, PositionRiskPlanCell, positionRiskPlanMap } from './PositionRiskControls.tsx'
 import css from './InvestmentShell.module.css'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
-
-interface HoldingsProviderOption {
-  readonly value: string
-  readonly label: string
-}
-
-const HOLDINGS_PROVIDER_OPTIONS: readonly HoldingsProviderOption[] = [
-  { value: 'manual', label: '手动输入' },
-  { value: 'easytrader', label: '同花顺（Windows）' },
-  { value: 'mac_ths', label: '同花顺（macOS）' },
-  { value: 'qmt', label: 'QMT 迅投' },
-]
-
-function holdingsProviderOptions(current: string, allowed: readonly string[]): readonly HoldingsProviderOption[] {
-  const options = HOLDINGS_PROVIDER_OPTIONS.filter(option => option.value === current || allowed.includes(option.value))
-  return HOLDINGS_PROVIDER_OPTIONS.some(option => option.value === current)
-    ? options
-    : [{ value: current, label: '未知数据源' }, ...options]
-}
 
 export type WorkbenchDetailKind =
   | 'holdings'
@@ -69,6 +50,7 @@ interface WorkbenchOverviewDialogProps {
   readonly onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   readonly requestData: RequestData
   readonly brokerSync?: boolean
+  /** Retained for host compatibility; the single-action flow resolves its source automatically. */
   readonly holdingsProviders?: readonly string[]
   readonly onClose: () => void
 }
@@ -243,15 +225,18 @@ function HoldingsBulkImport({
 
   const readFile = async (file: File): Promise<void> => {
     if (saving) return
-    if (!/\.(csv|tsv|txt)$/i.test(file.name)) {
-      onError('仅支持 CSV、TSV 或 TXT 文件。')
+    if (!/\.(csv|tsv|txt|xls|xlsx)$/i.test(file.name)) {
+      onError('仅支持 CSV、TSV、TXT、XLS 或 XLSX 文件。')
       return
     }
     try {
-      const content = await file.text()
+      const content = /\.xlsx?$/i.test(file.name)
+        ? holdingsWorkbookToDelimitedText(await file.arrayBuffer())
+        : await file.text()
+      onError('')
       onSourceChange(content)
     } catch {
-      onError('文件读取失败，请重试或直接粘贴表格内容。')
+      onError('文件读取失败，请确认文件未损坏，或直接粘贴表格内容。')
     }
   }
 
@@ -259,7 +244,7 @@ function HoldingsBulkImport({
     <section className={css.workbenchImportPanel} role="tabpanel" aria-labelledby="holdings-batch-tab">
       <div className={css.workbenchImportGuide}>
         <strong>批量导入会整体替换当前持仓</strong>
-        <span>支持 CSV、TSV 和从 Excel / WPS 复制的表格，至少需要股票代码、数量、成本价三列。</span>
+        <span>支持 CSV、TSV、XLS、XLSX 和从 Excel / WPS 复制的表格，至少需要股票代码、数量、成本价三列。</span>
       </div>
       <div
         className={css.workbenchImportDropzone}
@@ -285,12 +270,12 @@ function HoldingsBulkImport({
         }}
       >
         <strong>拖放持仓文件到这里</strong>
-        <span>或点击选择 CSV / TSV / TXT 文件</span>
+        <span>或点击选择 CSV / TSV / TXT / XLS / XLSX 文件</span>
         <input
           ref={fileInputRef}
           type="file"
           aria-label="选择持仓文件"
-          accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+          accept=".csv,.tsv,.txt,.xls,.xlsx,text/csv,text/tab-separated-values,text/plain,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           disabled={saving}
           onClick={(event) => { event.stopPropagation() }}
           onChange={(event) => {
@@ -350,9 +335,8 @@ function HoldingsBulkImport({
  * Chooses a persisted holdings provider, reads real holdings from its broker
  * client, and replaces the saved portfolio with them after explicit confirmation.
  */
-function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSync, onBack, onSavingChange }: {
+function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSavingChange }: {
   requestData: RequestData
-  holdingsProviders: readonly string[]
   onSync: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onNativeSync: (items: readonly WorkbenchHoldingInput[]) => void
   onBack: () => void
@@ -416,10 +400,10 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
     const timer = window.setTimeout(() => { setSlow(true) }, 3_000)
     return () => { window.clearTimeout(timer) }
   }, [loading])
-  const permission = reason === 'accessibility_required' || reason === 'automation_required'
-  const missing = reason === 'client_missing' || reason === 'client_location_required'
   const navigation = reason === 'navigation_required'
-  const options = holdingsProviderOptions(provider, holdingsProviders)
+  const permission = reason === 'automation_required' || (reason === 'accessibility_required' && state.accessibility !== 'granted')
+  const ready = (state.available === true || navigation) && !permission
+  const missing = reason === 'client_missing' || reason === 'client_location_required'
   const run = async (operation: () => Promise<void>): Promise<void> => {
     if (busy) return
     setBusy(true); setError(''); onSavingChange(true)
@@ -478,6 +462,10 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
     if (native !== undefined) nativeAction('download')
     else window.open(platform === 'darwin' ? 'https://download.10jqka.com.cn/free/mac/' : 'https://download.10jqka.com.cn/free/', '_blank', 'noopener,noreferrer')
   }
+  const acquire = (): void => {
+    if (native !== undefined) nativeAction('read')
+    else read()
+  }
   const confirm = (): void => {
     if (preview === undefined) return
     void run(async () => {
@@ -510,26 +498,19 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
   }
   return <section className={css.workbenchSyncPanel} aria-label="从券商同步持仓">
     <div className={css.workbenchImportHeader}>
-      <div><span>账户选择 → 客户端准备 → 预览确认</span></div>
+      <div><span>选择账户后获取持仓，确认预览才会保存</span></div>
       <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>返回持仓明细</button>
     </div>
     <div className={css.workbenchAccountMode}>
-      <div><strong>1 · 操盘账户</strong><span>选择要同步的账户，设置会自动记住</span></div>
+      <div className={css.workbenchSyncStepHeading}><strong>操盘账户</strong><span>选择模拟或实盘，设置会自动记住</span></div>
       <div className={css.workbenchAccountModeChoices} role="group" aria-label="操盘账户">
         {(['simulated', 'real'] as const).map(mode => <button key={mode} type="button" aria-pressed={account === mode} disabled={busy || loading} onClick={() => { change({ HOLDINGS_ACCOUNT_MODE: mode }) }}>{mode === 'simulated' ? '模拟操盘' : '真实操盘'}</button>)}
       </div>
     </div>
     <div className={css.workbenchSyncPreparation}>
-      <strong>2 · 同花顺准备状态</strong>
-      <label className={css.sourceSelect}><span>持仓数据源</span><select aria-label="持仓数据源" value={provider} disabled={busy || loading} onChange={event => { change({ HOLDINGS_PROVIDER: event.target.value }) }}>
-        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select></label>
-      <p role="status">{loading ? (slow ? '检测耗时较长，最多等待 12 秒。你也可以先手动录入。' : '正在检测客户端与权限，请稍候…') : state.available === true ? '已具备读取条件；读取时仍需确认账户与登录状态。' : text(state.reason, '请选择数据源并检查客户端。')}</p>
-      <div className={css.syncStatusList} aria-label="检测结果">
-        <span>客户端 <strong>{state.installation === 'installed' ? '已安装' : state.installation === 'missing' ? '未安装' : '待确认'}</strong></span>
-        <span>运行状态 <strong>{state.process === 'running' ? '运行中' : state.process === 'not_running' ? '未启动' : '待确认'}</strong></span>
-        <span>读取权限 <strong>{state.accessibility === 'granted' ? '已授权' : permission ? '待授权' : '待确认'}</strong></span>
-      </div>
+      <div className={css.workbenchSyncStepHeading}><strong>获取持仓</strong><span>读取后先展示预览，确认后才会替换本地持仓</span></div>
+      <p className={css.workbenchSyncPath}><span>读取位置</span><strong>{path}</strong></p>
+      {!ready && !permission && <p className={css.workbenchSyncStateMessage} role="status">{loading ? (slow ? '检测耗时较长，最多等待 12 秒。你也可以先手动录入。' : '正在检查读取条件…') : text(state.reason, '当前暂时无法读取持仓。')}</p>}
       {native !== undefined && platform === 'darwin' && <fieldset className={css.syncAuthorization}>
         <legend>主动读取授权</legend>
         <label><input type="radio" name="holdings-authorization" checked={authorization === 'once'} disabled={busy} onChange={() => {
@@ -539,11 +520,6 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
         <label><input type="radio" name="holdings-authorization" checked={authorization === 'persistent'} disabled={busy} onChange={() => { setAuthorization('persistent') }} />长期允许主动读取</label>
         <p>{authorization === 'persistent' ? '以后仍须由你点击读取，但不再重复询问；应用不会定时或在后台自动读取。' : '每次切换到同花顺前都会询问。'}</p>
       </fieldset>}
-      {missing && <>
-        <button type="button" className={css.primaryButton} disabled={busy} onClick={download}>前往官网下载 {platform === 'darwin' ? 'Mac' : 'Windows'} 版</button>
-        <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={reload}>已安装，重新检测</button>
-        {native !== undefined && platform === 'win32' && <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { nativeAction('select_client') }}>选择客户端位置</button>}
-      </>}
       {permission && <div className={css.syncPermissionGuide}>
         <strong>{reason === 'automation_required' ? '补充自动化授权' : '允许读取同花顺持仓'}</strong>
         <span>{reason === 'automation_required' ? '本次读取还需要系统自动化授权，请按下面的步骤开启。' : '读取同花顺窗口中的持仓表格需要辅助功能权限；不读取交易密码、不提交买卖委托。'}</span>
@@ -559,23 +535,38 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
         <button type="button" className={css.syncHelpButton} aria-expanded={troubleshoot} onClick={() => { setTroubleshoot(value => !value) }}>没有看到本应用？</button>
         {troubleshoot && <p>实际权限属于读取进程。辅助功能列表中可点击“+”添加投研智能体；源码运行时请检查 Python 或启动终端。更换运行环境后可能需要重新授权。</p>}
       </div>}
-      {reason === 'client_not_running' && (native
-        ? <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('launch') }}>打开同花顺</button>
-        : <p>请手动打开同花顺并登录，进入 {path}，然后返回浏览器重新检测。</p>)}
-      {!permission && !missing && <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={() => { setBlocking(''); reload() }}>重新检测</button>}
-      <button type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>{missing ? '暂不安装，改用手动录入' : '改用手动录入 / 批量导入'}</button>
-    </div>
-    <div className={css.workbenchSyncPreparation}>
-      <strong>3 · 读取、预览与确认</strong>
-      <p>{path}</p>
-      {state.available !== true && !navigation && <p className={css.syncHint}>完成上方准备后即可读取；确认预览前不会修改本地持仓。</p>}
-      {native === undefined && <p>Web 版请在同花顺手动进入上述路径，完成后返回读取。浏览器不会自动切换同花顺或保证恢复焦点。</p>}
-      {navigation && native !== undefined && <div className={css.workbenchImportGuide}><strong>后台读取未完成</strong><span>继续时会先弹窗说明访问路径、窗口切换和返回行为，取得本次同意后再操作。</span><button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('read') }}>查看本次切换说明</button></div>}
-      {preview === undefined && !(navigation && native) && <button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual' || (state.available !== true && !navigation)} onClick={read}>{reading ? (cancelling ? '正在取消读取…' : '正在读取持仓…') : native ? '读取持仓' : '我已打开持仓页，开始读取'}</button>}
+      {reason === 'client_not_running' && native === undefined && <p className={css.syncHint}>请手动打开同花顺并登录，进入 {path}，然后返回浏览器重新检测。</p>}
+      {!ready && !permission && <div className={css.syncPreparationActions}>
+        {missing && <>
+          <button type="button" className={css.primaryButton} disabled={busy} onClick={download}>前往官网下载 {platform === 'darwin' ? 'Mac' : 'Windows'} 版</button>
+          <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={reload}>已安装，重新检测</button>
+          {native !== undefined && platform === 'win32' && <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { nativeAction('select_client') }}>选择客户端位置</button>}
+        </>}
+        {reason === 'client_not_running' && native !== undefined && <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('launch') }}>打开同花顺</button>}
+        {!missing && <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={() => { setBlocking(''); reload() }}>重新检测</button>}
+        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>{missing ? '暂不安装，改用手动录入' : '改用手动录入 / 批量导入'}</button>
+      </div>}
+      {native === undefined && ready && <p className={css.syncHint}>Web 版不会自动切换窗口，请先在同花顺进入上述位置。</p>}
+      {native !== undefined && ready && preview === undefined && <p className={css.syncHint}>开始后会切换到同花顺并自动进入上述位置；读取完成、失败或取消后会尽力返回投研智能体。</p>}
+      {preview === undefined && ready && <div className={css.syncPrimaryAction}><button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual'} onClick={acquire}>{reading ? (cancelling ? '正在取消读取…' : '正在切换并读取…') : '获取持仓'}</button></div>}
       {reading && native !== undefined && <button type="button" className={css.secondaryButton} disabled={cancelling} onClick={cancelRead}>{cancelling ? '正在取消…' : '取消读取'}</button>}
       {preview !== undefined && <div className={css.workbenchImportPreview}>
-        <div><strong>{saved ? '已同步持仓' : '持仓预览 · 尚未保存'}</strong><span>{text(preview.account_label, accountLabel)} · 当前 {String(preview.previous_count)} 条 → {items.length} 条</span></div>
-        <p>来源：{text(preview.label, '同花顺')} · 读取时间：{text(preview.read_at, '—')} · 预览有效期 5 分钟</p>
+        <div className={css.workbenchImportPreviewHeader}>
+          <div><strong>{saved ? '已同步持仓' : '持仓预览 · 尚未保存'}</strong><span>{text(preview.account_label, accountLabel)} · 当前 {String(preview.previous_count)} 条 → {items.length} 条</span></div>
+          <p>来源：{text(preview.label, '同花顺')} · 读取时间：{text(preview.read_at, '—')} · 预览有效期 5 分钟</p>
+        </div>
+        {text(asRecord(preview.details).status, '') === 'unavailable' && <div className={css.workbenchImportGuide} role="status">
+          <strong>持仓已读取，成交明细未完成</strong>
+          <span>{text(asRecord(preview.details).reason, '成交明细读取失败。')} 当前使用读取时间兜底，可逐只修改后再确认。</span>
+        </div>}
+        {text(asRecord(preview.details).status, '') === 'empty' && <div className={css.workbenchImportGuide} role="status">
+          <strong>当前查询范围没有成交明细</strong>
+          <span>{text(asRecord(preview.details).reason, '历史成交表没有返回记录。')} 当前使用读取时间兜底，可逐只修改后再确认。</span>
+        </div>}
+        {text(asRecord(preview.details).status, '') === 'available' && asRecord(preview.details).scope === 'current_query' && <div className={css.workbenchImportGuide} role="status">
+          <strong>已读取当前查询范围的成交明细</strong>
+          <span>成交时间来自同花顺当前历史成交查询结果；尚未证明该范围覆盖当前持仓的全部形成过程。</span>
+        </div>}
         <div className={css.workbenchImportTableWrap}><table><thead><tr><th>股票代码</th><th>数量（股）</th><th>成本价（元）</th><th>时间来源</th></tr></thead><tbody>{items.map((item, index) => {
           const ticker = text(item.ticker, '')
           const trades = records(item.trades)
@@ -589,9 +580,11 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
             </details></td></tr>
           </Fragment>
         })}</tbody></table></div>
-        {saved ? <><strong>本次同步记录</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p><button type="button" className={css.primaryButton} onClick={onBack}>完成</button></>
-          : preview.changed === false ? <><p role="status">持仓无变化，不会创建重复快照或变更记录。</p><button type="button" className={css.primaryButton} onClick={() => { if (native !== undefined) nativeAction('discard'); onBack() }}>完成</button></>
-            : <><p>确认后整体替换本地持仓并重新计算组合风险；空结果不会清空持仓。</p><button type="button" className={css.primaryButton} disabled={busy} onClick={confirm}>确认替换 {items.length} 条持仓</button><button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { if (native !== undefined) nativeAction('discard'); setPreview(undefined); setError('') }}>取消预览</button></>}
+        {saved
+          ? <div className={css.workbenchImportPreviewFooter}><div><strong>同步完成</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} onClick={onBack}>完成</button></div></div>
+          : preview.changed === false
+            ? <div className={css.workbenchImportPreviewFooter}><div><strong>持仓无变化</strong><p role="status">不会创建重复快照或变更记录。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} onClick={() => { if (native !== undefined) nativeAction('discard'); onBack() }}>完成</button></div></div>
+            : <div className={css.workbenchImportPreviewFooter}><div><strong>确认替换本地持仓</strong><p>确认后整体替换本地持仓并重新计算组合风险；空结果不会清空持仓。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} disabled={busy} onClick={confirm}>确认替换 {items.length} 条持仓</button><button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { if (native !== undefined) nativeAction('discard'); setPreview(undefined); setError('') }}>取消预览</button></div></div>}
       </div>}
     </div>
     {(error || source.state.error || config.state.error) && <div className={css.workbenchImportErrors} role="alert"><strong>当前操作未完成</strong><span>{error || source.state.error || config.state.error}</span><span>本地持仓保持不变；可重新读取或改用手动录入。</span></div>}
@@ -599,13 +592,12 @@ function HoldingsSyncPanel({ requestData, holdingsProviders, onSync, onNativeSyn
 }
 
 function HoldingsEditor({
-  positions, requestData, brokerSync, holdingsProviders, positionPlans, onEditRisk,
+  positions, requestData, brokerSync, positionPlans, onEditRisk,
   onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
 }: {
   positions: readonly WorkbenchPositionDetail[]
   requestData: RequestData
   brokerSync: boolean
-  holdingsProviders: readonly string[]
   positionPlans: Map<string, Record<string, unknown>>
   onEditRisk: (item?: WorkbenchPositionDetail) => void
   onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
@@ -615,6 +607,10 @@ function HoldingsEditor({
 }) {
   const [flow, setFlow] = useState<'view' | 'import' | 'sync'>('view')
   useEffect(() => { onFlowChange(flow) }, [flow, onFlowChange])
+  const brokerSource = useRequestResource(requestData)
+  useEffect(() => {
+    if (brokerSync && flow === 'view') brokerSource.run({ operation: 'trading-core.holdings-source' })
+  }, [brokerSource.run, brokerSync, flow])
   const [importMode, setImportMode] = useState<'single' | 'batch'>('single')
   const [editDraft, setEditDraft] = useState<HoldingEditorDraft>()
   const [singleDraft, setSingleDraft] = useState<HoldingEditorDraft>(EMPTY_HOLDING_DRAFT)
@@ -629,6 +625,14 @@ function HoldingsEditor({
   const importButtonRef = useRef<HTMLButtonElement>(null)
   const singleTabRef = useRef<HTMLButtonElement>(null)
   const focusRequestRef = useRef<'view' | 'import' | 'sync'>()
+  const brokerSourceValue = asRecord(brokerSource.state.value)
+  const brokerBlockReason = text(brokerSourceValue.blocking_reason, '')
+  const syncUnavailable = brokerSource.state.loaded
+    && brokerSourceValue.available !== true
+    && (brokerBlockReason === 'dependency_missing' || brokerBlockReason === 'unsupported_platform')
+  const syncUnavailableMessage = syncUnavailable
+    ? `券商同步暂不可用：${text(brokerSourceValue.reason, '当前环境不支持自动读取券商持仓。')} 请改用“导入持仓”。`
+    : ''
 
   const effectivePositions = useMemo<readonly WorkbenchPositionDetail[]>(() => {
     if (savedSnapshot === undefined) return positions
@@ -769,7 +773,21 @@ function HoldingsEditor({
           <div className={css.workbenchHoldingToolbar}>
             <div><strong>持仓标的</strong><span>{effectivePositions.length} 项</span></div>
             <div className={css.workbenchHoldingToolbarActions}>
-              {brokerSync && <button type="button" className={css.secondaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginSync}>从券商同步持仓</button>}
+              {brokerSync && (
+                <span
+                  className={css.workbenchSyncEntry}
+                  data-sync-unavailable={syncUnavailable || undefined}
+                  {...(syncUnavailable ? { tabIndex: 0, 'aria-label': syncUnavailableMessage } : {})}
+                >
+                  <button
+                    type="button"
+                    className={css.secondaryButton}
+                    disabled={saving || editDraft !== undefined || pendingDelete !== '' || syncUnavailable}
+                    onClick={beginSync}
+                  >从券商同步持仓</button>
+                  {syncUnavailable && <span className={css.workbenchSyncTooltip} role="tooltip">{syncUnavailableMessage}</span>}
+                </span>
+              )}
               <button
                 type="button"
                 className={css.secondaryButton}
@@ -807,7 +825,6 @@ function HoldingsEditor({
       ) : flow === 'sync' ? (
         <HoldingsSyncPanel
           requestData={requestData}
-          holdingsProviders={holdingsProviders}
           onSync={applySyncedHoldings}
           onNativeSync={(items) => {
             setSavedSnapshot(items)
@@ -1043,7 +1060,7 @@ function RiskCenterDetail({
 export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
   holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onSyncHoldings, requestData,
-  brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'], onClose,
+  brokerSync = true, onClose,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
@@ -1070,7 +1087,6 @@ export function WorkbenchOverviewDialog({
           positionPlans={positionPlans}
           onEditRisk={(item) => { setPositionRiskEditor(item ?? null) }}
           onSaveHoldings={onSaveHoldings}
-          holdingsProviders={holdingsProviders}
           onSyncHoldings={onSyncHoldings}
           onSavingChange={setHoldingSaving}
           onFlowChange={setHoldingFlow}
@@ -1104,7 +1120,7 @@ export function WorkbenchOverviewDialog({
     <>
       <DetailDialog
         title={syncing ? '同步同花顺持仓' : copy.title}
-        description={syncing ? '选择账户，完成准备后读取预览；确认后才会替换本地持仓。' : copy.description}
+        description={syncing ? '选择账户并获取持仓；核对预览后确认导入。' : copy.description}
         {...(syncing ? {} : { eyebrow: '投研概览' })}
         wide
         onClose={close}

@@ -166,6 +166,29 @@ describe('investment backend path resolution', () => {
     expect(resolved.projectDir).toBe(explicit)
   })
 
+  it('prefers a bundled Runtime when the packaged application is inside a source checkout', () => {
+    const resources = '/repo/frontend/apps/electron/out/DSH.app/Contents/Resources'
+    const root = `${resources}/investment-python`
+    const descriptorPath = `${root}/runtime.json`
+    const sourceProjectDir = '/repo/backend/dsh-trading-core'
+    const resolved = resolveBackendPaths(backend(), {
+      packageDir: `${resources}/app/node_modules/@deepseek-ai/dsh-investment-python-runtime/lib`,
+      pathApi: posix,
+      platform: 'linux',
+      arch: 'x64',
+      dshHome: '/home/dsh',
+      isDirectory: candidate => candidate === sourceProjectDir,
+      isFile: candidate => candidate === `${sourceProjectDir}/env/bin/python` || candidate === descriptorPath,
+      verifyDescriptor: (candidate) => {
+        expect(candidate).toBe(descriptorPath)
+        return bundledRuntime(root)
+      },
+    })
+
+    expect(resolved.source).toBe('bundled')
+    expect(resolved.pythonExecutable).toBe(`${root}/runtime/bin/python3`)
+  })
+
   it('explains the explicit projectDir recovery when no repository backend is discoverable', () => {
     expect(() => resolveBackendPaths(backend(), {
       packageDir: '/opt/dsh/node_modules/@deepseek-ai/dsh-investment-python-runtime/lib',

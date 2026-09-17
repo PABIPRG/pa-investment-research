@@ -18,7 +18,7 @@ Status: implemented
 
 Electron 先选择 profile，再叠加原生特化。`dsh electron --profile investment-research` 把 profile 名传给 main 进程；main 进程为这五层调用 `runProfile`，然后且只再应用现有 `electron.patch.yml`。该 patch 禁用 Web server、静态 Web runtime、Web connection、自适应 directory picker 与 client HMR，再插入原生 connection 与 directory-picker 行。`dsh electron` 继续默认使用 `web`。配置检查保持为独立的非产品命令：`dsh --profile investment-research --dump-default-config`。
 
-源码 checkout 从已安装 Runtime 包向上发现三个 backend 目录。不含该仓库布局的部署必须配置绝对 `backendProjectDir`。虚拟环境缺失时给出平台对应的 `./init.sh` 或 `init.bat` 指引，不执行安装。每个 owned managed child 都会收到 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，因此源码与 bundled child 共用一个可写契约，独立启动的源码 backend 则保留仓库默认值。Python scheduler 与外部 push 配置仍归 backend 所有；股票分析的对话内 push 默认为 false。
+显式绝对 `backendProjectDir` 具有最高优先级。否则 Electron 的 `Resources/investment-python/runtime.json` sidecar 优先于源码发现，因此即使 `.app` 位于源码 checkout 内，打包应用仍使用其已签名的 bundled Runtime。没有 sidecar 时，源码 checkout 从已安装 Runtime 包向上发现三个 backend 目录。两种布局都不存在的部署必须配置绝对 `backendProjectDir`。虚拟环境缺失时给出平台对应的 `./init.sh` 或 `init.bat` 指引，不执行安装。每个 owned managed child 都会收到 `DSH_INVESTMENT_STATE_DIR=$DSH_HOME/investment-research/<id>`，因此源码与 bundled child 共用一个可写契约，独立启动的源码 backend 则保留仓库默认值。Python scheduler 与外部 push 配置仍归 backend 所有；股票分析的对话内 push 默认为 false。
 
 共享 home-path 包从一个挂载根解析 Host 设置、profile、会话、附件、storage、备份与全部 backend 子树。Runtime 初始化会创建带版本的空目录布局。零写入 dry-run 会列出已声明的持久文件、排除项、字节数、复制策略和拒绝原因。迁移使用目标内部 staging、流式校验和、身份复核与版本标记最后发布的顶层事务，因此不会替换已有挂载点。managed profile 依赖和运行期产物会被排除，内部备份路径会被重定位，PAB-14 业务归档语义保持独立；在线 SQLite 使用显式一致性备份，在线 Host 会话和附件则在缺少共同快照屏障时被拒绝。
 

@@ -88,6 +88,29 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(JSON.stringify(readiness)).not.toContain(dshHome)
   })
 
+  it('preserves a redacted backend business detail across the Remote boundary', async () => {
+    const runtime = runtimeWith()
+    const manager = Reflect.get(runtime, 'manager') as {
+      acquire(id: string): Promise<{ baseUrl: string; ownership: 'attached'; release(): Promise<void> }>
+    }
+    vi.spyOn(manager, 'acquire').mockResolvedValue({
+      baseUrl: 'http://127.0.0.1:8183', ownership: 'attached', release: vi.fn(async () => {}),
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      detail: '历史行情暂不可用，请稍后重试：000001 历史行情获取失败',
+    }), { status: 503 })))
+
+    const error = await runtime.requestData({ operation: 'trading-core.portfolio-performance' })
+      .catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(TypertRemoteFailure)
+    expect((error as TypertRemoteFailure<{ code: string; message: string }>).failure).toEqual({
+      code: 'remote-rejected',
+      message: '历史行情暂不可用，请稍后重试：000001 历史行情获取失败',
+      details: {},
+    })
+  })
+
   it.each(['cli', 'local-web', 'electron'] as const)('keeps the Runtime log path in %s readiness', (surface) => {
     const runtime = runtimeWith(undefined, surface)
     runtime.register(externalBackend)

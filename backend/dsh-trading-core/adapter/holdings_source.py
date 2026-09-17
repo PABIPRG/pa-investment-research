@@ -161,6 +161,7 @@ def provider_snapshot(surface: str = "web") -> dict:
         "platform": platform, "surface": surface, "available": False, "reason": None,
         "installation": "unknown", "process": "unknown", "accessibility": "not_applicable",
         "automation": "not_requested" if platform == "darwin" else "not_applicable",
+        "navigation": "verified_during_read" if name == "mac_ths" else "not_applicable",
         "session": "unknown", "readiness": "blocked", "blocking_reason": None,
         "available_actions": ["manual", "recheck"],
         "account_mode": str(getattr(settings, "holdings_account_mode", "simulated")),
@@ -402,8 +403,27 @@ def preview_holdings(*, foreground: bool = False, expected_account: str | None =
         provider = get_provider()
         store = JsonStore()
         previous = store.get("holdings", "default", []) or []
+        details = None
         if name == "mac_ths":
-            items = provider.read_holdings(foreground=foreground, cancelled=cancelled)
+            result_reader = getattr(provider, "read_holdings_result", None)
+            if callable(result_reader):
+                read_result = result_reader(
+                    foreground=foreground, cancelled=cancelled
+                )
+                items = read_result.items
+                details = {
+                    "status": read_result.details_status,
+                    "reason": read_result.details_reason,
+                    "code": read_result.details_code,
+                    "scope": read_result.details_scope,
+                    "count": sum(len(item.trades) for item in items),
+                }
+            else:
+                # 测试替身和旧的内嵌 provider 仍可走列表接口；生产 mac_ths 实现
+                # 始终提供 read_holdings_result，不会丢失明细状态。
+                items = provider.read_holdings(
+                    foreground=foreground, cancelled=cancelled
+                )
         elif name in _CLIENT_AUTOMATION_PROVIDERS:
             items = provider.read_holdings(foreground=foreground)
         else:
@@ -434,11 +454,18 @@ def preview_holdings(*, foreground: bool = False, expected_account: str | None =
                     value["time_source_label"] = "用户修改"
             payload.append(value)
         token = secrets.token_urlsafe(32)
+        readiness = (
+            "partial"
+            if details is not None and details["status"] == "unavailable"
+            else "preview"
+        )
         result = {"preview_token": token, "items": payload, "previous_count": len(previous),
                   "account_mode": mode, "account_label": _ACCOUNT_LABELS[mode], "provider": name,
                   "label": _provider_label(provider), "read_at": read_at,
-                  "expires_in_seconds": _PREVIEW_TTL, "readiness": "preview", "session": "ready",
+                  "expires_in_seconds": _PREVIEW_TTL, "readiness": readiness, "session": "ready",
                   "surface": "electron" if foreground else "web", "platform": sys.platform}
+        if details is not None:
+            result["details"] = details
         history = store.get("holdings", "snapshots", []) or []
         latest = history[-1] if history else None
         result["changed"] = not holdings_snapshot_matches(latest, payload, "broker_" + mode)

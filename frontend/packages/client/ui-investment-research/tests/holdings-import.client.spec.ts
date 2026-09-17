@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseHoldingsImport } from '../src/client/holdings-import.ts'
+import { utils, write } from 'xlsx'
+import { parseHoldingsImport, parseHoldingsWorkbook } from '../src/client/holdings-import.ts'
 
 describe('holdings import parser', () => {
   it('parses Chinese CSV headers and normalizes A-share codes', () => {
@@ -55,5 +56,33 @@ describe('holdings import parser', () => {
       '第 3 行：股票代码“1234567”无效。',
       '第 4 行：成本价必须大于 0。',
     ])
+  })
+
+  it('finds the holdings header after exported workbook title rows', () => {
+    expect(parseHoldingsImport([
+      '同花顺模拟炒股持仓导出',
+      '导出时间,2026-09-16 10:00:00',
+      '证券代码,证券名称,股票余额,参考成本价',
+      '002518,科士达,100,36.712',
+    ].join('\n'))).toEqual({
+      items: [{ ticker: '002518', quantity: 100, cost_price: 36.712 }],
+      errors: [],
+    })
+  })
+
+  it('parses a binary xls workbook exported by a broker', () => {
+    const sheet = utils.aoa_to_sheet([
+      ['资金股份'],
+      ['证券代码', '证券名称', '股份余额', '参考成本价'],
+      ['600519', '贵州茅台', 100, 1500.5],
+    ])
+    const workbook = utils.book_new()
+    utils.book_append_sheet(workbook, sheet, '持仓')
+    const binary = write(workbook, { type: 'array', bookType: 'xls' }) as ArrayBuffer
+
+    expect(parseHoldingsWorkbook(binary)).toEqual({
+      items: [{ ticker: '600519', quantity: 100, cost_price: 1500.5 }],
+      errors: [],
+    })
   })
 })

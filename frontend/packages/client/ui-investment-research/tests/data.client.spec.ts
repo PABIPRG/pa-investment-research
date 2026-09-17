@@ -8,6 +8,9 @@ describe('产品错误文案', () => {
     expect(productErrorText(new Error(
       'investment data: industry-chain.company failed with HTTP 404: {"detail":"未找到公司 000000"}',
     ))).toBe('未找到公司 000000')
+    expect(productErrorText(new Error(
+      'investment Runtime Client: request-data failed: remote-rejected: 历史行情暂不可用，请稍后重试：000001 历史行情获取失败',
+    ))).toBe('历史行情暂不可用，请稍后重试：000001 历史行情获取失败')
   })
 
   it('隐藏地址、本地路径、运行日志和堆栈', () => {
@@ -15,5 +18,8 @@ describe('产品错误文案', () => {
     expect(productErrorText(new Error('fetch http://127.0.0.1:8200 failed'))).toBe(fallback)
     expect(productErrorText(new Error('Runtime log: /Users/example/private/runtime.log'))).toBe(fallback)
     expect(productErrorText(new Error('Traceback at handler (/private/tmp/app.py:2)'))).toBe(fallback)
+    expect(productErrorText(new Error(
+      'investment Runtime Client: request-data failed: internal: Remote operation failed',
+    ))).toBe(fallback)
   })
 })

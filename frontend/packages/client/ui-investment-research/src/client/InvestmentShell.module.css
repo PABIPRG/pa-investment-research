@@ -1391,6 +1391,12 @@
 .workbenchHoldingToolbar > div { display: flex; align-items: baseline; gap: 8px; }
 .workbenchHoldingToolbar > div span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .workbenchHoldingToolbarActions { display: flex; flex: none; align-items: center; gap: 8px; }
+.workbenchSyncEntry { position: relative; display: inline-flex; }
+.workbenchSyncEntry > button { width: 100%; }
+.workbenchSyncTooltip { position: absolute; z-index: 4; top: calc(100% + 8px); right: 0; width: max-content; max-width: min(320px, 70vw); padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); font-size: 0.7857rem; line-height: 1.5; text-align: left; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity 120ms ease, transform 120ms ease; }
+.workbenchSyncEntry[data-sync-unavailable='true']:hover .workbenchSyncTooltip,
+.workbenchSyncEntry[data-sync-unavailable='true']:focus .workbenchSyncTooltip,
+.workbenchSyncEntry[data-sync-unavailable='true']:focus-within .workbenchSyncTooltip { opacity: 1; transform: translateY(0); }
 .workbenchHoldingNotice { margin-bottom: 12px; padding: 10px 12px; border-radius: 8px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: 0.8571rem; }
 .workbenchHoldingForm { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
 .workbenchHoldingForm label { display: grid; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
@@ -1404,7 +1410,7 @@
 .workbenchSingleImport { display: grid; gap: 12px; }
 .workbenchSingleImport .workbenchHoldingForm { margin-bottom: 0; }
 .workbenchImportPanel { display: grid; gap: 12px; }
-.workbenchSyncPanel { display: grid; gap: 20px; min-width: 0; }
+.workbenchSyncPanel { display: grid; gap: 0; min-width: 0; }
 .workbenchSyncPanel .workbenchImportHeader, .workbenchSyncPanel .sourceFacts { margin: 0; }
 .workbenchAccountMode { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
 .workbenchAccountMode > div:first-child { display: grid; gap: 3px; min-width: 0; }
@@ -1435,13 +1441,14 @@
 .workbenchImportStats span { padding: 5px 9px; border-radius: 999px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); font-size: 0.8571rem; }
 .workbenchImportStats span[data-error='true'] { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .workbenchImportErrors { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); font-size: 0.8571rem; line-height: 1.5; }
-.workbenchImportPreview { min-width: 0; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; }
-.workbenchImportPreview > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; }
-.workbenchImportPreview > div:first-child span, .workbenchImportPreview p { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
-.workbenchImportPreview p { margin: 0; padding: 9px 12px; border-top: 1px solid var(--dsw-alias-border-l1); }
-.workbenchImportTableWrap { max-width: 100%; overflow-x: auto; }
+.workbenchImportPreview { display: grid; gap: 8px; min-width: 0; }
+.workbenchImportPreviewHeader { display: grid; gap: 4px; }
+.workbenchImportPreviewHeader > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.workbenchImportPreviewHeader span, .workbenchImportPreviewHeader p { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.workbenchImportPreviewHeader p { margin: 0; line-height: 1.5; }
+.workbenchImportTableWrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; }
 .workbenchImportTableWrap table { width: 100%; min-width: 420px; border-collapse: collapse; font-size: 0.8571rem; }
-.workbenchImportTableWrap th, .workbenchImportTableWrap td { padding: 10px 12px; border-top: 1px solid var(--dsw-alias-border-l1); text-align: right; white-space: nowrap; }
+.workbenchImportTableWrap th, .workbenchImportTableWrap td { padding: 8px 10px; border-top: 1px solid var(--dsw-alias-border-l1); text-align: right; white-space: nowrap; }
 .workbenchImportTableWrap th:first-child, .workbenchImportTableWrap td:first-child { text-align: left; }
 .workbenchImportTableWrap th { color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2); }
 .workbenchImportCommit { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
@@ -2527,7 +2534,12 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .workbenchOverviewTable tbody th, .workbenchOverviewTable tbody td { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); text-align: right; white-space: normal; }
   .workbenchOverviewTable tbody th { align-items: flex-start; text-align: left; }
   .workbenchOverviewTable tbody tr > :last-child { border-bottom: 0; }
-  .workbenchHoldingToolbar { align-items: stretch; }
+  .workbenchHoldingToolbar { align-items: stretch; flex-direction: column; }
+  .workbenchHoldingToolbar > div:first-child { width: 100%; justify-content: space-between; }
+  .workbenchHoldingToolbar .workbenchHoldingToolbarActions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .workbenchHoldingToolbarActions > button, .workbenchHoldingToolbarActions > .workbenchSyncEntry > button { min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
+  .workbenchHoldingToolbarActions > button:first-child { grid-column: 1 / -1; }
+  .workbenchSyncEntry { min-width: 0; }
   .workbenchImportHeader { align-items: stretch; flex-direction: column; }
   .workbenchImportHeader > button { width: 100%; min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
   .sourceSelect { flex: 1 1 100%; justify-content: space-between; }
@@ -2705,15 +2717,27 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   }
 }
 
-/* 持仓同步：紧凑任务弹层，检测与授权保持清晰的操作层级。 */
-.detailDialogWide:has(.workbenchSyncPanel) { width: min(720px, 100%); }
-.workbenchSyncPanel .workbenchAccountMode { border: 0; padding: 0; background: transparent; }
-.workbenchSyncPanel .workbenchSyncPreparation { padding: 16px 0 0; align-items: stretch; }
-.workbenchSyncPanel .workbenchSyncPreparation > button { align-self: flex-start; }
-.syncStatusList { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 12px 0; border-block: 1px solid var(--dsw-alias-border-l1); }
-.syncStatusList > span { display: grid; gap: 4px; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
-.syncStatusList strong { color: var(--dsw-alias-label-primary); font-weight: 600; }
-.syncPermissionGuide { display: grid; gap: 12px; padding: 16px; border-radius: 12px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-size: 0.8571rem; line-height: 1.5; }
+/* 持仓同步：为预览表保留完整桌面扫描宽度，避免把宽弹窗再次压窄。 */
+.detailDialogWide:has(.workbenchSyncPanel) { width: min(1040px, 100%); }
+.workbenchSyncPanel, .workbenchSyncPanel .workbenchImportPreview, .workbenchSyncPanel .workbenchImportTableWrap { width: 100%; box-sizing: border-box; }
+.workbenchSyncPanel .workbenchImportHeader {
+  position: sticky;
+  z-index: 3;
+  top: -18px;
+  margin: -18px -20px 0;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-base);
+  box-shadow: var(--dsw-shadow-lv1);
+}
+.workbenchSyncPanel .workbenchAccountMode { padding: 14px 0; border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); border-radius: 0; background: transparent; }
+.workbenchSyncPanel .workbenchSyncPreparation { gap: 12px; padding: 16px 0; border-top: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); background: transparent; }
+.workbenchSyncPanel .workbenchSyncPreparation:last-of-type { border-bottom: 0; }
+.workbenchSyncStepHeading { display: grid; gap: 3px; min-width: 0; }
+.workbenchSyncStepHeading > strong { color: var(--dsw-alias-label-primary); font-weight: 650; }
+.workbenchSyncStepHeading > span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.5; }
+.workbenchSyncStateMessage { min-height: 38px; box-sizing: border-box; padding: 9px 11px; border-radius: 8px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); font-size: 0.8571rem; line-height: 1.5; }
+.syncPermissionGuide { display: grid; gap: 10px; padding: 14px; border-radius: 10px; background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-size: 0.8571rem; line-height: 1.5; }
 .syncPermissionGuide > span, .syncHint { color: var(--dsw-alias-label-secondary); }
 .syncActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .syncAuthorization { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 8px 16px; margin: 0; padding: 12px 0; border: 0; border-block-end: 1px solid var(--dsw-alias-border-l1); }
@@ -2727,4 +2751,19 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 .holdingFallbackTime input { min-height: 36px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 6px 8px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: inherit; }
 .syncHelpButton { justify-self: start; border: 0; padding: 4px 0; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; text-decoration: underline; cursor: pointer; }
 .syncHelpButton:focus-visible { outline: 2px solid var(--dsw-alias-border-l2); outline-offset: 4px; }
-@media (max-width: 768px) { .syncActions > button { flex: 1 1 auto; } }
+.syncPreparationActions { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.syncPrimaryAction { display: flex; align-items: center; }
+.workbenchSyncPath { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-1); font-size: 0.8571rem; }
+.workbenchSyncPath span { color: var(--dsw-alias-label-tertiary); }
+.workbenchSyncPath strong { color: var(--dsw-alias-label-primary); font-weight: 600; }
+.workbenchImportPreviewFooter { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
+.workbenchImportPreviewFooter > div:first-child { display: grid; flex: 1; gap: 5px; min-width: 0; }
+.workbenchImportPreviewFooter > .syncActions { flex: none; }
+.workbenchImportPreviewFooter p { margin: 0; padding: 0; border: 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+@media (max-width: 768px) {
+  .workbenchSyncPanel .workbenchImportHeader { margin-inline: -14px; padding-inline: 14px; }
+  .workbenchImportPreviewHeader > div, .workbenchImportPreviewFooter { align-items: stretch; flex-direction: column; }
+  .workbenchImportPreviewFooter > .syncActions { width: 100%; }
+  .syncPreparationActions { flex-wrap: wrap; }
+  .syncActions > button, .syncPreparationActions > button { flex: 1 1 auto; }
+}
