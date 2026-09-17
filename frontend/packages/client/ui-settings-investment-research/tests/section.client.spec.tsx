@@ -621,7 +621,7 @@ describe('InvestmentReadinessSection', () => {
     await screen.findByRole('dialog', { name: '确认增量导入' })
     fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))
 
-    expect(await screen.findByText('导入暂时失败，请重试')).toBeTruthy()
+    expect(await within(screen.getByRole('dialog', { name: '确认增量导入' })).findByText('导入暂时失败，请重试')).toBeTruthy()
     expect(screen.getByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
     expect(view.backup.backupPreviewCancel).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '导入所选数据' }))

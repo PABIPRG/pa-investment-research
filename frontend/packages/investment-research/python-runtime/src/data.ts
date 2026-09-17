@@ -279,12 +279,12 @@ function evolutionRead(path: string): RequestSpec {
     backendId: 'trading-core',
     method: 'GET',
     path: (input) => {
-      knownKeys(input, ['strategy_id'])
+      knownKeys(input, path === '/evolution/status' ? ['strategy_id', 'include_history'] : ['strategy_id'])
       const strategyId = optionalString(input, 'strategy_id')
       if (strategyId !== undefined && !STRATEGY_IDENTIFIER.test(strategyId)) {
         throw new TypeError('investment data: strategy_id must be a safe identifier')
       }
-      return query(path, { strategy_id: strategyId })
+      return query(path, { strategy_id: strategyId, ...(path === '/evolution/status' ? { include_history: optionalBoolean(input, 'include_history') } : {}) })
     },
   }
 }
@@ -1238,6 +1238,15 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     path: (input) => {
       knownKeys(input, ['task_id'])
       return `/shadow/tasks/${taskIdentifier(input, 'task_id')}/cancel`
+    },
+  },
+  'trading-core.evolution-history': {
+    backendId: 'trading-core', method: 'GET',
+    path: (input) => {
+      knownKeys(input, ['limit', 'cursor'])
+      const cursor = optionalString(input, 'cursor')
+      if (cursor !== undefined && cursor.length > 512) throw new TypeError('investment data: cursor too long')
+      return query('/evolution/history', { limit: integer(input, 'limit', 20, 1, 50), cursor })
     },
   },
   'trading-core.evolution-status': evolutionRead('/evolution/status'),

@@ -135,7 +135,7 @@ export function evolutionSemanticSummary(labels: EvolutionSemanticLabels): strin
 export interface EvolutionDashboardProps {
   readonly requestData: EvolutionRequestData
   readonly onAnalyze: (intent: AssistantIntent) => void
-  readonly onOpenStrategy: (strategyId: string, returnGroup?: EvolutionLifecycleGroup) => void
+  readonly onOpenStrategy: (strategyId: string, returnGroup?: EvolutionLifecycleGroup, openDetail?: boolean) => void
   readonly onOpenStock?: (code: string) => void
   readonly initialLifecycleGroup?: EvolutionLifecycleGroup
 }

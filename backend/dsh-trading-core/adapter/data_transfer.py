@@ -1022,10 +1022,11 @@ def register_data_transfer_routes(
         authorize(authorization)
         def commit() -> dict:
             store = store_factory()
-            result = commit_import(store, payload["transaction_id"], notification_repository)
-            if on_committed is not None and "holdings" in result.get("categories", []):
-                result["position_risk"] = on_committed(store)
-            return result
+            with store.transaction(payload["transaction_id"]):
+                result = commit_import(store, payload["transaction_id"], notification_repository)
+                if on_committed is not None and "holdings" in result.get("categories", []):
+                    result["position_risk"] = on_committed(store)
+                return result
 
         return invoke(commit)
 

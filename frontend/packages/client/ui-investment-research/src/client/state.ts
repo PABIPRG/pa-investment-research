@@ -16,7 +16,7 @@ export type InvestmentRoute =
 
 export type AssistantDisplayMode = 'closed' | 'docked' | 'expanded'
 export type AssistantModule = 'general' | 'stock' | 'industry' | 'portfolio' | 'strategy' | 'watch'
-export type StrategyResearchStage = 'form' | 'backtest' | 'shadow' | 'evolution'
+export type StrategyResearchStage = 'form' | 'backtest' | 'shadow' | 'evolution' | 'detail'
 export type StockDetailReturnRoute = Exclude<InvestmentRoute, 'stock-detail' | 'assistant'>
 
 export interface InvestmentUiSnapshot {

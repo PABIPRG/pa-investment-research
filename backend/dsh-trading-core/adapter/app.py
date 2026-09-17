@@ -1621,17 +1621,28 @@ def create_app(
 
     # ---- 自进化闭环（S_shadow→T→W→H + R→S→U→K outcome 版）-----------------
 
+    @app.get("/evolution/history", response_model=dict)
+    def evolution_history_get(limit: int = Query(default=20, ge=1, le=50), cursor: Optional[str] = Query(default=None, max_length=512)):
+        from .evolution_history import history, HistoryCursorConflict
+        try:
+            return history(limit=limit, cursor=cursor)
+        except HistoryCursorConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @app.get("/evolution/status", response_model=dict)
     def evolution_status(
         strategy_id: Optional[str] = Query(
             default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$"
         ),
+        include_history: bool = Query(default=True),
     ):
         """自进化闭环状态：影子数据是否就绪 + 策略生命周期统计。"""
         from . import evolution
 
         try:
-            return evolution.status(strategy_id=strategy_id)
+            return evolution.status(strategy_id=strategy_id, include_history=include_history)
         except evolution.EvolutionStrategyNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

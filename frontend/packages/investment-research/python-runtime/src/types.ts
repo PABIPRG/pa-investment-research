@@ -197,6 +197,7 @@ export type InvestmentDataOperation =
   | 'trading-core.shadow-run'
   | 'trading-core.shadow-task-detail'
   | 'trading-core.shadow-task-cancel'
+  | 'trading-core.evolution-history'
   | 'trading-core.evolution-status'
   | 'trading-core.evolution-attribution'
   | 'trading-core.evolution-preview'

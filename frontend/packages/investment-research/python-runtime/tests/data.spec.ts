@@ -1145,3 +1145,14 @@ describe('investment data broker', () => {
     expect(acquire).not.toHaveBeenCalled()
   })
 })
+
+
+it('validates and forwards bounded history cursors', async () => {
+  const release = vi.fn()
+  const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release }))
+  const fetchMock = vi.fn(async (_input: unknown) => new Response(JSON.stringify({ items: [], next_cursor: null, total: 0 }), { status: 200 }))
+  vi.stubGlobal('fetch', fetchMock)
+  await requestInvestmentData({ operation: 'trading-core.evolution-history', input: { limit: 20, cursor: 'abc=' } }, acquire)
+  expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/evolution/history?limit=20&cursor=abc%3D')
+  await expect(requestInvestmentData({ operation: 'trading-core.evolution-history', input: { limit: 51 } }, acquire)).rejects.toThrow()
+})
