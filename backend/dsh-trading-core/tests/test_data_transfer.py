@@ -526,6 +526,36 @@ class DataTransferTests(unittest.TestCase):
             {"ticker": "000001", "quantity": 50, "cost_price": 10},
         ])
 
+    def test_commit_reconciliation_retains_transfer_ownership_until_finalize(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from adapter.position_risk import reconcile
+
+        app = FastAPI()
+        register_data_transfer_routes(
+            app, lambda: self.store, token="transfer-secret", on_committed=reconcile,
+        )
+        client = TestClient(app, headers={"Authorization": "Bearer transfer-secret"})
+        snapshot = export_snapshot(self.store, ["holdings"])
+        preview = client.post("/data-transfer/preview", json={"snapshot": snapshot}).json()
+        transaction_id = "99999999-9999-4999-8999-999999999999"
+        prepared = client.post("/data-transfer/prepare", json={
+            "transaction_id": transaction_id,
+            "snapshot": snapshot,
+            "expected_revision": preview["currentRevision"],
+        })
+        self.assertEqual(prepared.status_code, 200)
+        committed = client.post("/data-transfer/commit", json={"transaction_id": transaction_id})
+        self.assertEqual(committed.status_code, 200, committed.text)
+        self.assertEqual(committed.json()["status"], "applied")
+        self.assertIn("position_risk", committed.json())
+        with self.assertRaises(JsonStoreTransferBusyError):
+            self.store.set("holdings", "default", [])
+        finalized = client.post("/data-transfer/finalize", json={"transaction_id": transaction_id})
+        self.assertEqual(finalized.status_code, 200)
+        self.assertIsNone(self.store.active_transfer_id())
+        self.assertIsInstance(self.store.all("position_risk_runtime"), dict)
+
     def test_http_routes_require_host_token_and_map_stale_revision(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient

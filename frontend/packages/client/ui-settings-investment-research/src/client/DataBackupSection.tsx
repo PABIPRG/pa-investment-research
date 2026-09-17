@@ -175,6 +175,7 @@ function Modal(props: {
   confirmLabel: string
   destructive?: boolean
   confirmDisabled?: boolean
+  feedback?: string
   onCancel: () => void
   onConfirm: () => void
 }): ReactNode {
@@ -223,6 +224,7 @@ function Modal(props: {
     <section ref={modal} className={css.modal} role="dialog" aria-modal="true" aria-labelledby="backup-dialog-title">
       <h3 id="backup-dialog-title">{props.title}</h3>
       <div className={css.modalBody}>{props.children}</div>
+      {props.feedback && <p className={css.modalFeedback} role="alert">{props.feedback}</p>}
       <div className={css.modalActions}>
         <button ref={cancelButton} type="button" className={css.secondaryButton} disabled={props.busy} onClick={props.onCancel}>{props.t('backupCancel')}</button>
         <button
@@ -636,7 +638,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
         transferAbort.current?.abort()
       }}>{props.t('backupCancel')}</button>}
     </div>}
-    <p className={css.feedback} aria-live="polite">{feedback}</p>
+    <p className={css.feedback} aria-live="polite">{dialog === 'import' ? '' : feedback}</p>
 
     <section className={css.location} aria-labelledby="backup-location-title">
       <div>
@@ -744,7 +746,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       <p className={css.note}>{props.t('backupReadableFilenameHint')}</p>
     </Modal>}
 
-    {dialog === 'import' && preview && <Modal t={props.t} title={props.t('backupImportDialogTitle')} busy={busy} confirmLabel={props.t('backupConfirmImport')} onCancel={() => {
+    {dialog === 'import' && preview && <Modal t={props.t} title={props.t('backupImportDialogTitle')} busy={busy} feedback={feedback} confirmLabel={props.t('backupConfirmImport')} onCancel={() => {
       setDialog(null)
       setPreview(undefined)
       releasePreview(preview)
