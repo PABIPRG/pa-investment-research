@@ -48,6 +48,7 @@ from .portfolio_price_cache import PortfolioPriceHistoryCache
 from . import position_risk
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
+from .manual_trades import ManualTradeRequest, apply_trade, history as manual_trade_history
 from .schemas import (
     AnalyzeRequest,
     BacktestRunRequest,
@@ -571,6 +572,24 @@ def create_app(
         """启动持仓分析任务（analyze_holdings），返回 task_id。"""
         task_id = manager.start(req.model_dump(), task_type="holdings")
         return {"task_id": task_id}
+
+    @app.get("/holdings/trades", response_model=dict)
+    async def holdings_trades():
+        return await run_in_threadpool(manual_trade_history, JsonStore())
+
+    @app.post("/holdings/trades", response_model=dict)
+    async def holdings_trade(req: ManualTradeRequest):
+        store = JsonStore()
+        try:
+            result = await run_in_threadpool(apply_trade, store, req)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if result["saved"]:
+            try:
+                result["position_risk"] = await run_in_threadpool(position_risk.reconcile, store, risk_rule_port)
+            except Exception:
+                result["warning"] = "成交已保存，风险计划刷新失败，请稍后刷新。"
+        return result
 
     @app.post("/holdings/save", response_model=dict)
     async def holdings_save(req: HoldingsSaveRequest):

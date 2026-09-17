@@ -422,6 +422,7 @@ function RegionMeta({ state, settled }: { state: ResourceState; settled: string 
 }
 
 interface ResearchWorkbenchPageProps {
+  readonly holdingsEntry?: { readonly flow: 'view' | 'sync' } | undefined
   readonly requestData: RequestData
   readonly brokerSync?: boolean
   readonly holdingsProviders?: readonly string[]
@@ -434,7 +435,7 @@ interface ResearchWorkbenchPageProps {
 
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
-  requestData, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
+  requestData, holdingsEntry, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
   navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
   const { hidden: fundsHidden } = useFundsPrivacy()
@@ -461,6 +462,12 @@ export function ResearchWorkbenchPage({
   const [selectedRisk, setSelectedRisk] = useState<Record<string, unknown>>()
   const [riskDetailOrigin, setRiskDetailOrigin] = useState<'panel' | 'overview'>('panel')
   const [selectedOverview, setSelectedOverview] = useState<WorkbenchDetailKind>()
+  const [initialHoldingsFlow, setInitialHoldingsFlow] = useState<'view' | 'sync'>('view')
+  useEffect(() => {
+    if (holdingsEntry === undefined) return
+    setInitialHoldingsFlow(holdingsEntry.flow)
+    setSelectedOverview('holdings')
+  }, [holdingsEntry])
   const [performanceOpen, setPerformanceOpen] = useState(false)
   const [performancePeriod, setPerformancePeriod] = useState<PerformancePeriod>('since_inception')
   const [performanceMethod, setPerformanceMethod] = useState<PerformanceMethod>('twr')
@@ -1096,6 +1103,7 @@ export function ResearchWorkbenchPage({
       {selectedOverview !== undefined && (
         <WorkbenchOverviewDialog
           kind={selectedOverview}
+          initialHoldingsFlow={initialHoldingsFlow}
           positions={overviewPositions}
           risk={riskValue}
           alerts={alertItems}
@@ -1115,12 +1123,13 @@ export function ResearchWorkbenchPage({
               degraded_reason: text(alertValue.degraded_reason, '关联事件暂未更新，组合与画像预警仍可用。'),
             })
           }}
+          onHoldingsChanged={refreshDashboard}
           onSaveHoldings={saveHoldings}
           onSyncHoldings={syncHoldings}
           requestData={requestData}
           brokerSync={brokerSync}
           holdingsProviders={holdingsProviders}
-          onClose={() => { setSelectedOverview(undefined) }}
+          onClose={() => { setSelectedOverview(undefined); setInitialHoldingsFlow('view') }}
         />
       )}
       {performanceOpen && (

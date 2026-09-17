@@ -44,6 +44,46 @@ function requestMock() {
 }
 
 describe('NotificationCenter', () => {
+  it.each([
+    ['security', '查看个股详情', 'stock-detail', { stockCode: '600519' }],
+    ['portfolio-plan', '查看持仓止盈止损', 'dashboard', { holdingsFlow: 'view' }],
+    ['report', '查看研究报告', 'dashboard', { openReports: true }],
+    ['evolution', '查看自进化进展', 'tasks', undefined],
+  ] as const)('uses the business destination for %s', async (kind, label, route, context) => {
+    const item = { ...ITEMS[0], action: { kind, id: '600519' } }
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.notifications') return { items: [item], unreadCount: 1 }
+      if (request.operation === 'trading-core.notification-read') return item
+      return {}
+    })
+    const navigate = vi.fn()
+    render(<NotificationCenter requestData={requestData} navigate={navigate} />)
+    fireEvent.click(await screen.findByRole('button', { name: '消息中心，1 条未读' }))
+    fireEvent.click(await screen.findByText('贵州茅台触发跌幅预警'))
+    fireEvent.click(await screen.findByRole('button', { name: label }))
+    expect(navigate).toHaveBeenCalledWith(route, context)
+  })
+
+  it('opens the existing holdings sync flow from an actionable notification', async () => {
+    const item = { ...ITEMS[0], category: 'holdings_sync', severity: 'action_required',
+      title: '持仓读取超时', summary: '同花顺未能在限定时间内完成读取。',
+      body: '当前持仓保持不变。请在同花顺打开持仓页面，再重新读取。',
+      action: { kind: 'holdings-sync', id: 'mac_ths' }, deliverySummary: { macos: 'pending' } }
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.notifications') return { items: [item], unreadCount: 1 }
+      if (request.operation === 'trading-core.notification-read') return item
+      return {}
+    })
+    const navigate = vi.fn()
+    render(<NotificationCenter requestData={requestData} navigate={navigate} />)
+    fireEvent.click(await screen.findByRole('button', { name: '消息中心，1 条未读' }))
+    fireEvent.click(await screen.findByText(item.title))
+    expect(await screen.findByText('系统通知发送状态')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '前往持仓同步' }))
+    expect(navigate).toHaveBeenCalledWith('dashboard', { holdingsFlow: 'sync' })
+    expect(screen.queryByRole('dialog', { name: '通知中心' })).toBeNull()
+  })
+
   it('opens the unread dropdown without marking anything read, then opens detail in the large modal', async () => {
     const requestData = requestMock()
     render(<NotificationCenter requestData={requestData} navigate={vi.fn()} />)

@@ -545,6 +545,14 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     },
   },
   'trading-core.holdings': noInput('/holdings', 'trading-core'),
+  'trading-core.holdings-trades': noInput('/holdings/trades', 'trading-core'),
+  'trading-core.holdings-trade': {
+    backendId: 'trading-core', method: 'POST', path: () => '/holdings/trades',
+    body: (input) => {
+      knownKeys(input, ['action', 'request_id', 'ticker', 'side', 'quantity', 'price', 'fees', 'traded_at', 'version'])
+      return { ...input }
+    },
+  },
   'trading-core.holdings-save': {
     backendId: 'trading-core',
     method: 'POST',

@@ -2,6 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { InvestmentUiState } from '../src/client/state.ts'
 
 describe('InvestmentUiState', () => {
+  it('同页通知可重复打开持仓同步，离开后不保留旧入口', () => {
+    const state = new InvestmentUiState()
+    state.navigate('dashboard', { holdingsFlow: 'sync' })
+    const first = state.getSnapshot().holdingsEntry
+    expect(first).toEqual({ flow: 'sync' })
+    state.navigate('dashboard', { holdingsFlow: 'sync' })
+    expect(state.getSnapshot().holdingsEntry).not.toBe(first)
+    state.navigate('analysis')
+    expect(state.getSnapshot().holdingsEntry).toBeUndefined()
+    state.navigate('dashboard', { openReports: true })
+    expect(state.getSnapshot().reportsOpen).toBe(true)
+  })
   it('从自进化看板携带策略和第4阶段进入策略研究', () => {
     const state = new InvestmentUiState()
     state.navigate('framework', {
