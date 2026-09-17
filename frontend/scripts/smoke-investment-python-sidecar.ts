@@ -22,7 +22,12 @@ export interface SmokeInvestmentSidecarDependencies {
     args: readonly string[],
     cwd: string,
     env: Readonly<Record<string, string>>,
-  ) => Promise<number>
+  ) => Promise<SmokeCommandResult>
+}
+
+export interface SmokeCommandResult {
+  readonly exitCode: number | null
+  readonly signalCode: NodeJS.Signals | null
 }
 
 function safePath(value: string): string {
@@ -40,12 +45,18 @@ async function defaultRunCommand(
   args: readonly string[],
   cwd: string,
   env: Readonly<Record<string, string>>,
-): Promise<number> {
-  return await new Promise<number>((resolveExit, reject) => {
+): Promise<SmokeCommandResult> {
+  return await new Promise<SmokeCommandResult>((resolveExit, reject) => {
     const child = spawn(command, [...args], { cwd, env: { ...process.env, ...env }, stdio: 'inherit' })
     child.once('error', reject)
-    child.once('exit', (code) => { resolveExit(code ?? 1) })
+    child.once('close', (exitCode, signalCode) => { resolveExit({ exitCode, signalCode }) })
   })
+}
+
+function commandFailure(result: SmokeCommandResult): string | undefined {
+  if (result.signalCode !== null) return `signal ${result.signalCode}`
+  if (result.exitCode !== 0) return `exit code ${result.exitCode ?? 'unknown'}`
+  return undefined
 }
 
 async function sha256(path: string): Promise<string> {
@@ -118,16 +129,34 @@ export async function smokeInvestmentPythonSidecar(
     '        assert "POST" in routes.get("/data/bootstrap", set())',
   ].join('\n')
   try {
-    const exitCode = await (dependencies.runCommand ?? defaultRunCommand)(
-      join(root, ...executable.split('/')),
-      ['-B', '-c', script],
+    const runCommand = dependencies.runCommand ?? defaultRunCommand
+    const command = join(root, ...executable.split('/'))
+    const args = ['-B', '-c', script]
+    const env = {
+      DSH_INVESTMENT_STATE_DIR: stateRoot,
+      PYTHONDONTWRITEBYTECODE: '1',
+    }
+    let result = await runCommand(
+      command,
+      args,
       root,
-      {
-        DSH_INVESTMENT_STATE_DIR: stateRoot,
-        PYTHONDONTWRITEBYTECODE: '1',
-      },
+      env,
     )
-    if (exitCode !== 0) throw new Error(`investment Python sidecar smoke failed with exit code ${exitCode}`)
+    const firstSignal = result.signalCode
+    if (firstSignal !== null) {
+      process.stderr.write(`investment Python sidecar smoke terminated by signal ${firstSignal}; retrying once\n`)
+      result = await runCommand(
+        command,
+        args,
+        root,
+        env,
+      )
+    }
+    const failure = commandFailure(result)
+    if (failure !== undefined) {
+      const retryContext = firstSignal === null ? '' : ` after retry (first attempt signal ${firstSignal})`
+      throw new Error(`investment Python sidecar smoke failed with ${failure}${retryContext}`)
+    }
     await verifyFiles(root, descriptor.files)
   } finally {
     await rm(stateRoot, { recursive: true, force: true })

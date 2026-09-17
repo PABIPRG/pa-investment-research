@@ -54,7 +54,7 @@ describe('investment Python sidecar smoke', () => {
     await writeFile(join(root, path), content)
     descriptor.files.find(file => file.path === path)!.sha256 = createHash('sha256').update(content).digest('hex')
     await writeFile(join(root, 'runtime.json'), JSON.stringify(descriptor))
-    const runCommand = vi.fn(async () => 0)
+    const runCommand = vi.fn(async () => ({ exitCode: 0, signalCode: null }))
     await expect(smokeInvestmentPythonSidecar(root, { runCommand })).rejects.toThrow(/credential-literal/)
     expect(runCommand).not.toHaveBeenCalled()
   })
@@ -69,7 +69,7 @@ describe('investment Python sidecar smoke', () => {
       env: Readonly<Record<string, string>>,
     ) => {
       observedEnv = env
-      return 0
+      return { exitCode: 0, signalCode: null }
     })
     await smokeInvestmentPythonSidecar(root, { runCommand })
 
@@ -93,7 +93,10 @@ describe('investment Python sidecar smoke', () => {
 
   it('rejects corrupt files before launch and reports interpreter/import failures', async () => {
     const { root } = await fixture()
-    const runCommand = vi.fn(async (_command: string, _args: readonly string[], _cwd: string) => 0)
+    const runCommand = vi.fn(async (_command: string, _args: readonly string[], _cwd: string) => ({
+      exitCode: 0,
+      signalCode: null,
+    }))
     await writeFile(join(root, 'site-packages/native.so'), 'corrupt')
     await expect(smokeInvestmentPythonSidecar(root, { runCommand })).rejects.toThrow(/hash mismatch/u)
     expect(runCommand).not.toHaveBeenCalled()
@@ -104,8 +107,34 @@ describe('investment Python sidecar smoke', () => {
 
     const healthy = await fixture()
     await expect(smokeInvestmentPythonSidecar(healthy.root, {
-      runCommand: async () => 17,
+      runCommand: async () => ({ exitCode: 17, signalCode: null }),
     })).rejects.toThrow(/smoke failed with exit code 17/u)
+  })
+
+  it('retries one signal-terminated first launch without masking deterministic failures', async () => {
+    const { root } = await fixture()
+    const runCommand = vi.fn<NonNullable<SmokeInvestmentSidecarDependencies['runCommand']>>()
+      .mockResolvedValueOnce({ exitCode: null, signalCode: 'SIGKILL' })
+      .mockResolvedValueOnce({ exitCode: 0, signalCode: null })
+
+    await smokeInvestmentPythonSidecar(root, { runCommand })
+
+    expect(runCommand).toHaveBeenCalledTimes(2)
+
+    const failed = await fixture()
+    const deterministicFailure = vi.fn(async () => ({ exitCode: 1, signalCode: null }))
+    await expect(smokeInvestmentPythonSidecar(failed.root, {
+      runCommand: deterministicFailure,
+    })).rejects.toThrow(/smoke failed with exit code 1/u)
+    expect(deterministicFailure).toHaveBeenCalledOnce()
+
+    const signaled = await fixture()
+    const repeatedSignal = vi.fn<NonNullable<SmokeInvestmentSidecarDependencies['runCommand']>>()
+      .mockResolvedValueOnce({ exitCode: null, signalCode: 'SIGKILL' })
+      .mockResolvedValueOnce({ exitCode: null, signalCode: 'SIGTERM' })
+    await expect(smokeInvestmentPythonSidecar(signaled.root, {
+      runCommand: repeatedSignal,
+    })).rejects.toThrow(/failed with signal SIGTERM after retry \(first attempt signal SIGKILL\)/u)
   })
 
   it('requires exactly the three backend descriptor entries before launch', async () => {
@@ -117,7 +146,7 @@ describe('investment Python sidecar smoke', () => {
         'market-watch': descriptor.backends['market-watch'],
       },
     }))
-    const runCommand = vi.fn(async () => 0)
+    const runCommand = vi.fn(async () => ({ exitCode: 0, signalCode: null }))
 
     await expect(smokeInvestmentPythonSidecar(root, { runCommand })).rejects.toThrow(/exactly the three/u)
     expect(runCommand).not.toHaveBeenCalled()

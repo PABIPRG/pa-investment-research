@@ -1198,7 +1198,7 @@ describe('研究工作台', () => {
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-    const read = await within(dialog).findByRole('button', { name: '获取持仓' })
+    const read = await within(dialog).findByRole('button', { name: '我已打开，开始读取' })
     await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
     expect(within(dialog).getByRole('button', { name: '模拟操盘' }).getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(read)
@@ -1228,7 +1228,7 @@ describe('研究工作台', () => {
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-    const read = await within(dialog).findByRole('button', { name: '获取持仓' })
+    const read = await within(dialog).findByRole('button', { name: '我已打开，开始读取' })
     await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
     fireEvent.click(read)
     expect(await within(dialog).findByText('没有读到持仓。')).toBeTruthy()
@@ -1236,7 +1236,7 @@ describe('研究工作台', () => {
     fireEvent.click(read)
     fireEvent.click(await within(dialog).findByRole('button', { name: '取消预览' }))
     expect(requestData.mock.calls.some(([r]) => r.input?.action === 'commit')).toBe(false)
-    fireEvent.click(within(dialog).getByRole('button', { name: '获取持仓' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '我已打开，开始读取' }))
     fireEvent.click(await within(dialog).findByRole('button', { name: '确认替换 1 条持仓' }))
     expect(await within(dialog).findByText('预览已过期，请重新读取。')).toBeTruthy()
     expect(within(dialog).queryByText('已同步持仓')).toBeNull()
@@ -1268,7 +1268,7 @@ describe('研究工作台', () => {
     expect(within(dialog).getByText('交易 → 模拟 → 股票 → 持仓')).toBeTruthy()
     expect(within(dialog).queryByRole('combobox', { name: '持仓数据源' })).toBeNull()
     expect(provider).toBe('mac_ths')
-    expect(within(dialog).getByRole('button', { name: '获取持仓' }).hasAttribute('disabled')).toBe(false)
+    expect(within(dialog).getByRole('button', { name: '我已打开，开始读取' }).hasAttribute('disabled')).toBe(false)
   })
 
   it('检测超时后恢复重试入口，迟到结果不覆盖重试成功状态', async () => {
@@ -1309,7 +1309,7 @@ describe('研究工作台', () => {
     expect(await within(dialog).findByText('允许读取同花顺持仓')).toBeTruthy()
     expect(within(dialog).queryByRole('button', { name: '打开辅助功能设置' })).toBeNull()
     expect(within(dialog).queryByText('补充自动化授权')).toBeNull()
-    expect(within(dialog).queryByRole('button', { name: '获取持仓' })).toBeNull()
+    expect(within(dialog).queryByRole('button', { name: '我已打开，开始读取' })).toBeNull()
     expect(requestData.mock.calls.some(([r]) => r.operation === 'trading-core.holdings-sync')).toBe(false)
   })
 
@@ -1320,7 +1320,7 @@ describe('研究工作台', () => {
     Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
     try {
       const requestData = vi.fn(async (request: InvestmentDataRequest) => {
-        if (request.operation === 'trading-core.holdings-source') return { provider: 'mac_ths', available: true }
+        if (request.operation === 'trading-core.holdings-source') return { provider: 'mac_ths', platform: 'darwin', available: true }
         return completeResponse(request.operation)
       })
       const view = renderWorkbench(requestData)
@@ -1328,7 +1328,11 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       const dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-      const read = await within(dialog).findByRole('button', { name: '获取持仓' })
+      const preparation = await within(dialog).findByRole('note')
+      expect(within(preparation).getByText('请先打开同花顺左侧「交易」页')).toBeTruthy()
+      expect(within(preparation).getByText(/模拟 → 股票 → 持仓/)).toBeTruthy()
+      expect(within(dialog).getByRole('radiogroup', { name: '主动读取授权' })).toBeTruthy()
+      const read = await within(dialog).findByRole('button', { name: '我已打开，开始读取' })
       await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
       fireEvent.click(read)
       await waitFor(() => { expect(native).toHaveBeenCalledWith({ action: 'read', account_mode: 'simulated', authorization: 'once' }) })
@@ -1356,11 +1360,11 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       const dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-      fireEvent.click(await within(dialog).findByRole('button', { name: '获取持仓' }))
+      fireEvent.click(await within(dialog).findByRole('button', { name: '我已打开，开始读取' }))
       fireEvent.click(await within(dialog).findByRole('button', { name: '取消读取' }))
 
       await waitFor(() => { expect(native).toHaveBeenCalledWith({ action: 'cancel_read', account_mode: 'simulated' }) })
-      await waitFor(() => { expect(within(dialog).getByRole('button', { name: '获取持仓' })).toBeTruthy() })
+      await waitFor(() => { expect(within(dialog).getByRole('button', { name: '我已打开，开始读取' })).toBeTruthy() })
       expect(within(dialog).queryByText('持仓预览 · 尚未保存')).toBeNull()
     } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
   })
@@ -1387,7 +1391,7 @@ describe('研究工作台', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
       const persistent = await within(dialog).findByRole<HTMLInputElement>('radio', { name: '长期允许主动读取' })
       await waitFor(() => { expect(persistent.checked).toBe(true) })
-      fireEvent.click(within(dialog).getByRole('button', { name: '获取持仓' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: '我已打开，开始读取' }))
       fireEvent.click(await within(dialog).findByText('未取得成交明细'))
       const time = await within(dialog).findByLabelText<HTMLInputElement>('000001 持仓归因时间')
       fireEvent.change(time, { target: { value: '2026-09-14T14:30' } })
@@ -1431,7 +1435,7 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       const dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-      fireEvent.click(await within(dialog).findByRole('button', { name: '获取持仓' }))
+      fireEvent.click(await within(dialog).findByRole('button', { name: '我已打开，开始读取' }))
 
       expect(await within(dialog).findByText('持仓已读取，成交明细未完成')).toBeTruthy()
       expect(within(dialog).getByText(/自动切换到历史成交页失败/)).toBeTruthy()

@@ -131,11 +131,11 @@ export function bindHoldingsNative(window: BrowserWindow, run: (request: NativeR
       const authorization = value.authorization === 'persistent' ? 'persistent' : 'once'
       if (action === 'launch' || !consent.persistent) {
         const confirmation = await dialog.showMessageBox(window, {
-          type: 'question', title: action === 'read' ? '需要前往同花顺读取持仓' : '打开同花顺', message: action === 'read' ? '需要前往同花顺读取持仓' : '打开同花顺',
+          type: 'question', title: action === 'read' ? '读取同花顺持仓' : '打开同花顺', message: action === 'read' ? '读取同花顺持仓' : '打开同花顺',
           detail: action === 'read'
-            ? `我们将前往：\n${path}\n\n窗口会短暂切换到同花顺。系统只读取持仓与成交明细，不读取交易密码、不提交任何委托。读取完成或失败后会返回投研智能体。${authorization === 'persistent' ? '\n\n允许后，以后仍须由你主动点击读取，但不再重复询问；可随时关闭。' : '\n\n本次允许不会用于后续读取。'}`
+            ? `请先在同花顺打开：\n${path}\n\n系统会先读取当前页面；仅当页面未就绪时才会短暂切换到同花顺尝试进入该位置。系统只读取持仓，不读取交易密码、不提交任何委托。读取完成、失败或取消后会返回投研智能体。${authorization === 'persistent' ? '\n\n允许后，以后仍须由你主动点击读取，但不再重复询问；可随时关闭。' : '\n\n本次允许不会用于后续读取。'}`
             : `即将打开同花顺，请自行登录并进入：\n${path}\n\n不会自动输入密码或提交委托。完成后请返回投研智能体。`,
-          buttons: ['允许并继续', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+          buttons: [action === 'read' ? '开始读取' : '打开同花顺', '取消'], defaultId: 1, cancelId: 1, noLink: true,
         })
         if (confirmation.response !== 0) return { canceled: true }
         if (action === 'read' && authorization === 'persistent') await consent.setPersistent(true)

@@ -511,15 +511,15 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
       <div className={css.workbenchSyncStepHeading}><strong>获取持仓</strong><span>读取后先展示预览，确认后才会替换本地持仓</span></div>
       <p className={css.workbenchSyncPath}><span>读取位置</span><strong>{path}</strong></p>
       {!ready && !permission && <p className={css.workbenchSyncStateMessage} role="status">{loading ? (slow ? '检测耗时较长，最多等待 12 秒。你也可以先手动录入。' : '正在检查读取条件…') : text(state.reason, '当前暂时无法读取持仓。')}</p>}
-      {native !== undefined && platform === 'darwin' && <fieldset className={css.syncAuthorization}>
-        <legend>主动读取授权</legend>
+      {native !== undefined && platform === 'darwin' && <div className={css.syncAuthorization} role="radiogroup" aria-label="主动读取授权">
+        <strong>主动读取授权</strong>
         <label><input type="radio" name="holdings-authorization" checked={authorization === 'once'} disabled={busy} onChange={() => {
           setAuthorization('once')
           if (authorization === 'persistent') nativeAction('revoke_consent')
         }} />每次询问</label>
         <label><input type="radio" name="holdings-authorization" checked={authorization === 'persistent'} disabled={busy} onChange={() => { setAuthorization('persistent') }} />长期允许主动读取</label>
-        <p>{authorization === 'persistent' ? '以后仍须由你点击读取，但不再重复询问；应用不会定时或在后台自动读取。' : '每次切换到同花顺前都会询问。'}</p>
-      </fieldset>}
+        <span>{authorization === 'persistent' ? '仍须手动点击读取，不再重复询问；不会定时或后台读取。' : '每次需要切换到同花顺前都会询问。'}</span>
+      </div>}
       {permission && <div className={css.syncPermissionGuide}>
         <strong>{reason === 'automation_required' ? '补充自动化授权' : '允许读取同花顺持仓'}</strong>
         <span>{reason === 'automation_required' ? '本次读取还需要系统自动化授权，请按下面的步骤开启。' : '读取同花顺窗口中的持仓表格需要辅助功能权限；不读取交易密码、不提交买卖委托。'}</span>
@@ -547,8 +547,12 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
         <button type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>{missing ? '暂不安装，改用手动录入' : '改用手动录入 / 批量导入'}</button>
       </div>}
       {native === undefined && ready && <p className={css.syncHint}>Web 版不会自动切换窗口，请先在同花顺进入上述位置。</p>}
-      {native !== undefined && ready && preview === undefined && <p className={css.syncHint}>开始后会切换到同花顺并自动进入上述位置；读取完成、失败或取消后会尽力返回投研智能体。</p>}
-      {preview === undefined && ready && <div className={css.syncPrimaryAction}><button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual'} onClick={acquire}>{reading ? (cancelling ? '正在取消读取…' : '正在切换并读取…') : '获取持仓'}</button></div>}
+      {native !== undefined && platform === 'darwin' && ready && preview === undefined && <div className={css.syncReadinessNotice} role="note">
+        <strong>请先打开同花顺左侧「交易」页</strong>
+        <span>再进入 {account === 'simulated' ? '模拟' : 'A股'} → 股票 → 持仓，并保持窗口可见；页面未就绪时，应用会在确认后尝试切换。</span>
+      </div>}
+      {native !== undefined && platform !== 'darwin' && ready && preview === undefined && <p className={css.syncHint}>请先在券商客户端打开上述页面并保持窗口可见；页面未就绪时，应用会在确认后尝试切换。</p>}
+      {preview === undefined && ready && <div className={css.syncPrimaryAction}><button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual'} onClick={acquire}>{reading ? (cancelling ? '正在取消读取…' : '正在读取持仓…') : '我已打开，开始读取'}</button></div>}
       {reading && native !== undefined && <button type="button" className={css.secondaryButton} disabled={cancelling} onClick={cancelRead}>{cancelling ? '正在取消…' : '取消读取'}</button>}
       {preview !== undefined && <div className={css.workbenchImportPreview}>
         <div className={css.workbenchImportPreviewHeader}>
