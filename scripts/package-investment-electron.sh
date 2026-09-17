@@ -24,9 +24,10 @@ esac
 export NODE_USE_ENV_PROXY="${NODE_USE_ENV_PROXY:-1}"
 cd "$ROOT/frontend"
 echo "正在构建 $TARGET 桌面包（首次会下载独立 Python 及依赖，请保持联网）…"
-pnpm run constraints
 # Keep deploy metadata from causing an automatic production-only reinstall.
-pnpm_config_verify_deps_before_run=warn pnpm run make:electron
+export pnpm_config_verify_deps_before_run=warn
+pnpm run constraints
+pnpm run make:electron
 echo "构建成功。应用目录：$ROOT/frontend/apps/electron/out"
 echo "可分发 ZIP：$ROOT/frontend/apps/electron/out/make"
 echo "macOS 当前采用临时签名；对外稳定分发前需要正式签名与公证。"
