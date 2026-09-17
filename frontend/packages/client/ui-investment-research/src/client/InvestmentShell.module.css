@@ -2063,10 +2063,10 @@
 .evolutionStrategyKind[data-direction='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .evolutionStrategyKind[data-direction='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
 .evolutionDashboard .strategyEntry .dataRow > div > strong.evolutionStrategyIdentity { display: flex; }
-.evolutionOverviewGrid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 16px; align-items: stretch; min-width: 0; }
+.evolutionOverviewGrid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: 16px; align-items: stretch; min-width: 0; }
 .evolutionRuntimeCard, .evolutionAttributionCard { height: 100%; box-sizing: border-box; }
 .evolutionRuntimeMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 0 0; }
-.evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .evolutionRuntimeMeta > div { min-width: 0; }
 .evolutionRuntimeMeta dt { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
 .evolutionRuntimeMeta dd { margin: 5px 0 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: var(--investment-font-secondary); font-weight: 650; line-height: 1.45; }
@@ -2572,7 +2572,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .evolutionOverviewGrid { grid-template-columns: 1fr; }
   .evolutionLead { align-items: flex-start; flex-direction: column; }
   .evolutionLead span { text-align: left; }
-  .evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .evolutionDistribution .lifecycleNav { grid-auto-flow: column; grid-auto-columns: minmax(112px, 1fr); grid-template-columns: none; overflow-x: auto; }
   .evolutionDistribution .lifecycleNav button { border-right: 1px solid var(--dsw-alias-border-l1); }
   .moduleToolbar { gap: 8px; }
@@ -2767,3 +2767,24 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .syncPreparationActions { flex-wrap: wrap; }
   .syncActions > button, .syncPreparationActions > button { flex: 1 1 auto; }
 }
+
+.evolutionAttributionCard .evolutionRuntimeMeta dd { font-size: 1.5714rem; line-height: 1.35; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.evolutionAttributionCard .evolutionRuntimeMeta dd[data-tone='positive'] { color: var(--dsw-alias-state-error-primary); }
+.evolutionAttributionCard .evolutionRuntimeMeta dd[data-tone='negative'] { color: var(--dsw-alias-state-success-primary); }
+.evolutionRuntimeMeta dt small { font: inherit; }
+
+ .evolutionInfoHint { display: inline-flex; vertical-align: middle; margin-left: 2px; }
+.evolutionInfoHint > button { padding: 0; width: 28px; }
+@media (min-width: 681px) and (max-width: 1200px) {
+  .evolutionRuntimeCard .evolutionRuntimeMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.evolutionRuntimeMeta dt { display: flex; align-items: center; min-height: 28px; gap: 2px; }
+.evolutionInfoHint { flex: none; }
+@media (pointer: coarse) { .evolutionRuntimeMeta dt { min-height: 44px; } .evolutionInfoHint > button { width: 44px; height: 44px; } }
+
+/* 帮助说明沿用共享 Modal，仅压缩正文间距并匹配业务按钮形状。 */
+.evolutionHelpContent > div:last-child { margin-top: 0; }
+.evolutionHelpContent p { margin: 0; line-height: 1.6; }
+.evolutionHelpConfirm { border-radius: 8px; }
+.evolutionRuntimeCard .evolutionRuntimeMeta dd { font-size: 1.1429rem; }

@@ -1571,7 +1571,7 @@ function InvestmentShellContent({
             initialView={(snapshot.route === 'projects' || retainedRoute === 'projects') ? 'shadow' : 'pool'}
             onOpenEvolution={() => { navigate('tasks') }}
             onOpenStock={(code) => { navigate('stock-detail', { stockCode: code }) }}
-            initialStage={snapshot.strategyResearchStage ?? 'form'}
+            initialStage={snapshot.route === 'framework' ? snapshot.strategyResearchStage ?? 'form' : 'form'}
             onBackEvolution={() => { navigate('tasks', { evolutionReturnGroup: snapshot.evolutionReturnGroup ?? '' }) }}
           />
           </div>
@@ -1582,10 +1582,10 @@ function InvestmentShellContent({
             requestData={requestData}
             onAnalyze={prepareAssistantWithoutReturn}
             initialLifecycleGroup={snapshot.evolutionReturnGroup ?? ''}
-            onOpenStrategy={(strategyId, group) => {
+            onOpenStrategy={(strategyId, group, openDetail) => {
               navigate('framework', {
                 strategyId,
-                strategyStage: 'evolution',
+                strategyStage: openDetail ? 'detail' : 'evolution',
                 ...(group === undefined ? {} : { evolutionReturnGroup: group }),
               })
             }}

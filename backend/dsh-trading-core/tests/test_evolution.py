@@ -477,7 +477,7 @@ class StatusTests(unittest.TestCase):
                 scoped_status.return_value = {"ready": True}
                 response = client.get("/evolution/status?strategy_id=strat-good")
                 self.assertEqual(response.status_code, 200)
-                scoped_status.assert_called_once_with(strategy_id="strat-good")
+                scoped_status.assert_called_once_with(strategy_id="strat-good", include_history=True)
 
             with patch(
                 "adapter.evolution.attribution",

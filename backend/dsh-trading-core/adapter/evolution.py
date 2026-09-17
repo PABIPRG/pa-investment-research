@@ -1442,6 +1442,7 @@ def _evolution_counts(strategies: dict) -> dict[str, int]:
 def status(
     store: JsonStore | None = None,
     strategy_id: str | None = None,
+    include_history: bool = True,
 ) -> dict:
     """闭环状态：数据是否就绪 + 生命周期统计。"""
     _validate_strategy_id(strategy_id)
@@ -1508,6 +1509,12 @@ def status(
     runtime = store.get(_PREVIEW_COLLECTION, _CLOSED_LOOP_RUNTIME_KEY) or {}
     from .scheduler import next_closed_loop_run_at
 
+    if not include_history and strategy_id is None:
+        from .evolution_history import history
+        latest = history(store, limit=1)["items"]
+        last_applied = latest[0]["applied_at"] if latest else None
+    else:
+        last_applied = _last_applied_at(store, strategy_id)
     return {
         "as_of": _now(),
         "days_of_data": n,
@@ -1521,13 +1528,13 @@ def status(
             if ready
             else f"影子净值仅 {n} 日，自进化待累积至 {settings.evolve_min_days} 日"
         ),
-        "last_applied_at": _last_applied_at(store, strategy_id),
+        "last_applied_at": last_applied,
         "closed_loop_enabled": settings.closed_loop_enabled,
         "closed_loop_time": settings.closed_loop_time,
         "recent_run_at": runtime.get("recent_run_at"),
         "next_scheduled_run_at": next_closed_loop_run_at(),
         "per_strategy": per_strategy,
-        "recent_applied": _recent_applied(store, strategy_id=strategy_id, limit=5),
+        "recent_applied": _recent_applied(store, strategy_id=strategy_id, limit=5) if include_history else [],
     }
 
 

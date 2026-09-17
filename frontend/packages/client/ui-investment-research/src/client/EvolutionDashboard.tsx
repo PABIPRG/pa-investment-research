@@ -8,6 +8,8 @@ import {
 import { useSecurityNames } from './security-names.ts'
 import { strategyDirectionLabel, strategyEvolutionLabel, strategyTickers } from './strategy-display.ts'
 import css from './InvestmentShell.module.css'
+import { Button, IconQuestionOutline14, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { EvolutionHistory } from './EvolutionHistory.tsx'
 
 // 变异是来源标记（source/mutated_from）而非独立分组：策略按真实状态落桶。mutated 保留为防御性兜底。
 const GROUPS: readonly EvolutionLifecycleGroup[] = [
@@ -18,8 +20,13 @@ const GROUP_LABELS: Readonly<Record<string, string>> = {
   active: '正常运行', candidate: '候选', retired: '已淘汰', watch: '观察中', rejected: '已拒绝',
 }
 
-const DECISION_LABELS: Readonly<Record<string, string>> = {
-  promote: '已升级', demote: '观察中', retire: '已淘汰', mutate: '生成变体', none: '正常运行',
+
+function InfoHint({ label, explanation }: { label: string; explanation: string }) {
+  const [open, setOpen] = useState(false)
+  return <>
+    <Tooltip label={explanation} side="bottom" maxWidth={300} disabled={open}><span className={css.evolutionInfoHint}><Button variant="ghost" size="sm" aria-label={label} aria-haspopup="dialog" onClick={() => { setOpen(true) }} icon={<IconQuestionOutline14 />} /></span></Tooltip>
+    <Modal open={open} onClose={() => { setOpen(false) }} title={label} closeLabel="关闭说明" contentClassName={css.evolutionHelpContent} footer={<Button className={css.evolutionHelpConfirm} variant="outline" onClick={() => { setOpen(false) }}>知道了</Button>}><p>{explanation}</p></Modal>
+  </>
 }
 
 function strings(value: unknown): string[] {
@@ -55,8 +62,22 @@ function readinessLabel(status: Record<string, unknown>): string {
   const minimum = number(status.min_days)
   if (days === undefined || minimum === undefined) return '—'
   const completed = status.ready === true || days >= minimum
-  if (completed) return `${days.toFixed(0)} 日（最低 ${minimum.toFixed(0)} 日，已达标）`
-  return `${days.toFixed(0)} 日（最低 ${minimum.toFixed(0)} 日，还差 ${Math.max(0, minimum - days).toFixed(0)} 日）`
+  if (completed) return `已积累 ${days.toFixed(0)} 天模拟数据，满足至少 ${minimum.toFixed(0)} 天的评估门槛`
+  return `已积累 ${days.toFixed(0)} 天模拟数据，还需 ${Math.max(0, minimum - days).toFixed(0)} 天才能评估（至少 ${minimum.toFixed(0)} 天）`
+}
+
+export function relativeRunTime(raw: unknown, now = Date.now()): string {
+  if (typeof raw !== 'string' || !raw) return '尚无运行记录'
+  // 无时区历史值不推测服务时区，保留准确原值。
+  if (!/(Z|[+-]\d{2}:\d{2})$/.test(raw)) return formatEvolutionTimestamp(raw)
+  const timestamp = Date.parse(raw)
+  if (!Number.isFinite(timestamp)) return formatEvolutionTimestamp(raw)
+  const elapsed = now - timestamp
+  if (elapsed < 0) return formatEvolutionTimestamp(raw)
+  if (elapsed < 60_000) return '刚刚'
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
+  return `${Math.floor(elapsed / 86_400_000)} 天前`
 }
 
 interface LineageNodeProps {
@@ -157,7 +178,7 @@ export function EvolutionDashboard({
     setError('')
     setStrategyFactsUnavailable(false)
     void Promise.all([
-      requestData({ operation: 'trading-core.evolution-status' }),
+      requestData({ operation: 'trading-core.evolution-status', input: { include_history: false } }),
       requestData({ operation: 'trading-core.evolution-attribution' }),
       requestData({ operation: 'trading-core.strategies', input: { limit: 500 } }).catch(() => {
         setStrategyFactsUnavailable(true)
@@ -183,7 +204,6 @@ export function EvolutionDashboard({
   const evolutionCounts = asRecord(statusRecord.evolution_counts)
   const perStrategy = records(statusRecord.per_strategy)
   const attributionByStrategy = new Map(records(attributionRecord.strategies).map(entry => [strategyId(entry), entry]))
-  const recentApplied = records(statusRecord.recent_applied)
   const overall = asRecord(attributionRecord.overall)
   const closedLoopEnabled = statusRecord.closed_loop_enabled === true
   const closedLoopTime = text(statusRecord.closed_loop_time, '15:35')
@@ -284,38 +304,23 @@ export function EvolutionDashboard({
         <article className={`${css.moduleCard} ${css.evolutionRuntimeCard}`} role="region" aria-label="运行状态摘要">
           <div className={css.sectionHeading}><strong>闭环运行状态</strong><span>{closedLoopEnabled ? `每日 ${closedLoopTime}` : '未启用'}</span></div>
           <dl className={css.evolutionRuntimeMeta}>
-            <div><dt>最近自动运行</dt><dd>{formatEvolutionTimestamp(statusRecord.recent_run_at, '尚无运行记录')}</dd></div>
-            <div><dt>下次计划运行</dt><dd>{closedLoopEnabled ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${closedLoopTime}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
-            <div><dt>上次自动应用</dt><dd>{formatEvolutionTimestamp(statusRecord.last_applied_at, '尚未应用')}</dd></div>
-            <div><dt>数据完成度</dt><dd>{readinessLabel(statusRecord)}</dd></div>
+            <div><dt>最近自动运行</dt><dd title={formatEvolutionTimestamp(statusRecord.recent_run_at, '尚无运行记录')}>{relativeRunTime(statusRecord.recent_run_at)}</dd></div>
+            <div><dt>下次计划运行<InfoHint label="自动运行说明" explanation="此处仅展示自动运行状态，本页面没有启用或关闭入口。自动运行由服务端配置决定：开启时按计划评估策略并执行符合条件的调整；关闭时不安排自动调整，已有记录仍可查看。策略的影子验证另由服务端配置控制，不受此状态直接决定。" /></dt><dd>{closedLoopEnabled ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${closedLoopTime}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
+            <div><dt>上次自动应用</dt><dd>{formatEvolutionTimestamp(statusRecord.last_applied_at, '尚未应用').replace('（服务本地时间）', '')}</dd></div>
+            <div><dt>策略验证记录<InfoHint label="策略验证记录说明" explanation={`${readinessLabel(statusRecord)}。统计的是影子账户有有效净值记录的日期数，属于纸面交易验证记录，不是编造的行情，也不代表已经真实成交。天数达标仅表示可以评估，不代表策略表现达标。`} /></dt><dd>{number(statusRecord.days_of_data) === undefined ? '—' : `${Number(statusRecord.days_of_data).toFixed(0)} 天`}</dd></div>
           </dl>
         </article>
         <article className={`${css.moduleCard} ${css.evolutionAttributionCard}`} aria-label="整体影子归因">
           <div className={css.sectionHeading}><strong>整体影子归因</strong><span>{number(attributionRecord.days_of_data)?.toFixed(0) ?? '—'} 日</span></div>
           <dl className={css.evolutionRuntimeMeta}>
-            <div><dt>累计收益</dt><dd>{metric(overall.return_pct, '%')}</dd></div>
-            <div><dt>最大回撤</dt><dd>{metric(overall.max_drawdown_pct, '%')}</dd></div>
-            <div><dt>当前净值</dt><dd>{metric(overall.end_nav)}</dd></div>
+            <div><dt>累计收益<InfoHint label="累计收益与净值说明" explanation={`影子账户相对初始本金的收益，不是实际账户收益。净值以 1 为起点，累计收益 =（净值 − 1）× 100%。两者表达同一表现，因此这里只展示收益百分比。${number(overall.end_nav) === undefined ? '' : `当前净值为 ${Number(overall.end_nav).toFixed(4)}。`}`} /></dt><dd data-tone={performanceTone(overall.return_pct)}>{signedPercentage(overall.return_pct)}</dd></div>
+            <div><dt>最大回撤</dt><dd data-tone={number(overall.max_drawdown_pct) ? 'negative' : undefined}>{metric(overall.max_drawdown_pct, '%')}</dd></div>
+
           </dl>
         </article>
       </section>
 
-      <section className={css.moduleGrid} aria-label="历史进化动作">
-        <article className={css.moduleCard}>
-          <div className={css.sectionHeading}>
-            <div><strong>历史进化动作</strong><small>按自动闭环执行轮次保留可追溯记录</small></div>
-            <span>{recentApplied.length} 条</span>
-          </div>
-          <div className={css.dataList}>
-            {recentApplied.flatMap((round, roundIndex) => records(round.actions).map((action, actionIndex) => {
-              const sid = strategyId(action)
-              const label = `${text(round.applied_at, '')} · 自动应用 ${number(round.count)?.toFixed(0) ?? '0'} 项动作`
-              return <button type="button" className={css.dataRow} key={`${roundIndex}-${actionIndex}`} aria-label={label} onClick={() => { if (sid !== '') onOpenStrategy(sid, openGroup) }}><div><strong>{label}</strong><small>{text(action.reason, '')}</small></div><span>{DECISION_LABELS[text(action.type, '')] ?? text(action.type, '')}</span></button>
-            }))}
-            {recentApplied.length === 0 && !loading && <div className={css.emptyPanel}>尚未有自动进化记录。</div>}
-          </div>
-        </article>
-      </section>
+      {status !== undefined && <EvolutionHistory requestData={requestData} strategies={strategyRecords} securityNames={securityNames} refreshKey={status} onOpenStrategy={strategyId => { onOpenStrategy(strategyId, openGroup, true) }} />}
 
       <section className={`${css.moduleCard} ${css.evolutionLineageOverview}`} aria-label="演化关系">
         <div className={css.sectionHeading}>

@@ -1004,6 +1004,18 @@ export function StrategyResearchPage({
   const [hypothesisStatus, setHypothesisStatus] = useState('')
   const [lifecycleHelpStage, setLifecycleHelpStage] = useState<LifecycleHelpStage>()
   useEffect(() => { setView(initialStage === 'evolution' ? 'evolution' : initialView) }, [initialStage, initialView])
+  useEffect(() => {
+    if (initialStage !== 'detail' || !selectedStrategyId) return
+    let current = true
+    setDetailItem(undefined)
+    setNotice('正在读取策略详情…')
+    void requestData({ operation: 'trading-core.strategy-detail', input: { strategy_id: selectedStrategyId } }).then(result => {
+      if (!current) return
+      setDetailItem({ ...asRecord(result), id: selectedStrategyId })
+      setNotice('')
+    }).catch(() => { if (current) setNotice('策略详情读取失败，请返回重试。') })
+    return () => { current = false }
+  }, [initialStage, selectedStrategyId, requestData])
   const load = useCallback(() => {
     strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
   }, [strategies.run])

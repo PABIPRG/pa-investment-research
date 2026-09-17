@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
-import { EvolutionDashboard } from '../src/client/EvolutionDashboard.tsx'
+import { EvolutionDashboard, relativeRunTime } from '../src/client/EvolutionDashboard.tsx'
 import { StrategyEvolutionDiagnostics } from '../src/client/StrategyEvolutionDiagnostics.tsx'
 import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
 import {
@@ -44,7 +45,9 @@ describe('自进化全局只读看板', () => {
     expect(history.compareDocumentPosition(lineage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(lineage.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(distribution.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(screen.getByText('2 日（最低 5 日，还差 3 日）')).toBeTruthy()
+    expect(screen.getByText('2 天')).toBeTruthy()
+    fireEvent.focus(screen.getByRole('button', { name: '策略验证记录说明' }))
+    expect(screen.getByText(/已积累 2 天模拟数据，还需 3 天/)).toBeTruthy()
     expect(within(lineage).getByText('尚未发生自动进化')).toBeTruthy()
     expect(screen.getByRole('region', { name: '候选策略列表' }).className).toContain('evolutionLifecycleList')
   })
@@ -136,11 +139,11 @@ describe('自进化全局只读看板', () => {
     expect(summary.textContent).toContain('已升级5')
     expect(summary.textContent).toContain('已淘汰4')
     expect(summary.textContent).not.toContain('变异')
-    expect(screen.getByText('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
+    expect(screen.getByTitle('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
     expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
-    expect(screen.getByText('9 日（最低 5 日，已达标）')).toBeTruthy()
+    expect(screen.getByText('9 天')).toBeTruthy()
     expect(screen.queryByText('9 / 5 日')).toBeNull()
-    expect(screen.getByText('样本外证据达标')).toBeTruthy()
+    expect(screen.getByRole('region', { name: '历史进化动作' })).toBeTruthy()
     const facts = screen.getByRole('group', { name: /升级策略.*运行状态/ })
     expect(within(facts).getAllByRole('term')).toHaveLength(5)
     expect(within(facts).getAllByRole('definition')).toHaveLength(5)
@@ -214,15 +217,18 @@ describe('自进化全局只读看板', () => {
       'trading-core.evolution-status',
       'trading-core.evolution-attribution',
       'trading-core.strategies',
+      'trading-core.evolution-history',
     ])
     expect(screen.getAllByText(/自动闭环未启用/).length).toBeGreaterThan(0)
     expect(screen.queryByText(/正在每日自动运行/)).toBeNull()
   })
 
-  it('策略现状、链路和历史动作都进入对应策略诊断', async () => {
+  it('策略现状和链路进入诊断，历史动作保留本次上下文', async () => {
     const onOpenStrategy = vi.fn()
     const onOpenStock = vi.fn()
     const requestData = vi.fn(async ({ operation, input }: InvestmentDataRequest) => {
+      if (operation === 'trading-core.evolution-history') return { items: [{ action_id: 'a', round_id: 'r', applied_at: '2026-09-01', action: { sid: 'strat-child', type: 'promote', reason: '升级' } }], total: 1, next_cursor: null }
+      if (operation === 'trading-core.strategy-detail') return { id: 'strat-child', name: '子策略', status: 'active' }
       if (operation === 'trading-core.evolution-status') return {
         closed_loop_enabled: true,
         lifecycle: {
@@ -256,7 +262,7 @@ describe('自进化全局只读看板', () => {
 
     render(<EvolutionDashboard requestData={requestData} onAnalyze={() => {}} onOpenStrategy={onOpenStrategy} onOpenStock={onOpenStock} initialLifecycleGroup="active" />)
     await screen.findByText('策略演化链路')
-    const strategyRow = screen.getByRole('button', { name: /子策略.*证据达标/ })
+    const strategyRow = await screen.findByRole('button', { name: /证据达标/ })
     const highlightedReturn = within(strategyRow).getByText('+12.00%')
     expect(highlightedReturn.dataset.tone).toBe('positive')
     const lossRow = screen.getByRole('button', { name: /回撤策略.*风险扩大/ })
@@ -264,11 +270,11 @@ describe('自进化全局只读看板', () => {
     expect(screen.getByText('12.00%')).toBeTruthy()
     expect(screen.getByText('3.00%')).toBeTruthy()
     expect(screen.getByText('8')).toBeTruthy()
-    const statusGroup = screen.getByRole('group', { name: /子策略.*运行状态/ })
-    const performanceGroup = screen.getByRole('group', { name: /子策略.*影子表现/ })
+    const statusGroup = screen.getByRole('group', { name: /(?:子策略|贵州茅台).*运行状态/ })
+    const performanceGroup = screen.getByRole('group', { name: /(?:子策略|贵州茅台).*影子表现/ })
     expect(within(statusGroup).getAllByRole('term')).toHaveLength(5)
     expect(within(performanceGroup).getAllByRole('term')).toHaveLength(5)
-    const symbolGroup = await screen.findByRole('group', { name: /子策略.*关联标的/ })
+    const symbolGroup = await screen.findByRole('group', { name: /(?:子策略|贵州茅台).*关联标的/ })
     const stockButton = await within(symbolGroup).findByRole('button', { name: '查看贵州茅台 · 600519个股详情' })
     expect(within(stockButton).getByText('贵州茅台')).toBeTruthy()
     expect(within(stockButton).getByText('600519').tagName).toBe('SMALL')
@@ -281,8 +287,9 @@ describe('自进化全局只读看板', () => {
     fireEvent.click(screen.getByRole('button', { name: /母策略/ }))
     expect(onOpenStrategy).toHaveBeenLastCalledWith('strat-parent', 'active')
 
-    fireEvent.click(screen.getByRole('button', { name: /2026-09-01.*自动应用 1 项动作/ }))
-    await waitFor(() => { expect(onOpenStrategy).toHaveBeenLastCalledWith('strat-child', 'active') })
+    fireEvent.click(await within(screen.getByRole('region', { name: '历史进化动作' })).findByRole('button', { name: /模拟表现达标/ }))
+    expect(screen.getByRole('dialog', { name: '进化动作详情' })).toBeTruthy()
+    expect(await screen.findByText('判定依据')).toBeTruthy()
   })
 })
 
@@ -452,4 +459,53 @@ describe('策略研究单策略诊断', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(requestData.mock.calls.filter(([request]) => request.operation.startsWith('trading-core.evolution-')).every(([request]) => request.input?.strategy_id === 'strat-a')).toBe(true)
   })
+})
+
+
+it('历史动作详情入口按 ID 读取并打开既有完整策略详情', async () => {
+  const requestData = vi.fn(async ({ operation, input }: InvestmentDataRequest) => {
+    if (operation === 'trading-core.strategies') return { items: [] }
+    if (operation === 'trading-core.strategy-detail') {
+      expect(input?.strategy_id).toBe('strat-full')
+      return { id: 'strat-full', name: '完整策略详情目标', status: 'candidate', kind: 'bollinger', params: { n: 30, k: 2.5 } }
+    }
+    return {}
+  })
+  render(<StrategyResearchPage requestData={requestData} selectedStrategyId="strat-full" initialStage="detail" onSelectStrategy={() => {}} onOpenShadow={() => {}} onOpenReports={() => {}} onAnalyze={() => {}} />)
+  expect(await screen.findByRole('dialog', { name: '完整策略详情目标' })).toBeTruthy()
+  expect(screen.queryByRole('region', { name: '单策略进化诊断' })).toBeNull()
+})
+
+
+it('最近运行显示人类时间并保留无时区记录的原始语义', () => {
+  const now = Date.parse('2026-09-17T16:00:00+08:00')
+  expect(relativeRunTime('2026-09-09T15:35:02+08:00', now)).toBe('8 天前')
+  expect(relativeRunTime('2026-09-17T15:30:00+08:00', now)).toBe('30 分钟前')
+  expect(relativeRunTime(undefined, now)).toBe('尚无运行记录')
+  expect(relativeRunTime('2026-09-09 15:35:02', now)).toContain('服务本地时间')
+})
+
+
+it('帮助说明支持点击打开及明确关闭，使用组件库图标', async () => {
+  render(<EvolutionDashboard requestData={async () => ({})} onAnalyze={() => {}} onOpenStrategy={() => {}} />)
+  const help = screen.getByRole('button', { name: '策略验证记录说明' })
+  expect(help.querySelector('svg')).toBeTruthy()
+  expect(help.getAttribute('aria-haspopup')).toBe('dialog')
+  fireEvent.click(help)
+  const dialog = await screen.findByRole('dialog', { name: '策略验证记录说明' })
+  expect(within(dialog).getByText(/纸面交易验证记录/)).toBeTruthy()
+  fireEvent.click(within(dialog).getByRole('button', { name: '知道了' }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+})
+
+
+it('概览帮助入口保持复用组件库，禁止退回手写符号控件', () => {
+  const source = readFileSync('packages/client/ui-investment-research/src/client/EvolutionDashboard.tsx', 'utf8')
+  const helper = source.slice(source.indexOf('function InfoHint('), source.indexOf('function strings('))
+  for (const component of ['Tooltip', 'Button', 'IconQuestionOutline14', 'Modal']) {
+    expect(source).toMatch(new RegExp(`import \{[^}]*${component}[^}]*\} from '@deepseek-ai/dsh-client-ui-primitives'`))
+    expect(helper).toContain(`<${component}`)
+  }
+  expect(helper).not.toContain('<button')
+  expect(helper).not.toMatch(/>\s*[!?]\s*</)
 })
