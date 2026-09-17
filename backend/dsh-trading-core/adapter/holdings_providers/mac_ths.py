@@ -450,8 +450,7 @@ class MacThsProvider(HoldingsProvider):
         except ProviderUnavailable as exc:
             if not foreground or exc.code != "navigation_required":
                 raise
-        if not foreground:
-            assert passive is not None
+        if passive is not None:
             return passive
         from AppKit import NSWorkspace, NSApplicationActivateIgnoringOtherApps
         workspace = NSWorkspace.sharedWorkspace()
@@ -493,12 +492,13 @@ class MacThsProvider(HoldingsProvider):
                 header, rows = parse_output(stdout)
                 return MacHoldingsReadResult(
                     items=rows_to_items(header, rows),
-                    details_status="unavailable",
+                    details_status="not_requested",
                     details_reason=(
-                        "AX 自动导航未完成；已通过兼容路径读取持仓，但成交明细未读取。"
+                        "AX 自动导航未完成；已通过兼容路径读取持仓，"
+                        "本次未请求成交明细。"
                     ),
                     details_code="compatibility_fallback",
-                    details_scope="unknown",
+                    details_scope="not_requested",
                 )
             except MacThsScriptError as exc:
                 raise ProviderUnavailable(str(exc), "read_failed") from exc
@@ -589,6 +589,57 @@ def _account_tab(account_mode: str) -> str:
     return "模拟" if account_mode == "simulated" else "A股"
 
 
+def _ax_text_values(node, attr: Callable) -> set[str]:
+    """读取一个 AX 节点可供用户识别的全部文本。"""
+    values: set[str] = set()
+    for key in ("AXTitle", "AXDescription", "AXValue"):
+        value = attr(node, key)
+        if isinstance(value, str) and value.strip():
+            values.add(value.strip())
+    return values
+
+
+def _account_context_confirmed(
+    nodes: list,
+    account_mode: str,
+    attr: Callable,
+) -> bool:
+    """确认窗口属于目标账户，不把未选中的可见页签误判为已选中。"""
+    account = _account_tab(account_mode)
+    selected = any(
+        account in _ax_text_values(node, attr)
+        and (
+            attr(node, "AXSelected") is True
+            or attr(node, "AXValue") == 1
+            or attr(node, "AXValue") == "1"
+        )
+        for node in nodes
+    )
+    if selected:
+        return True
+    # 部分 Mac 版不暴露“模拟”页签的 selected，但会在同一窗口展示唯一的
+    # 账户身份“模拟练习/模拟股票”。仍限定在持仓表所在窗口，不能跨窗口背书。
+    return account_mode == "simulated" and any(
+        _ax_text_values(node, attr) & {"模拟练习", "模拟股票"}
+        for node in nodes
+    )
+
+
+def _ths_trading_sidebar_control(window, attr: Callable):
+    """定位同花顺 Mac 主侧栏中不暴露文字的“交易”按钮。"""
+    sidebar_buttons = [
+        child
+        for child in (attr(window, "AXChildren") or [])
+        if attr(child, "AXRole") == "AXButton"
+        and not _ax_text_values(child, attr)
+        and attr(child, "AXHidden") is not True
+        and attr(child, "AXEnabled") is not False
+    ]
+    # 当前 Mac 版九个主侧栏按钮顺序稳定，“交易”是第六个。只在直接子节点
+    # 数量足够且按钮无文字时使用，不扫描行情页中的任意按钮，也不使用屏幕坐标。
+    return sidebar_buttons[5] if len(sidebar_buttons) >= 6 else None
+
+
 # 「历史成交」在 Mac 版左树里的位置：与持仓同一层级。**尚未在真机验证**（闸门 4
 # 未做）：标签取自 Windows 版客户端的同名入口，Mac 版若叫别的名字（例如分组折叠着），
 # AXPress 会找不到按钮并按 navigation_required 中止——不会点错地方，只是失败。
@@ -672,12 +723,7 @@ def _ax_session(
         )
 
     def node_labels(node) -> set[str]:
-        values = []
-        for key in ("AXTitle", "AXDescription", "AXValue"):
-            value = attr(node, key)
-            if isinstance(value, str) and value.strip():
-                values.append(value.strip())
-        return set(values)
+        return _ax_text_values(node, attr)
 
     def action_names(node) -> set[str]:
         if AXUIElementCopyActionNames is not None:
@@ -715,6 +761,16 @@ def _ax_session(
                         break
                     candidate = attr(candidate, "AXParent")
                     depth += 1
+        if not candidates and label == "交易":
+            for window in windows():
+                candidate = _ths_trading_sidebar_control(window, attr)
+                if candidate is None or "AXPress" not in action_names(candidate):
+                    continue
+                score = (
+                    4 * int(attr(window, "AXFocused") is True)
+                    + 3 * int(attr(window, "AXMain") is True)
+                )
+                candidates.append((score, candidate))
         if not candidates:
             return None
         candidates.sort(key=lambda item: item[0], reverse=True)
@@ -758,19 +814,10 @@ def _ax_session(
         if blocker is not None:
             raise ProviderUnavailable(blocker, "client_interaction_required")
 
-    account = _account_tab(account_mode)
-
     def ready_context():
         for window in windows():
             nodes = list(walk(window))
-            selected = any(
-                account in node_labels(node)
-                and (attr(node, "AXSelected") is True
-                     or attr(node, "AXValue") == 1
-                     or attr(node, "AXValue") == "1")
-                for node in nodes
-            )
-            if not selected:
+            if not _account_context_confirmed(nodes, account_mode, attr):
                 continue
             for node in nodes:
                 if attr(node, "AXRole") != "AXTable":
@@ -827,11 +874,57 @@ def _ax_session(
     )
 
 
+def _ax_primary_text(node, attr: Callable) -> str:
+    """读取 AX 单元格或表头的主文本，避免同一节点重复取值。"""
+    for key in ("AXTitle", "AXDescription", "AXValue"):
+        value = attr(node, key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _table_values(table, attr, walk) -> list[list[str]]:
-    """一张 AXTable → 单元格文本（第 0 行是表头）。"""
-    rows = attr(table, "AXRows") or []
-    return [[str(attr(n, "AXValue") or "") for n in walk(row)
-             if attr(n, "AXRole") == "AXStaticText"] for row in rows]
+    """一张 AXTable → 单元格文本（第 0 行统一为表头）。
+
+    旧版同花顺把表头放在第一条 AXRow；当前部分 Mac 版只在表格内的
+    AXButton/AXColumnHeader 暴露列名，AXRows 从第一条数据开始。两种结构都先用
+    表签名验证，再统一成 ``[header, *rows]``，避免把第一条持仓当成表头。
+    """
+    row_values: list[list[str]] = []
+    for row in attr(table, "AXRows") or []:
+        values = [
+            _ax_primary_text(node, attr)
+            for node in walk(row)
+            if attr(node, "AXRole") == "AXStaticText"
+        ]
+        if any(values):
+            row_values.append(values)
+
+    if row_values and classify_table(row_values[0]) is not None:
+        return row_values
+
+    descendant_header = [
+        _ax_primary_text(node, attr)
+        for node in walk(table)
+        if attr(node, "AXRole") in {"AXButton", "AXColumnHeader"}
+    ]
+    descendant_header = [value for value in descendant_header if value]
+    if classify_table(descendant_header) is not None:
+        return [descendant_header, *row_values]
+
+    # 少数 AX 实现只通过 AXColumns 暴露列头，不把它们列入 AXChildren。
+    column_header: list[str] = []
+    for column in attr(table, "AXColumns") or []:
+        texts = [
+            _ax_primary_text(node, attr)
+            for node in walk(column)
+            if attr(node, "AXRole") in {"AXButton", "AXColumnHeader"}
+        ]
+        column_header.extend(value for value in texts if value)
+    if classify_table(column_header) is not None:
+        return [column_header, *row_values]
+
+    return row_values
 
 
 def _attach_holding_trades(
@@ -896,26 +989,23 @@ def read_ax_holdings_result(
     account_mode: str,
     *,
     navigate: bool = False,
+    include_trades: bool = False,
     cancelled: Callable[[], bool] | None = None,
     app_name: str = DEFAULT_APP_NAME,
 ) -> MacHoldingsReadResult:
-    """读取持仓，并把成交页失败保留为可见的部分成功元数据。"""
+    """读取持仓；只有明确请求时才继续读取成交明细。"""
     holdings = _read_ax_holdings_only(
         account_mode,
         navigate=navigate,
         cancelled=cancelled,
         app_name=app_name,
     )
-    if not navigate:
+    if not include_trades:
         return MacHoldingsReadResult(
             items=holdings,
-            details_status="unavailable",
-            details_reason=(
-                "当前只验证并读取了持仓页；成交明细需要在桌面端主动读取，"
-                "或先手动进入历史成交页。"
-            ),
-            details_code="foreground_required_for_details",
-            details_scope="unknown",
+            details_status="not_requested",
+            details_reason="本次仅读取持仓；成交明细可在对应功能中单独读取。",
+            details_scope="not_requested",
         )
     try:
         trades = read_ax_trades(

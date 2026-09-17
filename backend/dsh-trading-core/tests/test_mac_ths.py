@@ -307,6 +307,19 @@ class MacThsProviderTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'navigation_required')
         self.target.activateWithOptions_.assert_not_called()
 
+    def test_foreground_returns_a_ready_passive_holding_without_further_navigation(self):
+        read_result = MacHoldingsReadResult(
+            items=[HoldingItem(ticker="600519", quantity=100, cost_price=1500)],
+            details_status='not_requested',
+        )
+        with patch.object(mac_ths, 'read_ax_holdings_result', return_value=read_result) as read:
+            result = MacThsProvider(platform='darwin').read_holdings_result(foreground=True)
+
+        self.assertEqual(result, read_result)
+        read.assert_called_once()
+        self.target.activateWithOptions_.assert_not_called()
+        self.previous.activateWithOptions_.assert_not_called()
+
     def test_foreground_uses_ax_first_and_restores_previous(self):
         read_result = MacHoldingsReadResult(items=[], details_status='empty')
         with patch.object(mac_ths, 'read_ax_holdings_result', side_effect=[ProviderUnavailable('导航', 'navigation_required'), read_result]) as read:
@@ -368,6 +381,102 @@ class TradesNavigationTests(unittest.TestCase):
                          ('交易', 'A股', '股票'))
 
 
+class AxTableCompatibilityTests(unittest.TestCase):
+    """兼容同花顺不同版本暴露表头与模拟账户上下文的方式。"""
+
+    @staticmethod
+    def _attr(node, key):
+        return node.get(key) if isinstance(node, dict) else None
+
+    @classmethod
+    def _walk(cls, root):
+        pending = [root]
+        while pending:
+            node = pending.pop(0)
+            yield node
+            pending.extend(cls._attr(node, "AXChildren") or [])
+
+    @staticmethod
+    def _text(value):
+        return {"AXRole": "AXStaticText", "AXValue": value, "AXChildren": []}
+
+    def test_reads_sortable_button_header_separate_from_data_rows(self):
+        header = {
+            "AXRole": "AXGroup",
+            "AXChildren": [
+                {"AXRole": "AXButton", "AXTitle": title, "AXChildren": []}
+                for title in ("证券代码", "证券名称", "股票余额", "参考成本价")
+            ],
+        }
+        row = {
+            "AXRole": "AXRow",
+            "AXChildren": [
+                self._text(value)
+                for value in ("002518", "科士达", "100", "36.712")
+            ],
+        }
+        table = {
+            "AXRole": "AXTable",
+            "AXRows": [row],
+            "AXChildren": [row, header],
+        }
+
+        values = mac_ths._table_values(table, self._attr, self._walk)
+
+        self.assertEqual(values, [
+            ["证券代码", "证券名称", "股票余额", "参考成本价"],
+            ["002518", "科士达", "100", "36.712"],
+        ])
+
+    def test_keeps_first_row_header_compatibility(self):
+        header = {
+            "AXRole": "AXRow",
+            "AXChildren": [
+                self._text(value)
+                for value in ("证券代码", "股票余额", "成本价")
+            ],
+        }
+        row = {
+            "AXRole": "AXRow",
+            "AXChildren": [
+                self._text(value)
+                for value in ("600879", "900", "23.5024")
+            ],
+        }
+        table = {
+            "AXRole": "AXTable",
+            "AXRows": [header, row],
+            "AXChildren": [header, row],
+        }
+
+        self.assertEqual(
+            mac_ths._table_values(table, self._attr, self._walk),
+            [
+                ["证券代码", "股票余额", "成本价"],
+                ["600879", "900", "23.5024"],
+            ],
+        )
+
+    def test_simulation_identity_confirms_account_in_same_window(self):
+        nodes = [self._text("模拟练习")]
+
+        self.assertTrue(
+            mac_ths._account_context_confirmed(nodes, "simulated", self._attr)
+        )
+
+    def test_visible_unselected_real_tab_does_not_confirm_account(self):
+        nodes = [{
+            "AXRole": "AXRadioButton",
+            "AXTitle": "A股",
+            "AXSelected": False,
+            "AXChildren": [],
+        }]
+
+        self.assertFalse(
+            mac_ths._account_context_confirmed(nodes, "real", self._attr)
+        )
+
+
 class AxNavigationSessionTests(unittest.TestCase):
     """AX 导航必须等待真实页面状态，不能把 AXPress 成功当作切页完成。"""
 
@@ -406,8 +515,12 @@ class AxNavigationSessionTests(unittest.TestCase):
         holding = control("持仓", lambda: window.update(AXChildren=[account, table]))
         stock = control("股票", lambda: window.update(AXChildren=[account, holding]))
         account["press"] = lambda: window.update(AXChildren=[account, stock])
-        trade = control("交易", lambda: window.update(AXChildren=[account]))
-        window["AXChildren"] = [trade]
+        sidebar = [
+            control("", lambda: None)
+            for _ in range(9)
+        ]
+        sidebar[5]["press"] = lambda: window.update(AXChildren=[account])
+        window["AXChildren"] = sidebar
 
         def attr(node, key, _):
             return (0, node[key]) if key in node else (1, None)
@@ -438,7 +551,7 @@ class AxNavigationSessionTests(unittest.TestCase):
                 page='持仓', expected_kind='holdings',
             )
 
-        self.assertEqual(actions, ['交易', 'A股', '股票', '持仓'])
+        self.assertEqual(actions, ['', 'A股', '股票', '持仓'])
         self.assertIn(table, nodes)
 
     def test_selected_account_in_another_window_does_not_validate_the_table(self):
@@ -572,16 +685,16 @@ class AxNavigationSessionTests(unittest.TestCase):
 
 
 class MacHoldingsReadResultTests(unittest.TestCase):
-    def test_passive_read_makes_missing_trade_details_explicit(self):
+    def test_passive_read_does_not_request_trade_details(self):
         holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
         with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
                 patch.object(mac_ths, 'read_ax_trades') as trades:
             result = mac_ths.read_ax_holdings_result('real')
 
         self.assertEqual(result.items, holdings)
-        self.assertEqual(result.details_status, 'unavailable')
-        self.assertEqual(result.details_code, 'foreground_required_for_details')
-        self.assertEqual(result.details_scope, 'unknown')
+        self.assertEqual(result.details_status, 'not_requested')
+        self.assertEqual(result.details_code, '')
+        self.assertEqual(result.details_scope, 'not_requested')
         trades.assert_not_called()
 
     def test_detail_failure_is_preserved_as_partial_metadata(self):
@@ -589,7 +702,7 @@ class MacHoldingsReadResultTests(unittest.TestCase):
         with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
                 patch.object(mac_ths, 'read_ax_trades', side_effect=ProviderUnavailable(
                     '没有找到历史成交入口', 'navigation_required')):
-            result = mac_ths.read_ax_holdings_result('real', navigate=True)
+            result = mac_ths.read_ax_holdings_result('real', navigate=True, include_trades=True)
 
         self.assertIsInstance(result, MacHoldingsReadResult)
         self.assertEqual(result.items, holdings)
@@ -601,10 +714,20 @@ class MacHoldingsReadResultTests(unittest.TestCase):
         holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
         with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
                 patch.object(mac_ths, 'read_ax_trades', return_value=[]):
-            result = mac_ths.read_ax_holdings_result('real', navigate=True)
+            result = mac_ths.read_ax_holdings_result('real', navigate=True, include_trades=True)
 
         self.assertEqual(result.details_status, 'empty')
         self.assertEqual(result.details_scope, 'current_query')
+
+    def test_holdings_read_does_not_wait_for_trade_navigation_by_default(self):
+        holdings = [HoldingItem(ticker="600519", quantity=100, cost_price=1500)]
+        with patch.object(mac_ths, '_read_ax_holdings_only', return_value=holdings), \
+                patch.object(mac_ths, 'read_ax_trades') as trades:
+            result = mac_ths.read_ax_holdings_result('real', navigate=True)
+
+        self.assertEqual(result.items, holdings)
+        self.assertEqual(result.details_status, 'not_requested')
+        trades.assert_not_called()
 
 
 class MacThsTradesTests(unittest.TestCase):
