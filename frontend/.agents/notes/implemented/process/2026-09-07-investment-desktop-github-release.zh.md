@@ -28,6 +28,8 @@ Status: implemented
 
 打包保留仓库现有的 macOS ad-hoc 签名与 ZIP 格式。Apple Developer ID 签名、公证、Windows Authenticode 与安装器格式需要仓库当前尚未定义的发布身份和凭据；这项缺口保持明确，不把它表述为生产级签名。
 
+打包入口必须能在同一个检出目录中重复执行。macOS 签名会在描述文件与签名确定后，把随包 Python sidecar 封成只读。下一次调用在 Electron Packager 覆盖已有应用前，只恢复旧 sidecar 内目录的 owner 访问权限；新组装的 sidecar 在产物验收前会再次封成只读。
+
 ## 曾考虑的替代方案
 
 **每个 commit 都发布。** 这会让测试构建永久存在、让普通集成占满 Release 历史，而且不能表达明确的发布意图。PR CI 继续自动运行并保留限时产物。

@@ -24,8 +24,10 @@ esac
 export NODE_USE_ENV_PROXY="${NODE_USE_ENV_PROXY:-1}"
 cd "$ROOT/frontend"
 echo "正在构建 $TARGET 桌面包（首次会下载独立 Python 及依赖，请保持联网）…"
-# Keep deploy metadata from causing an automatic production-only reinstall.
+# A production deploy removes workspace development tools such as tsx.
+# Restore the frozen development tree explicitly before any pnpm script runs.
 export pnpm_config_verify_deps_before_run=warn
+pnpm --config.confirmModulesPurge=false install --frozen-lockfile --prod=false
 pnpm run constraints
 pnpm run make:electron
 echo "构建成功。应用目录：$ROOT/frontend/apps/electron/out"

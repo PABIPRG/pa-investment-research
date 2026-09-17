@@ -18,6 +18,7 @@ import {
   materializePackagingWorkspaceLinks,
   packagerWithIconWarningGuard,
   packagingDirectoryLinkTarget,
+  preparePackagerOutputForOverwrite,
   refreshPackagedSidecarDescriptor,
   removePackagingRoot,
   retryDescriptorOperation,
@@ -767,6 +768,30 @@ describe('Electron investment sidecar packaging', () => {
       await chmod(join(sidecarRoot, 'backends', 'dsh-trading-core'), 0o755).catch(() => undefined)
       await chmod(join(sidecarRoot, 'backends', 'dsh-trading-core', 'adapter'), 0o755).catch(() => undefined)
       await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
+  it('makes a sealed macOS sidecar removable before repeated packaging', async () => {
+    const outDir = await mkdtemp(join(tmpdir(), 'dsh-electron-repeat-package-test-'))
+    const packageDir = join(outDir, `${appIdentity.name}-darwin-arm64`)
+    const appPath = join(packageDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    const nestedDir = join(sidecarRoot, 'backends', 'market-watch')
+    try {
+      await mkdir(nestedDir, { recursive: true })
+      await writeFile(join(nestedDir, 'main.py'), 'print("ready")\n')
+      await sealPackagedSidecarReadOnly(appPath)
+
+      await preparePackagerOutputForOverwrite(outDir, 'darwin', 'arm64')
+
+      expect((await stat(sidecarRoot)).mode & 0o700).toBe(0o700)
+      expect((await stat(nestedDir)).mode & 0o700).toBe(0o700)
+      await expect(rm(packageDir, { force: true, recursive: true })).resolves.toBeUndefined()
+    } finally {
+      await chmod(sidecarRoot, 0o755).catch(() => undefined)
+      await chmod(join(sidecarRoot, 'backends'), 0o755).catch(() => undefined)
+      await chmod(nestedDir, 0o755).catch(() => undefined)
+      await rm(outDir, { force: true, recursive: true })
     }
   })
 

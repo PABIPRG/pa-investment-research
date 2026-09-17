@@ -28,6 +28,8 @@ The workflow defaults to read-only repository access. Only the publish job recei
 
 The package retains the repository's existing ad-hoc macOS signature and ZIP format. Apple Developer ID signing, notarization, Windows Authenticode, and installer formats require release identities and credentials that this repository does not currently define; their absence remains explicit rather than being represented as production signing.
 
+The packaging entry is repeatable in one checkout. macOS signing seals the bundled Python sidecar read-only after its descriptor and signatures are finalized. Before Electron Packager overwrites an existing application, the next invocation restores owner access only on directories inside that stale sidecar; the newly assembled sidecar is sealed again before the package is accepted.
+
 ## Alternatives considered
 
 **Release on every commit.** This makes test builds permanent, consumes Release history for ordinary integration, and does not express deliberate release intent. Pull request CI remains automatic and keeps time-limited artifacts instead.

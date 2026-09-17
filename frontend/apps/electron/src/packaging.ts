@@ -556,6 +556,46 @@ async function copySidecarTree(source: string, destination: string): Promise<voi
   )
 }
 
+async function makePackagedDirectoriesWritable(candidate: string): Promise<void> {
+  let metadata
+  try {
+    metadata = await lstat(candidate)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (metadata.isSymbolicLink()) {
+    throw new TypeError(`existing packaged sidecar contains a symbolic link: ${candidate}`)
+  }
+  if (!metadata.isDirectory()) return
+
+  await chmod(candidate, (metadata.mode & 0o777) | 0o700)
+  const entries = await readdir(candidate, { withFileTypes: true })
+  for (const entry of entries) {
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      await makePackagedDirectoriesWritable(join(candidate, entry.name))
+    }
+  }
+}
+
+/** Restore owner access to a previously sealed macOS sidecar before Packager overwrites it. */
+export async function preparePackagerOutputForOverwrite(
+  outDir: string,
+  platform: NodeJS.Platform,
+  arch: string,
+): Promise<void> {
+  if (platform !== 'darwin') return
+  const sidecarRoot = join(
+    outDir,
+    `${appIdentity.name}-${platform}-${arch}`,
+    `${appIdentity.name}.app`,
+    'Contents',
+    'Resources',
+    'investment-python',
+  )
+  await makePackagedDirectoriesWritable(sidecarRoot)
+}
+
 /**
  * Create packager options that install the sidecar directory under Electron Resources.
  * @param input - Resolved Electron artifact and temporary package paths.
@@ -888,6 +928,7 @@ async function packageApplication(): Promise<void> {
       version: electronVersion,
       ...(process.env.ELECTRON_CACHE ? { cacheRoot: process.env.ELECTRON_CACHE } : {}),
     }))
+    const outDir = join(appDir, 'out')
     const packagerOptions = createPackagerOptions({
       arch: process.arch,
       electronVersion,
@@ -896,9 +937,14 @@ async function packageApplication(): Promise<void> {
       packagerSeedDir: plan.packagerSeedDir,
       sidecarDir: plan.sidecarDir,
       stagingDir: plan.stagingDir,
-      outDir: join(appDir, 'out'),
+      outDir,
     })
     await validatePackagerIcon(packagerOptions)
+    await timed('existing application preparation', () => preparePackagerOutputForOverwrite(
+      outDir,
+      process.platform,
+      process.arch,
+    ))
     const appPaths = await timed('application assembly', () => packagerWithIconWarningGuard(packagerOptions))
     for (const packagePath of appPaths) {
       const resources = process.platform === 'darwin'
