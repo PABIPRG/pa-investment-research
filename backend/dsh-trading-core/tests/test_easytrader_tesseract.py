@@ -87,6 +87,50 @@ class LocateTesseractTests(unittest.TestCase):
             self.assertIsNone(_ocr.locate_tesseract())
 
 
+class PureProbeTests(unittest.TestCase):
+    """快照探测必须无副作用。
+
+    快照接口是只读路径（holdings_source 模块约定「只报告不抛错」），而
+    `locate_tesseract` 会设 `pytesseract.tesseract_cmd` —— 那是读取路径该做的事。
+    两者混用会让「看一眼可用性」顺手改掉后续识别的行为，所以这里把边界钉死。
+    """
+
+    def test_find_tesseract_is_side_effect_free(self):
+        """找到了也不许碰 pytesseract 的全局配置。"""
+        fake = fake_pytesseract()
+        with patch.object(_ocr.shutil, "which", return_value="/custom/bin/tesseract"), \
+                patch.dict(sys.modules, {"pytesseract": fake}):
+            found = _ocr.find_tesseract()
+
+        self.assertEqual(found, "/custom/bin/tesseract")
+        self.assertEqual(fake.pytesseract.tesseract_cmd, "tesseract")
+
+    def test_find_tesseract_does_not_need_pytesseract(self):
+        """对照 test_returns_none_when_pytesseract_missing：找路径与能否识别是两回事。"""
+        with patch.object(_ocr.shutil, "which", return_value="/usr/bin/tesseract"), \
+                patch.dict(sys.modules, {"pytesseract": None}):
+            self.assertEqual(_ocr.find_tesseract(), "/usr/bin/tesseract")
+
+    def test_status_reports_available(self):
+        with patch.object(_ocr.shutil, "which", return_value="/usr/bin/tesseract"):
+            self.assertEqual(_ocr.tesseract_status(), "available")
+
+    def test_status_reports_missing_on_empty_candidates(self):
+        with patch.object(_ocr.shutil, "which", return_value=None), \
+                patch.object(_ocr, "candidate_dirs", return_value=[]):
+            self.assertEqual(_ocr.tesseract_status(), "missing")
+
+    def test_status_ignores_broken_pytesseract(self):
+        """二进制在就报 available：缺 pytesseract 是「本应用依赖不全」，不是「缺 OCR」。
+
+        两者修复动作完全不同（重装本应用 vs 自己装 Tesseract），混成一个取值
+        会把用户引到错误的修法上。
+        """
+        with patch.object(_ocr.shutil, "which", return_value="/usr/bin/tesseract"), \
+                patch.dict(sys.modules, {"pytesseract": None}):
+            self.assertEqual(_ocr.tesseract_status(), "available")
+
+
 class IsMissingTesseractTests(unittest.TestCase):
     """pytesseract 是「先 FileNotFoundError 再包一层」，只看最外层拿不到判据。"""
 

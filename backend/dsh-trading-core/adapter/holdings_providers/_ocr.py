@@ -8,9 +8,15 @@ Windows 版 Tesseract 的安装器**默认不写 PATH**——于是本机明明�
 「请确认客户端已登录且窗口未被遮挡」，把排查方向整个带偏。2026-09-18 真机踩过：
 用户看着「窗口没登录」的提示去查券商客户端，实际根因是 OCR 依赖没暴露。
 
-本模块只做两件事，都不改变读取逻辑本身：
+本模块只做四件事，都不改变读取逻辑本身：
+    find_tesseract()          纯查找：只返回路径，不碰任何全局状态
     locate_tesseract()        找到就设进 pytesseract，返回路径；找不到返回 None
+    tesseract_status()        给 UI 做前置提醒用的纯探测：'available' | 'missing'
     is_missing_tesseract(exc) 判断一个异常链是不是「tesseract 没找到」
+
+find_tesseract 与 locate_tesseract 的区别是「有没有副作用」：后者会设
+`pytesseract.pytesseract.tesseract_cmd`，所以只能放在真正要读取的路径上；
+快照接口是只读探测，必须走前者。
 """
 
 from __future__ import annotations
@@ -47,14 +53,15 @@ def candidate_dirs() -> list[Path]:
     return [Path(os.path.expandvars(hint)) for hint in hints]
 
 
-def locate_tesseract() -> str | None:
-    """找到 tesseract 并交给 pytesseract；找不到返回 None。
+def find_tesseract() -> str | None:
+    """只找路径，不做别的。
 
-    PATH 优先，其次按常见落点探测。命中时设置 `pytesseract.tesseract_cmd` ——
-    那是 pytesseract 唯一认的覆盖点，设完后续所有识别都走这个路径。
+    PATH 优先，其次按常见落点探测。不 import pytesseract，也不写任何全局状态，
+    所以可以随时调用而不会影响后续读取——快照探测必须用这个而不是
+    `locate_tesseract`。
 
-    pytesseract 本身缺失时返回 None：那是另一类问题（easytrader 没装全），
-    不该在这里伪装成「tesseract 找到了」。
+    刻意不看 pytesseract 是否可导入：那是「easytrader 装没装全」的另一类问题，
+    调用方要分清楚时自己查（见 `locate_tesseract` 的返回约定）。
     """
     found = shutil.which(_EXE_NAME)
     if found is None:
@@ -63,6 +70,19 @@ def locate_tesseract() -> str | None:
             if candidate.is_file():
                 found = str(candidate)
                 break
+    return found
+
+
+def locate_tesseract() -> str | None:
+    """找到 tesseract 并交给 pytesseract；找不到返回 None。
+
+    命中时设置 `pytesseract.tesseract_cmd` —— 那是 pytesseract 唯一认的覆盖点，
+    设完后续所有识别都走这个路径。
+
+    pytesseract 本身缺失时返回 None：那是另一类问题（easytrader 没装全），
+    不该在这里伪装成「tesseract 找到了」。
+    """
+    found = find_tesseract()
     if found is None:
         return None
     try:
@@ -71,6 +91,16 @@ def locate_tesseract() -> str | None:
         return None
     pytesseract.pytesseract.tesseract_cmd = found
     return found
+
+
+def tesseract_status() -> str:
+    """本机 tesseract 是否可用，供 UI 做读取前提醒：'available' | 'missing'。
+
+    只看二进制在不在。**不看 pytesseract 能不能导入**——那属于「本应用依赖是否
+    完整」，修复动作是重装本应用而不是装 Tesseract，两者文案不能混。真要覆盖，
+    得再加一个取值，别塞进 'missing'。
+    """
+    return "available" if find_tesseract() is not None else "missing"
 
 
 def is_missing_tesseract(exc: BaseException) -> bool:
@@ -100,4 +130,20 @@ def missing_tesseract_hint() -> str:
         "读取持仓时券商弹出了风控验证码，但本机没找到 tesseract OCR，无法自动识别。"
         "请安装 Tesseract OCR（Windows 安装包默认不写 PATH，本应用会自动探测常见"
         "安装目录，装好后重启本应用即可）。装之前也可以在弹出的验证码框里手工输入。"
+    )
+
+
+def missing_tesseract_notice() -> str:
+    """读取之前给用户看的预告式提醒。
+
+    与 `missing_tesseract_hint` 的区别是时机：那条是「已经失败了，解释为什么」，
+    这条是「还没点，先说清风险」。所以措辞是条件句而不是过去式——缺 OCR 不等于
+    一定读不了，验证码不保证每次都弹。
+
+    「怎么装」那半句和 `missing_tesseract_hint` 是同一份措辞（探测策略变了要一起改）。
+    """
+    return (
+        "读取时如果券商弹出风控验证码，需要手工输入才能继续。"
+        "想恢复自动识别请安装 Tesseract OCR（Windows 安装包默认不写 PATH，"
+        "本应用会自动探测常见安装目录，装好后重启本应用即可）。"
     )

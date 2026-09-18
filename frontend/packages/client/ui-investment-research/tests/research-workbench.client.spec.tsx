@@ -903,6 +903,98 @@ describe('研究工作台', () => {
     expect(within(dialog).getByRole('button', { name: '导入持仓' }).hasAttribute('disabled')).toBe(false)
   })
 
+  it('本机缺少 OCR 时先提醒，但不影响读取入口可用', async () => {
+    const native = vi.fn(async (input: { action: string }) => input.action === 'consent_status'
+      ? { persistent_authorization: false }
+      : { canceled: true })
+    Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+    try {
+      const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+        if (request.operation === 'trading-core.holdings-source') {
+          return {
+            provider: 'easytrader', platform: 'win32', available: true,
+            captcha_ocr: 'missing',
+            captcha_ocr_hint: '想恢复自动识别请安装 Tesseract OCR（装好后重启本应用即可）。',
+          }
+        }
+        return completeResponse(request.operation)
+      })
+      const view = renderWorkbench(requestData)
+      await view.findByText('白酒板块经营数据改善')
+      fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+      let dialog = view.getByRole('dialog', { name: '持仓明细' })
+      const entry = within(dialog).getByRole('button', { name: '从券商同步持仓' })
+
+      // 入口按钮不能因为缺 OCR 被禁用——验证码不保证每次都弹。
+      await waitFor(() => { expect(entry.hasAttribute('disabled')).toBe(false) })
+      fireEvent.click(entry)
+      dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+
+      const notice = await within(dialog).findByRole('note')
+      expect(within(notice).getByText('本机未找到 OCR，验证码可能需要手工输入')).toBeTruthy()
+      expect(within(notice).getByText(/Tesseract/)).toBeTruthy()
+
+      const read = await within(dialog).findByRole('button', { name: '我已打开，开始读取' })
+      await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
+    } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
+  })
+
+  it('OCR 可用或后端未上报该字段时都不提醒', async () => {
+    for (const snapshot of [
+      { provider: 'easytrader', platform: 'win32', available: true, captcha_ocr: 'available' },
+      // 老后端没有这个字段：缺失必须是无害的，不能把读取路径带崩。
+      { provider: 'easytrader', platform: 'win32', available: true },
+    ]) {
+      const native = vi.fn(async () => ({ canceled: true }))
+      Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+      try {
+        const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
+          ? snapshot
+          : completeResponse(request.operation))
+        const view = renderWorkbench(requestData)
+        await view.findByText('白酒板块经营数据改善')
+        fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+        let dialog = view.getByRole('dialog', { name: '持仓明细' })
+        fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+        dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+
+        const read = await within(dialog).findByRole('button', { name: '我已打开，开始读取' })
+        await waitFor(() => { expect(read.hasAttribute('disabled')).toBe(false) })
+        expect(within(dialog).queryByRole('note')).toBeNull()
+      } finally {
+        Reflect.deleteProperty(window, '__DSH_ELECTRON__')
+        cleanup()
+      }
+    }
+  })
+
+  it('读取条件未就绪时不提前报 OCR，避免同屏出现两条原因', async () => {
+    const native = vi.fn(async () => ({ canceled: true }))
+    Object.defineProperty(window, '__DSH_ELECTRON__', { value: { holdingsAction: native }, configurable: true })
+    try {
+      const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+        if (request.operation === 'trading-core.holdings-source') {
+          return {
+            provider: 'easytrader', platform: 'win32', available: false,
+            blocking_reason: 'client_not_running', reason: '请打开同花顺并登录所选账户。',
+            captcha_ocr: 'missing', captcha_ocr_hint: '想恢复自动识别请安装 Tesseract OCR。',
+          }
+        }
+        return completeResponse(request.operation)
+      })
+      const view = renderWorkbench(requestData)
+      await view.findByText('白酒板块经营数据改善')
+      fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
+      let dialog = view.getByRole('dialog', { name: '持仓明细' })
+      fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
+      dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+
+      expect(await within(dialog).findByText('请打开同花顺并登录所选账户。')).toBeTruthy()
+      expect(within(dialog).queryByRole('note')).toBeNull()
+      expect(within(dialog).queryByRole('button', { name: '我已打开，开始读取' })).toBeNull()
+    } finally { Reflect.deleteProperty(window, '__DSH_ELECTRON__') }
+  })
+
   it('持仓明细默认只负责查看，点击导入后再选择单条或批量并保留草稿', async () => {
     const view = renderWorkbench()
     await view.findByText('白酒板块经营数据改善')
