@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import settings
-from .holdings_providers import get_provider
+from .holdings_providers import _ocr, get_provider
 from .holdings_providers.base import ProviderUnavailable, current_account_mode
 from .holdings_providers.broker_profiles import discover_clients
 from .portfolio_performance import holdings_snapshot_matches, record_holdings_snapshot
@@ -166,6 +166,9 @@ def provider_snapshot(surface: str = "web") -> dict:
         "available_actions": ["manual", "recheck"],
         "account_mode": str(getattr(settings, "holdings_account_mode", "simulated")),
         "supported_account_modes": _ACCOUNT_MODE_SUPPORT.get(name, ["real"]),
+        # 验证码 OCR 只是「读取时可能用到」，不是读取的前置条件；默认不适用，
+        # 只有真会用 OCR 的 provider 分支才改写（当前只有 easytrader）。
+        "captcha_ocr": "not_applicable", "captcha_ocr_hint": None,
     }
     # 成交能力闸门要看的券商档案；只有 easytrader 分支会填（mac_ths 没有券商档案，
     # 留 None 表示那道闸门不适用）。
@@ -196,6 +199,18 @@ def provider_snapshot(surface: str = "web") -> dict:
             return blocked("client_not_running", "请打开同花顺并登录所选账户。")
     elif name == "easytrader":
         from .holdings_providers.easytrader import EasyTraderProvider
+        # 读网格可能撞上风控验证码，这时要用 tesseract 识别。缺失只提示、不禁用：
+        # 验证码不保证每次都弹（见 easytrader._read_with_navigation 的注释），没装
+        # OCR 的机器照样能读到不弹验证码的持仓，把 available 打成 False 等于关掉
+        # 一个经常可用的功能。所以这里只写提示字段，绝不碰 available/blocking_reason。
+        # 位置必须在下面三个 blocked() 之前：客户端没开、没选路径时也要带着这条
+        # 提示返回，由前端按 ready 决定显不显示（同一屏最多出现一条原因）。
+        try:
+            state["captcha_ocr"] = _ocr.tesseract_status()
+        except Exception:  # 探测失败不该拖垮整个快照（本模块约定：只报告不抛错）
+            state["captcha_ocr"] = "unknown"
+        if state["captcha_ocr"] == "missing":
+            state["captcha_ocr_hint"] = _ocr.missing_tesseract_notice()
         provider = EasyTraderProvider()
         profile = getattr(provider, "profile", None)
         path = provider._client_path()

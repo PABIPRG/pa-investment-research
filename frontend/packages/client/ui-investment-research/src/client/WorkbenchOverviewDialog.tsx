@@ -428,6 +428,9 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onImport, onClos
   const permission = reason === 'automation_required' || (reason === 'accessibility_required' && state.accessibility !== 'granted')
   const ready = (state.available === true || navigation) && !permission
   const missing = reason === 'client_missing' || reason === 'client_location_required'
+  // OCR 缺失不进 ready / missing / permission 三处判断：验证码不保证每次都弹，
+  // 缺 OCR 的机器照样读得到不弹验证码的持仓，这里只提示风险，读取入口保持可用。
+  const ocrMissing = text(state.captcha_ocr, '') === 'missing'
   const run = async (operation: () => Promise<void>): Promise<void> => {
     if (busy) return
     setBusy(true); setError(''); onSavingChange(true)
@@ -572,6 +575,10 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onImport, onClos
         <span>再进入 {account === 'simulated' ? '模拟' : 'A股'} → 股票 → 持仓，并保持窗口可见；页面未就绪时，应用会在确认后尝试切换。</span>
       </div>}
       {native !== undefined && platform !== 'darwin' && ready && preview === undefined && <p className={css.syncHint}>请先在券商客户端打开上述页面并保持窗口可见；页面未就绪时，应用会在确认后尝试切换。</p>}
+      {native !== undefined && platform !== 'darwin' && ready && preview === undefined && ocrMissing && <div className={css.syncReadinessNotice} role="note">
+        <strong>本机未找到 OCR，验证码可能需要手工输入</strong>
+        <span>{text(state.captcha_ocr_hint, '读取时若券商弹出风控验证码，将无法自动识别，需要手工输入。')}</span>
+      </div>}
       {preview === undefined && ready && <div className={css.syncPrimaryAction}><button type="button" className={css.primaryButton} disabled={busy || loading || provider === 'manual'} onClick={acquire}>{reading ? (cancelling ? '正在取消读取…' : '正在读取持仓…') : '我已打开，开始读取'}</button></div>}
       {reading && native !== undefined && <button type="button" className={css.secondaryButton} disabled={cancelling} onClick={cancelRead}>{cancelling ? '正在取消…' : '取消读取'}</button>}
       {preview !== undefined && <div className={css.workbenchImportPreview}>

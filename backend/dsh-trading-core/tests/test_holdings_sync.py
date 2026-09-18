@@ -17,6 +17,7 @@ os.environ["BRIEF_SCHEDULE_ENABLED"] = "false"
 
 from adapter import app as adapter_app
 from adapter import holdings_source
+from adapter.holdings_providers import easytrader as easytrader_module
 from adapter.holdings_providers.base import ProviderUnavailable
 from adapter.holdings_providers.broker_profiles import DiscoveredClient, resolve_profile
 from adapter.holdings_source import EmptyHoldingsError
@@ -76,6 +77,90 @@ class ProviderSnapshotTests(unittest.TestCase):
             snapshot = holdings_source.provider_snapshot()
         self.assertEqual(snapshot["blocking_reason"], "provider_unavailable")
         reader.assert_not_called()
+
+
+class CaptchaOcrAdvisoryTests(unittest.TestCase):
+    """验证码 OCR 是「建议」不是「闸门」。
+
+    真机踩过：Tesseract 装了但不在 PATH 里，读持仓撞上风控验证码才失败。修法是
+    在用户点读取**之前**先提示，但绝不能顺手把功能禁掉——验证码不保证每次都弹，
+    没装 OCR 的机器照样读得到不弹验证码的持仓。这组用例钉死这个边界。
+    """
+
+    def _snapshot(self, *, ocr: str, client_running: bool = True,
+                  client_exists: bool = True, provider: str = "easytrader") -> dict:
+        """按 easytrader 分支真正用到的属性桩住 provider，并指定 OCR 探测结果。"""
+        path = str(Path(tempfile.gettempdir()) / "dsh-ocr-test.exe") if client_exists else ""
+        stub = SimpleNamespace(
+            profile=resolve_profile("pingan"),
+            _client_path=lambda: path,
+            _client_running=lambda: client_running,
+            _imported=True,
+        )
+        if client_exists:
+            Path(path).write_text("", encoding="utf-8")
+            self.addCleanup(lambda: Path(path).unlink(missing_ok=True))
+
+        def probe() -> str:
+            if isinstance(ocr, Exception):
+                raise ocr
+            return ocr
+
+        patchers = [
+            patch.object(holdings_source.settings, "holdings_provider", provider),
+            patch.object(holdings_source.settings, "holdings_account_mode", "real"),
+            patch.object(holdings_source, "platform_gate", lambda name: None),
+            patch.object(holdings_source._ocr, "tesseract_status", probe),
+            patch.object(easytrader_module, "EasyTraderProvider", lambda *a, **k: stub),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return holdings_source.provider_snapshot("electron")
+
+    def test_missing_ocr_is_advisory_not_blocking(self):
+        """核心非回归：缺 OCR 时读取入口必须照常上报。"""
+        snapshot = self._snapshot(ocr="missing")
+
+        self.assertTrue(snapshot["available"])
+        self.assertIsNone(snapshot["blocking_reason"])
+        self.assertIn("read", snapshot["available_actions"])
+        self.assertEqual(snapshot["captcha_ocr"], "missing")
+        self.assertIn("Tesseract", snapshot["captcha_ocr_hint"])
+
+    def test_missing_ocr_survives_client_not_running(self):
+        """探测必须排在三个 blocked() 之前，否则客户端没开时这条提示会消失。"""
+        snapshot = self._snapshot(ocr="missing", client_running=False)
+
+        self.assertEqual(snapshot["blocking_reason"], "client_not_running")
+        self.assertEqual(snapshot["captcha_ocr"], "missing")
+
+    def test_missing_ocr_survives_unlocated_client(self):
+        """同上，覆盖另一个提前返回。"""
+        snapshot = self._snapshot(ocr="missing", client_exists=False)
+
+        self.assertEqual(snapshot["blocking_reason"], "client_location_required")
+        self.assertEqual(snapshot["captcha_ocr"], "missing")
+
+    def test_available_ocr_leaves_hint_empty(self):
+        snapshot = self._snapshot(ocr="available")
+
+        self.assertEqual(snapshot["captcha_ocr"], "available")
+        self.assertIsNone(snapshot["captcha_ocr_hint"])
+
+    def test_probe_failure_does_not_break_the_snapshot(self):
+        """探测抛错也要出快照——本模块约定「只报告不抛错」。"""
+        snapshot = self._snapshot(ocr=RuntimeError("探测炸了"))
+
+        self.assertEqual(snapshot["captcha_ocr"], "unknown")
+        self.assertTrue(snapshot["available"])
+
+    def test_non_ocr_provider_reports_not_applicable(self):
+        """只有 easytrader 用 OCR；其他数据源不该看到这个字段有值。"""
+        snapshot = self._snapshot(ocr="missing", provider="manual")
+
+        self.assertEqual(snapshot["captcha_ocr"], "not_applicable")
+        self.assertIsNone(snapshot["captcha_ocr_hint"])
 
 
 class SyncHoldingsTests(unittest.TestCase):
