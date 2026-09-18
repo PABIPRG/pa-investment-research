@@ -1,3 +1,7 @@
+import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { HoldingsActionDialog } from './HoldingsActionDialog.tsx'
+import { ManualTradePanel } from './ManualTradePanel.tsx'
+import type { TradeSelection } from './ManualTradePanel.tsx'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
@@ -34,6 +38,7 @@ export interface WorkbenchHoldingInput {
 export type WorkbenchHoldingSaveSource = 'manual' | 'bulk_import'
 
 interface WorkbenchOverviewDialogProps {
+  readonly initialHoldingsFlow?: 'view' | 'sync'
   readonly kind: WorkbenchDetailKind
   readonly positions: readonly WorkbenchPositionDetail[]
   readonly risk: Record<string, unknown>
@@ -52,6 +57,7 @@ interface WorkbenchOverviewDialogProps {
   readonly brokerSync?: boolean
   /** Retained for host compatibility; the single-action flow resolves its source automatically. */
   readonly holdingsProviders?: readonly string[]
+  readonly onHoldingsChanged?: () => void
   readonly onClose: () => void
 }
 
@@ -95,18 +101,23 @@ function summedAmount(
 }
 
 function PositionTable({
-  positions, kind, saving, pendingDelete, positionPlans, onEdit, onEditRisk, onRequestDelete, onConfirmDelete, onCancelDelete,
+  positions, kind, saving, pendingDelete, positionPlans, onEdit, onTrade, onEditRisk, onRequestDelete, onConfirmDelete, onCancelDelete,
+  editDraft, onChangeDraft, onCancelEdit,
 }: {
   positions: readonly WorkbenchPositionDetail[]
   kind: 'holdings' | 'cost'
   saving?: boolean
   pendingDelete?: string
+  onTrade?: (selection: TradeSelection) => void
   onEdit?: (item: WorkbenchPositionDetail) => void
   positionPlans?: Map<string, Record<string, unknown>>
   onEditRisk?: (item: WorkbenchPositionDetail) => void
   onRequestDelete?: (code: string) => void
   onConfirmDelete?: (code: string) => void
   onCancelDelete?: () => void
+  editDraft?: HoldingEditorDraft | undefined
+  onChangeDraft?: (draft: HoldingEditorDraft) => void
+  onCancelEdit?: () => void
 }) {
   const { hidden: fundsHidden } = useFundsPrivacy()
   if (positions.length === 0) {
@@ -114,31 +125,38 @@ function PositionTable({
   }
   return (
     <div className={css.workbenchOverviewTableWrap}>
-      <table className={css.workbenchOverviewTable}>
+      <table className={css.workbenchOverviewTable} data-kind={kind}>
         <thead>
           <tr>
             <th scope="col">标的</th>
             <th scope="col">持仓数量</th>
             <th scope="col">成本价</th>
             {kind === 'cost' && <th scope="col">成本金额</th>}
-            {kind === 'holdings' && onEditRisk !== undefined && <th scope="col">止盈止损</th>}
+            {kind === 'holdings' && onEditRisk !== undefined && <th scope="col" className={css.holdingRiskHeading}>止盈止损</th>}
             {kind === 'holdings' && onEdit !== undefined && <th scope="col">操作</th>}
           </tr>
         </thead>
         <tbody>
           {positions.map((item, index) => {
             const price = item.costPrice
+            const editing = editDraft?.originalCode === item.code
+            const actionsDisabled = saving || editDraft !== undefined
             return (
-              <tr key={`${item.code}-${index}`}>
+              <tr key={`${item.code}-${index}`} data-editing={editing || undefined}>
                 <th scope="row"><strong className={item.name === '名称加载中' ? css.securityNameLoading : undefined}>{item.name}</strong><small>{item.code}</small></th>
-                <td><span className={css.workbenchMobileLabel}>持仓数量</span>{privateFunds(quantity(item.quantity), fundsHidden)}</td>
-                <td><span className={css.workbenchMobileLabel}>成本价</span>{privateFunds(amount(item.costPrice), fundsHidden)}</td>
+                <td><span className={css.workbenchMobileLabel}>持仓数量</span>{editing && editDraft
+                  ? <Input className={css.holdingInlineInput ?? ''} aria-label="持仓数量" type="number" min="0" step="any" disabled={saving} value={editDraft.quantity} onChange={event => { onChangeDraft?.({ ...editDraft, quantity: event.target.value }) }} />
+                  : privateFunds(quantity(item.quantity), fundsHidden)}</td>
+                <td><span className={css.workbenchMobileLabel}>成本价</span>{editing && editDraft
+                  ? <Input className={css.holdingInlineInput ?? ''} aria-label="成本价" type="number" min="0" step="any" disabled={saving} value={editDraft.costPrice} onChange={event => { onChangeDraft?.({ ...editDraft, costPrice: event.target.value }) }} />
+                  : privateFunds(amount(item.costPrice), fundsHidden)}</td>
                 {kind === 'cost' && <td><span className={css.workbenchMobileLabel}>成本金额</span>{privateFunds(amount(positionAmount(item, price)), fundsHidden)}</td>}
                 {kind === 'holdings' && onEditRisk !== undefined && (
                   <td>
                     <span className={css.workbenchMobileLabel}>止盈止损</span>
                     <PositionRiskPlanCell
                       plan={positionPlans?.get(item.code)}
+                      disabled={actionsDisabled}
                       onEdit={() => { onEditRisk(item) }}
                     />
                   </td>
@@ -146,16 +164,22 @@ function PositionTable({
                 {kind === 'holdings' && onEdit !== undefined && (
                   <td className={css.workbenchHoldingActions}>
                     <span className={css.workbenchMobileLabel}>操作</span>
-                    {pendingDelete === item.code ? (
+                    {editing ? (
+                      <div className={css.holdingRowActions}>
+                        <Button className={css.holdingTextButton} variant="ghost" size="sm" type="submit" aria-label="保存持仓" disabled={saving}>{saving ? '保存中…' : '保存'}</Button>
+                        <Button className={css.holdingTextButton} variant="ghost" size="sm" aria-label="取消编辑" disabled={saving} onClick={onCancelEdit}>取消</Button>
+                      </div>
+                    ) : pendingDelete === item.code ? (
                       <div className={css.workbenchDeleteConfirm}>
                         <span>确认删除该持仓？</span>
                         <button type="button" disabled={saving} aria-label={`确认删除 ${item.code}`} onClick={() => { onConfirmDelete?.(item.code) }}>确认删除</button>
                         <button type="button" disabled={saving} aria-label={`取消删除 ${item.code}`} onClick={onCancelDelete}>取消</button>
                       </div>
                     ) : (
-                      <div>
-                        <button type="button" disabled={saving} aria-label={`编辑 ${item.name} ${item.code}`} onClick={() => { onEdit(item) }}>编辑</button>
-                        <button type="button" disabled={saving} aria-label={`删除 ${item.name} ${item.code}`} onClick={() => { onRequestDelete?.(item.code) }}>删除</button>
+                      <div className={css.holdingRowActions}>
+                        {onTrade && <><Button className={css.holdingTextButton} variant="ghost" size="sm" disabled={actionsDisabled} onClick={() => { onTrade({ side: 'buy', ticker: item.code, name: item.name }) }}>买入</Button><Button className={css.holdingTextButton} variant="ghost" size="sm" disabled={actionsDisabled} onClick={() => { onTrade({ side: 'sell', ticker: item.code, name: item.name }) }}>卖出</Button><Button className={css.holdingTextButton} variant="ghost" size="sm" disabled={actionsDisabled} onClick={() => { onTrade({ side: 'history', ticker: item.code, name: item.name }) }}>历史</Button></>}
+                        <Button className={css.holdingTextButton} variant="ghost" size="sm" disabled={actionsDisabled} data-holding-edit={item.code} aria-label={`编辑 ${item.name} ${item.code}`} onClick={() => { onEdit(item) }}>编辑</Button>
+                        <Button className={`${css.holdingTextButton} ${css.holdingDangerButton}`} variant="ghost" size="sm" disabled={actionsDisabled} aria-label={`删除 ${item.name} ${item.code}`} onClick={() => { onRequestDelete?.(item.code) }}>删除</Button>
                       </div>
                     )}
                   </td>
@@ -335,11 +359,12 @@ function HoldingsBulkImport({
  * Chooses a persisted holdings provider, reads real holdings from its broker
  * client, and replaces the saved portfolio with them after explicit confirmation.
  */
-function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSavingChange }: {
+function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onImport, onClose, onSavingChange }: {
   requestData: RequestData
   onSync: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onNativeSync: (items: readonly WorkbenchHoldingInput[]) => void
-  onBack: () => void
+  onImport: () => void
+  onClose: () => void
   onSavingChange: (saving: boolean) => void
 }) {
   const boundedRequest = useCallback((request: InvestmentDataRequest): Promise<unknown> => new Promise((resolve, reject) => {
@@ -349,7 +374,6 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
   const source = useRequestResource(boundedRequest)
   const config = useRequestResource(boundedRequest)
   const [slow, setSlow] = useState(false)
-  const backButtonRef = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
   const [reading, setReading] = useState(false)
   const [cancelling, setCancelling] = useState(false)
@@ -368,7 +392,7 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
     source.run({ operation: 'trading-core.holdings-source' })
     config.run({ operation: 'trading-core.holdings-user-config' })
   }, [source.run, config.run])
-  useEffect(() => { reload(); backButtonRef.current?.focus() }, [reload])
+  useEffect(() => { reload() }, [reload])
   useEffect(() => {
     alive.current = true
     const focus = (): void => {
@@ -497,10 +521,6 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
     })
   }
   return <section className={css.workbenchSyncPanel} aria-label="从券商同步持仓">
-    <div className={css.workbenchImportHeader}>
-      <div><span>选择账户后获取持仓，确认预览才会保存</span></div>
-      <button ref={backButtonRef} type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>返回持仓明细</button>
-    </div>
     <div className={css.workbenchAccountMode}>
       <div className={css.workbenchSyncStepHeading}><strong>操盘账户</strong><span>选择模拟或实盘，设置会自动记住</span></div>
       <div className={css.workbenchAccountModeChoices} role="group" aria-label="操盘账户">
@@ -544,7 +564,7 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
         </>}
         {reason === 'client_not_running' && native !== undefined && <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { nativeAction('launch') }}>打开同花顺</button>}
         {!missing && <button type="button" className={css.secondaryButton} disabled={busy || loading} onClick={() => { setBlocking(''); reload() }}>重新检测</button>}
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onBack}>{missing ? '暂不安装，改用手动录入' : '改用手动录入 / 批量导入'}</button>
+        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onImport}>{missing ? '暂不安装，改用手动录入' : '改用手动录入 / 批量导入'}</button>
       </div>}
       {native === undefined && ready && <p className={css.syncHint}>Web 版不会自动切换窗口，请先在同花顺进入上述位置。</p>}
       {native !== undefined && platform === 'darwin' && ready && preview === undefined && <div className={css.syncReadinessNotice} role="note">
@@ -585,9 +605,9 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
           </Fragment>
         })}</tbody></table></div>
         {saved
-          ? <div className={css.workbenchImportPreviewFooter}><div><strong>同步完成</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} onClick={onBack}>完成</button></div></div>
+          ? <div className={css.workbenchImportPreviewFooter}><div><strong>同步完成</strong><p role="status">持仓已保存，组合风险已请求刷新；本次变更保留在持仓快照记录中。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} onClick={onClose}>完成</button></div></div>
           : preview.changed === false
-            ? <div className={css.workbenchImportPreviewFooter}><div><strong>持仓无变化</strong><p role="status">不会创建重复快照或变更记录。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} onClick={() => { if (native !== undefined) nativeAction('discard'); onBack() }}>完成</button></div></div>
+            ? <div className={css.workbenchImportPreviewFooter}><div><strong>持仓无变化</strong><p role="status">不会创建重复快照或变更记录。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} onClick={() => { if (native !== undefined) nativeAction('discard'); onClose() }}>完成</button></div></div>
             : <div className={css.workbenchImportPreviewFooter}><div><strong>确认替换本地持仓</strong><p>确认后整体替换本地持仓并重新计算组合风险；空结果不会清空持仓。</p></div><div className={css.syncActions}><button type="button" className={css.primaryButton} disabled={busy} onClick={confirm}>确认替换 {items.length} 条持仓</button><button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { if (native !== undefined) nativeAction('discard'); setPreview(undefined); setError('') }}>取消预览</button></div></div>}
       </div>}
     </div>
@@ -596,9 +616,11 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onBack, onSaving
 }
 
 function HoldingsEditor({
-  positions, requestData, brokerSync, positionPlans, onEditRisk,
-  onSaveHoldings, onSyncHoldings, onSavingChange, onFlowChange,
+  positions, requestData, brokerSync, positionPlans, onEditRisk, initialFlow,
+  onSaveHoldings, onSyncHoldings, onSavingChange, onHoldingsChanged,
 }: {
+  onHoldingsChanged?: () => void
+  initialFlow: 'view' | 'sync'
   positions: readonly WorkbenchPositionDetail[]
   requestData: RequestData
   brokerSync: boolean
@@ -607,16 +629,24 @@ function HoldingsEditor({
   onSaveHoldings: (holdings: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource) => Promise<void>
   onSyncHoldings: (token: string) => Promise<readonly WorkbenchHoldingInput[]>
   onSavingChange: (saving: boolean) => void
-  onFlowChange: (flow: 'view' | 'import' | 'sync') => void
 }) {
+  const [tradeSelection, setTradeSelection] = useState<TradeSelection>()
   const [flow, setFlow] = useState<'view' | 'import' | 'sync'>('view')
-  useEffect(() => { onFlowChange(flow) }, [flow, onFlowChange])
+  useEffect(() => { if (brokerSync && initialFlow === 'sync') setFlow('sync') }, [brokerSync, initialFlow])
   const brokerSource = useRequestResource(requestData)
   useEffect(() => {
     if (brokerSync && flow === 'view') brokerSource.run({ operation: 'trading-core.holdings-source' })
   }, [brokerSource.run, brokerSync, flow])
   const [importMode, setImportMode] = useState<'single' | 'batch'>('single')
   const [editDraft, setEditDraft] = useState<HoldingEditorDraft>()
+  const editFormRef = useRef<HTMLFormElement>(null)
+  const previousEditCode = useRef<string>()
+  const editCode = editDraft?.originalCode
+  useEffect(() => {
+    if (editCode) editFormRef.current?.querySelector<HTMLInputElement>('input[aria-label="持仓数量"]')?.focus()
+    else if (previousEditCode.current) editFormRef.current?.querySelector<HTMLButtonElement>(`button[data-holding-edit="${previousEditCode.current}"]`)?.focus()
+    previousEditCode.current = editCode
+  }, [editCode])
   const [singleDraft, setSingleDraft] = useState<HoldingEditorDraft>(EMPTY_HOLDING_DRAFT)
   const [pendingDelete, setPendingDelete] = useState('')
   const [saving, setSaving] = useState(false)
@@ -626,9 +656,6 @@ function HoldingsEditor({
   const [importSource, setImportSource] = useState('')
   const [notice, setNotice] = useState('')
   const [savedSnapshot, setSavedSnapshot] = useState<readonly WorkbenchHoldingInput[]>()
-  const importButtonRef = useRef<HTMLButtonElement>(null)
-  const singleTabRef = useRef<HTMLButtonElement>(null)
-  const focusRequestRef = useRef<'view' | 'import' | 'sync'>()
   const brokerSourceValue = asRecord(brokerSource.state.value)
   const brokerBlockReason = text(brokerSourceValue.blocking_reason, '')
   const syncUnavailable = brokerSource.state.loaded
@@ -658,23 +685,14 @@ function HoldingsEditor({
     if (refreshed !== undefined && sameHoldings(refreshed, savedSnapshot)) setSavedSnapshot(undefined)
   }, [positions, savedSnapshot])
 
-  useEffect(() => {
-    if (saving || focusRequestRef.current !== flow) return
-    // sync 面板在自己的挂载副作用里接管焦点（父级工具栏按钮此时已卸载）
-    if (flow === 'import') singleTabRef.current?.focus()
-    else if (flow !== 'sync') importButtonRef.current?.focus()
-    focusRequestRef.current = undefined
-  }, [flow, saving])
-
+  const beginTrade = (selection: TradeSelection): void => { setTradeSelection(selection); setEditDraft(undefined); setPendingDelete(''); setViewError(''); setNotice('') }
   const beginImport = (): void => {
-    focusRequestRef.current = 'import'
     setPendingDelete(''); setViewError(''); setNotice(''); setImportMode('single'); setFlow('import')
   }
   const beginSync = (): void => {
-    focusRequestRef.current = 'sync'
     setPendingDelete(''); setViewError(''); setNotice(''); setFlow('sync')
   }
-  const returnToView = (): void => { focusRequestRef.current = 'view'; setFlow('view') }
+  const returnToView = (): void => { setFlow('view') }
   const applySyncedHoldings = async (token: string): Promise<readonly WorkbenchHoldingInput[]> => {
     const items = await onSyncHoldings(token)
     setSavedSnapshot(items)
@@ -703,7 +721,6 @@ function HoldingsEditor({
     try {
       await onSaveHoldings(next, 'manual')
       setSavedSnapshot(next)
-      focusRequestRef.current = 'view'
       setEditDraft(undefined)
       setNotice('持仓已保存，工作台数据正在刷新。')
     } catch (reason) {
@@ -743,7 +760,6 @@ function HoldingsEditor({
       const next = current.filter(item => item.ticker !== code)
       await onSaveHoldings(next, 'manual')
       setSavedSnapshot(next)
-      focusRequestRef.current = 'view'
       setPendingDelete('')
       setEditDraft(currentDraft => currentDraft?.originalCode === code ? undefined : currentDraft)
       setNotice('持仓已删除，工作台数据正在刷新。')
@@ -772,11 +788,12 @@ function HoldingsEditor({
   return (
     <>
       {notice !== '' && <div className={css.workbenchHoldingNotice} role="status">{notice}</div>}
-      {flow === 'view' ? (
         <section aria-label="已保存持仓">
           <div className={css.workbenchHoldingToolbar}>
             <div><strong>持仓标的</strong><span>{effectivePositions.length} 项</span></div>
             <div className={css.workbenchHoldingToolbarActions}>
+              <Button className={css.holdingButton} variant="outline" disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={() => { beginTrade({ side: 'buy', ticker: '' }) }}>记录买入</Button>
+              <Button className={css.holdingButton} variant="outline" disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={() => { beginTrade({ side: 'history', ticker: '' }) }}>全部成交记录</Button>
               {brokerSync && (
                 <span
                   className={css.workbenchSyncEntry}
@@ -798,21 +815,11 @@ function HoldingsEditor({
                 disabled={saving || editDraft !== undefined || pendingDelete !== ''}
                 onClick={() => { onEditRisk() }}
               >全局止盈止损</button>
-              <button ref={importButtonRef} type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
+              <button type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
             </div>
           </div>
           {viewError !== '' && <div className={css.inlineError} role="alert">{viewError}</div>}
-          {editDraft !== undefined && (
-            <form className={css.workbenchHoldingForm} aria-label="持仓编辑表单" onSubmit={(event) => { event.preventDefault(); void saveEditDraft() }}>
-              <label><span>股票代码</span><input className={css.fieldInput} type="text" inputMode="numeric" maxLength={6} disabled={saving} value={editDraft.code} onChange={(event) => { setEditDraft({ ...editDraft, code: event.target.value }); setViewError('') }} /></label>
-              <label><span>持仓数量</span><input className={css.fieldInput} type="number" min="0" step="any" disabled={saving} value={editDraft.quantity} onChange={(event) => { setEditDraft({ ...editDraft, quantity: event.target.value }); setViewError('') }} /></label>
-              <label><span>成本价</span><input className={css.fieldInput} type="number" min="0" step="any" disabled={saving} value={editDraft.costPrice} onChange={(event) => { setEditDraft({ ...editDraft, costPrice: event.target.value }); setViewError('') }} /></label>
-              <div>
-                <button type="button" className={css.secondaryButton} disabled={saving} onClick={() => { setEditDraft(undefined); setViewError('') }}>取消编辑</button>
-                <button type="submit" className={css.primaryButton} disabled={saving}>{saving ? '正在保存…' : '保存持仓'}</button>
-              </div>
-            </form>
-          )}
+          <form ref={editFormRef} aria-label="持仓行内编辑" onSubmit={event => { event.preventDefault(); void saveEditDraft() }}>
           <PositionTable
             positions={effectivePositions}
             kind="holdings"
@@ -820,31 +827,36 @@ function HoldingsEditor({
             onEditRisk={onEditRisk}
             saving={saving}
             pendingDelete={pendingDelete}
+            editDraft={editDraft}
+            onChangeDraft={draft => { setEditDraft(draft); setViewError('') }}
+            onCancelEdit={() => { setEditDraft(undefined); setViewError('') }}
             onEdit={beginEdit}
+            onTrade={beginTrade}
             onRequestDelete={(code) => { setEditDraft(undefined); setViewError(''); setNotice(''); setPendingDelete(code) }}
             onConfirmDelete={(code) => { void confirmDelete(code) }}
             onCancelDelete={() => { setPendingDelete('') }}
           />
+          </form>
         </section>
-      ) : flow === 'sync' ? (
-        <HoldingsSyncPanel
+      {flow !== 'view' && (
+        <HoldingsActionDialog
+          title={flow === 'sync' ? '同步同花顺持仓' : '导入持仓'}
+          description={flow === 'sync' ? '选择账户并获取持仓；核对预览后确认导入。' : '选择单条录入或批量导入，核对后保存研究持仓。'}
+          wide onClose={returnToView} busy={saving}
+        >
+        {flow === 'sync' ? <HoldingsSyncPanel
           requestData={requestData}
           onSync={applySyncedHoldings}
           onNativeSync={(items) => {
             setSavedSnapshot(items)
             setNotice(`已同步 ${items.length} 条持仓，工作台数据正在刷新。`)
           }}
-          onBack={returnToView}
+          onImport={beginImport}
+          onClose={returnToView}
           onSavingChange={(value) => { setSaving(value); onSavingChange(value) }}
-        />
-      ) : (
-        <section aria-label="导入持仓">
-          <div className={css.workbenchImportHeader}>
-            <div><strong>导入持仓</strong><span>选择适合本次录入数量的方式</span></div>
-            <button type="button" className={css.secondaryButton} disabled={saving} onClick={returnToView}>返回持仓明细</button>
-          </div>
+        /> : <section aria-label="导入持仓">
           <div className={css.workbenchHoldingModeTabs} role="tablist" aria-label="持仓导入方式">
-            <button ref={singleTabRef} id="holdings-single-tab" type="button" role="tab" aria-selected={importMode === 'single'} disabled={saving} onClick={() => { setImportMode('single') }}>单条录入</button>
+            <button id="holdings-single-tab" type="button" role="tab" aria-selected={importMode === 'single'} disabled={saving} onClick={() => { setImportMode('single') }}>单条录入</button>
             <button id="holdings-batch-tab" type="button" role="tab" aria-selected={importMode === 'batch'} disabled={saving} onClick={() => { setImportMode('batch') }}>批量导入</button>
           </div>
           {importMode === 'single' ? (
@@ -875,8 +887,14 @@ function HoldingsEditor({
               onSave={saveImport}
             />
           )}
-        </section>
+        </section>}
+        </HoldingsActionDialog>
       )}
+      {tradeSelection && <ManualTradePanel selection={tradeSelection} requestData={requestData}
+        onRecordBuy={() => { setTradeSelection({ ...tradeSelection, side: 'buy' }) }}
+        onClose={() => { setTradeSelection(undefined) }}
+        onBusy={(value) => { setSaving(value); onSavingChange(value) }}
+        onSaved={(items, warning) => { setSavedSnapshot(items); setTradeSelection(undefined); setNotice(warning || '成交已保存，研究持仓已更新。'); onHoldingsChanged?.() }} />}
     </>
   )
 }
@@ -1064,18 +1082,16 @@ function RiskCenterDetail({
 export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
   holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onSyncHoldings, requestData,
-  brokerSync = true, onClose,
+  brokerSync = true, initialHoldingsFlow = 'view', onClose, onHoldingsChanged,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
-  const [holdingFlow, setHoldingFlow] = useState<'view' | 'import' | 'sync'>('view')
   const [positionRiskEditor, setPositionRiskEditor] = useState<WorkbenchPositionDetail | null>()
   const positionRisk = useRequestResource(requestData)
   useEffect(() => {
     if (kind === 'holdings') positionRisk.run({ operation: 'trading-core.position-risk' })
   }, [kind, positionRisk.run])
   const positionPlans = positionRiskPlanMap(positionRisk.state.value)
-  const syncing = kind === 'holdings' && holdingFlow === 'sync'
   const close = (): void => { if (!holdingSaving) onClose() }
   let dialogContent: ReactNode
   if (kind === 'holdings' || kind === 'cost') {
@@ -1084,7 +1100,9 @@ export function WorkbenchOverviewDialog({
     } else if (kind === 'holdings') {
       dialogContent = <>
         {retainedResourceWarning(holdingsState, '持仓')}
+        {initialHoldingsFlow === 'sync' && !brokerSync && <p role="status">当前环境不支持券商同步。请在支持的桌面环境同步，或使用下方“导入持仓”。</p>}
         <HoldingsEditor
+          initialFlow={initialHoldingsFlow}
           positions={positions}
           requestData={requestData}
           brokerSync={brokerSync}
@@ -1092,8 +1110,8 @@ export function WorkbenchOverviewDialog({
           onEditRisk={(item) => { setPositionRiskEditor(item ?? null) }}
           onSaveHoldings={onSaveHoldings}
           onSyncHoldings={onSyncHoldings}
+          onHoldingsChanged={() => { onHoldingsChanged?.(); positionRisk.run({ operation: 'trading-core.position-risk' }) }}
           onSavingChange={setHoldingSaving}
-          onFlowChange={setHoldingFlow}
         />
       </>
     } else {
@@ -1123,13 +1141,13 @@ export function WorkbenchOverviewDialog({
   return (
     <>
       <DetailDialog
-        title={syncing ? '同步同花顺持仓' : copy.title}
-        description={syncing ? '选择账户并获取持仓；核对预览后确认导入。' : copy.description}
-        {...(syncing ? {} : { eyebrow: '投研概览' })}
+        title={copy.title}
+        description={copy.description}
+        eyebrow="投研概览"
         wide
         onClose={close}
         closeDisabled={holdingSaving}
-        actions={<button type="button" className={css.secondaryButton} disabled={holdingSaving} onClick={close}>关闭</button>}
+        actions={<Button variant="primary" className={`${css.holdingButton} ${css.holdingCloseButton}`} disabled={holdingSaving} onClick={close}>关闭</Button>}
       >
         {dialogContent}
       </DetailDialog>

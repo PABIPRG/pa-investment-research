@@ -131,6 +131,8 @@ export type InvestmentDataOperation =
   | 'trading-core.watchlist-save'
   | 'trading-core.holdings'
   | 'trading-core.holdings-save'
+  | 'trading-core.holdings-trades'
+  | 'trading-core.holdings-trade'
   | 'trading-core.holdings-source'
   | 'trading-core.holdings-detect'
   | 'trading-core.holdings-sync'

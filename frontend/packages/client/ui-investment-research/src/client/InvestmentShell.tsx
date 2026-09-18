@@ -1,3 +1,4 @@
+import { searchSecurities, type SecuritySearchItem } from './security-search.ts'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
@@ -427,20 +428,6 @@ export function InvestmentSidebar({
   )
 }
 
-interface SecuritySearchItem {
-  readonly code: string
-  readonly name: string
-  readonly market: string
-}
-
-function securitySearchItems(value: unknown): SecuritySearchItem[] {
-  return records(asRecord(value).items).flatMap((item) => {
-    const code = text(item.code, '')
-    if (code === '') return []
-    return [{ code, name: text(item.name, code), market: text(item.market, '') }]
-  })
-}
-
 function GlobalStockSearch({
   requestData, navigate, trackTelemetry,
 }: { requestData: RequestData; navigate: UiInjected['navigate']; trackTelemetry: TrackLocalTelemetry }) {
@@ -460,10 +447,10 @@ function GlobalStockSearch({
     let alive = true
     setLoading(true); setError('')
     const timer = window.setTimeout(() => {
-      requestData({ operation: 'market-watch.security-search', input: { query: keyword, limit: 8 } })
+      searchSecurities(requestData, keyword)
         .then((value) => {
           if (!alive) return
-          setItems(securitySearchItems(value)); setActiveIndex(0); setLoading(false)
+          setItems(value); setActiveIndex(0); setLoading(false)
         })
         .catch(() => {
           if (!alive) return
@@ -1199,6 +1186,9 @@ function InvestmentShellContent({
     if (snapshot.route !== 'dashboard' && retainedRoute !== 'dashboard') setDashboardView('workbench')
   }, [retainedRoute, snapshot.route])
   useEffect(() => {
+    if (snapshot.holdingsEntry !== undefined) setDashboardView('workbench')
+  }, [snapshot.holdingsEntry])
+  useEffect(() => {
     document.body.dataset.investmentAssistantMode = conversationPrimary ? 'closed' : assistantMode
     if (conversationPrimary) {
       document.body.dataset.investmentConversationPrimary = ''
@@ -1498,6 +1488,7 @@ function InvestmentShellContent({
             <div className={css.dashboardViewPane} data-dashboard-view="workbench" hidden={dashboardView !== 'workbench'}>
               <ResearchWorkbenchPage
                 requestData={requestData}
+                holdingsEntry={snapshot.holdingsEntry}
                 brokerSync={hostDescription === undefined ? true : deployment?.brokerSync ?? false}
                 holdingsProviders={hostDescription === undefined
                   ? ['manual', 'easytrader', 'mac_ths', 'qmt']

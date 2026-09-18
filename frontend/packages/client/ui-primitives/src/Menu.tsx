@@ -87,7 +87,7 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * by a hairline; they stay visible while the items above scroll.
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, closeOnPointerLeave = false, dense = false, compact = false, getAnchorRect, footer, className }: {
+export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, closeOnPointerLeave = false, dense = false, compact = false, getAnchorRect, footer, className, content, listClassName }: {
   open: boolean
   anchor: ReactNode
   items: readonly MenuEntry[]
@@ -104,6 +104,9 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   compact?: boolean
   getAnchorRect?: () => DOMRect | null
   className?: string
+  /** Custom selection content owns its listbox/status semantics; positioning and outside dismissal stay here. */
+  content?: ReactNode
+  listClassName?: string | undefined
 }) {
   const rootRef = useRef<HTMLSpanElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -265,16 +268,16 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   const list = open && (
     <div
       ref={listRef}
-      className={clsx(css.list, dense && css.denseList, compact && css.compactList, scrollable && css.scrollable, portal && css.portal, side === 'top' && !portal && css.sideTop, align === 'end' && !portal && css.alignEnd)}
+      className={clsx(css.list, dense && css.denseList, compact && css.compactList, scrollable && css.scrollable, portal && css.portal, side === 'top' && !portal && css.sideTop, align === 'end' && !portal && css.alignEnd, listClassName)}
       style={portal ? fixedPos ?? MEASURE_STYLE : undefined}
-      role="menu"
+      role={content == null ? 'menu' : 'presentation'}
       // React portals bubble synthetic events through the REACT tree: without
       // this stop, an item click re-fires the anchor row's own onClick
       // (open/toggle) after onSelect.
       onClick={(e) => { e.stopPropagation() }}
     >
       <div className={css.viewport} role="presentation">
-        {items.map(renderEntry)}
+        {content ?? items.map(renderEntry)}
       </div>
       {footer !== undefined && footer.length > 0 && (
         <div className={css.footer} role="presentation">

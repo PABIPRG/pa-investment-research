@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Button, IconQuestionOutline14, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
@@ -23,6 +24,18 @@ interface PositionRiskDialogProps {
 }
 
 const EMPTY_TARGET: TargetDraft = Object.freeze({ enabled: true, mode: 'percent', value: '' })
+const PROFILE_LABELS: Readonly<Record<string, string>> = { conservative: '保守型', balanced: '稳健型', aggressive: '进取型' }
+
+function CalculationHelp({ kind }: { readonly kind: TargetKind }) {
+  const label = kind === 'take_profit' ? '止盈线' : '止损线'
+  const example = kind === 'take_profit' ? '止盈幅度 20%，目标价为 120 元' : '止损幅度 10%，目标价为 90 元'
+  const explanation = `以确认时的持仓成本价计算。例如成本价 100 元，${example}。确认后目标价固定，成本变化不会自动重算；达到目标只提醒，不会自动交易。`
+  return <Tooltip label={explanation} side="bottom" maxWidth={300}>
+    <span className={css.positionRiskHelp}><Button size="sm" variant="ghost" icon={<IconQuestionOutline14 />}
+      aria-label={`了解${label}计算方式`} aria-description={explanation}
+      onClick={(event) => { event.currentTarget.focus() }} /></span>
+  </Tooltip>
+}
 
 function targetDraft(targetValue: unknown, fallbackPercent: number | undefined): TargetDraft {
   const target = asRecord(targetValue)
@@ -65,17 +78,20 @@ function TargetEditor({ kind, value, global, disabled, onChange }: {
         <span>启用{label}</span>
       </label>
       <div className={css.positionRiskTargetFields}>
-        <label>
+        {global ? <div className={css.positionRiskFixedMode}>
+          <div><span>计算方式</span><CalculationHelp kind={kind} /></div>
+          <strong>相对成本涨跌幅</strong>
+        </div> : <label>
           <span>计算方式</span>
           <select
-            value={global ? 'percent' : value.mode}
-            disabled={disabled || !value.enabled || global}
+            value={value.mode}
+            disabled={disabled || !value.enabled}
             onChange={(event) => { onChange({ ...value, mode: event.target.value as TargetMode }) }}
           >
             <option value="percent">相对成本涨跌幅</option>
-            {!global && <option value="price">固定价格</option>}
+            <option value="price">固定价格</option>
           </select>
-        </label>
+        </label>}
         <label>
           <span>{value.mode === 'percent' ? '幅度（%）' : '目标价（元）'}</span>
           <input
@@ -93,15 +109,16 @@ function TargetEditor({ kind, value, global, disabled, onChange }: {
 }
 
 /** 持仓表中的解析后计划摘要；只展示有效快照，不在前端复制配置解析逻辑。 */
-export function PositionRiskPlanCell({ plan, onEdit }: {
+export function PositionRiskPlanCell({ plan, onEdit, disabled }: {
   readonly plan: Record<string, unknown> | undefined
+  readonly disabled?: boolean
   readonly onEdit: () => void
 }) {
   if (plan === undefined) {
     return (
       <div className={css.positionRiskCell} data-status="loading">
         <div className={css.positionRiskState}><strong>读取中…</strong></div>
-        <button type="button" className={css.positionRiskAdjust} onClick={onEdit}>设置</button>
+        <Button variant="ghost" size="sm" className={`${css.holdingTextButton} ${css.positionRiskAdjust}`} disabled={disabled} onClick={onEdit}>设置</Button>
       </div>
     )
   }
@@ -114,13 +131,15 @@ export function PositionRiskPlanCell({ plan, onEdit }: {
     unconfigured: '尚未设置', disabled: '不监控', scheduled: '待生效', active: '监控中',
     triggered: '已触发', expired: '已到期', sync_error: '同步待重试', unconfirmed: '待确认',
   }
+  const explanation = `${status === 'unconfigured' ? '请先确认全局配置，或点击设置单独配置该持仓。' : source}${plan.basis_changed === true ? ' · 成本已变化，请复核目标价。' : ''}`
   return (
     <div className={css.positionRiskCell} data-status={status}>
       <div className={css.positionRiskState}>
         <strong>{statusLabel[status] ?? status}</strong>
-        <span className={css.positionRiskSource}>
-          {status === 'unconfigured' ? '请先确认全局配置' : source}{plan.basis_changed === true ? ' · 成本已变化' : ''}
-        </span>
+        <Tooltip label={explanation} side="top" maxWidth={260}>
+          <span className={css.positionRiskHelp}><Button className={css.positionRiskInfo} size="sm" variant="ghost" icon={<IconQuestionOutline14 />}
+            aria-label="了解止盈止损状态" aria-description={explanation} onClick={event => { event.currentTarget.focus() }} /></span>
+        </Tooltip>
       </div>
       {(number(takeProfit.resolved_price) !== undefined || number(stopLoss.resolved_price) !== undefined) && (
         <dl className={css.positionRiskValues} aria-label="止盈止损价格">
@@ -128,7 +147,7 @@ export function PositionRiskPlanCell({ plan, onEdit }: {
           {number(stopLoss.resolved_price) !== undefined && <div><dt>止损</dt><dd>{money(stopLoss.resolved_price)}</dd></div>}
         </dl>
       )}
-      <button type="button" className={css.positionRiskAdjust} onClick={onEdit}>{status === 'unconfigured' ? '设置' : '调整'}</button>
+      <Button variant="ghost" size="sm" className={`${css.holdingTextButton} ${css.positionRiskAdjust}`} disabled={disabled} onClick={onEdit}>{status === 'unconfigured' ? '设置' : '调整'}</Button>
     </div>
   )
 }
@@ -250,7 +269,7 @@ export function PositionRiskDialog({ requestData, ticker, name, onClose, onChang
       {!loading && <div className={css.positionRiskForm}>
         {isGlobal && Object.keys(suggestion).length > 0 && (
           <div className={css.positionRiskSuggestion}>
-            <strong>{text(suggestion.profile, 'balanced')} 画像建议</strong>
+            <strong>{PROFILE_LABELS[text(suggestion.profile, '')] ?? '风险'}画像建议</strong>
             <span>
               止盈 +{((number(suggestion.take_profit_pct) ?? 0) * 100).toFixed(0)}%
               {' · '}止损 -{((number(suggestion.stop_loss_pct) ?? 0) * 100).toFixed(0)}%

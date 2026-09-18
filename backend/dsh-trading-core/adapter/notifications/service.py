@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 
 from .models import NotificationEvent
 from .repository import NotificationRepository
+from .presentation import holdings_issue_copy, holdings_source_label
 
 
 CATEGORIES = {"market_risk", "holding_plan", "holdings_sync", "research"}
@@ -59,27 +60,25 @@ def _render(event: NotificationEvent) -> dict[str, Any]:
             "externalContent": summary,
         }
     if kind.startswith("holdings."):
-        source = _text(payload.get("sourceName"), "持仓同步")
+        source_key = _text(payload.get("sourceName"), "持仓同步")
+        source = holdings_source_label(payload.get("sourceName"))
+        if kind in {"holdings.sync.action_required.v1", "holdings.sync.failed.v1"}:
+            copy = holdings_issue_copy(payload)
+            return {"category": "holdings_sync", **copy, "action": action,
+                    "dedupeKey": f"{kind}:{source_key}:{_text(payload.get('reasonCode'))}",
+                    "externalContent": copy["body"]}
         if kind == "holdings.snapshot.changed.v1":
             title, severity = "持仓已更新", "important"
             summary = _text(payload.get("changeSummary"), "持仓发生变化")
             dedupe = f"{kind}:{_text(payload.get('syncRunId'))}"
-        elif kind == "holdings.sync.action_required.v1":
-            title, severity = "持仓同步需要处理", "action_required"
-            summary = f"{source}需要人工处理：{_text(payload.get('reasonCode'))}"
-            dedupe = f"{kind}:{source}:{_text(payload.get('reasonCode'))}"
-        elif kind == "holdings.sync.failed.v1":
-            title, severity = "持仓同步失败", "action_required"
-            summary = f"{source}同步失败：{_text(payload.get('reasonCode'))}"
-            dedupe = f"{kind}:{source}:{_text(payload.get('reasonCode'))}"
         elif kind == "holdings.sync.stale.v1":
             title, severity = "持仓数据已过期", "action_required"
             summary = f"{source}最后成功于 {_text(payload.get('lastSuccessfulAt'))}"
-            dedupe = f"{kind}:{source}"
+            dedupe = f"{kind}:{source_key}"
         else:
             title, severity = "持仓同步已恢复", "information"
             summary = f"{source}已恢复正常同步"
-            dedupe = f"{kind}:{source}"
+            dedupe = f"{kind}:{source_key}"
         return {
             "category": "holdings_sync", "severity": severity, "title": title,
             "summary": summary, "body": summary, "action": action,

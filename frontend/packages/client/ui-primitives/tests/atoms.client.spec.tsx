@@ -65,6 +65,21 @@ describe('Menu', () => {
     { id: 'b', label: 'Beta', disabled: true },
   ]
 
+  it('supports custom listbox content and keeps null content on the default menu path', () => {
+    const onClose = vi.fn()
+    const { rerender } = render(<Menu open anchor={<input aria-label="search" />} items={items} onSelect={() => {}} onClose={onClose}
+      content={<div role="listbox"><button role="option">Result</button></div>} />)
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(screen.getByRole('listbox')).toBeTruthy()
+    fireEvent.pointerDown(screen.getByRole('option'))
+    expect(onClose).not.toHaveBeenCalled()
+    fireEvent.pointerDown(document.body)
+    expect(onClose).toHaveBeenCalledOnce()
+    rerender(<Menu open anchor={<span>trigger</span>} items={items} onSelect={() => {}} onClose={onClose} content={null} />)
+    expect(screen.getByRole('menu')).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Alpha' })).toBeTruthy()
+  })
+
   it('shows items only while open; select fires onSelect', () => {
     const onSelect = vi.fn()
     const { rerender } = render(
@@ -380,6 +395,15 @@ describe('Menu', () => {
 })
 
 describe('Modal', () => {
+  it('allows an inner popup to consume Escape without dismissing the modal', () => {
+    const onClose = vi.fn()
+    const onEscapeKeyDown = vi.fn((event: KeyboardEvent) => { event.preventDefault() })
+    render(<Modal open onClose={onClose} onEscapeKeyDown={onEscapeKeyDown} title="Search"><input aria-label="query" /></Modal>)
+    fireEvent.keyDown(screen.getByLabelText('query'), { key: 'Escape' })
+    expect(onEscapeKeyDown).toHaveBeenCalledOnce()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('is absent while closed; Escape and mask click call onClose', async () => {
     const onClose = vi.fn()
     const { rerender } = render(

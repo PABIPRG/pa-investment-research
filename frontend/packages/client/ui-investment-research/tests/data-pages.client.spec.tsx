@@ -55,7 +55,9 @@ describe('持仓止盈止损摘要', () => {
     )
 
     expect(screen.getByText('监控中')).toBeTruthy()
-    expect(screen.getByText('继承全局')).toBeTruthy()
+    expect(screen.queryByText('继承全局')).toBeNull()
+    fireEvent.focus(screen.getByRole('button', { name: '了解止盈止损状态' }))
+    expect(screen.getByRole('tooltip').textContent).toBe('继承全局')
     const values = screen.getByText('止盈').parentElement
     expect(values?.textContent).toBe('止盈¥15.00')
     expect(screen.getByText('止损').parentElement?.textContent).toBe('止损¥11.25')
@@ -808,7 +810,12 @@ describe('投研数据页慢请求状态', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '全局止盈止损' }))
     const dialog = await screen.findByRole('dialog', { name: '全局止盈止损' })
-    expect(within(dialog).getByText('balanced 画像建议')).toBeTruthy()
+    expect(within(dialog).getByText('稳健型画像建议')).toBeTruthy()
+    expect(within(dialog).queryByRole('combobox')).toBeNull()
+    fireEvent.focus(within(dialog).getByRole('button', { name: '了解止盈线计算方式' }))
+    expect(within(dialog).getByRole('tooltip').textContent).toContain('成本价 100 元')
+    fireEvent.click(within(dialog).getByRole('button', { name: '了解止盈线计算方式' }))
+    expect(within(dialog).getByRole('tooltip').textContent).toContain('目标价为 120 元')
     expect(within(dialog).getByText('止盈 +12% · 止损 -6%')).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: '确认并启用全局配置' }))
 

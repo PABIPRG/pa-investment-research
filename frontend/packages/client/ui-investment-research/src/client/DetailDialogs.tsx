@@ -1,8 +1,7 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { createPortal } from 'react-dom'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { MarkdownText, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { asRecord, records, text } from './data.ts'
 import css from './InvestmentShell.module.css'
 
@@ -15,83 +14,28 @@ interface DetailDialogProps {
   readonly actions?: ReactNode
   readonly wide?: boolean
   readonly closeDisabled?: boolean
+  readonly onEscapeKeyDown?: ((event: KeyboardEvent) => void) | undefined
 }
 
 /** Shared, keyboard-safe modal shell for product details and evidence. */
 export function DetailDialog({
-  title, description, eyebrow, onClose, children, actions, wide = false, closeDisabled = false,
+  title, description, eyebrow, onClose, children, actions, wide = false, closeDisabled = false, onEscapeKeyDown,
 }: DetailDialogProps) {
-  const titleId = useId()
-  const dialogRef = useRef<HTMLElement>(null)
-  const closeRef = useRef<HTMLButtonElement>(null)
-  const onCloseRef = useRef(onClose)
-  const closeDisabledRef = useRef(closeDisabled)
-
-  useEffect(() => { onCloseRef.current = onClose }, [onClose])
-  useEffect(() => { closeDisabledRef.current = closeDisabled }, [closeDisabled])
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    closeRef.current?.focus()
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        if (!closeDisabledRef.current) onCloseRef.current()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable === undefined || focusable.length === 0) {
-        event.preventDefault()
-        dialogRef.current?.focus()
-        return
-      }
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (dialogRef.current?.contains(document.activeElement) !== true) {
-        event.preventDefault()
-        if (event.shiftKey) last?.focus(); else first?.focus()
-      } else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      window.requestAnimationFrame(() => { previousFocus?.focus() })
-    }
-  }, [])
-
-  const dialog = (
-    <div
-      className={css.detailBackdrop}
-      role="presentation"
-      onMouseDown={(event) => { if (event.target === event.currentTarget && !closeDisabled) onClose() }}
-    >
-      <section
-        ref={dialogRef}
-        className={`${css.detailDialog} ${wide ? css.detailDialogWide : ''}`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-      >
-        <header className={css.detailDialogHeader}>
-          <div>
-            {eyebrow !== undefined && <span>{eyebrow}</span>}
-            <h2 id={titleId}>{title}</h2>
-            {description !== undefined && <p>{description}</p>}
-          </div>
-          <button ref={closeRef} type="button" aria-label={`关闭${title}`} disabled={closeDisabled} onClick={onClose}>×</button>
-        </header>
-        <div className={css.detailDialogBody}>{children}</div>
-        {actions !== undefined && <footer className={css.detailDialogActions}>{actions}</footer>}
-      </section>
-    </div>
+  const close = (): void => { if (!closeDisabled) onClose() }
+  return (
+    <Modal open onClose={close} title={title} headless onEscapeKeyDown={onEscapeKeyDown} className={`${css.detailDialog} ${wide ? css.detailDialogWide : ''}`}>
+      <header className={css.detailDialogHeader}>
+        <div>
+          {eyebrow !== undefined && <span>{eyebrow}</span>}
+          <h2 aria-hidden="true">{title}</h2>
+          {description !== undefined && <p>{description}</p>}
+        </div>
+        <button type="button" aria-label={`关闭${title}`} disabled={closeDisabled} onClick={close}>×</button>
+      </header>
+      <div className={css.detailDialogBody}>{children}</div>
+      {actions !== undefined && <footer className={css.detailDialogActions}>{actions}</footer>}
+    </Modal>
   )
-
-  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body)
 }
 
 function strings(value: unknown): string[] {

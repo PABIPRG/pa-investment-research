@@ -21,7 +21,7 @@ import css from './Modal.module.css'
  * @returns null when closed; otherwise the overlay tree.
  */
 export function Modal({
-  open, onClose, title, closeLabel = 'Close', description, children, footer, className, contentClassName, headless = false,
+  open, onClose, title, closeLabel = 'Close', description, children, footer, className, contentClassName, headless = false, onEscapeKeyDown,
 }: {
   open: boolean
   onClose: () => void
@@ -33,6 +33,8 @@ export function Modal({
   className?: string | undefined
   contentClassName?: string | undefined
   headless?: boolean
+  /** Allow an owned dropdown to consume Escape before the dialog dismisses. */
+  onEscapeKeyDown?: ((event: KeyboardEvent) => void) | undefined
 }) {
   const restoreFocusRef = useRef<HTMLElement | null>(null)
 
@@ -51,6 +53,7 @@ export function Modal({
         <div className={css.root} role="presentation">
           <DialogPrimitive.Overlay className={css.mask} />
           <DialogPrimitive.Content
+            onEscapeKeyDown={event => { onEscapeKeyDown?.(event) }}
             className={clsx(css.dialog, className)}
             onOpenAutoFocus={() => {
               const activeElement = document.activeElement

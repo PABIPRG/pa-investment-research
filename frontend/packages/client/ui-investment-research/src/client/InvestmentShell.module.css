@@ -916,15 +916,14 @@
 .importNotice { margin-bottom: 14px; padding: 11px 13px; border: 1px solid var(--dsw-alias-state-success-secondary); border-radius: 9px; color: var(--dsw-alias-state-success-primary); background: var(--dsw-alias-state-success-tertiary); font-size: 0.8571rem; }
 
 .positionRiskCell {
-  display: grid;
-  min-width: 232px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: 'state action' 'values action';
+  display: inline-grid;
+  grid-template-columns: max-content max-content;
+  grid-template-areas: 'state action' 'values values';
   align-items: center;
-  gap: 7px 14px;
+  gap: 4px;
   text-align: left;
 }
-.positionRiskState { grid-area: state; display: flex; min-width: 0; align-items: center; gap: 8px; }
+.positionRiskState { grid-area: state; display: flex; min-width: 0; align-items: center; gap: 2px; }
 .positionRiskState > strong {
   flex: none;
   padding: 2px 7px;
@@ -942,39 +941,28 @@
 .positionRiskValues > div { display: flex; min-width: 0; align-items: baseline; gap: 5px; }
 .positionRiskValues dt { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.5; }
 .positionRiskValues dd { margin: 0; color: var(--dsw-alias-label-primary); font-size: 0.8571rem; font-variant-numeric: tabular-nums; line-height: 1.5; }
-.positionRiskAdjust {
-  grid-area: action;
-  min-width: 52px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  color: var(--investment-primary);
-  background: var(--dsw-alias-bg-base);
-  font: inherit;
-  font-size: 0.7857rem;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
-}
-.positionRiskAdjust:hover { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
-.positionRiskAdjust:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
-.positionRiskAdjust:active { background: var(--dsw-alias-interactive-bg-active); transform: translateY(1px); }
+.positionRiskAdjust { grid-area: action; }
 .positionRiskHeadingActions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .positionRiskHeadingActions .secondaryButton { height: 30px; }
 .positionRiskLoading { min-height: 180px; display: grid; place-items: center; color: var(--dsw-alias-label-tertiary); }
 .positionRiskForm { display: grid; gap: 14px; }
+.positionRiskForm, .positionRiskLoading { font-size: 0.8571rem; line-height: 1.5; }
+.positionRiskSuggestion > strong, .positionRiskNotice > strong, .positionRiskRearm > strong, .positionRiskTarget legend { font-size: 0.9286rem; line-height: 1.5; font-weight: 600; }
 .positionRiskSuggestion, .positionRiskNotice, .positionRiskRearm { display: flex; flex-direction: column; gap: 4px; padding: 12px 13px; border: 1px solid var(--dsw-alias-state-business-primary); border-radius: 10px; background: var(--dsw-alias-state-business-tertiary); }
 .positionRiskSuggestion span, .positionRiskNotice, .positionRiskRearm span { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
-.positionRiskSuggestion small { color: var(--dsw-alias-label-tertiary); }
+.positionRiskSuggestion small { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.5; }
 .positionRiskScope { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .positionRiskScope label { display: flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 11px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 9px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); cursor: pointer; }
 .positionRiskScope label:has(input:checked) { border-color: var(--investment-primary); color: var(--investment-primary); background: var(--investment-interactive-hover); }
 .positionRiskTargets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .positionRiskTarget { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; }
-.positionRiskTarget legend { padding: 0 5px; font-weight: 700; }
+.positionRiskTarget legend { padding: 0 5px; }
 .positionRiskToggle { display: flex; align-items: center; gap: 7px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
 .positionRiskTargetFields { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 8px; margin-top: 10px; }
-.positionRiskTargetFields label > span { display: block; margin-bottom: 5px; color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; }
+.positionRiskFixedMode > div { display: flex; align-items: center; gap: 4px; min-height: 28px; color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.4; }
+.positionRiskFixedMode > strong { display: flex; align-items: center; min-height: var(--investment-control-height); color: var(--dsw-alias-label-secondary); font-weight: 400; }
+.positionRiskHelp { display: inline-flex; }
+.positionRiskTargetFields label > span { display: flex; align-items: center; min-height: 28px; color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.4; }
 .positionRiskTargetFields select, .positionRiskTargetFields input { width: 100%; height: var(--investment-control-height); box-sizing: border-box; padding: 0 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; }
 .positionRiskRearm > div { display: flex; gap: 8px; margin-top: 5px; }
 .positionRiskDisclaimer { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.6; }
@@ -1290,19 +1278,7 @@
 .lineageRow > small { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); white-space: nowrap; }
 .lineageNode[data-muted] .lineageLabel { opacity: 0.55; }
 
-.detailBackdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-  padding: 24px;
-  background: var(--dsw-alias-bg-mask-1);
-  animation: investment-backdrop-enter 160ms ease-out;
-}
-
-.detailDialog {
+.detailDialog.detailDialog {
   display: flex;
   gap: 0;
   flex-direction: column;
@@ -1318,7 +1294,7 @@
   animation: investment-welcome-enter 180ms ease-out;
 }
 
-.detailDialogWide { width: min(920px, 100%); }
+.detailDialogWide.detailDialogWide { width: min(920px, 100%); }
 .detailDialogHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 20px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
 .detailDialogHeader > div { min-width: 0; }
 .detailDialogHeader span { display: block; margin-bottom: 5px; color: var(--investment-primary); font-size: 0.8571rem; font-weight: 700; letter-spacing: .04em; }
@@ -1328,7 +1304,11 @@
 .detailDialogHeader button:hover:not(:disabled) { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); }
 .detailDialogHeader button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 .detailDialogBody { min-height: 0; overflow: auto; padding: 18px 20px 22px; background: var(--dsw-alias-bg-base); }
-.detailDialogActions { display: flex; justify-content: flex-end; gap: 8px; padding: 13px 20px; border-top: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.detailDialogActions { display: flex; flex-shrink: 0; align-items: center; justify-content: flex-end; gap: 8px; padding: 13px 20px; border-top: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1); }
+.detailDialogHeader { flex-shrink: 0; }
+.holdingCloseHint { margin-right: auto; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.5; }
+.holdingCloseButton.holdingCloseButton { color: var(--dsw-alias-label-primary-foreground); background: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-primary); }
+.holdingCloseButton.holdingCloseButton:hover:not(:disabled) { background: var(--dsw-alias-state-error-primary); filter: brightness(.92); }
 
 .detailTags { display: flex; gap: 7px; margin-bottom: 15px; flex-wrap: wrap; }
 .detailTags span { display: inline-flex; align-items: center; min-height: 24px; box-sizing: border-box; padding: 3px 8px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 99px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); font-size: 0.8571rem; }
@@ -1387,10 +1367,11 @@
 .workbenchHoldingModeTabs button:hover:not(:disabled) { color: var(--investment-primary); }
 .workbenchHoldingModeTabs button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 .workbenchHoldingModeTabs button:disabled { color: var(--dsw-alias-label-dimmed); cursor: wait; }
-.workbenchHoldingToolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
-.workbenchHoldingToolbar > div { display: flex; align-items: baseline; gap: 8px; }
+.workbenchHoldingToolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.workbenchHoldingToolbar > div { display: flex; align-items: center; gap: 8px; }
 .workbenchHoldingToolbar > div span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
-.workbenchHoldingToolbarActions { display: flex; flex: none; align-items: center; gap: 8px; }
+.workbenchHoldingToolbarActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.workbenchHoldingToolbarActions > button, .workbenchHoldingToolbarActions .workbenchSyncEntry > button { height: 36px; min-height: 36px; padding: 0 12px; border-radius: 8px; font-size: 0.8571rem; line-height: 1.5; font-weight: 600; }
 .workbenchSyncEntry { position: relative; display: inline-flex; }
 .workbenchSyncEntry > button { width: 100%; }
 .workbenchSyncTooltip { position: absolute; z-index: 4; top: calc(100% + 8px); right: 0; width: max-content; max-width: min(320px, 70vw); padding: 8px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); font-size: 0.7857rem; line-height: 1.5; text-align: left; opacity: 0; pointer-events: none; transform: translateY(-3px); transition: opacity 120ms ease, transform 120ms ease; }
@@ -1401,12 +1382,24 @@
 .workbenchHoldingForm { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 10px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
 .workbenchHoldingForm label { display: grid; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
 .workbenchHoldingForm > div { display: flex; gap: 7px; }
-.workbenchHoldingActions > div { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
-.workbenchHoldingActions button { min-height: 30px; padding: 4px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-base); cursor: pointer; }
-.workbenchHoldingActions button:hover:not(:disabled) { border-color: var(--investment-primary); color: var(--investment-primary); }
-.workbenchHoldingActions button[aria-label^='删除 '] { color: var(--dsw-alias-state-error-primary); border-color: transparent; background: transparent; }
-.workbenchHoldingActions button[aria-label^='删除 ']:hover:not(:disabled) { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
-.workbenchHoldingActions button:disabled { opacity: 0.55; cursor: not-allowed; }
+.holdingButton.holdingButton { min-height: 36px; height: 36px; padding: 0 12px; border-radius: 8px; font: inherit; font-size: 0.8571rem; line-height: 1.5; font-weight: 600; white-space: nowrap; }
+.holdingRowActions.holdingRowActions { display: inline-flex; align-items: center; gap: 4px; }
+.holdingTextButton.holdingTextButton { min-width: 0; min-height: 28px; height: 28px; padding: 0 5px; border: 0; border-radius: 6px; color: var(--investment-primary); font: inherit; font-size: 0.8571rem; font-weight: 400; white-space: nowrap; }
+.holdingTextButton.holdingTextButton:disabled { color: var(--dsw-alias-label-dimmed); }
+.holdingInlineInput.holdingInlineInput { display: inline-flex; width: 100%; height: 32px; box-sizing: border-box; padding: 0 8px; border-radius: 6px; background: var(--dsw-alias-bg-base); }
+.holdingInlineInput input { min-width: 0; width: 100%; text-align: right; font: inherit; font-variant-numeric: tabular-nums; }
+.holdingInlineInput:focus-within { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.holdingInlineInput input:focus-visible { outline: none; }
+.workbenchOverviewTable[data-kind='holdings'] { min-width: 664px; table-layout: fixed; }
+.workbenchOverviewTable[data-kind='holdings'] tbody th strong { white-space: normal; overflow-wrap: anywhere; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(2), .workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(3) { width: 112px; box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(4) { width: 154px; box-sizing: border-box; text-align: left; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(5) { width: 214px; box-sizing: border-box; }
+.workbenchOverviewTable[data-kind='holdings'] .positionRiskValues { flex-wrap: wrap; gap: 4px 10px; }
+.workbenchOverviewTable tr[data-editing] > * { background: var(--dsw-alias-bg-layer-2); }
+.holdingDangerButton.holdingDangerButton { color: var(--dsw-alias-state-error-primary); }
+.holdingDangerButton.holdingDangerButton:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover-danger); }
+.positionRiskInfo.positionRiskInfo { width: 24px; height: 28px; min-width: 24px; padding: 0; border-radius: 8px; color: var(--dsw-alias-label-tertiary); }
 .workbenchSingleImport { display: grid; gap: 12px; }
 .workbenchSingleImport .workbenchHoldingForm { margin-bottom: 0; }
 .workbenchImportPanel { display: grid; gap: 12px; }
@@ -2368,7 +2361,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 @media (prefers-reduced-motion: reduce) {
   .sessionProgress::before, .workbench, .investmentWelcome, .dashboardViewPane, .pageScroll[data-assistant-layout], .opportunityWorkspace, .marketNewsRail, .evolutionStatusSummary div, .drawerBackdrop, .historyDrawer,
   .drawerBackdrop[data-closing='true'], .drawerBackdrop[data-closing='true'] .historyDrawer,
-  .historyTitleRow i, .loadingSkeleton span, .reportBackdrop, .reportDrawer, .detailBackdrop, .detailDialog,
+  .historyTitleRow i, .loadingSkeleton span, .reportBackdrop, .reportDrawer, .detailDialog.detailDialog,
   .industryGraphBackdrop, .industryGraphDialog,
   .stockLoadingMark i, .stockLoadingIdentity i, .stockLoadingMetrics i, .stockLoadingMetrics b, .stockLoadingPanel > *,
   .assistantLauncher, .assistantBackdrop, .assistantPanel, .researchFloatingBackdrop, .researchFloatingSurface,
@@ -2516,8 +2509,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .investmentWelcome { padding-inline: 14px; }
   .investmentWelcome > p { display: none; }
   .drawerBackdrop.importBackdrop { padding: 12px; }
-  .detailBackdrop { padding: 10px; }
-  .detailDialog { max-height: 100%; border-radius: 13px; }
+  .detailDialog.detailDialog { max-height: calc(100dvh - 24px); border-radius: 13px; }
   .detailDialogHeader, .detailDialogBody { padding-inline: 14px; }
   .detailDialogActions { padding-inline: 14px; flex-wrap: wrap; }
   .detailDialogActions .primaryButton, .detailDialogActions .secondaryButton { flex: 1 1 auto; min-height: var(--investment-touch-target); height: auto; padding-block: 10px; }
@@ -2525,7 +2517,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .workbenchOverviewMetricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .positionRiskTargets, .positionRiskScope { grid-template-columns: 1fr; }
   .positionRiskHeadingActions { flex-wrap: wrap; }
-  .positionRiskCell { width: min(260px, calc(100% - 88px)); min-width: 0; grid-template-areas: 'state action' 'values values'; }
+  .positionRiskCell { min-width: 0; max-width: 100%; }
   .workbenchOverviewTableWrap { overflow: visible; border: 0; }
   .workbenchOverviewTable { min-width: 0; }
   .workbenchOverviewTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
@@ -2707,16 +2699,6 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .workbenchSyncPreparation { align-items: stretch; }
 }
 
-@media (max-width: 390px) {
-  .detailBackdrop:has(.workbenchSyncPanel) { padding: 0; }
-  .detailDialogWide:has(.workbenchSyncPanel) {
-    width: 100vw;
-    height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0;
-  }
-}
-
 /* 持仓同步：为预览表保留完整桌面扫描宽度，避免把宽弹窗再次压窄。 */
 .detailDialogWide:has(.workbenchSyncPanel) { width: min(1040px, 100%); }
 .workbenchSyncPanel, .workbenchSyncPanel .workbenchImportPreview, .workbenchSyncPanel .workbenchImportTableWrap { width: 100%; box-sizing: border-box; }
@@ -2793,3 +2775,21 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 .evolutionHelpContent p { margin: 0; line-height: 1.6; }
 .evolutionHelpConfirm { border-radius: 8px; }
 .evolutionRuntimeCard .evolutionRuntimeMeta dd { font-size: 1.1429rem; }
+
+@media (min-width: 681px) and (max-width: 1100px) {
+  .workbenchHoldingToolbar { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .workbenchHoldingToolbarActions { width: 100%; }
+}
+@media (max-width: 680px) {
+  .holdingButton.holdingButton { min-height: 44px; height: auto; }
+  .workbenchOverviewTable td.workbenchHoldingActions { display: grid; gap: 8px; justify-content: stretch; text-align: left; }
+  .holdingRowActions.holdingRowActions { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 4px 8px; }
+  .holdingTextButton.holdingTextButton { min-height: 44px; height: 44px; padding-inline: 6px; }
+  .holdingInlineInput.holdingInlineInput { height: 40px; width: 140px; }
+  .workbenchOverviewTable[data-kind='holdings'] { min-width: 0; }
+  .workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(n+2) { width: auto; }
+}
+
+.holdingPrimary.holdingPrimary { color: var(--dsw-alias-label-primary-foreground); background: var(--dsw-alias-state-business-primary); }
+.holdingPrimary.holdingPrimary:hover:not(:disabled) { background: var(--dsw-alias-button-info-fill); }
+.workbenchOverviewTable th.holdingRiskHeading { text-align: left; }

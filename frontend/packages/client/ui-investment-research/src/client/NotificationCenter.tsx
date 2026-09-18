@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { asRecord, productErrorText, records, text } from './data.ts'
 import type { RequestData } from './research-types.ts'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
@@ -34,8 +34,15 @@ const SEVERITY_LABELS: Record<NotificationSeverity, string> = {
   action_required: '需要处理', important: '重要', information: '信息',
 }
 const DELIVERY_LABELS: Record<string, string> = {
-  pending: '等待投递', leased: '投递中', retry_wait: '等待重试', sent: '已送达',
-  dead_letter: '投递失败', suppressed: '已抑制', cancelled: '已取消',
+  pending: '等待发送系统通知', leased: '正在发送通知', retry_wait: '发送未成功，将自动重试', sent: '通知已发送',
+  dead_letter: '通知发送失败', suppressed: '未发送（通知规则限制）', cancelled: '已取消发送',
+}
+const ACTIONS: Readonly<Record<string, { label: string; route: InvestmentRoute; context?: InvestmentNavigationContext }>> = {
+  security: { label: '查看个股详情', route: 'stock-detail' },
+  'portfolio-plan': { label: '查看持仓止盈止损', route: 'dashboard', context: { holdingsFlow: 'view' } },
+  'holdings-sync': { label: '前往持仓同步', route: 'dashboard', context: { holdingsFlow: 'sync' } },
+  report: { label: '查看研究报告', route: 'dashboard', context: { openReports: true } },
+  evolution: { label: '查看自进化进展', route: 'tasks' },
 }
 
 function parseItem(value: unknown): NotificationItem | undefined {
@@ -377,14 +384,10 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
 
   const followAction = (): void => {
     if (!selected) return
-    const mapping: Record<string, InvestmentRoute> = {
-      security: 'stock-detail', 'portfolio-plan': 'portfolio', 'holdings-sync': 'portfolio',
-      report: 'portfolio', evolution: 'tasks',
-    }
-    const route = mapping[selected.action.kind]
-    if (!route) return
+    const action = ACTIONS[selected.action.kind]
+    if (!action) return
     setModalOpen(false)
-    navigate(route, route === 'stock-detail' ? { stockCode: selected.action.id } : undefined)
+    navigate(action.route, action.route === 'stock-detail' ? { stockCode: selected.action.id } : action.context)
   }
 
   const updatePreference = (categoryValue: NotificationCategory, channel: NotificationChannel): void => {
@@ -556,22 +559,26 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
                       <h3>{selected.title}</h3>
                       <p>{selected.body}</p>
                       {Object.keys(selected.deliverySummary).length > 0 && (
-                        <dl className={css.delivery}>
-                          {Object.entries(selected.deliverySummary).map(([channel, status]) => (
-                            <div key={channel}>
-                              <dt>{Object.hasOwn(CHANNEL_LABELS, channel) ? CHANNEL_LABELS[channel as NotificationChannel] : channel}</dt>
-                              <dd>
-                                {DELIVERY_LABELS[status] ?? status}
-                                {status === 'dead_letter' && <button type="button" disabled={deliveryBusy === channel} onClick={() => { retryDelivery(channel) }}>{deliveryBusy === channel ? '重试中…' : '重试'}</button>}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
+                        <section className={css.deliverySection} aria-label="系统通知发送状态">
+                          <h4>系统通知发送状态</h4>
+                          <p>以下仅表示消息是否发送到其他渠道，不代表业务操作是否完成。</p>
+                          <dl className={css.delivery}>
+                            {Object.entries(selected.deliverySummary).map(([channel, status]) => (
+                              <div key={channel}>
+                                <dt>{Object.hasOwn(CHANNEL_LABELS, channel) ? CHANNEL_LABELS[channel as NotificationChannel] : '其他通知渠道'}</dt>
+                                <dd>
+                                  {DELIVERY_LABELS[status] ?? '发送状态暂不可用'}
+                                  {status === 'dead_letter' && <button type="button" disabled={deliveryBusy === channel} onClick={() => { retryDelivery(channel) }}>{deliveryBusy === channel ? '重试中…' : '重试'}</button>}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </section>
                       )}
                       {Object.values(selected.deliverySummary).includes('dead_letter') && <p className={css.retryHint}>投递结果不明确时，人工重试可能造成重复发送。</p>}
                       <div className={css.detailActions}>
-                        {selected.action.kind !== 'none' && <button type="button" className={css.primary} onClick={followAction}>前往相关内容</button>}
-                        <button type="button" onClick={archiveSelected}>归档</button>
+                        {ACTIONS[selected.action.kind] && <Button className={css.primary} onClick={followAction}>{ACTIONS[selected.action.kind]?.label}</Button>}
+                        <Button className={css.archive} onClick={archiveSelected}>归档</Button>
                       </div>
                     </article>
                   )

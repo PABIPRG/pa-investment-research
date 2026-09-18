@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .presentation import holdings_issue_copy
+
 
 SCHEMA_VERSION = 1
 FINAL_DELIVERY_STATES = {"sent", "dead_letter", "suppressed", "cancelled"}
@@ -283,6 +285,8 @@ class NotificationRepository:
 
     @staticmethod
     def _notification(row: sqlite3.Row, delivery: dict[str, str] | None = None) -> dict[str, Any]:
+        payload = json.loads(row["payload_json"])
+        copy = holdings_issue_copy(payload) if row["category"] == "holdings_sync" and payload.get("reasonCode") else {}
         return {
             "id": row["id"],
             "category": row["category"],
@@ -292,7 +296,7 @@ class NotificationRepository:
             "body": row["body"],
             "subject": {"kind": row["subject_kind"], "id": row["subject_id"]},
             "action": {"kind": row["action_kind"], "id": row["action_id"]},
-            "payload": json.loads(row["payload_json"]),
+            "payload": payload,
             "occurrenceCount": row["occurrence_count"],
             "occurredAt": row["occurred_at"],
             "lastOccurredAt": row["last_occurred_at"],
@@ -301,6 +305,7 @@ class NotificationRepository:
             "readAt": row["read_at"],
             "archivedAt": row["archived_at"],
             "deliverySummary": delivery or {},
+            **copy,
         }
 
     @staticmethod
@@ -469,17 +474,23 @@ class NotificationRepository:
     ) -> dict[str, Any]:
         clauses = ["n.archived_at IS NOT NULL" if archived else "n.archived_at IS NULL"]
         values: list[Any] = []
+        # Historical cancellations were persisted as failures; filters use the same effective severity as the inbox.
+        effective_severity = (
+            "(CASE WHEN n.category = 'holdings_sync' "
+            "AND json_extract(n.payload_json, '$.reasonCode') = 'read_cancelled' "
+            "THEN 'information' ELSE n.severity END)"
+        )
         if view == "unread":
             clauses.append("n.read_at IS NULL")
         elif view == "actionable":
-            clauses.append("n.severity = 'action_required'")
+            clauses.append(effective_severity + " = 'action_required'")
         elif view != "all":
             raise ValueError("不支持的通知视图")
         if category:
             clauses.append("n.category = ?")
             values.append(category)
         if severity:
-            clauses.append("n.severity = ?")
+            clauses.append(effective_severity + " = ?")
             values.append(severity)
         if cursor:
             cursor_time, separator, cursor_id = cursor.rpartition("|")

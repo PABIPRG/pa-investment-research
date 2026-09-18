@@ -20,6 +20,8 @@ export type StrategyResearchStage = 'form' | 'backtest' | 'shadow' | 'evolution'
 export type StockDetailReturnRoute = Exclude<InvestmentRoute, 'stock-detail' | 'assistant'>
 
 export interface InvestmentUiSnapshot {
+  /** Each explicit navigation creates a fresh request, including same-route re-entry. */
+  readonly holdingsEntry?: { readonly flow: 'view' | 'sync' } | undefined
   readonly route: InvestmentRoute
   readonly historyOpen: boolean
   readonly reportsOpen: boolean
@@ -43,6 +45,8 @@ export interface InvestmentUiSnapshot {
 export type InvestmentDraftKey = 'analysisQuery' | 'backtestQuery' | 'watchQuery' | 'chainQuery'
 
 export interface InvestmentNavigationContext {
+  readonly holdingsFlow?: 'view' | 'sync'
+  readonly openReports?: boolean
   readonly stockCode?: string
   readonly strategyId?: string
   readonly strategyStage?: StrategyResearchStage
@@ -91,7 +95,8 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
       ...this.snapshot,
       route: nextRoute,
       historyOpen: false,
-      reportsOpen: false,
+      reportsOpen: context.openReports === true,
+      holdingsEntry: nextRoute === 'dashboard' && context.holdingsFlow !== undefined ? { flow: context.holdingsFlow } : undefined,
       selectedStockCode: context.stockCode ?? this.snapshot.selectedStockCode,
       // Entering the shadow workbench from the sidebar means "all active
       // strategies". Only the deliberate lifecycle hand-off carries a
@@ -140,6 +145,7 @@ export class InvestmentUiState implements HostObservable<InvestmentUiSnapshot> {
 
   private publish(next: InvestmentUiSnapshot): void {
     if (next.route === this.snapshot.route
+      && next.holdingsEntry === this.snapshot.holdingsEntry
       && next.historyOpen === this.snapshot.historyOpen
       && next.reportsOpen === this.snapshot.reportsOpen
       && next.assistantMode === this.snapshot.assistantMode

@@ -1,0 +1,44 @@
+.panel { display: grid; gap: 24px; min-width: 0; color: var(--dsw-alias-label-primary); }
+.form { display: grid; gap: 24px; margin: 0; }
+.fields { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 20px 16px; }
+.fields label { display: grid; min-width: 0; align-content: start; gap: 8px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+.fields > label { grid-column: span 2; }
+.fields > .time, .security { grid-column: span 3; min-width: 0; }
+.fieldControl.fieldControl { display: flex; min-width: 0; width: 100%; height: 40px; box-sizing: border-box; padding: 0 12px; border-radius: 8px; background: var(--dsw-alias-bg-base); }
+.fieldControl input { min-width: 0; width: 100%; font-size: 1rem; line-height: 1.5; }
+.fieldControl:has(input:disabled) { background: var(--dsw-alias-bg-layer-2); }
+.formActions { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-top: 16px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.formActions p, .footnote { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.6; }
+.formActions > button { flex-shrink: 0; }
+.empty { display: flex; min-height: 200px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px 16px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); text-align: center; }
+.emptyIcon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--dsw-alias-label-tertiary); }
+.empty > strong { font-size: 1rem; line-height: 1.5; }
+.empty p { max-width: 400px; margin: 0 0 4px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.7; }
+.footnote { padding-top: 16px; border-top: 1px solid var(--dsw-alias-border-l1); }
+.historyCaption { display: flex; gap: 12px; align-items: baseline; font-size: 0.9286rem; line-height: 1.5; }
+.historyCaption span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.5; }
+.historyTable.historyTable th, .historyTable.historyTable td { text-align: left; }
+.historyTable.historyTable th:nth-child(n+4):nth-child(-n+6), .historyTable.historyTable td:nth-child(n+4):nth-child(-n+6) { text-align: right; font-variant-numeric: tabular-nums; }
+.direction { font-weight: 600; }
+.preview { display: grid; gap: 16px; padding: 20px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
+.preview h4 { margin: 0; font-size: 1rem; line-height: 1.5; }
+.preview dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.preview dt { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+.preview dd { margin: 6px 0 0; font-size: 1.1429rem; line-height: 1.5; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .panel { gap: 20px; }
+  .fields { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .fields > label, .fields > .time, .security { grid-column: auto; }
+  .formActions { align-items: stretch; flex-direction: column; gap: 12px; }
+  .formActions > button { width: 100%; }
+  .preview { padding: 16px; }
+  .preview dl { grid-template-columns: minmax(0, 1fr); }
+}
+.historyWrap { min-width: 0; overflow-x: auto; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }
+.historyTable { width: 100%; min-width: 700px; border-collapse: collapse; font-size: 0.8571rem; line-height: 1.5; }
+.historyTable th { color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); font-weight: 600; }
+.historyTable th, .historyTable td { padding: 12px 16px; white-space: nowrap; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.historyTable tbody tr:last-child td { border-bottom: 0; }
+
+.fieldControl.fieldControl:focus-within { border-color: var(--dsw-alias-state-business-primary); outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.fieldControl.fieldControl input:focus-visible { outline: none; }

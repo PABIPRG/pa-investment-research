@@ -76,6 +76,38 @@ class NotificationEventTests(unittest.TestCase):
 
 
 class NotificationServiceTests(unittest.TestCase):
+    def test_holdings_failure_explains_cause_impact_and_next_action(self):
+        repository = _repository()
+        service = NotificationService(repository, now=lambda: NOW,
+                                      channel_defaults={"holdings_sync": {"macos": True}})
+        for code, title, phrase in [
+            ("read_timeout", "持仓读取超时", "请在同花顺打开持仓页面"),
+            ("read_cancelled", "持仓读取已取消", "无需处理"),
+            ("new_internal_error", "持仓同步未完成", "查看当前检测结果"),
+        ]:
+            with self.subTest(code=code):
+                event = NotificationEvent.from_mapping({
+                    "eventId": code, "schemaVersion": 1, "producer": "holdings",
+                    "type": "holdings.sync.failed.v1", "occurredAt": NOW.isoformat(),
+                    "subject": {"kind": "holdings-sync", "id": "mac_ths"},
+                    "payload": {"sourceName": "mac_ths", "reasonCode": code, "retryable": True},
+                })
+                item = service.publish(event)
+                self.assertEqual(item["title"], title)
+                self.assertIn("同花顺", item["summary"])
+                self.assertIn("当前持仓保持不变", item["body"])
+                self.assertIn(phrase, item["body"])
+                self.assertNotIn(code, item["body"])
+                # Existing stored messages must acquire the same presentation without rewriting history.
+                with repository._connect() as connection:
+                    connection.execute("UPDATE notifications SET title = ?, summary = ?, body = ?, severity = 'action_required' WHERE id = ?",
+                                       ("持仓同步失败", f"mac_ths同步失败：{code}", code, item["id"]))
+                restored = NotificationService(repository).get(item["id"])
+                self.assertEqual(restored["body"], item["body"])
+                self.assertEqual(restored["title"], title)
+        actionable = service.list_notifications(view="actionable")["items"]
+        self.assertFalse(any(item["payload"]["reasonCode"] == "read_cancelled" for item in actionable))
+
     def test_exact_replay_returns_existing_notification_without_new_occurrence(self):
         repository = _repository()
         service = NotificationService(repository, now=lambda: NOW)

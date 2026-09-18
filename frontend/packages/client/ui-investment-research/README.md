@@ -51,3 +51,5 @@ Business pages do not create model requests, so they do not affect the KV cache.
 - Superseded responses can be ignored but Host requests cannot yet be cancelled. A task that exceeds the UI wait window continues in the backend and can later be found in the report center.
 
 Holdings onboarding defaults to the simulated account and preserves later choices. The dialog separates client preparation, read-only preview, and confirmed replacement; Web guides manual navigation while Electron requires consent for each foreground read.
+
+通知按业务动作进入现有页面：持仓同步直达工作台同步面板，持仓计划进入持仓明细，研究报告打开报告列表。跳转不会开始读取或修改持仓；不支持券商同步的环境提供导入入口。系统通知发送状态单独说明，归档保留撤销。全局风险配置以中文显示画像，固定计算方式使用静态文字与共享 UI 库的计算示例提示。
