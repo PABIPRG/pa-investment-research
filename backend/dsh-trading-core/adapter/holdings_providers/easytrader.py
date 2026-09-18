@@ -39,6 +39,7 @@ import sys
 
 from ..config import settings
 from ..schemas import HoldingItem, TradeItem
+from . import _ocr
 from ._ths_export import export_grid as _export_grid
 from ._ths_export import read_tab_separated as _read_tab_separated
 from ._ths_fields import classify_table as _classify_table
@@ -195,6 +196,11 @@ class EasyTraderProvider(HoldingsProvider):
         """
         self._require_client()
 
+        # 读网格可能撞上风控验证码，easytrader 要用 OCR 识别——先把 tesseract
+        # 指给 pytesseract。找不到不在这里报错：验证码不是每次必弹，没装 OCR 的
+        # 机器仍然能读到不弹验证码的那些持仓，真撞上了再由下面的异常翻译兜住。
+        _ocr.locate_tesseract()
+
         # 连接客户端并查询持仓
         try:
             trader = self._connect()
@@ -203,6 +209,12 @@ class EasyTraderProvider(HoldingsProvider):
             raise
         except Exception as exc:
             log.error("easytrader 连接/查询失败: %s", exc, exc_info=True)
+            if _ocr.is_missing_tesseract(exc):
+                # 不翻译的话这里会说成「请确认客户端已登录且窗口未被遮挡」，
+                # 而客户端好端端开着——排查方向会被整个带偏。
+                raise ProviderUnavailable(
+                    _ocr.missing_tesseract_hint(), "automation_required"
+                ) from exc
             raise ProviderUnavailable(
                 f"easytrader 连接或查询持仓失败: {exc}。"
                 f"请确认 {self.profile.label if self.profile else '券商客户端'} "
@@ -302,6 +314,9 @@ class EasyTraderProvider(HoldingsProvider):
                 "navigation_required",
             )
         self._require_client()
+        # 另存为同样会弹风控验证码，_ths_export 用同一套 OCR——这里先把
+        # tesseract 指给 pytesseract，否则「本机装了 OCR 也识别不了」。
+        _ocr.locate_tesseract()
         trader = self._connect()
         try:
             header, rows = self._read_trade_table(trader)
