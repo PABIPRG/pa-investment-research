@@ -22,14 +22,14 @@ it.each([
 ])('%s 在独立子框打开，底部关闭保留父持仓并还原焦点', async (triggerName, title) => {
   const { onClose } = renderHoldings()
   const parent = screen.getByRole('dialog', { name: '持仓明细' })
-  const trigger = within(parent).getAllByRole('button', { name: triggerName, exact: true })[0]!
+  const trigger = within(parent).getAllByRole('button', { name: triggerName })[0]!
   trigger.focus()
   fireEvent.click(trigger)
-  const child = await screen.findByRole('dialog', { name: title, exact: true })
+  const child = await screen.findByRole('dialog', { name: title })
   expect(child).not.toBe(parent)
   expect(parent.isConnected).toBe(true)
   expect(within(child).queryByRole('button', { name: /返回持仓/ })).toBeNull()
-  const close = within(child).getByRole('button', { name: '关闭', exact: true })
+  const close = within(child).getByRole('button', { name: '关闭' })
   expect(close.closest('footer')).not.toBeNull()
   fireEvent.click(close)
   await waitFor(() => { expect(child.isConnected).toBe(false) })
@@ -100,7 +100,7 @@ it('从空历史切换买入后关闭，焦点回到原持仓入口', async () =
   fireEvent.click(trigger)
   fireEvent.click(await screen.findByRole('button', { name: '记录一笔买入' }))
   const buy = screen.getByRole('dialog', { name: '记录买入' })
-  fireEvent.click(within(buy).getByRole('button', { name: '关闭', exact: true }))
+  fireEvent.click(within(buy).getByRole('button', { name: '关闭' }))
   await waitFor(() => { expect(document.activeElement).toBe(trigger) })
 })
 
@@ -111,6 +111,6 @@ it('同步改用导入后关闭，焦点回到原同步入口', async () => {
   fireEvent.click(trigger)
   fireEvent.click(await screen.findByRole('button', { name: '暂不安装，改用手动录入' }))
   const child = screen.getByRole('dialog', { name: '导入持仓' })
-  fireEvent.click(within(child).getByRole('button', { name: '关闭', exact: true }))
+  fireEvent.click(within(child).getByRole('button', { name: '关闭' }))
   await waitFor(() => { expect(document.activeElement).toBe(trigger) })
 })

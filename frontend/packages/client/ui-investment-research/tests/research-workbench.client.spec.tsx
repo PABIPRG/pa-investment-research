@@ -917,7 +917,7 @@ describe('研究工作台', () => {
     within(dialog).getByRole('button', { name: '导入持仓' }).focus()
     fireEvent.click(within(dialog).getByRole('button', { name: '导入持仓' }))
     dialog = view.getByRole('dialog', { name: '导入持仓' })
-    expect(within(dialog).getByRole('button', { name: '关闭', exact: true })).toBeTruthy()
+    expect(within(dialog).getByRole('button', { name: '关闭' })).toBeTruthy()
     const singleTab = within(dialog).getByRole('tab', { name: '单条录入' })
     expect(singleTab.getAttribute('aria-selected')).toBe('true')
     expect(dialog.contains(document.activeElement)).toBe(true)
@@ -926,7 +926,7 @@ describe('研究工作台', () => {
     fireEvent.click(within(dialog).getByRole('tab', { name: '批量导入' }))
     const source = '股票代码,数量,成本价\n000858,300,135'
     fireEvent.change(within(dialog).getByRole('textbox', { name: '持仓导入内容' }), { target: { value: source } })
-    fireEvent.click(within(dialog).getByRole('button', { name: '关闭', exact: true }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
     dialog = await view.findByRole('dialog', { name: '持仓明细' })
 
     expect(within(dialog).queryByRole('tab', { name: '单条录入' })).toBeNull()
@@ -1332,7 +1332,7 @@ describe('研究工作台', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
     dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
     expect(await within(dialog).findByText(/检测耗时较长/, {}, { timeout: 5000 })).toBeTruthy()
-    expect(within(dialog).getByRole('button', { name: '关闭', exact: true }).hasAttribute('disabled')).toBe(false)
+    expect(within(dialog).getByRole('button', { name: '关闭' }).hasAttribute('disabled')).toBe(false)
     expect(await within(dialog).findByText('检测暂未完成，请重新检测，或先手动录入持仓。', {}, { timeout: 11000 })).toBeTruthy()
     fireEvent.click(within(dialog).getByRole('button', { name: '重新检测' }))
     expect(await within(dialog).findByText('允许读取同花顺持仓')).toBeTruthy()
@@ -1579,7 +1579,7 @@ describe('研究工作台', () => {
 
     await waitFor(() => { expect(rejectSave).toBeTypeOf('function') })
     expect(within(dialog).getByRole('tab', { name: '单条录入' }).hasAttribute('disabled')).toBe(true)
-    expect(within(dialog).getByRole('button', { name: '关闭', exact: true }).hasAttribute('disabled')).toBe(true)
+    expect(within(dialog).getByRole('button', { name: '关闭' }).hasAttribute('disabled')).toBe(true)
     expect(within(dialog).getByRole('button', { name: '正在批量保存…' }).hasAttribute('disabled')).toBe(true)
     expect(within(dialog).getByRole('button', { name: '关闭导入持仓' }).hasAttribute('disabled')).toBe(true)
     fireEvent.keyDown(document, { key: 'Escape' })
