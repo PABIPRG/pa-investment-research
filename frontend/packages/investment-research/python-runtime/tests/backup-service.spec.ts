@@ -49,6 +49,27 @@ function tradingSnapshot(categories: string[]): DomainSnapshot {
 }
 
 describe('BackupService storage', () => {
+  it('creates and lists a backup containing the notification table envelope', async () => {
+    const dshHome = await home()
+    const service = new BackupService({
+      dshHome, appVersion: '0.2.0-alpha.2',
+      request: async () => ({
+        schemaVersion: 4, backend: 'trading-core', categories: {
+          notifications: { count: 0, collections: { notification_center: {
+            schemaVersion: 1,
+            tables: {
+              notifications: [], notification_events: [], delivery_jobs: [],
+              delivery_attempts: [], notification_preferences: [], notification_audit: [],
+            },
+          } } },
+        },
+      }),
+    })
+    const created = await service.create({ categories: ['notifications'], reason: 'manual' })
+    expect(created.manifest.contents).toEqual([{ category: 'notifications', count: 0 }])
+    expect(await service.list()).toEqual([expect.objectContaining({ filename: created.filename, status: 'ready' })])
+  })
+
   it('rejects growth observed after opening before allocating or reading the file', async () => {
     const expected = { dev: 1, ino: 2, size: 4, isFile: () => true }
     const handle = {

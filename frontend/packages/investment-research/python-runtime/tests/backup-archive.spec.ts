@@ -5,6 +5,7 @@ import {
   createBackupArchive,
   inspectBackupArchive,
   readableBackupFilename,
+  validateDomainSnapshot,
 } from '../src/backup-archive.ts'
 
 const CREATED_AT = new Date('2026-09-07T06:35:20.000Z')
@@ -21,6 +22,43 @@ const tradingSnapshot = {
 }
 
 describe('investment backup archive', () => {
+  it.each([0, 1, 2, 3, 10])('round trips a notification snapshot with %i records instead of counting wrapper fields', (count) => {
+    const snapshot = {
+      schemaVersion: 1,
+      backend: 'trading-core',
+      categories: {
+        notifications: {
+          count,
+          collections: {
+            notification_center: {
+              schemaVersion: 1,
+              tables: { notifications: Array.from({ length: count }, (_, id) => ({ id: String(id) })) },
+            },
+          },
+        },
+      },
+    }
+    const archive = createBackupArchive({
+      createdAt: CREATED_AT.toISOString(), createdByAppVersion: '0.2.0-alpha.2',
+      reason: 'manual', categories: ['notifications'], snapshots: { 'trading-core': snapshot },
+    })
+    const restored = inspectBackupArchive(archive.bytes)
+    expect(restored.manifest.contents).toEqual([{ category: 'notifications', count }])
+    expect(restored.snapshots['trading-core']).toEqual(snapshot)
+  })
+
+  it('rejects a mismatched notification count and a malformed notification table', () => {
+    const snapshot = (notifications: unknown) => ({
+      schemaVersion: 1, backend: 'trading-core', categories: {
+        notifications: { count: 2, collections: { notification_center: {
+          schemaVersion: 1, tables: { notifications },
+        } } },
+      },
+    })
+    expect(() => validateDomainSnapshot(snapshot([{ id: 'one' }]), 'trading-core')).toThrow(/数量与集合数据不匹配/)
+    expect(() => validateDomainSnapshot(snapshot({}), 'trading-core')).toThrow(/notifications/)
+  })
+
   it('creates a standard zip with a readable filename and verified manifest', () => {
     const filename = readableBackupFilename({
       reason: 'manual',

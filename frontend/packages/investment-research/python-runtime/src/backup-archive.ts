@@ -142,6 +142,15 @@ export function validateDomainSnapshot(snapshot: unknown, expectedDomainId: stri
     let actualCount = 0
     for (const [collection, document] of Object.entries(payload.collections)) {
       assertPlainObject(document, `领域 ${expectedDomainId} 的 ${category}.${collection}`)
+      if (category === 'notifications' && collection === 'notification_center') {
+        assertPlainObject(document.tables, `领域 ${expectedDomainId} 的 notifications tables`)
+        const notifications = document.tables.notifications
+        if (!Array.isArray(notifications)) {
+          throw new Error(`领域 ${expectedDomainId} 的 notifications 表必须是列表`)
+        }
+        actualCount += notifications.length
+        continue
+      }
       const rows = document.default
       actualCount += Array.isArray(rows) ? rows.length : Object.keys(document).length
     }

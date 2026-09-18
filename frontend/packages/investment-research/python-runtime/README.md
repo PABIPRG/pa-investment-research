@@ -65,6 +65,8 @@ Personalized feedback and the five `trading-core.local-learning-*` operations ar
 
 ## Deployment-aware backup and holdings transport
 
+Notification archive counts are validated against the rows in `notification_center.tables.notifications`, not the `schemaVersion` and `tables` envelope fields. Creation and inspection share this check: empty notification tables are valid, while mismatched counts and non-array notification tables are rejected.
+
 The Runtime consumes the Host deployment snapshot instead of inferring a browser platform. Cloud Web refuses broker discovery, broker synchronization, native holdings, and holdings-provider configuration, while manual entry and browser bulk import remain available. `backup-describe` returns a managed location without a path in Cloud Web; local deployments retain their directory description and directory management.
 
 Browser uploads use bounded chunk sessions followed by archive inspection and the existing import preview. Stored downloads use separate authenticated chunk sessions over an immutable validated archive snapshot. Only direct `.pabackup` files are accepted; symlinks, non-files, archives over 64 MiB, stale ids, and invalid offsets are rejected. The opened size is rechecked and a fixed-size read rejects concurrent growth. At most two compressed snapshots remain active (128 MiB resident ceiling); concurrent validation has a 384 MiB logical payload ceiling including bounded decompression, excluding allocator overhead. Every terminal path releases its session, and client cancellation aborts the in-flight Remote before best-effort server cleanup.
