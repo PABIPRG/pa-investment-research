@@ -412,9 +412,15 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
   const create = (): void => {
     run(async () => {
       const result = await props.backupCreate({ categories: selected, reason: 'manual' })
-      await refresh()
       setDialog(null)
       setFeedback(`${props.t('backupCreated')} ${result.filename}`)
+      try {
+        await refresh()
+      }
+      catch {
+        // The archive is already durable; a refresh failure must not invite another create.
+        setFeedback(`${props.t('backupCreatedRefreshFailed')} ${result.filename}`)
+      }
     })
   }
 
@@ -613,6 +619,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       </div>
       <div className={css.heroActions}>
         <button type="button" className={css.primaryButton} disabled={busy} onClick={() => {
+          setFeedback('')
           setSelected(ALL_CATEGORIES)
           setDialog('create')
         }}>{props.t('backupCreate')}</button>
@@ -638,7 +645,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
         transferAbort.current?.abort()
       }}>{props.t('backupCancel')}</button>}
     </div>}
-    <p className={css.feedback} aria-live="polite">{dialog === 'import' ? '' : feedback}</p>
+    <p className={css.feedback} aria-live="polite">{dialog === 'import' || dialog === 'create' ? '' : feedback}</p>
 
     <section className={css.location} aria-labelledby="backup-location-title">
       <div>
@@ -738,7 +745,7 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       }}>{props.t('backupResetAction')}</button>
     </section>
 
-    {dialog === 'create' && <Modal t={props.t} title={props.t('backupCreateDialogTitle')} busy={busy} confirmLabel={props.t('backupCreate')} confirmDisabled={!selected.length} onCancel={() => {
+    {dialog === 'create' && <Modal t={props.t} title={props.t('backupCreateDialogTitle')} busy={busy} feedback={feedback} confirmLabel={props.t('backupCreate')} confirmDisabled={!selected.length} onCancel={() => {
       setDialog(null)
     }} onConfirm={create}>
       <p>{props.t('backupCreateDialogHint')}</p>

@@ -492,6 +492,38 @@ describe('InvestmentReadinessSection', () => {
     expect(await screen.findByText(/投研备份-全量数据-2026-09-07_14-35-20\.pabackup/)).toBeTruthy()
   })
 
+  it('shows create failures inside the dialog and preserves selection for retry', async () => {
+    const { backup } = mount(CONFIGURED)
+    backup.backupCreate.mockRejectedValueOnce(new Error('无法创建备份，请稍后重试。'))
+    fireEvent.click(screen.getByRole('button', { name: '创建备份' }))
+    const dialog = screen.getByRole('dialog', { name: '创建投研备份' })
+    const category = within(dialog).getAllByRole('checkbox')[0] as HTMLInputElement
+    fireEvent.click(category)
+    fireEvent.click(within(dialog).getByRole('button', { name: '创建备份' }))
+
+    expect((await within(dialog).findByRole('alert')).textContent).toBe('无法创建备份，请稍后重试。')
+    expect(category.checked).toBe(false)
+    expect(within(dialog).getByRole('button', { name: '创建备份' }).hasAttribute('disabled')).toBe(false)
+    fireEvent.click(within(dialog).getByRole('button', { name: '创建备份' }))
+    await waitFor(() => { expect(screen.queryByRole('dialog', { name: '创建投研备份' })).toBeNull() })
+    expect(backup.backupCreate).toHaveBeenCalledTimes(2)
+    expect(backup.backupCreate.mock.calls[1]).toEqual(backup.backupCreate.mock.calls[0])
+  })
+
+  it('reports a completed backup separately from a failed list refresh', async () => {
+    const { backup } = mount(CONFIGURED)
+    await screen.findByText('还没有备份')
+    backup.backupList.mockRejectedValueOnce(new Error('列表读取失败'))
+    fireEvent.click(screen.getByRole('button', { name: '创建备份' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '创建投研备份' })).getByRole('button', { name: '创建备份' }))
+
+    expect(await screen.findByText(/备份已创建，但列表刷新失败/)).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: '创建投研备份' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => { expect(backup.backupList).toHaveBeenCalledTimes(3) })
+    expect(backup.backupCreate).toHaveBeenCalledOnce()
+  })
+
   it('imports from the backup list with editable rules and optional pre-import backup', async () => {
     const filename = '投研备份-持仓-2026-09-07_14-35-20.pabackup'
     const manifest = {
