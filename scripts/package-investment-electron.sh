@@ -23,7 +23,7 @@ esac
 # Honor the configured proxy for Node downloads (supported Node versions).
 export NODE_USE_ENV_PROXY="${NODE_USE_ENV_PROXY:-1}"
 cd "$ROOT/frontend"
-echo "正在构建 $TARGET 桌面包（首次会下载独立 Python 及依赖，请保持联网）…"
+echo "正在构建 $TARGET 桌面包（首次会下载独立 Python 及依赖，后续构建会复用用户缓存）…"
 # A production deploy removes workspace development tools such as tsx.
 # Restore the frozen development tree explicitly before any pnpm script runs.
 export pnpm_config_verify_deps_before_run=warn

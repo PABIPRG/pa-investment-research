@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import {
-  cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile,
+  cp, link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile,
 } from 'node:fs/promises'
 import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -17,6 +17,11 @@ const execFileAsync = promisify(execFile)
 const TARGETS = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'] as const
 const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
+const RETRYABLE_DOWNLOAD_CODES = new Set([
+  'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ENETDOWN', 'ENETUNREACH', 'EPIPE', 'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET',
+])
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 
 export type InvestmentSidecarTarget = typeof TARGETS[number]
 
@@ -51,6 +56,19 @@ export interface BuildInvestmentSidecarDependencies {
   readonly extractArchive?: (archive: string, destination: string) => Promise<void>
   readonly runCommand?: (command: string, args: readonly string[], cwd: string) => Promise<number>
   readonly descriptorFileSha256?: (path: string) => Promise<string>
+}
+
+export interface DownloadFileOptions {
+  readonly fetchImplementation?: (url: string) => Promise<Response>
+  readonly maxAttempts?: number
+  readonly wait?: (delay: number) => Promise<void>
+}
+
+class DownloadHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`HTTP ${status}`)
+    this.name = 'DownloadHttpError'
+  }
 }
 
 interface RuntimeDescriptor {
@@ -147,13 +165,100 @@ async function loadDefaultLock(repoRoot: string): Promise<InvestmentSidecarLock>
   return JSON.parse(await readFile(path, 'utf8')) as InvestmentSidecarLock
 }
 
-async function defaultDownload(url: string, destination: string): Promise<void> {
-  const response = await fetch(url)
-  if (!response.ok || response.body === null) throw new Error(`download failed (${response.status}): ${url}`)
-  await pipeline(
-    Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>),
-    createWriteStream(destination, { flags: 'wx' }),
-  )
+function sanitizedUrl(value: string): string {
+  try {
+    const parsed = new URL(value)
+    parsed.username = ''
+    parsed.password = ''
+    parsed.search = ''
+    parsed.hash = ''
+    return parsed.href
+  } catch {
+    return '<redacted-url>'
+  }
+}
+
+function sanitizedMessage(value: string): string {
+  return value.replace(/https?:\/\/[^\s)\]}]+/giu, match => sanitizedUrl(match))
+}
+
+function errorDiagnostic(error: unknown): string {
+  const diagnostics: string[] = []
+  const seen = new Set<unknown>()
+  let current = error
+  while (current !== undefined && current !== null && diagnostics.length < 4 && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error) {
+      const code = (current as NodeJS.ErrnoException).code
+      diagnostics.push(`${current.name}${code === undefined ? '' : ` [${code}]`}: ${sanitizedMessage(current.message)}`)
+      current = (current as Error & { cause?: unknown }).cause
+    } else {
+      diagnostics.push(typeof current === 'string' ? sanitizedMessage(current) : '<non-error cause>')
+      break
+    }
+  }
+  return diagnostics.join(' <- cause: ')
+}
+
+function retryableDownloadError(error: unknown): boolean {
+  if (error instanceof DownloadHttpError) return RETRYABLE_HTTP_STATUSES.has(error.status)
+  const seen = new Set<unknown>()
+  let current = error
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error) {
+      const code = (current as NodeJS.ErrnoException).code
+      if (code !== undefined && RETRYABLE_DOWNLOAD_CODES.has(code)) return true
+      current = (current as Error & { cause?: unknown }).cause
+    } else {
+      break
+    }
+  }
+  return false
+}
+
+/** Download one immutable file with bounded retries for transient network failures only. */
+export async function downloadFileWithRetry(
+  url: string,
+  destination: string,
+  options: DownloadFileOptions = {},
+): Promise<void> {
+  const fetchImplementation = options.fetchImplementation ?? fetch
+  const maxAttempts = options.maxAttempts ?? 3
+  const wait = options.wait ?? (async (delay) => {
+    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, delay) })
+  })
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new TypeError('download maxAttempts must be a positive integer')
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    await rm(destination, { force: true })
+    try {
+      const response = await fetchImplementation(url)
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {})
+        throw new DownloadHttpError(response.status)
+      }
+      if (response.body === null) throw new Error('download response has no body')
+      await pipeline(
+        Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>),
+        createWriteStream(destination, { flags: 'wx' }),
+      )
+      return
+    } catch (error) {
+      await rm(destination, { force: true })
+      const retryable = retryableDownloadError(error)
+      if (!retryable || attempt >= maxAttempts) {
+        throw new Error(
+          `download failed after ${attempt} attempt${attempt === 1 ? '' : 's'}: ${sanitizedUrl(url)}: ${errorDiagnostic(error)}`,
+        )
+      }
+      const delay = 250 * attempt
+      console.warn(
+        `Python sidecar download retry ${attempt}/${maxAttempts - 1} in ${delay}ms: ${errorDiagnostic(error)}`,
+      )
+      await wait(delay)
+    }
+  }
 }
 
 async function defaultListArchive(archive: string): Promise<readonly string[]> {
@@ -246,15 +351,29 @@ async function prepareArchive(
   } catch {
     // A cache miss is handled below.
   }
-  if (present && await fileSha256(archive) === targetLock.archiveSha256) return archive
+  const cachedHash = present ? await fileSha256(archive).catch(() => '') : ''
+  if (cachedHash === targetLock.archiveSha256) {
+    console.log(`Python sidecar cache: hit for ${target} (${archive})`)
+    return archive
+  }
   if (offline) throw new Error(`offline cache miss or hash mismatch for ${target}`)
-  await rm(archive, { force: true })
-  const temporary = `${archive}.download-${process.pid}`
-  await rm(temporary, { force: true })
+  console.log(`Python sidecar cache: ${present ? 'hash mismatch' : 'miss'} for ${target}; downloading`)
+  const temporary = `${archive}.download-${process.pid}-${randomUUID()}`
   try {
     await download(targetLock.archiveUrl, temporary)
     if (await fileSha256(temporary) !== targetLock.archiveSha256) throw new Error(`${target} archive hash mismatch`)
-    await rename(temporary, archive)
+    for (let publishAttempt = 1; publishAttempt <= 3; publishAttempt += 1) {
+      try {
+        await link(temporary, archive)
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        if (await fileSha256(archive).catch(() => '') === targetLock.archiveSha256) break
+        if (publishAttempt >= 3) throw new Error(`${target} cache changed repeatedly while publishing`)
+        await rm(archive, { force: true })
+      }
+    }
+    console.log(`Python sidecar cache: stored verified ${target} archive (${archive})`)
   } finally {
     await rm(temporary, { force: true })
   }
@@ -284,7 +403,7 @@ export async function buildInvestmentPythonSidecar(
 
   const archiveStarted = Date.now()
   const archive = await prepareArchive(
-    resolve(options.cache), target, targetLock, options.offline === true, dependencies.download ?? defaultDownload,
+    resolve(options.cache), target, targetLock, options.offline === true, dependencies.download ?? downloadFileWithRetry,
   )
   console.log(`Python sidecar: archive ready in ${Date.now() - archiveStarted}ms`)
   const entries = await (dependencies.listArchive ?? defaultListArchive)(archive)
@@ -381,7 +500,7 @@ if (process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).hre
   try {
     await buildInvestmentPythonSidecar(parseCli(process.argv.slice(2)))
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    process.stderr.write(`${errorDiagnostic(error)}\n`)
     process.exitCode = 1
   }
 }
