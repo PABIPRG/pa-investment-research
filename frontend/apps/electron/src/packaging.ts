@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { downloadArtifact } from '@electron/get'
@@ -34,6 +34,12 @@ interface PackagingPlan {
   sidecarDir: string
   stagingDir: string
   workspaceDir: string
+}
+
+export interface PackagingDownloadCaches {
+  electron: string
+  pip: string
+  python: string
 }
 
 interface PackagingWorkspaceLink {
@@ -71,6 +77,29 @@ interface DescriptorRetryOptions {
 const descriptorErrorCodes = new Set(['EMFILE', 'ENFILE'])
 const defaultDescriptorMaxRetries = 50
 const defaultDescriptorRetryDelay = 50
+
+function configuredCache(value: string | undefined, fallback: string): string {
+  return value?.trim() || fallback
+}
+
+/** Resolve persistent, independent download caches for every desktop packaging entrypoint. */
+export function resolvePackagingDownloadCaches(
+  environment: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  homeDirectory: string = homedir(),
+): PackagingDownloadCaches {
+  const platformCacheRoot = platform === 'darwin'
+    ? join(homeDirectory, 'Library', 'Caches')
+    : platform === 'win32'
+      ? configuredCache(environment.LOCALAPPDATA, join(homeDirectory, 'AppData', 'Local'))
+      : configuredCache(environment.XDG_CACHE_HOME, join(homeDirectory, '.cache'))
+  const packagingRoot = join(platformCacheRoot, appIdentity.appBundleId, 'packaging-downloads')
+  return {
+    electron: configuredCache(environment.ELECTRON_CACHE, join(packagingRoot, 'electron')),
+    pip: configuredCache(environment.PIP_CACHE_DIR, join(packagingRoot, 'pip')),
+    python: configuredCache(environment.INVESTMENT_PYTHON_DOWNLOAD_CACHE, join(packagingRoot, 'python')),
+  }
+}
 
 /** Retry only transient file-descriptor exhaustion with bounded linear backoff. */
 export async function retryDescriptorOperation<T>(
@@ -696,11 +725,16 @@ export async function packagerWithIconWarningGuard(
   }
 }
 
-async function run(command: string, args: string[], cwd: string): Promise<void> {
+async function run(
+  command: string,
+  args: string[],
+  cwd: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
   await new Promise<void>((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd,
-      env: process.env,
+      env: environment,
       shell: commandRequiresShell(command),
       stdio: 'inherit',
     })
@@ -889,14 +923,34 @@ async function timed<T>(phase: string, action: () => Promise<T>): Promise<T> {
 
 async function packageApplication(): Promise<void> {
   const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-'))
-  const plan = createPackagingPlan(rootDir, process.platform, process.arch, process.env.INVESTMENT_PYTHON_DOWNLOAD_CACHE)
+  const downloadCaches = resolvePackagingDownloadCaches()
+  const packagingEnvironment = {
+    ...process.env,
+    ELECTRON_CACHE: downloadCaches.electron,
+    INVESTMENT_PYTHON_DOWNLOAD_CACHE: downloadCaches.python,
+    PIP_CACHE_DIR: downloadCaches.pip,
+  }
+  const plan = createPackagingPlan(rootDir, process.platform, process.arch, downloadCaches.python)
+  console.log(`Electron packaging: Python download cache ${plan.sidecarCacheDir}`)
+  console.log(`Electron packaging: pip download cache ${downloadCaches.pip}`)
+  console.log(`Electron packaging: Electron download cache ${downloadCaches.electron}`)
   try {
     // Build the sidecar while workspace development tools are still present.
     // pnpm deploy --prod records a production-only workspace state; invoking
     // the tsx-backed sidecar script afterwards can otherwise purge tsx before
     // the script starts.
-    await timed('Python sidecar', () => run(plan.sidecar.command, plan.sidecar.args, plan.sidecar.cwd))
-    await timed('production deploy', () => run(plan.deploy.command, plan.deploy.args, plan.deploy.cwd))
+    await timed('Python sidecar', () => run(
+      plan.sidecar.command,
+      plan.sidecar.args,
+      plan.sidecar.cwd,
+      packagingEnvironment,
+    ))
+    await timed('production deploy', () => run(
+      plan.deploy.command,
+      plan.deploy.args,
+      plan.deploy.cwd,
+      packagingEnvironment,
+    ))
     if (process.platform === 'darwin' || process.platform === 'win32') {
       const startedAt = Date.now()
       const materializedLinks = await materializePackagingWorkspaceLinks(
@@ -926,7 +980,7 @@ async function packageApplication(): Promise<void> {
       checksums,
       platform: process.platform,
       version: electronVersion,
-      ...(process.env.ELECTRON_CACHE ? { cacheRoot: process.env.ELECTRON_CACHE } : {}),
+      cacheRoot: downloadCaches.electron,
     }))
     const outDir = join(appDir, 'out')
     const packagerOptions = createPackagerOptions({

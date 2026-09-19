@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildInvestmentPythonSidecar,
+  downloadFileWithRetry,
   type InvestmentSidecarLock,
 } from './build-investment-python-sidecar.ts'
 
@@ -218,6 +219,126 @@ describe('investment Python sidecar builder', () => {
       extractArchive,
     })).rejects.toThrow(/unsafe archive entry/u)
     expect(extractArchive).not.toHaveBeenCalled()
+  })
+
+  it('replaces a corrupt cached archive with a verified download', async () => {
+    const setup = await fixture()
+    const archive = join(setup.cache, `${TARGET}-python.tar.gz`)
+    await writeFile(archive, 'corrupt')
+    const download = vi.fn(async (_url: string, destination: string) => {
+      await writeFile(destination, 'fixture archive')
+    })
+
+    await buildInvestmentPythonSidecar({
+      target: TARGET, output: setup.output, cache: setup.cache,
+    }, { ...setup.dependencies, download })
+
+    expect(download).toHaveBeenCalledOnce()
+    expect(await readFile(archive, 'utf8')).toBe('fixture archive')
+  })
+
+  it('publishes concurrent verified downloads without exposing partial cache files', async () => {
+    const setup = await fixture()
+    const archive = join(setup.cache, `${TARGET}-python.tar.gz`)
+    await rm(archive)
+    let arrivals = 0
+    let releaseDownloads: (() => void) | undefined
+    const bothDownloadsStarted = new Promise<void>((resolvePromise) => { releaseDownloads = resolvePromise })
+    const download = vi.fn(async (_url: string, destination: string) => {
+      await writeFile(destination, 'fixture archive')
+      arrivals += 1
+      if (arrivals === 2) releaseDownloads?.()
+      await bothDownloadsStarted
+    })
+
+    await Promise.all([
+      buildInvestmentPythonSidecar({
+        target: TARGET, output: join(setup.root, 'output-one'), cache: setup.cache,
+      }, { ...setup.dependencies, download }),
+      buildInvestmentPythonSidecar({
+        target: TARGET, output: join(setup.root, 'output-two'), cache: setup.cache,
+      }, { ...setup.dependencies, download }),
+    ])
+
+    expect(download).toHaveBeenCalledTimes(2)
+    expect(await readFile(archive, 'utf8')).toBe('fixture archive')
+    expect(await readdir(setup.cache)).toEqual([`${TARGET}-python.tar.gz`])
+  })
+
+  it('retries only bounded transient download failures and removes partial files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'investment download retry '))
+    roots.push(root)
+    const destination = join(root, 'python.tar.gz')
+    const delays: number[] = []
+    const transient = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('socket reset for https://example.invalid/python.tar.gz?token=private'), {
+        code: 'ECONNRESET',
+      }),
+    })
+    const fetchImplementation = vi.fn()
+      .mockRejectedValueOnce(transient)
+      .mockResolvedValueOnce(new Response('fixture archive', { status: 200 }))
+
+    await downloadFileWithRetry(
+      'https://example.invalid/python.tar.gz?token=private',
+      destination,
+      {
+        fetchImplementation,
+        maxAttempts: 2,
+        wait: async (delay) => { delays.push(delay) },
+      },
+    )
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(2)
+    expect(delays).toEqual([250])
+    expect(await readFile(destination, 'utf8')).toBe('fixture archive')
+  })
+
+  it('does not retry permanent HTTP failures and redacts URL secrets from diagnostics', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'investment download failure '))
+    roots.push(root)
+    const destination = join(root, 'python.tar.gz')
+    const fetchImplementation = vi.fn(async () => new Response('not found', { status: 404 }))
+
+    const failure = await downloadFileWithRetry(
+      'https://user:password@example.invalid/python.tar.gz?token=private#fragment',
+      destination,
+      { fetchImplementation, maxAttempts: 3, wait: async () => {} },
+    ).catch((error: unknown) => error)
+
+    expect(fetchImplementation).toHaveBeenCalledOnce()
+    expect(String(failure)).toContain('https://example.invalid/python.tar.gz')
+    expect(String(failure)).toContain('HTTP 404')
+    expect(String(failure)).not.toMatch(/user|password|token|private|fragment/u)
+  })
+
+  it('stops transient download retries at the configured limit and reports the cause chain', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'investment download exhausted '))
+    roots.push(root)
+    const destination = join(root, 'python.tar.gz')
+    const delays: number[] = []
+    const transient = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('timeout for https://example.invalid/python.tar.gz?token=private'), {
+        code: 'UND_ERR_CONNECT_TIMEOUT',
+      }),
+    })
+    const fetchImplementation = vi.fn(async () => { throw transient })
+
+    const failure = await downloadFileWithRetry(
+      'https://example.invalid/python.tar.gz?token=private',
+      destination,
+      {
+        fetchImplementation,
+        maxAttempts: 3,
+        wait: async (delay) => { delays.push(delay) },
+      },
+    ).catch((error: unknown) => error)
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(3)
+    expect(delays).toEqual([250, 500])
+    expect(String(failure)).toContain('TypeError: fetch failed')
+    expect(String(failure)).toContain('UND_ERR_CONNECT_TIMEOUT')
+    expect(String(failure)).not.toMatch(/token|private/u)
   })
 
   it('emits the Linux platform identity for the container target', async () => {

@@ -22,6 +22,7 @@ import {
   refreshPackagedSidecarDescriptor,
   removePackagingRoot,
   retryDescriptorOperation,
+  resolvePackagingDownloadCaches,
   resolveMacCodesignIdentity,
   sealPackagedSidecarReadOnly,
   signPackagedMacApplications,
@@ -164,10 +165,10 @@ describe('Electron investment sidecar packaging', () => {
     })).resolves.toEqual(['/tmp/packaged'])
   })
 
-  it('preserves downloads outside disposable roots and separates targets', async () => {
+  it('reuses the default user cache across disposable roots and separates targets', async () => {
     const fixture = await mkdtemp(join(tmpdir(), 'packaging-cache-'))
     try {
-      const cache = join(fixture, 'downloads')
+      const cache = resolvePackagingDownloadCaches({}, 'darwin', fixture).python
       const first = createPackagingPlan(join(fixture, 'first'), 'darwin', 'arm64', cache)
       const second = createPackagingPlan(join(fixture, 'second'), 'darwin', 'arm64', cache)
       const intel = createPackagingPlan(join(fixture, 'third'), 'darwin', 'x64', cache)
@@ -178,6 +179,48 @@ describe('Electron investment sidecar packaging', () => {
       expect(await readFile(join(second.sidecarCacheDir, 'archive'), 'utf8')).toBe('cached download')
       expect(intel.sidecarCacheDir).not.toBe(first.sidecarCacheDir)
     } finally { await rm(fixture, { recursive: true, force: true }) }
+  })
+
+  it.each([
+    {
+      expectedRoot: join('/Users/example', 'Library/Caches/com.pa.investmentresearch/packaging-downloads'),
+      environment: {},
+      home: '/Users/example',
+      platform: 'darwin',
+    },
+    {
+      expectedRoot: join('C:/Users/example/AppData/Local', 'com.pa.investmentresearch/packaging-downloads'),
+      environment: { LOCALAPPDATA: 'C:/Users/example/AppData/Local' },
+      home: 'C:/Users/example',
+      platform: 'win32',
+    },
+    {
+      expectedRoot: join('/var/cache/example', 'com.pa.investmentresearch/packaging-downloads'),
+      environment: { XDG_CACHE_HOME: '/var/cache/example' },
+      home: '/home/example',
+      platform: 'linux',
+    },
+  ] as const)('uses persistent user download caches by default on $platform', ({
+    environment, expectedRoot, home, platform,
+  }) => {
+    expect(resolvePackagingDownloadCaches(environment, platform, home)).toEqual({
+      electron: join(expectedRoot, 'electron'),
+      pip: join(expectedRoot, 'pip'),
+      python: join(expectedRoot, 'python'),
+    })
+  })
+
+  it('keeps Python, pip, and Electron cache overrides independent', () => {
+    expect(resolvePackagingDownloadCaches({
+      ELECTRON_CACHE: '/custom/electron',
+      INVESTMENT_PYTHON_DOWNLOAD_CACHE: '/custom/python',
+      LOCALAPPDATA: '/ignored/local',
+      PIP_CACHE_DIR: '/custom/pip',
+    }, 'win32', '/ignored/home')).toEqual({
+      electron: '/custom/electron',
+      pip: '/custom/pip',
+      python: '/custom/python',
+    })
   })
 
   it('uses the Windows command shell only for batch entrypoints', () => {
