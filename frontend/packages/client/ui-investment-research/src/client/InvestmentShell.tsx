@@ -57,6 +57,7 @@ import css from './InvestmentShell.module.css'
 type HostDescriptionSource = ConnectionHandle['hostDescription']
 
 export const INVESTMENT_APP_VERSION = packageManifest.version
+const INVESTMENT_APP_ICON = '/icons/app-icon-001/icon-192.png'
 
 type ResourcePhase = 'idle' | 'loading' | 'refreshing' | 'success' | 'error'
 
@@ -298,6 +299,15 @@ function ImportIcon() {
   )
 }
 
+function SparkleIcon() {
+  return (
+    <svg className={css.productGlyph} viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M10 2.8 11.8 7l4.2 1.8-4.2 1.8-1.8 4.2-1.8-4.2L4 8.8 8.2 7 10 2.8Z" />
+      <path d="m15.5 2.8.6 1.5 1.5.6-1.5.6-.6 1.5-.6-1.5-1.5-.6 1.5-.6.6-1.5Z" />
+    </svg>
+  )
+}
+
 function NavGlyph({ route }: { route: NavigationRoute }) {
   const glyph = {
     dashboard: <><rect x="3" y="3" width="6" height="6" rx="1" /><rect x="11" y="3" width="6" height="6" rx="1" /><rect x="3" y="11" width="6" height="6" rx="1" /><rect x="11" y="11" width="6" height="6" rx="1" /></>,
@@ -315,10 +325,10 @@ function NavGlyph({ route }: { route: NavigationRoute }) {
 
 /** Profile identity from the approved shared investment shell. */
 export function InvestmentBrand({ compact }: InvestmentBrandProps) {
-  if (compact) return <span className={css.brandCompact}>✦</span>
+  if (compact) return <img className={css.brandCompact} src={INVESTMENT_APP_ICON} alt="投研智能体" />
   return (
     <div className={css.investmentBrand} aria-label="投研智能体">
-      <span className={css.brandMark}>✦</span>
+      <img className={css.brandMark} src={INVESTMENT_APP_ICON} alt="" aria-hidden="true" />
       <span className={css.brandCopy}>
         <strong>投研智能体</strong>
         <small>{INVESTMENT_APP_VERSION} · 智能投研系统</small>
@@ -390,7 +400,7 @@ const RESEARCH_EXPERTS: readonly ResearchExpert[] = [
 export function InvestmentWelcome(_props: InvestmentWelcomeProps) {
   return (
     <section className={css.investmentWelcome} aria-labelledby="investment-welcome-title">
-      <span className={css.welcomeMark} aria-hidden="true">✦</span>
+      <span className={css.welcomeMark} aria-hidden="true"><SparkleIcon /></span>
       <h1 id="investment-welcome-title">AI 研究助理</h1>
       <p>输入自然语言问题即可。需要业务事实时，助理会通过当前模块的受控工具按需读取。</p>
     </section>
@@ -644,7 +654,7 @@ export function InvestmentAssistantModuleSelect({
           onClick={() => { setOpen(current => !current) }}
         >
           {appearance === 'context'
-            && <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">✦</span>}
+            && <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true"><SparkleIcon /></span>}
           {appearance === 'context'
             ? <strong>{selected.label}</strong>
             : <span className={css.assistantModuleLabel}>{selected.label}</span>}
@@ -716,7 +726,7 @@ export function InvestmentPromptTemplateSelect({
           onClick={() => { setOpen(current => !current) }}
         >
           {appearance === 'context'
-            && <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">✦</span>}
+            && <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true"><SparkleIcon /></span>}
           {appearance === 'context'
             ? <strong>{selected.label}</strong>
             : <span className={css.assistantModuleLabel}>{selected.label}</span>}
@@ -800,7 +810,7 @@ function AssistantFloatingSurface({
       >
         <header className={css.assistantHeader}>
           <div className={css.assistantIdentity}>
-            <span aria-hidden="true">✦</span>
+            <span aria-hidden="true"><SparkleIcon /></span>
             <div><strong>AI 研究助理</strong><small>{selected.note}</small></div>
           </div>
           <div className={css.assistantHeaderActions}>

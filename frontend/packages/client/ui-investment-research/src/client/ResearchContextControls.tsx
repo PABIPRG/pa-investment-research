@@ -52,6 +52,16 @@ function instrumentLabel(instrument: ResearchChatInstrument): string {
   return `${instrument.name}，${instrument.code}，${instrument.type === 'etf' ? 'ETF' : 'A股'}`
 }
 
+function InstrumentTargetIcon() {
+  return (
+    <svg className={css.productGlyph} viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="5" />
+      <path d="M10 2.5v3M10 14.5v3M2.5 10h3M14.5 10h3" />
+      <circle cx="10" cy="10" r="1" />
+    </svg>
+  )
+}
+
 function containsSelectionSurface(
   element: Node,
   controls: HTMLDivElement | null,
@@ -270,7 +280,7 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
             setOpenSurface(current => current === 'instrument' ? null : 'instrument')
           }}
         >
-          <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true">⌖</span>
+          <span className={css.researchContextIcon} data-context-control-icon aria-hidden="true"><InstrumentTargetIcon /></span>
           <strong>{instrument?.name ?? '选标的'}</strong>
           <i className={open ? css.assistantModuleChevronOpen : undefined} aria-hidden="true">
             <IconChevronDownOutline14 />

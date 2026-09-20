@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-20-semantic-shape-and-brand-identity.md
+2026-09-20-semantic-shape-and-brand-identity.md: 7a550d409ec745000aebe79c666c3fae4d5f78c8
+2026-09-20-semantic-shape-and-brand-identity.zh.md: 9f590bae013d913e1ccff3fcdaefa496cf617911

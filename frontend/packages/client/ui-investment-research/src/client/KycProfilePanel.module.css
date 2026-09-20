@@ -169,7 +169,7 @@
   overflow: hidden;
   padding: 0;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 14px;
+  border-radius: var(--dsw-alias-radius-overlay);
   background: var(--dsw-alias-bg-base);
   box-shadow: var(--dsw-shadow-lv3);
 }
