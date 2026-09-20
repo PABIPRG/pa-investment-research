@@ -14,7 +14,7 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { RpcId, type ClientRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { WebServer, WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
 import { WebAuthService, hashPassword } from '@deepseek-ai/dsh-api-web-auth'
-import { API_PATH, apply, HOST_EVENTS_PATH, inject, MUX_EVENTS_PATH, type HostConnectionHandle } from '../src/index.ts'
+import { API_PATH, apply, HOST_EVENTS_PATH, inject, MUX_EVENTS_PATH, type ConnectionRpcHandler, type HostConnectionHandle } from '../src/index.ts'
 
 /** Structural webServer fake recording both route registries. */
 function fakeHttpServer(
@@ -478,7 +478,7 @@ describe('connection node half', () => {
     ctx.provide('apiProxy', {} as unknown as ApiProxy)
     await ctx.plugin({ inject: [...inject], apply }, { trustedHosts: ['harness.example'] }).await()
     const connection = ctx.get('connection') as HostConnectionHandle
-    const handler = vi.fn(async () => ({ ok: true, value: { channels: [] } }))
+    const handler = vi.fn<ConnectionRpcHandler>(async () => ({ ok: true, value: { channels: [] } }))
     const method = 'investmentPythonRuntime/notification-channels'
     connection.rpc.intercept('/api', endpoint => endpoint === method, handler, { authority: 'trusted-host' })
     const request: ClientRequest = { type: 'client-request', rpcId: RpcId('notification-config'), method, payload: { args: { request: { action: 'describe' } } } }
@@ -646,7 +646,10 @@ describe('authenticated remote model administration', () => {
     writeFileSync(passwordHashFile, hashPassword('model-admin-test-password'), { mode: 0o600 })
     const trust = { trustedHosts: ['models.example'], trustedProxyAddresses: ['127.0.0.1'] }
     const auth = new WebAuthService(ctx, { mode: 'required', username: 'admin', passwordHashFile, secureCookies: true, ...trust })
-    const describe = vi.fn(async (request: { rpcId: string }) => ({ rpcId: request.rpcId, result: { ok: true, value: { writable: true, hasDocument: false, namespaces: [] } } }))
+    const describe = vi.fn(async (request: { rpcId: string }) => ({
+      rpcId: request.rpcId,
+      result: { ok: true, value: { writable: true, hasDocument: false, namespaces: [] } },
+    }))
     ctx.provide('apiProxy', { modelAdmin: { describe } } as unknown as ApiProxy)
     const fiber = ctx.plugin({ inject: [...inject], apply }, trust)
     await fiber.await()

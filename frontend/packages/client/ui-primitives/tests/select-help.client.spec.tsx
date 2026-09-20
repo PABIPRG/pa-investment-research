@@ -12,7 +12,7 @@ it('选择器保持空值和不透明值，方向键跳过禁用项，Esc 只关
   const close = vi.fn()
   function View() {
     const [value, setValue] = useState('')
-    return <Modal open title="设置" onClose={close} onEscapeKeyDown={event => { event.stopPropagation() }}><Select aria-label="模型" value={value} onValueChange={setValue} options={[
+    return <Modal open title="设置" onClose={close} onEscapeKeyDown={(event) => { event.stopPropagation() }}><Select aria-label="模型" value={value} onValueChange={setValue} options={[
       { value: '', label: '未指定' }, { value: 'disabled', label: '不可用', disabled: true }, { value: 'provider\u0000model', label: '模型甲' },
     ]} /></Modal>
   }
@@ -59,7 +59,7 @@ it('说明只打开锚定提示，支持触屏点击和 Esc，不增加模态层
 it('空列表禁用，Home/End 和搜索聚焦可见选项，更新选项后恢复有效焦点', () => {
   const change = vi.fn()
   const view = render(<Select aria-label="模型" value="a" options={[]} onValueChange={change} />)
-  expect(view.getByRole<HTMLButtonElement>('combobox').disabled).toBe(true)
+  expect((view.getByRole('combobox') as HTMLButtonElement).disabled).toBe(true)
   const options = [{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }, { value: 'c', label: 'Charlie' }]
   view.rerender(<Select aria-label="模型" value="a" options={options} onValueChange={change} />)
   fireEvent.keyDown(view.getByRole('combobox'), { key: 'End' })

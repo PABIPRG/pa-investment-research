@@ -979,10 +979,10 @@ describe('ModelsSection', () => {
     fireEvent.click(screen.getByText(en.add))
     const pick = await screen.findByLabelText<HTMLButtonElement>(en.provider)
     fireEvent.click(pick)
-    fireEvent.click(screen.getByRole('option', { name: 'broken', exact: true }))
+    fireEvent.click(screen.getByRole('option', { name: 'broken' }))
     await screen.findByText(/unresolvable settings path/)
     fireEvent.click(pick)
-    fireEvent.click(screen.getByRole('option', { name: 'plain', exact: true }))
+    fireEvent.click(screen.getByRole('option', { name: 'plain' }))
     await waitFor(() => {
       expect(screen.getAllByText(content => content.includes(en.advancedHint)).length).toBeGreaterThan(0)
     })

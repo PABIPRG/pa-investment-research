@@ -620,7 +620,7 @@ describe('策略研究产品事实与确认流程', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: '回测 · 可回测策略' })).getByRole('button', { name: '新建回测任务' }))
     const wizard = await screen.findByRole('dialog', { name: '新建回测任务' })
     fireEvent.click(within(wizard).getByRole('combobox', { name: '回测时间窗口' }))
-    fireEvent.click(within(wizard).getByRole('option', { name: '3年', exact: true }))
+    fireEvent.click(within(wizard).getByRole('option', { name: '3年' }))
     fireEvent.click(within(wizard).getByRole('button', { name: '开始回测' }))
     await waitFor(() => {
       expect(runInputs()).toEqual([
