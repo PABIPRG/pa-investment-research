@@ -208,12 +208,22 @@ function eventBusinessView(card: Record<string, unknown>): EventBusinessView {
   return direction === '利空' && matchedHoldings.length > 0 ? 'position_risk' : 'radar_opportunity'
 }
 
-// 事件类型徽标（与后端 events.TYPE_EMOJI 的中文事件名对齐；仅前端展示用）。
-// 大盘趋势事件（政策/宏观）即使未命中具体标的也会进入主列表，靠此徽标与命中卡区分。
-const EVENT_TYPE_BADGE: Readonly<Record<string, string>> = Object.freeze({
-  公告: '📋 公告', 业绩: '📈 业绩', 价格异动: '💰 价格异动', 政策: '🏛 政策',
-  产业: '🏭 产业', 合作: '🤝 合作', 评级: '⭐ 评级', 宏观: '🌐 宏观', 相关: '🔗 相关',
-})
+const EVENT_TYPES = new Set(['公告', '业绩', '价格异动', '政策', '产业', '合作', '评级', '宏观', '相关'])
+
+function EventTypeIcon({ type }: { type: string }) {
+  const glyph = (() => {
+    if (type === '公告') return <><path d="M5 2.8h7l3 3V17H5z" /><path d="M12 2.8V6h3M7.5 9h5M7.5 12h5" /></>
+    if (type === '业绩') return <><path d="M3.5 15.5 8 11l3 2 5.5-7" /><path d="M12.5 6h4v4" /></>
+    if (type === '价格异动') return <><circle cx="10" cy="10" r="7" /><path d="M12.5 7.5c-.6-.7-1.5-1-2.5-1-1.4 0-2.5.7-2.5 1.7 0 2.8 5 1.1 5 3.7 0 1-.9 1.7-2.5 1.7-1.2 0-2.2-.4-2.8-1.2M10 4.8v10.4" /></>
+    if (type === '政策') return <><path d="m3 7 7-4 7 4M4 8h12M5.5 8v6M9 8v6M12.5 8v6M3.5 15.5h13" /></>
+    if (type === '产业') return <><path d="M3 17V9l5 3V8l5 3V6h4v11z" /><path d="M6 15h1M10 15h1M14 15h1" /></>
+    if (type === '合作') return <><path d="M7.5 7.5 5 10a2.1 2.1 0 0 0 3 3l2-2" /><path d="m12.5 12.5 2.5-2.5a2.1 2.1 0 0 0-3-3l-2 2M7.5 12.5l5-5" /></>
+    if (type === '评级') return <path d="m10 2.8 2.1 4.3 4.7.7-3.4 3.3.8 4.7-4.2-2.2-4.2 2.2.8-4.7-3.4-3.3 4.7-.7z" />
+    if (type === '宏观') return <><circle cx="10" cy="10" r="7" /><path d="M3 10h14M10 3c2 2 3 4.3 3 7s-1 5-3 7M10 3c-2 2-3 4.3-3 7s1 5 3 7" /></>
+    return <><path d="M8 6.5 9.5 5A3 3 0 0 1 14 9l-1.5 1.5" /><path d="M12 13.5 10.5 15A3 3 0 0 1 6 11l1.5-1.5M7.5 12.5l5-5" /></>
+  })()
+  return <svg className={css.eventTypeIcon} data-event-type-icon={type} viewBox="0 0 20 20" aria-hidden="true">{glyph}</svg>
+}
 
 function tickerFromCard(card: Record<string, unknown>): { code: string; name: string } | undefined {
   const tickers: readonly unknown[] = Array.isArray(card.tickers) ? card.tickers : []
@@ -862,6 +872,7 @@ export function ResearchWorkbenchPage({
               const summary = text(card.summary, '').trim()
               const showSummary = summary !== '' && comparableCopy(summary) !== comparableCopy(title)
               const riskNote = text(cardRisk.note, '').trim()
+              const eventType = text(card.type, '')
               return (
                 <ImpressionArticle
                   className={css.dashboardEvent}
@@ -876,8 +887,8 @@ export function ResearchWorkbenchPage({
                     <h3>{title}</h3>
                     <div className={css.dashboardEventMeta}>
                       <time>{displayTime(card.time)}</time>
-                      {EVENT_TYPE_BADGE[text(card.type, '')] !== undefined && (
-                        <span data-kind="type">{EVENT_TYPE_BADGE[text(card.type, '')]}</span>
+                      {EVENT_TYPES.has(eventType) && (
+                        <span data-kind="type"><EventTypeIcon type={eventType} />{eventType}</span>
                       )}
                       <span>{BUCKET_LABELS[text(card.bucket, '')] ?? '关联事件'}</span>
                       {riskLevel !== '' && <span data-severity={riskLevel}>{riskLevel}风险</span>}

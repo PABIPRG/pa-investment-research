@@ -196,13 +196,15 @@ async function bench(options: { emptyFirstRun?: boolean } = {}) {
 
 describe('ui-investment-research apply', () => {
   it('shows the shared package version in the product brand', () => {
-    render(createElement(InvestmentBrand, {
+    const view = render(createElement(InvestmentBrand, {
       compact: false,
       label: '投研智能体',
       startSession: vi.fn(),
     } as never))
 
     expect(screen.getByText(`${packageManifest.version} · 智能投研系统`)).toBeTruthy()
+    expect(view.container.querySelector('img')?.getAttribute('src')).toBe('/icons/app-icon-001/icon-192.png')
+    expect(view.container.textContent).not.toContain('✦')
   })
 
   it('switches between the conversation-primary view and the preserved analysis workbench', () => {

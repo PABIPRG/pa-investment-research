@@ -154,6 +154,11 @@ body[data-ds-dark-theme] {
 }
 
 body {
+  --dsw-alias-radius-compact: 6px;
+  --dsw-alias-radius-control: 8px;
+  --dsw-alias-radius-module: 12px;
+  --dsw-alias-radius-overlay: 16px;
+  --dsw-alias-radius-pill: 999px;
   --dsw-alias-bg-base: var(--dsw-static-neutral-bluish-00);
   --dsw-alias-bg-layer-1: var(--dsw-static-neutral-bluish-00);
   --dsw-alias-bg-layer-2: var(--dsw-static-neutral-bluish-00);

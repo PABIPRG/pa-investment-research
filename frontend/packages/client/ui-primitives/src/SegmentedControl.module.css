@@ -6,7 +6,7 @@
   width: 100%;
   box-sizing: border-box;
   padding: 4px;
-  border-radius: 10px;
+  border-radius: var(--dsw-alias-radius-control);
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
@@ -19,7 +19,7 @@
   box-sizing: border-box;
   padding: 6px 10px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--dsw-alias-radius-compact);
   color: var(--dsw-alias-label-secondary);
   background: transparent;
   font: inherit;

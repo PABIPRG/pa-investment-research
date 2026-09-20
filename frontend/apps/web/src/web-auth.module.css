@@ -6,7 +6,7 @@
   box-sizing: border-box;
   color: var(--dsw-alias-label-primary);
   background:
-    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--dsw-alias-brand-primary) 13%, transparent), transparent 42%),
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--dsw-alias-button-info-fill) 13%, transparent), transparent 42%),
     var(--dsw-alias-bg-base);
 }
 
@@ -15,7 +15,7 @@
   box-sizing: border-box;
   padding: 36px;
   border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 20px;
+  border-radius: var(--dsw-alias-radius-overlay);
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: 0 20px 60px color-mix(in srgb, var(--dsw-alias-label-primary) 9%, transparent);
 }
@@ -25,18 +25,20 @@
   height: 44px;
   display: block;
   margin-bottom: 24px;
-  border-radius: 14px;
+  border-radius: var(--dsw-alias-radius-module);
   object-fit: cover;
 }
 
 .eyebrow, .subtitle, .privacy, .message, .success { margin: 0; }
-.eyebrow { color: var(--dsw-alias-brand-primary); font: var(--dsw-font-xs-strong-13); }
+.eyebrow { color: var(--dsw-alias-button-info-fill); font: var(--dsw-font-xs-strong-13); }
 .title { margin: 8px 0; font: var(--dsw-font-xl-24); letter-spacing: -0.03em; }
 .subtitle { color: var(--dsw-alias-label-secondary); font: var(--dsw-font-s-14); }
 .form { display: grid; gap: 16px; margin-top: 28px; }
 .field { display: grid; gap: 7px; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xs-13); }
 .field > span:last-child { width: 100%; height: 40px; box-sizing: border-box; }
-.submit { width: 100%; margin-top: 4px; }
+.field > span:last-child:focus-within { border-color: var(--dsw-alias-button-info-fill); }
+.submit { width: 100%; margin-top: 4px; background: var(--dsw-alias-button-info-fill); }
+.submit:hover:not(:disabled) { background: var(--dsw-alias-button-info-hover); }
 .retry { width: 100%; }
 .message, .success, .status { min-height: 20px; font: var(--dsw-font-xs-13); }
 .message { color: var(--dsw-alias-state-error-primary); }
@@ -45,7 +47,7 @@
 
 @media (max-width: 480px) {
   .page { padding: 20px 16px; place-items: center stretch; }
-  .card { padding: 28px 22px; border-radius: 16px; }
+  .card { padding: 28px 22px; border-radius: var(--dsw-alias-radius-overlay); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -55,7 +57,7 @@
 .captcha { display: grid; gap: 8px; min-width: 0; }
 .challengeRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .challengeRow > button { min-height: 44px; }
-.challengeImage { width: 216px; height: 64px; max-width: 100%; display: grid; place-items: center; overflow: hidden; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2); }
+.challengeImage { width: 216px; height: 64px; max-width: 100%; display: grid; place-items: center; overflow: hidden; border-radius: var(--dsw-alias-radius-control); border: 1px solid var(--dsw-alias-border-l2); }
 .challengeImage img { display: block; width: 100%; height: auto; }
 .captchaHelp { margin: 0; color: var(--dsw-alias-label-secondary); font: var(--dsw-font-xxs-12); }
 

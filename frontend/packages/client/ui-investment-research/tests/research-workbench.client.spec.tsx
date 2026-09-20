@@ -75,7 +75,7 @@ function completeResponse(operation: InvestmentDataRequest['operation']): unknow
       page_info: { offset: 0, limit: 10, total: 1, has_more: false, next_offset: null, max_visible: 100 },
       cards: [
         {
-          card_id: 'card-holdings', bucket: 'holdings', direction: '利好', title: '白酒板块经营数据改善',
+          card_id: 'card-holdings', bucket: 'holdings', direction: '利好', type: '公告', title: '白酒板块经营数据改善',
           summary: '贵州茅台发布经营数据', source: '交易所', time: '2026-08-26 09:20:00',
           tickers: [{ code: '600519', name: '贵州茅台' }], reasons: ['命中持仓：600519', '新鲜：<1小时'],
           risk: { level: '低', note: '仍需关注估值风险' }, matched: { strategies: [] },
@@ -283,6 +283,9 @@ describe('研究工作台', () => {
     expect(view.getByText('¥14.5 万')).toBeTruthy()
     expect(view.getByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeTruthy()
     expect(view.getByText('集中度超预算')).toBeTruthy()
+    const eventType = view.getByText('公告').closest('[data-kind="type"]')
+    expect(eventType?.querySelector('svg')?.getAttribute('data-event-type-icon')).toBe('公告')
+    expect(eventType?.textContent).toBe('公告')
     expect(view.getByRole('button', { name: /命中持仓：贵州茅台.*600519/ })).toBeTruthy()
   })
 
@@ -1759,7 +1762,7 @@ describe('研究工作台', () => {
         operation: 'trading-core.personalized-feedback',
         input: {
           card_id: 'card-holdings', sentiment: 'useful',
-          meta: { ticker: '600519', direction: '利好', bucket: 'holdings' },
+          meta: { ticker: '600519', direction: '利好', bucket: 'holdings', event_type: '公告' },
         },
       })
     })
