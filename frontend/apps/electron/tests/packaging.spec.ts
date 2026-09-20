@@ -1,11 +1,13 @@
 /** Electron packaging keeps the Python sidecar outside the application staging tree. */
 
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { inflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import forgeConfig from '../forge.config.ts'
 import { appIdentity, packagerIconPath } from '../src/app-identity.ts'
@@ -30,6 +32,34 @@ import {
   signPackagedSidecarMachO,
   validatePackagerIcon,
 } from '../src/packaging.ts'
+
+function decodeGeneratedPng(png: Buffer): { data: Buffer; height: number; width: number } {
+  const idat: Buffer[] = []
+  let width = 0
+  let height = 0
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset)
+    const type = png.toString('ascii', offset + 4, offset + 8)
+    const data = png.subarray(offset + 8, offset + 8 + length)
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0)
+      height = data.readUInt32BE(4)
+    } else if (type === 'IDAT') idat.push(data)
+    offset += 12 + length
+  }
+  const scanlines = inflateSync(Buffer.concat(idat))
+  const stride = width * 4
+  const pixels = Buffer.alloc(stride * height)
+  for (let y = 0; y < height; y += 1) {
+    expect(scanlines[y * (stride + 1)]).toBe(0)
+    scanlines.copy(pixels, y * stride, y * (stride + 1) + 1, (y + 1) * (stride + 1))
+  }
+  return { data: pixels, height, width }
+}
+
+function alphaAt(image: { data: Buffer; width: number }, x: number, y: number): number {
+  return image.data.readUInt8((y * image.width + x) * 4 + 3)
+}
 
 describe('Electron investment sidecar packaging', () => {
   it('prefers an explicit stable macOS signing identity over ad-hoc signing', () => {
@@ -102,9 +132,20 @@ describe('Electron investment sidecar packaging', () => {
       expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
       expect(png.readUInt32BE(16)).toBe(size)
       expect(png.readUInt32BE(20)).toBe(size)
+      const image = decodeGeneratedPng(png)
+      expect(alphaAt(image, 0, 0)).toBeLessThan(16)
+      expect(alphaAt(image, size - 1, size - 1)).toBeLessThan(16)
+      expect(alphaAt(image, Math.floor(size / 2), Math.floor(size / 2))).toBe(255)
       sizes.push(size)
     }
     expect(sizes).toEqual([16, 24, 32, 48, 64, 128, 256])
+  })
+
+  it('keeps the reviewed square Apple master unchanged for system masking', async () => {
+    const master = await readFile(appIdentity.runtimeIconPath)
+    expect([master.readUInt32BE(16), master.readUInt32BE(20)]).toEqual([1024, 1024])
+    expect(createHash('sha256').update(master).digest('hex'))
+      .toBe('c4e2af6eaa468f8b3f2cf31d1694356b62297bc49c3f918fb5afeb63e3c6e1bb')
   })
 
   it('rejects a missing target icon before Electron Packager can skip it', async () => {
