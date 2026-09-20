@@ -11,6 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .models import NotificationEvent, NotificationValidationError
+from .channel_settings import RuntimeNotificationChannels, validate_snapshot
 from .repository import NotificationConflictError, NotificationNotFoundError
 from .service import CATEGORIES, CHANNELS, SEVERITIES, NotificationService
 
@@ -38,6 +39,8 @@ def register_notification_routes(
     *,
     internal_token: str,
     vapid_public_key: str = "",
+    runtime_channels: RuntimeNotificationChannels | None = None,
+    delivery_enabled: bool = True,
 ) -> None:
     """注册站内信、偏好、订阅及内部事件入口。"""
 
@@ -46,6 +49,29 @@ def register_notification_routes(
             raise HTTPException(status_code=503, detail="内部通知入口未启用")
         if not candidate or not hmac.compare_digest(candidate, internal_token):
             raise HTTPException(status_code=401, detail="内部通知令牌无效")
+
+    @app.post("/internal/notification-channels/{operation}", response_model=dict)
+    def notification_channels(
+        operation: str, payload: dict[str, Any],
+        x_notification_token: str | None = Header(default=None),
+    ):
+        require_internal_token(x_notification_token)
+        if runtime_channels is None:
+            raise HTTPException(status_code=409, detail="此后台不接受应用托管配置")
+        try:
+            if operation == "validate":
+                validate_snapshot(payload)
+            elif operation == "apply":
+                runtime_channels.apply(payload)
+            elif operation == "test":
+                if not delivery_enabled:
+                    raise ValueError("后台投递服务已停用")
+                return runtime_channels.test(payload.get("channel"), payload.get("requestId"), payload.get("revision"))
+            else:
+                raise HTTPException(status_code=404, detail="不支持的渠道操作")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        return {"applied": runtime_channels.ready, "deliveryEnabled": delivery_enabled}
 
     @app.middleware("http")
     async def protect_notification_inbox(request: Request, call_next):

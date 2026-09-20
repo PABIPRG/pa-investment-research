@@ -1,3 +1,4 @@
+import { Button, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import clsx from 'clsx'
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
@@ -270,26 +271,17 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
             <h2 id="investment-project-model-title">{props.t('projectModelTitle')}</h2>
             <p>{props.t('projectModelIntro')}</p>
           </div>
-          <button type="button" className={css.secondaryButton} onClick={() => { props.openSection('models') }}>
+          <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { props.openSection('models') }}>
             {props.t('manageConfiguredModels')}
-          </button>
+          </Button>
         </div>
         <label className={css.projectModelSelect}>
           <span>{props.t('defaultMainModel')}</span>
-          <select
-            aria-label={props.t('defaultMainModel')}
+          <Select aria-label={props.t('defaultMainModel')}
             value={projectModels === undefined ? '' : modelValue(projectModels.current)}
             disabled={projectModels === undefined || !projectModels.writable || projectModelsBusy}
-            aria-busy={projectModelsBusy}
-            onChange={(event) => { selectProjectModel(event.target.value) }}
-          >
-            {projectModels === undefined && <option value="">{props.t('loadingModels')}</option>}
-            {projectModels?.options.map(option => (
-              <option key={modelValue(option)} value={modelValue(option)}>
-                {option.label} · {option.providerLabel}
-              </option>
-            ))}
-          </select>
+            aria-busy={projectModelsBusy} onValueChange={selectProjectModel}
+            options={projectModels === undefined ? [{ value: '', label: props.t('loadingModels') }] : projectModels.options.map(option => ({ value: modelValue(option), label: `${option.label} · ${option.providerLabel}` }))} />
           <small>{props.t('defaultMainModelHint')}</small>
         </label>
         {projectModelsError !== '' && <p className={css.modelError} role="alert">{projectModelsError}</p>}
@@ -314,29 +306,29 @@ export function InvestmentReadinessSection(props: InvestmentReadinessSectionProp
 
       <div className={css.actions}>
         {needsModels ? (
-          <button type="button" className={css.primaryButton} onClick={() => { props.openSection('models') }}>
+          <Button variant="primary" type="button" className={css.primaryButton} onClick={() => { props.openSection('models') }}>
             {props.t('openModels')}
-          </button>
+          </Button>
         ) : null}
         {needsRestart ? (
-          <button
+          <Button variant="primary"
             type="button"
             className={css.primaryButton}
             disabled={restart.status === 'pending'}
             onClick={requestRestart}
           >
             {props.t('restart')}
-          </button>
+          </Button>
         ) : null}
         {needsRefresh ? (
-          <button
+          <Button variant="outline"
             type="button"
             className={css.secondaryButton}
             disabled={interaction.refresh === 'pending'}
             onClick={refresh}
           >
             {props.t('refresh')}
-          </button>
+          </Button>
         ) : null}
       </div>
       {restartMessage !== undefined

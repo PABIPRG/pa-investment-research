@@ -215,6 +215,7 @@ describe('connection node half', () => {
       'host.pickDirectory', 'host.openPath',
       'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
       'credentials.describe', 'credentials.set', 'credentials.unset',
+      'investmentPythonRuntime/notification-channels',
       'llm.discoverModels',
       // A composition names the plugins a session runs: reading one is
       // reconnaissance, and copy/remove/openDocument manage the roster and
@@ -468,6 +469,29 @@ describe('connection node half', () => {
     expect(loopbackOnly.state.status).toBe(403)
     await removeLoopback()
     await fiber.dispose()
+  })
+
+  it('keeps notification credential POSTs loopback-only even on a trusted Remote interceptor', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    ctx.provide('apiProxy', {} as unknown as ApiProxy)
+    await ctx.plugin({ inject: [...inject], apply }, { trustedHosts: ['harness.example'] }).await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    const handler = vi.fn(async () => ({ ok: true, value: { channels: [] } }))
+    const method = 'investmentPythonRuntime/notification-channels'
+    connection.rpc.intercept('/api', endpoint => endpoint === method, handler, { authority: 'trusted-host' })
+    const request: ClientRequest = { type: 'client-request', rpcId: RpcId('notification-config'), method, payload: { args: { request: { action: 'describe' } } } }
+    const route = routes.find(candidate => candidate.path === API_PATH)!
+    const denied = fakeResponse()
+    await route.handler(fakePost({ host: 'harness.example' }, `/api/${method}`, request, '10.0.0.9'), denied.response)
+    expect(denied.state.status).toBe(403)
+    expect(handler).not.toHaveBeenCalled()
+    const accepted = fakeResponse()
+    await route.handler(fakePost({ host: '127.0.0.1:3080' }, `/api/${method}`, request), accepted.response)
+    expect(handler).toHaveBeenCalledOnce()
+    expect(accepted.state.headers).toMatchObject({ 'cache-control': 'no-store' })
+    await ctx.fiber.dispose()
   })
 
   it('applies the configured trust fence and JSON envelope checks to generic channels', async () => {

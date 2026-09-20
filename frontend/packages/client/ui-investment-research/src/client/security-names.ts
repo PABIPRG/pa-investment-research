@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import { asRecord, records, text } from './data.ts'
+import { cacheSecurityNames, readSecurityNames, validSecurityName } from './security-name-cache.ts'
 
 type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
@@ -8,15 +9,28 @@ type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 export function useSecurityNames(
   requestData: RequestData,
   values: readonly string[],
+  knownNames?: Readonly<Record<string, string>>,
 ): Readonly<Record<string, string>> {
   const codeKey = useMemo(() => [...new Set(values
     .map(value => value.trim())
     .filter(value => /^\d{6}$/.test(value)))]
     .sort()
     .join('|'), [values])
-  const [names, setNames] = useState<Record<string, string>>({})
+  const knownKey = JSON.stringify(Object.entries(knownNames ?? {})
+    .filter(([code, name]) => validSecurityName(code, name)).sort(([a], [b]) => a.localeCompare(b)))
+  const [names, setNames] = useState<Record<string, string>>(() => ({
+    ...readSecurityNames(), ...Object.fromEntries(JSON.parse(knownKey) as Array<[string, string]>),
+  }))
   const [retryVersion, setRetryVersion] = useState(0)
   const attempts = useRef<Record<string, number>>({})
+
+  useEffect(() => {
+    const known = Object.fromEntries(JSON.parse(knownKey) as Array<[string, string]>)
+    if (Object.keys(known).length === 0) return
+    cacheSecurityNames(known)
+    setNames(current => Object.entries(known).some(([code, name]) => current[code] !== name)
+      ? { ...current, ...known } : current)
+  }, [knownKey])
 
   useEffect(() => {
     const codes = codeKey === '' ? [] : codeKey.split('|')
@@ -33,7 +47,8 @@ export function useSecurityNames(
               operation: 'market-watch.security-search', input: { query: code, limit: 8 },
             }))
             const match = records(result.items).find(item => text(item.code, '').trim() === code)
-            return [code, text(match?.name, '').trim()] as const
+            const name = text(match?.name, '').trim()
+            return [code, validSecurityName(code, name) ? name : ''] as const
           } catch {
             return [code, ''] as const
           }
@@ -52,6 +67,7 @@ export function useSecurityNames(
           else shouldRetry = true
         }
         if (settled.length > 0) {
+          cacheSecurityNames(Object.fromEntries(settled))
           setNames(current => ({ ...current, ...Object.fromEntries(settled) }))
         }
       }

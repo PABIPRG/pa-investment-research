@@ -8,7 +8,7 @@ import {
 import { useSecurityNames } from './security-names.ts'
 import { strategyDirectionLabel, strategyEvolutionLabel, strategyTickers } from './strategy-display.ts'
 import css from './InvestmentShell.module.css'
-import { Button, IconQuestionOutline14, Modal, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { HelpPopover } from '@deepseek-ai/dsh-client-ui-primitives'
 import { EvolutionHistory } from './EvolutionHistory.tsx'
 
 // 变异是来源标记（source/mutated_from）而非独立分组：策略按真实状态落桶。mutated 保留为防御性兜底。
@@ -22,11 +22,7 @@ const GROUP_LABELS: Readonly<Record<string, string>> = {
 
 
 function InfoHint({ label, explanation }: { label: string; explanation: string }) {
-  const [open, setOpen] = useState(false)
-  return <>
-    <Tooltip label={explanation} side="bottom" maxWidth={300} disabled={open}><span className={css.evolutionInfoHint}><Button variant="ghost" size="sm" aria-label={label} aria-haspopup="dialog" onClick={() => { setOpen(true) }} icon={<IconQuestionOutline14 />} /></span></Tooltip>
-    <Modal open={open} onClose={() => { setOpen(false) }} title={label} closeLabel="关闭说明" contentClassName={css.evolutionHelpContent} footer={<Button className={css.evolutionHelpConfirm} variant="outline" onClick={() => { setOpen(false) }}>知道了</Button>}><p>{explanation}</p></Modal>
-  </>
+  return <HelpPopover label={label} className={css.evolutionInfoHint}>{explanation}</HelpPopover>
 }
 
 function strings(value: unknown): string[] {
@@ -322,33 +318,6 @@ export function EvolutionDashboard({
 
       {status !== undefined && <EvolutionHistory requestData={requestData} strategies={strategyRecords} securityNames={securityNames} refreshKey={status} onOpenStrategy={strategyId => { onOpenStrategy(strategyId, openGroup, true) }} />}
 
-      <section className={`${css.moduleCard} ${css.evolutionLineageOverview}`} aria-label="演化关系">
-        <div className={css.sectionHeading}>
-          <div>
-            <strong>策略演化链路</strong>
-            <small>并列展示当前运行策略，衍生策略通过母链连接</small>
-          </div>
-          <span>{mutationEntries.length > 0 ? `${mutationEntries.length} 个变体` : '尚无变体'}</span>
-        </div>
-        {mutationEntries.length === 0
-          ? <div className={css.evolutionLead} data-state="empty"><strong>尚未发生自动进化</strong><span>当影子数据和诊断证据达标后，这里会展示母策略与衍生策略的关系。</span></div>
-          : <div className={css.evolutionLead} data-state="evolved"><strong>已记录 {mutationEntries.length} 个衍生变体</strong><span>并列策略互不从属；母子节点由连线和关系标签标明，点击可进入诊断。</span></div>}
-        <div className={css.lineageTree} role="list" aria-label="并列策略演化关系">{lineage.roots.map(sid => (
-          <LineageNode
-            key={sid}
-            sid={sid}
-            entries={lineage.entries}
-            children={lineage.children}
-            onOpenStrategy={onOpenStrategy}
-            returnGroup={openGroup}
-            identityFor={strategyIdentity}
-          />
-        ))}</div>
-        {lineage.roots.length === 0 && mutationEntries.length > 0 && !loading && (
-          <div className={css.emptyPanel}>已有变体记录，但当前没有处于正常运行状态的演化链路。</div>
-        )}
-      </section>
-
       <section className={`${css.moduleCard} ${css.evolutionDistribution}`} aria-label="策略状态分布">
         <div className={css.sectionHeading}>
           <div><strong>策略状态分布</strong><small>选择状态查看对应策略，明细区限高滚动</small></div>
@@ -491,6 +460,33 @@ export function EvolutionDashboard({
             {perStrategy.length === 0 && !loading && <div className={css.emptyPanel}>暂无策略判定。</div>}
           </div>
         </article>
+      </section>
+
+      <section className={`${css.moduleCard} ${css.evolutionLineageOverview}`} aria-label="演化关系">
+        <div className={css.sectionHeading}>
+          <div>
+            <strong>策略演化链路</strong>
+            <small>并列展示当前运行策略，衍生策略通过母链连接</small>
+          </div>
+          <span>{mutationEntries.length > 0 ? `${mutationEntries.length} 个变体` : '尚无变体'}</span>
+        </div>
+        {mutationEntries.length === 0
+          ? <div className={css.evolutionLead} data-state="empty"><strong>尚未发生自动进化</strong><span>当影子数据和诊断证据达标后，这里会展示母策略与衍生策略的关系。</span></div>
+          : <div className={css.evolutionLead} data-state="evolved"><strong>已记录 {mutationEntries.length} 个衍生变体</strong><span>并列策略互不从属；母子节点由连线和关系标签标明，点击可进入诊断。</span></div>}
+        <div className={css.lineageTree} role="list" aria-label="并列策略演化关系">{lineage.roots.map(sid => (
+          <LineageNode
+            key={sid}
+            sid={sid}
+            entries={lineage.entries}
+            children={lineage.children}
+            onOpenStrategy={onOpenStrategy}
+            returnGroup={openGroup}
+            identityFor={strategyIdentity}
+          />
+        ))}</div>
+        {lineage.roots.length === 0 && mutationEntries.length > 0 && !loading && (
+          <div className={css.emptyPanel}>已有变体记录，但当前没有处于正常运行状态的演化链路。</div>
+        )}
       </section>
 
     </div>

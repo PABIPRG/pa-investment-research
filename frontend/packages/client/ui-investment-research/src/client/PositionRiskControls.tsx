@@ -1,3 +1,4 @@
+import { Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, IconQuestionOutline14, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
@@ -83,14 +84,9 @@ function TargetEditor({ kind, value, global, disabled, onChange }: {
           <strong>相对成本涨跌幅</strong>
         </div> : <label>
           <span>计算方式</span>
-          <select
-            value={value.mode}
-            disabled={disabled || !value.enabled}
-            onChange={(event) => { onChange({ ...value, mode: event.target.value as TargetMode }) }}
-          >
-            <option value="percent">相对成本涨跌幅</option>
-            <option value="price">固定价格</option>
-          </select>
+          <Select aria-label="计算方式" value={value.mode} disabled={disabled || !value.enabled}
+            onValueChange={mode => { onChange({ ...value, mode: mode as TargetMode }) }}
+            options={[{ value: 'percent', label: '相对成本涨跌幅' }, { value: 'price', label: '固定价格' }]} />
         </label>}
         <label>
           <span>{value.mode === 'percent' ? '幅度（%）' : '目标价（元）'}</span>

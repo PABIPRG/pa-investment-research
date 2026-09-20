@@ -1,4 +1,7 @@
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
+import type { NotificationChannelRequest, NotificationChannelResult } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
+
+export type RequestNotificationChannels = (request: NotificationChannelRequest) => Promise<NotificationChannelResult>
 
 export interface ResearchSubject {
   readonly code: string

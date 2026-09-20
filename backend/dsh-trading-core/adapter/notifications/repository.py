@@ -614,6 +614,17 @@ class NotificationRepository:
                     (timestamp, channel, category),
                 )
 
+    def cancel_channel_jobs(self, destinations: dict[str, str | None], now: datetime) -> None:
+        """Never repurpose queued or failed deliveries for a newly configured recipient."""
+        with self._connect() as connection:
+            for channel, destination in destinations.items():
+                connection.execute(
+                    """UPDATE delivery_jobs SET status = 'cancelled', updated_at = ?
+                       WHERE channel = ? AND status IN ('pending', 'retry_wait', 'dead_letter')
+                         AND (? IS NULL OR destination != ?)""",
+                    (_iso(now), channel, destination, destination),
+                )
+
     def list_preferences(self) -> list[dict[str, Any]]:
         with self._connect() as connection:
             return [
@@ -734,6 +745,15 @@ class NotificationRepository:
         placeholders = ",".join("?" for _ in channels)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            # A crashed test may already have reached its recipient. Never silently replay it.
+            connection.execute(
+                f"""UPDATE delivery_jobs SET status = 'dead_letter', updated_at = ?,
+                    lease_token = NULL, lease_expires_at = NULL, outcome_uncertain = 1,
+                    last_error_code = 'test_lease_expired', last_error_message = ?
+                    WHERE channel IN ({placeholders}) AND action_kind = 'notification-test'
+                      AND status = 'leased' AND lease_expires_at <= ?""",
+                [timestamp, "测试发送中断，结果未确认；请先检查接收端，不会自动重发。", *sorted(channels), timestamp],
+            )
             rows = connection.execute(
                 f"""SELECT * FROM delivery_jobs
                     WHERE channel IN ({placeholders})

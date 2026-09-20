@@ -1,3 +1,4 @@
+import { Input, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 /**
  * The card that declares a provider pi-ai does not ship — an OpenAI-compatible
  * gateway, a self-hosted server, or a provider newer than the installed
@@ -194,7 +195,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
       </div>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('customRoute')}</span>
-        <input
+        <Input
           className={styles['input']}
           type="text"
           value={route}
@@ -211,7 +212,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
         : <p className={styles['advancedHint']}>{t('customRouteHint')}</p>}
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('customDisplayName')}</span>
-        <input
+        <Input
           className={styles['input']}
           type="text"
           value={displayName}
@@ -223,7 +224,7 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
       </div>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('baseUrl')}</span>
-        <input
+        <Input
           className={styles['input']}
           type="text"
           value={baseURL}
@@ -235,19 +236,11 @@ export function CustomProviderCard(props: CustomProviderCardProps): ReactNode {
       </div>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('customApi')}</span>
-        <select
-          className={`${styles['input']} ${styles['selectInput']}`}
-          value={protocol}
-          aria-label={t('customApi')}
-          disabled={profileDisabled}
-          onChange={(event) => { setProtocol(event.target.value) }}
-        >
-          {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
-        </select>
+        <Select placeholder={t('customApiUnset')} className={styles['selectInput']} value={protocol} aria-label={t('customApi')} disabled={profileDisabled} onValueChange={setProtocol} options={protocols.map(choice => ({ value: choice, label: choice }))} />
       </div>
       <div className={styles['field']}>
         <span className={styles['fieldLabel']}>{t('keyInput')}</span>
-        <input
+        <Input
           className={styles['input']}
           type="password"
           autoComplete="off"

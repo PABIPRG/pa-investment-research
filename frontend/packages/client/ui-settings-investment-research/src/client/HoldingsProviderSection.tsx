@@ -1,3 +1,4 @@
+import { Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useState, type ReactNode } from 'react'
 import type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { InvestmentReadinessKey } from './locales.ts'
@@ -116,21 +117,13 @@ export function HoldingsProviderSection(props: HoldingsProviderSectionProps): Re
       <p>{t('providerIntro')}</p>
       <label className={css.selectRow}>
         <span>{t('providerLabel')}</span>
-        <select
-          aria-label={t('providerLabel')}
-          value={effective ?? ''}
-          disabled={loading || saving}
-          aria-busy={saving}
-          onChange={(event) => { onChange(event.target.value) }}
-        >
-          {loading && <option value="">{t('providerLoading')}</option>}
-          {!loading && effective !== undefined && !effectiveIsKnown && (
-            <option value={effective}>{t('providerUnknown')}</option>
-          )}
-          {availableOptions.map(option => (
-            <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
-          ))}
-        </select>
+        <Select aria-label={t('providerLabel')} value={effective ?? ''} disabled={loading || saving} aria-busy={saving}
+          onValueChange={onChange}
+          options={[
+            ...(loading ? [{ value: '', label: t('providerLoading') }] : []),
+            ...(!loading && effective !== undefined && !effectiveIsKnown ? [{ value: effective, label: t('providerUnknown') }] : []),
+            ...availableOptions.map(option => ({ value: option.value, label: t(option.labelKey) })),
+          ]} />
         <small>{t(props.brokerSync === false ? 'providerCloudHint' : 'providerHint')}</small>
       </label>
       {native !== undefined && currentPlatform() === 'darwin' && <div className={css.authorizationRow}>

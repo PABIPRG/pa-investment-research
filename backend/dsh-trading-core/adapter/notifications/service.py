@@ -122,6 +122,7 @@ class NotificationService:
         }
         self.channel_destinations = dict(channel_destinations or {})
         self.dedupe_window_seconds = dedupe_window_seconds
+        self.runtime_channels = None
 
     def _channels(self, event_type: str, category: str) -> list[tuple[str, str]]:
         defaults = self.channel_defaults.get(event_type, self.channel_defaults.get(category, {}))
@@ -130,6 +131,11 @@ class NotificationService:
             explicit = self.repository.preference(category, channel)
             enabled = defaults.get(channel, False) if explicit is None else explicit
             if enabled:
+                if self.runtime_channels is not None and channel in {"serverchan", "wecom", "email"}:
+                    destination = self.runtime_channels.destination(channel)
+                    if destination:
+                        result.append((channel, destination))
+                    continue
                 if channel == "browser":
                     # 每个设备独立一项投递，单设备失败重试不会让已送达设备收到重复通知。
                     result.extend(
@@ -173,6 +179,9 @@ class NotificationService:
     def set_preference(self, category: str, channel: str, enabled: bool) -> None:
         if category not in CATEGORIES or channel not in CHANNELS:
             raise ValueError("不支持的通知偏好")
+        if enabled and self.runtime_channels is not None and channel in {"serverchan", "wecom", "email"}:
+            if self.runtime_channels.destination(channel) is None:
+                raise ValueError("请先配置并启用该通知渠道")
         self.repository.set_preference(category, channel, enabled, self.now())
 
     def preferences(self) -> dict[str, Any]:

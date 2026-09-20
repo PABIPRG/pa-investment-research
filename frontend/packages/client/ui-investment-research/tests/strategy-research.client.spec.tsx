@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { StrategyResearchPage } from '../src/client/ProductPages.tsx'
+import { StrategyResearchPage, STRATEGY_EVOLUTION_HANDOFF_KEY } from '../src/client/ProductPages.tsx'
 import css from '../src/client/InvestmentShell.module.css'
 
 const primaryRouteSurfaceClass = css.primaryRouteSurface
@@ -619,7 +619,8 @@ describe('策略研究产品事实与确认流程', () => {
     // 再次新建，切到 3 年再回测
     fireEvent.click(within(screen.getByRole('dialog', { name: '回测 · 可回测策略' })).getByRole('button', { name: '新建回测任务' }))
     const wizard = await screen.findByRole('dialog', { name: '新建回测任务' })
-    fireEvent.change(within(wizard).getByLabelText('回测时间窗口'), { target: { value: '3' } })
+    fireEvent.click(within(wizard).getByRole('combobox', { name: '回测时间窗口' }))
+    fireEvent.click(within(wizard).getByRole('option', { name: '3年', exact: true }))
     fireEvent.click(within(wizard).getByRole('button', { name: '开始回测' }))
     await waitFor(() => {
       expect(runInputs()).toEqual([
@@ -628,4 +629,36 @@ describe('策略研究产品事实与确认流程', () => {
       ])
     })
   })
+})
+
+it('进化说明取消或 Escape 不进入，仅确认后保存不再提示', async () => {
+  window.localStorage.removeItem(STRATEGY_EVOLUTION_HANDOFF_KEY)
+  const requestData = vi.fn(async ({ operation }: { operation: string }) => operation === 'trading-core.strategies'
+    ? { items: [{ id: 'strategy-confirm', name: '待确认策略', status: 'active' }] }
+    : {})
+  render(<StrategyResearchPage requestData={requestData as never} selectedStrategyId="strategy-confirm"
+    onSelectStrategy={() => {}} onOpenShadow={() => {}} onOpenReports={() => {}} onAnalyze={() => {}} />)
+  await screen.findByText('待确认策略')
+  fireEvent.click(screen.getByRole('button', { name: '了解策略生命周期' }))
+  const lifecycle = screen.getByRole('dialog', { name: '策略生命周期' })
+  const trigger = within(lifecycle).getByRole('button', { name: /4.*进化诊断/ })
+  trigger.focus()
+  fireEvent.click(trigger)
+  let dialog = screen.getByRole('dialog', { name: '进入当前策略的进化诊断' })
+  fireEvent.click(within(dialog).getByRole('checkbox'))
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  expect(screen.queryByRole('region', { name: '单策略进化诊断' })).toBeNull()
+  expect(window.localStorage.getItem(STRATEGY_EVOLUTION_HANDOFF_KEY)).toBeNull()
+  await waitFor(() => { expect(document.activeElement).toBe(trigger) })
+  fireEvent.click(trigger)
+  dialog = screen.getByRole('dialog', { name: '进入当前策略的进化诊断' })
+  fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+  expect(window.localStorage.getItem(STRATEGY_EVOLUTION_HANDOFF_KEY)).toBeNull()
+  fireEvent.click(trigger)
+  dialog = screen.getByRole('dialog', { name: '进入当前策略的进化诊断' })
+  fireEvent.click(within(dialog).getByRole('checkbox'))
+  fireEvent.click(within(dialog).getByRole('button', { name: '继续进入' }))
+  expect(await screen.findByRole('region', { name: '单策略进化诊断' })).toBeTruthy()
+  expect(JSON.parse(window.localStorage.getItem(STRATEGY_EVOLUTION_HANDOFF_KEY) ?? 'null')).toEqual({ suppressed: true })
+  window.localStorage.removeItem(STRATEGY_EVOLUTION_HANDOFF_KEY)
 })

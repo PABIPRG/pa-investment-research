@@ -66,6 +66,36 @@ describe('持仓止盈止损摘要', () => {
   })
 })
 
+it('旧持仓导入使用共享弹窗：保存中禁止退出，失败保留草稿并可重试', async () => {
+  const saving = deferred<unknown>()
+  let attempts = 0
+  const requestData = requestDataWithMarketNews(async request => {
+    if (request.operation === 'trading-core.holdings-save') {
+      attempts += 1
+      return attempts === 1 ? saving.promise : {}
+    }
+    return {}
+  })
+  render(<PortfolioPage requestData={requestData} onAnalyze={() => {}} />)
+  const trigger = screen.getByRole('button', { name: '导入持仓' })
+  trigger.focus()
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole('dialog', { name: '导入持仓' })
+  const input = within(dialog).getByRole('textbox', { name: '持仓导入内容' })
+  fireEvent.change(input, { target: { value: '股票代码,数量,成本价\n600519,100,1500' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: '替换并导入 1 条' }))
+  expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: '取消' }).disabled).toBe(true)
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+  expect(screen.getByRole('dialog', { name: '导入持仓' })).toBe(dialog)
+  await act(async () => { saving.reject(new Error('暂时无法保存')); await saving.promise.catch(() => undefined) })
+  expect(await within(dialog).findByText('导入失败')).toBeTruthy()
+  expect((input as HTMLTextAreaElement).value).toContain('600519,100,1500')
+  fireEvent.click(within(dialog).getByRole('button', { name: '替换并导入 1 条' }))
+  await waitFor(() => { expect(screen.queryByRole('dialog', { name: '导入持仓' })).toBeNull() })
+  expect(attempts).toBe(2)
+  expect(document.activeElement).toBe(trigger)
+})
+
 describe('投研数据页慢请求状态', () => {
   it('为代码占位的持仓补全证券名称，并保留代码作为次级信息', async () => {
     const requestData = requestDataWithMarketNews(async (request) => {

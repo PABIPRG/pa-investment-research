@@ -90,7 +90,7 @@
   font-weight: 500;
 }
 
-.projectModelSelect select {
+.projectModelSelect [role="combobox"] {
   width: 100%;
   height: 36px;
   box-sizing: border-box;
@@ -103,7 +103,7 @@
   font-size: 13px;
 }
 
-.projectModelSelect select:focus-visible {
+.projectModelSelect [role="combobox"]:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 2px;
 }

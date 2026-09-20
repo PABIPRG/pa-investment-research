@@ -63,6 +63,16 @@ afterEach(async () => {
 })
 
 describe('InvestmentPythonRuntime Remote', () => {
+  it('refuses notification configuration on cloud or unowned backends before reading credentials', async () => {
+    const cloud = cloudRuntime()
+    await expect(cloud.notificationChannels({ action: 'describe' })).rejects.toThrow()
+    const runtime = runtimeWith()
+    const manager = Reflect.get(runtime, 'manager') as { acquire: (...args: unknown[]) => Promise<unknown> }
+    const release = vi.fn(async () => {})
+    vi.spyOn(manager, 'acquire').mockResolvedValue({ baseUrl: 'http://127.0.0.1:8183', ownership: 'attached', release })
+    await expect(runtime.notificationChannels({ action: 'describe' })).rejects.toThrow()
+    expect(release).toHaveBeenCalledOnce()
+  })
   it('keeps manual holdings and managed backups while rejecting cloud broker and directory operations', async () => {
     const runtime = cloudRuntime()
     await expect(runtime.requestData({ operation: 'trading-core.holdings-sync' })).rejects.toThrow(/云端 Web/)
@@ -157,6 +167,7 @@ describe('InvestmentPythonRuntime Remote', () => {
     expect(remoteMethods(runtime)).toEqual([
       { method: 'readiness', invocation: { kind: 'direct' } },
       { method: 'requestData', exportName: 'request-data', invocation: { kind: 'direct' } },
+      { method: 'notificationChannels', exportName: 'notification-channels', invocation: { kind: 'direct' } },
       { method: 'backupDescribe', exportName: 'backup-describe', invocation: { kind: 'direct' } },
       { method: 'backupSetDirectory', exportName: 'backup-set-directory', invocation: { kind: 'direct' } },
       { method: 'backupDownloadBegin', exportName: 'backup-download-begin', invocation: { kind: 'direct' } },

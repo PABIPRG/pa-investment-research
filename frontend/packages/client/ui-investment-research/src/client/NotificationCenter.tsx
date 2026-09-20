@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Select } from '@deepseek-ai/dsh-client-ui-primitives'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { asRecord, productErrorText, records, text } from './data.ts'
-import type { RequestData } from './research-types.ts'
+import { NotificationChannelSettings } from './NotificationChannelSettings.tsx'
+import type { NotificationChannelResult } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
+import type { RequestData, RequestNotificationChannels } from './research-types.ts'
 import type { InvestmentNavigationContext, InvestmentRoute } from './state.ts'
 import css from './NotificationCenter.module.css'
 
@@ -34,7 +37,7 @@ const SEVERITY_LABELS: Record<NotificationSeverity, string> = {
   action_required: '需要处理', important: '重要', information: '信息',
 }
 const DELIVERY_LABELS: Record<string, string> = {
-  pending: '等待发送系统通知', leased: '正在发送通知', retry_wait: '发送未成功，将自动重试', sent: '通知已发送',
+  pending: '等待发送通知', leased: '正在发送通知', retry_wait: '发送未成功，将自动重试', sent: '通知已发送',
   dead_letter: '通知发送失败', suppressed: '未发送（通知规则限制）', cancelled: '已取消发送',
 }
 const ACTIONS: Readonly<Record<string, { label: string; route: InvestmentRoute; context?: InvestmentNavigationContext }>> = {
@@ -139,10 +142,13 @@ async function enableBrowserPush(requestData: RequestData, publicKey: string): P
 
 export interface NotificationCenterProps {
   readonly requestData: RequestData
+  readonly requestNotificationChannels?: RequestNotificationChannels | undefined
   readonly navigate: (route: InvestmentRoute, context?: InvestmentNavigationContext) => void
 }
 
-export function NotificationCenter({ requestData, navigate }: NotificationCenterProps) {
+export function NotificationCenter({ requestData, requestNotificationChannels, navigate }: NotificationCenterProps) {
+  const [channelStatus, setChannelStatus] = useState<NotificationChannelResult>()
+  const bellRef = useRef<HTMLButtonElement>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [tab, setTab] = useState<'notifications' | 'settings'>('notifications')
@@ -307,6 +313,7 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
   )
 
   const openItem = useCallback((item: NotificationItem): void => {
+    bellRef.current?.focus({ preventScroll: true })
     setMenuOpen(false)
     setTab('notifications')
     setSelectedId(item.id)
@@ -324,6 +331,7 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
   }, [refreshList, refreshUnread, requestData])
 
   const openAll = (): void => {
+    bellRef.current?.focus({ preventScroll: true })
     setMenuOpen(false)
     setSelectedId(undefined)
     setSelectedDetail(undefined)
@@ -440,6 +448,7 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
         }}
         anchor={(
           <button
+            ref={bellRef}
             type="button"
             className={css.bell}
             aria-label={`消息中心${unreadCount > 0 ? `，${unreadCount} 条未读` : ''}`}
@@ -461,7 +470,7 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
         title="通知中心"
         closeLabel="关闭通知中心"
         headless
-        className={css.dialog}
+        className={`${css.dialog} ${tab === 'settings' ? css.settingsDialog : ''}`}
       >
         <header className={css.header}>
           <div><h2>通知中心</h2><p>{unreadCount > 0 ? `${unreadCount} 条未读` : '所有通知均已读'}</p></div>
@@ -475,10 +484,12 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
           ? (
             <section className={css.settings}>
               <div className={css.settingsIntro}>
-                <div><h3>通知渠道</h3><p>站内信始终保留；这里控制后续事件是否投递到外部渠道。</p></div>
+                <div><h3>通知渠道</h3><p>先配置接收渠道，再选择通知类型。站内信始终保留，勾选渠道不代表已配置或发送成功。</p></div>
                 <span data-state={pushState}>浏览器推送：{pushState === 'enabled' ? '已启用' : pushState === 'denied' ? '已拒绝' : pushState === 'checking' ? '检查中' : '未配置'}</span>
               </div>
               {error && <div className={css.error} role="alert">{error}</div>}
+              <NotificationChannelSettings request={requestNotificationChannels} requestData={requestData} onStatus={setChannelStatus} />
+              <div className={css.preferenceIntro}><h3>通知类型与渠道</h3><p>勾选后自动保存，仅影响后续事件。请先在上方保存并启用对应的外部渠道。</p></div>
               <div className={css.preferenceTable} role="table" aria-label="通知渠道设置">
                 <div className={css.preferenceHead} role="row"><span>类型</span>{Object.values(CHANNEL_LABELS).map(label => <span key={label}>{label}</span>)}</div>
                 {(Object.keys(CATEGORY_LABELS) as NotificationCategory[]).map(categoryValue => (
@@ -490,8 +501,9 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
                         <label key={channel}>
                           <input
                             type="checkbox"
+                            aria-label={`${CATEGORY_LABELS[categoryValue]} · ${CHANNEL_LABELS[channel]}`}
                             checked={preferences[key] ?? false}
-                            disabled={preferenceBusy === key}
+                            disabled={preferenceBusy === key || (!preferences[key] && ['serverchan', 'wecom', 'email'].includes(channel) && !(channelStatus?.applied && channelStatus.deliveryEnabled && channelStatus.channels.some(item => item.channel === channel && item.enabled)))}
                             onChange={() => { updatePreference(categoryValue, channel) }}
                           />
                           <span>{CHANNEL_LABELS[channel]}</span>
@@ -501,6 +513,25 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
                   </div>
                 ))}
               </div>
+              <section className={css.channelSetup} aria-label="外部渠道配置说明">
+                <h3>如何获取配置？</h3>
+                <p>测试仅发送固定测试文案，不包含持仓或账户信息。配置保存在本机凭据文件中，受文件权限保护，尚未使用系统钥匙串加密；不会写入环境变量或业务数据备份。</p>
+                <section className={css.channelRow} aria-label="Server 酱配置步骤"><h4>Server 酱</h4><ol className={css.setupGuide}>
+                  <li>打开 <a href="https://sct.ftqq.com/" target="_blank" rel="noopener noreferrer">Server 酱 Turbo</a>，登录后复制 SendKey；在其「通道配置」中绑定接收账号。</li>
+                  <li>在上方「Server 酱」中粘贴完整 SendKey，保存后发送测试。支持 SCT 开头的 Turbo 密钥，暂不支持 sctp 开头的 Server 酱 3 密钥。</li>
+                </ol></section>
+                <section className={css.channelRow} aria-label="企业微信配置步骤"><h4>企业微信</h4><ol className={css.setupGuide}>
+                  <li>在企业微信的目标群中添加群机器人，复制该机器人的 Webhook 地址；需具有相应群管理权限。</li>
+                  <li>在上方「企业微信」粘贴完整地址或 key，保存后发送测试；消息发往该机器人所在群，无需填写企业 ID 或个人微信号。</li>
+                </ol></section>
+                <section className={css.channelRow} aria-label="邮件配置步骤"><h4>邮件</h4><ol className={css.setupGuide}>
+                  <li>在发件邮箱设置中开启 SMTP / 第三方客户端服务，按服务商要求生成专用授权码。</li>
+                  <li>从邮箱官方帮助获取 SMTP 服务器、STARTTLS 端口和登录账号。填写授权码、该账号获准使用的发件人邮箱及目标收件邮箱。</li>
+                  <li>当前支持 STARTTLS（常见端口 587），不支持 465 隐式 TLS。保存并测试后，检查收件箱和垃圾邮件。</li>
+                </ol></section>
+                <p>保存配置即可在运行时生效，无需编辑配置文件或重启。正式通知可能包含证券名称、风险条件或持仓同步摘要，请仅配置可信接收端。应用后台需要持续运行；完全退出应用后，本机不会继续发送。</p>
+                <p>浏览器推送另需服务端 VAPID 配置和浏览器授权；macOS 系统通知由桌面客户端投递。投递状态与失败记录可在通知详情查看。</p>
+              </section>
             </section>
           )
           : (
@@ -508,15 +539,9 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
               <section className={css.listPane} aria-label="通知列表">
                 {archivedUndo && <div className={css.undo} role="status">已归档“{archivedUndo.title}”<button type="button" onClick={restoreArchived}>撤销</button></div>}
                 <div className={css.filters}>
-                  <select aria-label="阅读状态" value={view} onChange={(event) => { setView(event.target.value as NotificationView) }}>
-                    <option value="all">全部状态</option><option value="unread">未读</option><option value="actionable">需要处理</option>
-                  </select>
-                  <select aria-label="通知类型" value={category} onChange={(event) => { setCategory(event.target.value as NotificationCategory | '') }}>
-                    <option value="">全部类型</option>{Object.entries(CATEGORY_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                  </select>
-                  <select aria-label="重要程度" value={severity} onChange={(event) => { setSeverity(event.target.value as NotificationSeverity | '') }}>
-                    <option value="">全部级别</option>{Object.entries(SEVERITY_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                  </select>
+                  <Select aria-label="阅读状态" value={view} onValueChange={setView} options={[{ value: 'all', label: '全部状态' }, { value: 'unread', label: '未读' }, { value: 'actionable', label: '需要处理' }]} />
+                  <Select aria-label="通知类型" value={category} onValueChange={(value) => { setCategory(value as NotificationCategory | '') }} options={[{ value: '', label: '全部类型' }, ...Object.entries(CATEGORY_LABELS).map(([value, label]) => ({ value, label }))]} />
+                  <Select aria-label="重要程度" value={severity} onValueChange={(value) => { setSeverity(value as NotificationSeverity | '') }} options={[{ value: '', label: '全部级别' }, ...Object.entries(SEVERITY_LABELS).map(([value, label]) => ({ value, label }))]} />
                   <button type="button" onClick={markAllRead} disabled={unreadCount === 0}>全部已读</button>
                 </div>
                 {error && <div className={css.error} role="alert">{error}<button type="button" onClick={() => { void refreshList() }}>重试</button></div>}
@@ -575,9 +600,13 @@ export function NotificationCenter({ requestData, navigate }: NotificationCenter
                           </dl>
                         </section>
                       )}
-                      {Object.values(selected.deliverySummary).includes('dead_letter') && <p className={css.retryHint}>投递结果不明确时，人工重试可能造成重复发送。</p>}
+                      {Object.values(selected.deliverySummary).includes('dead_letter') && (
+                        <p className={css.retryHint}>投递结果不明确时，人工重试可能造成重复发送。</p>
+                      )}
                       <div className={css.detailActions}>
-                        {ACTIONS[selected.action.kind] && <Button className={css.primary} onClick={followAction}>{ACTIONS[selected.action.kind]?.label}</Button>}
+                        {ACTIONS[selected.action.kind] && (
+                          <Button variant="primary" onClick={followAction}>{ACTIONS[selected.action.kind]?.label}</Button>
+                        )}
                         <Button className={css.archive} onClick={archiveSelected}>归档</Button>
                       </div>
                     </article>

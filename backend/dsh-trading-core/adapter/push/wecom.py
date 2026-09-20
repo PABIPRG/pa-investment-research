@@ -15,8 +15,8 @@ from .base import Pusher
 class WeComPusher(Pusher):
     name = "wecom"
 
-    def __init__(self):
-        self.key = settings.wecom_webhook_key
+    def __init__(self, *, key: str | None = None):
+        self.key = settings.wecom_webhook_key if key is None else key
 
     def available(self) -> bool:
         return bool(self.key)

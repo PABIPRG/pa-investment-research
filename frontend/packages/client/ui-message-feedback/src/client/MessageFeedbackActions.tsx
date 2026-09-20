@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  IconDislikeOutline16, IconLikeOutline16, Tooltip,
+  IconDislikeOutline16, IconLikeOutline16, TextArea, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MessageFeedbackRating } from '@deepseek-ai/dsh-message-feedback/types'
 import type { MessageFeedbackActionProps } from './slots.ts'
@@ -123,7 +123,7 @@ export function MessageFeedbackActions({ messageId, ensure, rate, toggle, clearN
       )}
       {rating !== undefined && noteOpen && (
         <span className={css.noteEditor}>
-          <textarea
+          <TextArea
             className={css.noteInput}
             aria-label={t('note.aria')}
             placeholder={t('note.placeholder')}

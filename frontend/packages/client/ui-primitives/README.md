@@ -4,6 +4,14 @@ English | [中文](README.zh.md)
 
 Pure React atoms (zero cordis): StateDot, DisclosureRow, ic_ds_* icons, Button/Pill/Menu/Modal/Input, the Toast transient banner, the OnboardingSurface first-run takeover (body-portaled mask + opaque stage that holds `#root` inert for exactly its own lifetime), the markdown family (MessageText/MarkdownText/JsonBlock), the read-only JsonTree inspector, the `useAnchoredMaxHeight` hook that clamps a bottom-anchored overlay to the viewport space above its anchor (re-measured on resize, scroll, and a caller-supplied dependency), TerminalBlock, DiffBlock, ReadBlock, SearchBlock, and WebBlock.
 
+## Selectors and inline help
+
+`Button` uses the shared semantic shape scale: regular controls inherit the 8px control radius and compact controls inherit the 6px compact radius, matching the [product design rules](../../../../DESIGN.md). Every variant inherits these rounded-rectangle roles without page-specific overrides.
+
+`Select` composes the shared `Menu` into a controlled single-choice control (`value`, `options`, `onValueChange`). Values remain opaque strings, including empty values. Unknown values show the supplied placeholder without selecting the first option. It supports disabled and empty states, arrows, Home/End, typeahead, Tab and Escape. Popups stay inside the nearest Dialog's focus boundary; Escape dismisses the popup before its dialog and returns focus to the trigger. Consumers supply localized labels.
+
+`HelpPopover` toggles a small anchored explanation on click/touch and dismisses on Escape, a second click or outside press. It adds no modal mask or confirmation action. Use `Modal` for submission and destructive confirmation. `Menu.portalContainer` selects the owning dialog; `Modal` recognizes child-popup Escape handling. Safety-sensitive dialogs can focus Cancel with `onOpenAutoFocus` and reject outside dismissal with `preventOutsideClose`. `Button` forwards its DOM ref for anchoring and focus restoration.
+
 ## Hover cards
 
 `HoverCard` keeps its portaled preview reachable across the anchor gap with a pointer-leave grace. A consumer may also pass `copyText`: the card then exposes button semantics for pointer and keyboard activation, includes that value after the `copyLabel` prefix in its accessible name, writes the exact value through the package clipboard helper, and temporarily replaces its content with `copiedLabel` only after the host accepts the write. A non-collapsed text selection intersecting the card suppresses pointer-click activation, while success feedback retains the original card height and clears when the card closes or after one second. `copyLabel` and `copiedLabel` are label props because this zero-cordis atom cannot read the application locale; omitting `copyText` preserves the read/select-only card. Historical rationale: [the archived hover-card copy note](../../../.agents/notes/archived/feature/2026-07-31-hover-card-click-copy.md).

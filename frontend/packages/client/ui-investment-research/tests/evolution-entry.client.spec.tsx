@@ -42,11 +42,12 @@ describe('自进化全局只读看板', () => {
     const diagnostics = screen.getByRole('region', { name: '策略现状与诊断' })
     expect(runtime.parentElement).toBe(attribution.parentElement)
     expect(runtime.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(history.compareDocumentPosition(lineage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(lineage.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(history.compareDocumentPosition(distribution) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(distribution.compareDocumentPosition(diagnostics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(diagnostics.compareDocumentPosition(lineage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(lineage).toBe(lineage.parentElement?.lastElementChild)
     expect(screen.getByText('2 天')).toBeTruthy()
-    fireEvent.focus(screen.getByRole('button', { name: '策略验证记录说明' }))
+    fireEvent.click(screen.getByRole('button', { name: '策略验证记录说明' }))
     expect(screen.getByText(/已积累 2 天模拟数据，还需 3 天/)).toBeTruthy()
     expect(within(lineage).getByText('尚未发生自动进化')).toBeTruthy()
     expect(screen.getByRole('region', { name: '候选策略列表' }).className).toContain('evolutionLifecycleList')
@@ -490,11 +491,12 @@ it('帮助说明支持点击打开及明确关闭，使用组件库图标', asyn
   render(<EvolutionDashboard requestData={async () => ({})} onAnalyze={() => {}} onOpenStrategy={() => {}} />)
   const help = screen.getByRole('button', { name: '策略验证记录说明' })
   expect(help.querySelector('svg')).toBeTruthy()
-  expect(help.getAttribute('aria-haspopup')).toBe('dialog')
+  expect(help.getAttribute('aria-expanded')).toBe('false')
   fireEvent.click(help)
-  const dialog = await screen.findByRole('dialog', { name: '策略验证记录说明' })
+  const dialog = await screen.findByRole('tooltip')
   expect(within(dialog).getByText(/纸面交易验证记录/)).toBeTruthy()
-  fireEvent.click(within(dialog).getByRole('button', { name: '知道了' }))
+  fireEvent.click(help)
+  expect(screen.queryByRole('tooltip')).toBeNull()
   expect(screen.queryByRole('dialog')).toBeNull()
 })
 
@@ -502,7 +504,7 @@ it('帮助说明支持点击打开及明确关闭，使用组件库图标', asyn
 it('概览帮助入口保持复用组件库，禁止退回手写符号控件', () => {
   const source = readFileSync('packages/client/ui-investment-research/src/client/EvolutionDashboard.tsx', 'utf8')
   const helper = source.slice(source.indexOf('function InfoHint('), source.indexOf('function strings('))
-  for (const component of ['Tooltip', 'Button', 'IconQuestionOutline14', 'Modal']) {
+  for (const component of ['HelpPopover']) {
     expect(source).toMatch(new RegExp(`import \{[^}]*${component}[^}]*\} from '@deepseek-ai/dsh-client-ui-primitives'`))
     expect(helper).toContain(`<${component}`)
   }

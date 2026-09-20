@@ -407,7 +407,7 @@
 
 .dashboardSummary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 3fr) minmax(208px, 1fr);
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -433,6 +433,19 @@
 .dashboardSummary strong[data-tone='negative'] { color: var(--dsw-alias-state-success-primary); }
 .dashboardSummary small[data-tone='positive'] { color: var(--dsw-alias-state-error-primary); }
 .dashboardSummary small[data-tone='negative'] { color: var(--dsw-alias-state-success-primary); }
+
+.dashboardSummary .dashboardPortfolioHeading { color: var(--dsw-alias-label-primary); font-weight: 650; }
+.dashboardSummary .dashboardPortfolioHeader { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.dashboardSummary .dashboardPortfolioMetrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 8px 0; }
+.dashboardPortfolioMetrics strong { color: var(--dsw-alias-label-primary); }
+.dashboardSummary > .dashboardRiskCard { display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.dashboardRiskCard strong { margin: 0; }
+
+@container (max-width: 640px) {
+  .dashboardSummary { grid-template-columns: minmax(0, 1fr); }
+  .dashboardSummary > .dashboardRiskCard { display: grid; grid-template-columns: 1fr auto; align-items: center; }
+  .dashboardRiskCard small { grid-column: 1 / -1; }
+}
 
 .dashboardGrid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, .75fr); gap: 14px; align-items: start; }
 .dashboardPrimary, .dashboardSide { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
@@ -1373,7 +1386,7 @@
 .workbenchHoldingModeTabs button:disabled { color: var(--dsw-alias-label-dimmed); cursor: wait; }
 .workbenchHoldingToolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .workbenchHoldingToolbar > div { display: flex; align-items: center; gap: 8px; }
-.workbenchHoldingToolbar > div span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
+.workbenchHoldingToolbar > div:first-child > span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .workbenchHoldingToolbarActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .workbenchHoldingToolbarActions > button, .workbenchHoldingToolbarActions .workbenchSyncEntry > button { height: 36px; min-height: 36px; padding: 0 12px; border-radius: 8px; font-size: 0.8571rem; line-height: 1.5; font-weight: 600; }
 .workbenchSyncEntry { position: relative; display: inline-flex; }
@@ -1394,11 +1407,13 @@
 .holdingInlineInput input { min-width: 0; width: 100%; text-align: right; font: inherit; font-variant-numeric: tabular-nums; }
 .holdingInlineInput:focus-within { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
 .holdingInlineInput input:focus-visible { outline: none; }
-.workbenchOverviewTable[data-kind='holdings'] { min-width: 664px; table-layout: fixed; }
+.workbenchOverviewTable[data-kind='holdings'] { min-width: 1020px; table-layout: fixed; }
 .workbenchOverviewTable[data-kind='holdings'] tbody th strong { white-space: normal; overflow-wrap: anywhere; }
 .workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(2), .workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(3) { width: 112px; box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(4) { width: 154px; box-sizing: border-box; text-align: left; }
-.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(5) { width: 214px; box-sizing: border-box; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(4), .workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(5) { width: 120px; box-sizing: border-box; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(6) { width: 100px; box-sizing: border-box; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(7) { width: 154px; box-sizing: border-box; text-align: left; }
+.workbenchOverviewTable[data-kind='holdings'] :is(th, td):nth-child(8) { width: 214px; box-sizing: border-box; }
 .workbenchOverviewTable[data-kind='holdings'] .positionRiskValues { flex-wrap: wrap; gap: 4px 10px; }
 .workbenchOverviewTable tr[data-editing] > * { background: var(--dsw-alias-bg-layer-2); }
 .holdingDangerButton.holdingDangerButton { color: var(--dsw-alias-state-error-primary); }
@@ -1464,25 +1479,37 @@
 .performanceControls { display: grid; gap: 12px; }
 .performanceContent { display: flow-root; margin-top: 14px; }
 .performanceContent > :first-child { margin-top: 0; }
-.performancePeriods { display: flex; width: 100%; box-sizing: border-box; gap: 3px; overflow-x: auto; padding: 3px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); scrollbar-width: thin; }
-.performancePeriods button { flex: 1 0 auto; min-height: 34px; padding: 5px 11px; border: 0; border-radius: 7px; color: var(--dsw-alias-label-secondary); background: transparent; font: inherit; font-size: 0.8571rem; font-weight: 650; cursor: pointer; transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
-.performancePeriods button[aria-pressed='true'] { color: var(--investment-primary); background: var(--dsw-alias-bg-base); box-shadow: inset 0 0 0 1px var(--investment-primary); }
-.performancePeriods button:hover:not(:disabled) { color: var(--investment-primary); background: var(--investment-interactive-hover); }
-.performancePeriods button:active:not(:disabled) { transform: translateY(1px); }
-.performancePeriods button:focus-visible, .performanceMethods input:focus-visible, .performanceCustomDates input:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
-.performancePeriods button:disabled { color: var(--dsw-alias-label-dimmed); cursor: wait; }
+.performancePeriods { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.performanceSelect.performanceSelect { display: flex; justify-content: space-between; gap: 8px; width: 100%; min-width: 0; min-height: 40px; height: auto; box-sizing: border-box; padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; font-size: 0.8571rem; font-weight: 400; cursor: pointer; }
+.performanceSelect > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.performanceSelect > svg { flex: none; }
+.performanceSelect:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.performanceSelect:disabled { color: var(--dsw-alias-label-dimmed); cursor: wait; }
+.performancePeriods > button { min-height: 40px; padding: 7px 11px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; font-size: 0.8571rem; font-weight: 600; cursor: pointer; transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease; }
+.performancePeriods > button[aria-pressed='true'] { color: var(--investment-primary); background: var(--dsw-alias-bg-base); box-shadow: inset 0 0 0 1px var(--investment-primary); }
+.performancePeriods > button:hover:not(:disabled) { color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.performancePeriods > button:active:not(:disabled) { transform: translateY(1px); }
+.performancePeriods > button:focus-visible, .performanceMethods input:focus-visible, .performanceCustomDates input:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.performancePeriods > button:disabled { color: var(--dsw-alias-label-dimmed); cursor: wait; }
 .performanceCustomDates { display: flex; align-items: end; gap: 10px; padding: 12px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); flex-wrap: wrap; }
-.performanceCustomDates label { display: grid; flex: 1 1 180px; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
-.performanceCustomDates input { min-height: 38px; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; color-scheme: dark light; }
+.performanceCustomDates label { display: grid; min-width: 0; flex: 1 1 180px; gap: 6px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
+.performanceCustomDates input { width: 100%; min-width: 0; min-height: 38px; box-sizing: border-box; padding: 6px 9px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; color-scheme: dark light; }
 .performanceInlineError { padding: 9px 11px; border-radius: 8px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); font-size: 0.8571rem; }
 .performanceMethods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
 .performanceMethods legend { margin-bottom: 7px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; font-weight: 650; }
-.performanceMethods label { display: flex; min-width: 0; align-items: flex-start; gap: 8px; padding: 10px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; background: var(--dsw-alias-bg-layer-1); cursor: pointer; }
-.performanceMethods label:has(input:checked) { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
-.performanceMethods input { flex: none; margin: 3px 0 0; accent-color: var(--investment-primary); }
-.performanceMethods span, .performanceMethods strong, .performanceMethods small { display: block; min-width: 0; }
-.performanceMethods strong { color: var(--dsw-alias-label-primary); font-size: 0.8571rem; }
-.performanceMethods small { margin-top: 4px; color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.45; }
+.performanceMethodOption { display: flex; min-width: 0; align-items: center; padding: 4px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; background: var(--dsw-alias-bg-layer-1); }
+.performanceMethodOption:has(input:checked) { border-color: var(--investment-primary); background: var(--investment-interactive-hover); }
+.performanceMethods label { display: flex; flex: 1; min-width: 0; align-items: center; gap: 6px; min-height: 36px; padding: 4px; cursor: pointer; }
+.performanceMethods input { flex: none; margin: 0; accent-color: var(--investment-primary); }
+.performanceMethods strong { min-width: 0; color: var(--dsw-alias-label-primary); font-size: 0.8571rem; font-weight: 600; }
+.performanceMethodHelp.performanceMethodHelp { flex: none; width: 28px; min-width: 28px; padding: 0; }
+.performanceMethodCompact { display: none; }
+.performanceMethodCompactField { display: grid; flex: 1; min-width: 0; gap: 7px; }
+.performanceMethodCompactField > span { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; font-weight: 650; }
+.performanceNotes { margin-top: 16px; }
+.holdingsProfitRatio { display: block; margin-top: 3px; font-size: 0.8571rem; font-weight: 600; }
+.workbenchOverviewMetricGrid dd[data-tone='positive'], .workbenchOverviewTable td[data-tone='positive'] { color: var(--dsw-alias-state-error-primary); }
+.workbenchOverviewMetricGrid dd[data-tone='negative'], .workbenchOverviewTable td[data-tone='negative'] { color: var(--dsw-alias-state-success-primary); }
 .performanceError { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px; border: 1px solid var(--dsw-alias-state-error-secondary); border-radius: 9px; color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .performanceError strong, .performanceError p { display: block; margin: 0; }
 .performanceError p { margin-top: 4px; font-size: 0.8571rem; }
@@ -1557,6 +1584,7 @@
 .performanceLimitations { display: grid; gap: 5px; margin: 10px 0 0; padding-left: 18px; color: var(--dsw-alias-label-secondary); font-size: 0.7857rem; line-height: 1.55; }
 .workbenchOverviewSection { margin-top: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
 .workbenchOverviewSection:first-child { margin-top: 0; }
+.workbenchOverviewSection + .holdingsPositionSection { margin-top: 16px; }
 .workbenchOverviewSectionHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
 .workbenchOverviewSectionHead h3 { margin: 0; font-size: 0.9286rem; }
 .workbenchOverviewSectionHead span { color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
@@ -2060,7 +2088,7 @@
 .evolutionStrategyKind[data-direction='利好'] { color: var(--dsw-alias-state-error-primary); border-color: var(--dsw-alias-state-error-secondary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .evolutionStrategyKind[data-direction='利空'] { color: var(--dsw-alias-state-success-primary); border-color: var(--dsw-alias-state-success-secondary); background: var(--dsw-alias-state-success-tertiary); }
 .evolutionDashboard .strategyEntry .dataRow > div > strong.evolutionStrategyIdentity { display: flex; }
-.evolutionOverviewGrid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: 16px; align-items: stretch; min-width: 0; }
+.evolutionOverviewGrid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); gap: 16px; align-items: stretch; min-width: 0; }
 .evolutionRuntimeCard, .evolutionAttributionCard { height: 100%; box-sizing: border-box; }
 .evolutionRuntimeMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 14px 0 0; }
 .evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2401,7 +2429,6 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
 }
 
 @media (max-width: 1160px) {
-  .dashboardSummary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dashboardGrid, .opportunityGrid, .portfolioGrid { grid-template-columns: 1fr; }
   .dashboardOverviewPanel { height: auto; }
   .dashboardOverviewPanel > .dashboardHoldingList { overflow-y: visible; }
@@ -2434,8 +2461,8 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .globalSearch { grid-column: 1; }
   .topActions { grid-column: 2; }
   :global(body[data-investment-assistant-mode='expanded']) .historyDrawer { width: min(88vw, 360px); }
-  .dashboardSummary, .marketIndexGrid, .signalGrid, .metricRow, .stockLoadingMetrics, .preferenceMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .performanceMethods, .performanceMetricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .marketIndexGrid, .signalGrid, .metricRow, .stockLoadingMetrics, .preferenceMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .performanceMetricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .watchlistGrid, .evolutionFlow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboardHoldingList { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .reportLayout { grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); }
@@ -2591,7 +2618,11 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .industryGraphLoading, .industryGraphNotice { top: 64px; left: 50%; max-width: calc(100% - 28px); }
   .inlineForm { grid-template-columns: 1fr; }
   .detailFormGrid, .watchlistGrid, .evolutionFlow, .evolutionEvidenceCard .dataList { grid-template-columns: 1fr; }
-  .performanceMethods, .performanceMetricGrid, .performanceQualityFacts { grid-template-columns: 1fr; }
+  .performanceMetricGrid, .performanceQualityFacts { grid-template-columns: 1fr; }
+  .performanceMethods { display: none; }
+  .performanceMethodCompact { display: flex; align-items: flex-end; gap: 4px; }
+  .performanceSelect.performanceSelect, .performancePeriods > button { min-height: 44px; }
+  .performanceMethodHelp.performanceMethodHelp { width: 44px; height: 44px; margin-left: auto; }
   .performanceCustomDates { align-items: stretch; flex-direction: column; }
   .performanceCustomDates label { flex-basis: auto; }
   .performanceCustomDates .secondaryButton { min-height: var(--investment-touch-target); }
@@ -2670,7 +2701,7 @@ textarea.fieldInput { height: auto; min-height: 96px; padding-block: 10px; resiz
   .evolutionRuntimeMeta, .evolutionAttributionCard .evolutionRuntimeMeta { grid-template-columns: 1fr; }
   .reportBody { padding: 12px; }
   .reportSections > section { padding: 12px; }
-  .dashboardSummary { grid-template-columns: 1fr; }
+  .dashboardSummary .dashboardPortfolioMetrics { grid-template-columns: 1fr; gap: 8px; }
   .marketIndexGrid { grid-template-columns: 1fr; }
   .dashboardRiskMetrics { grid-template-columns: 1fr; }
   .industryStats { grid-template-columns: 1fr; }

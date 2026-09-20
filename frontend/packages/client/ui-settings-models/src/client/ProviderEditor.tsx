@@ -1,3 +1,4 @@
+import { Input, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 /**
  * One provider's editor card, hand-written per adapter family: the primary
  * field is a single write-only **API key** input (the page never asks for an
@@ -361,7 +362,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
       <>
         <div className={styles['field']}>
           <span className={styles['fieldLabel']}>{t('keyInput')}</span>
-          <input
+          <Input
             className={styles['input']}
             type="password"
             autoComplete="off"
@@ -386,7 +387,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
               ? (
                 <div className={styles['field']}>
                   <span className={styles['fieldLabel']}>{t('customDisplayName')}</span>
-                  <input
+                  <Input
                     className={styles['input']}
                     type="text"
                     value={stringAt(draft, 'displayName') ?? ''}
@@ -408,7 +409,7 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
               : null}
             <div className={styles['field']}>
               <span className={styles['fieldLabel']}>{t('baseUrl')}</span>
-              <input
+              <Input
                 className={styles['input']}
                 type="text"
                 value={stringAt(draft, 'baseURL') ?? ''}
@@ -428,22 +429,9 @@ export function ProviderEditor(props: ProviderEditorProps): ReactNode {
               ? (
                 <div className={styles['field']}>
                   <span className={styles['fieldLabel']}>{t('customApi')}</span>
-                  <select
-                    className={`${styles['input']} ${styles['selectInput']}`}
-                    value={probeApi ?? ''}
-                    aria-label={t('customApi')}
-                    disabled={disabled}
-                    onChange={(event) => { setField('api', event.target.value) }}
-                  >
-                    {/* A profile naming no protocol — hand-written into
-                        settings.yaml with no model to need one — selects
-                        nothing rather than reading as if it had picked the
-                        first choice. The option is named because a screen
-                        reader announces it either way, and an empty one is
-                        announced as a choice with no identity. */}
-                    {probeApi === undefined ? <option value="">{t('customApiUnset')}</option> : null}
-                    {protocols.map(choice => <option key={choice} value={choice}>{choice}</option>)}
-                  </select>
+                  <Select className={styles['selectInput']} value={probeApi ?? ''} aria-label={t('customApi')} disabled={disabled}
+                    onValueChange={value => { setField('api', value) }}
+                    options={[...(probeApi === undefined ? [{ value: '', label: t('customApiUnset') }] : []), ...protocols.map(choice => ({ value: choice, label: choice }))]} />
                 </div>
               )
               : null}

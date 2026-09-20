@@ -12,6 +12,7 @@ import { bindTypertRemote, Remote, TypertRemoteFailure, type RemoteFailure } fro
 import { BackupPublicError, BackupService } from './backup-service.ts'
 import { InvestmentBackendManager } from './runtime.ts'
 import { requestInvestmentData } from './data.ts'
+import { NotificationSettings, NotificationSettingsError, NOTIFICATION_CHANNEL_CREDENTIAL } from './notification-settings.ts'
 import type {
   BackupDescription,
   Config,
@@ -24,6 +25,8 @@ import type {
   InvestmentRestartResult,
   PythonBackendDefinition,
   PythonBackendLease,
+  NotificationChannelRequest,
+  NotificationChannelResult,
 } from './types.ts'
 import type { BackupCategory, BackupManifest, BackupReason } from './backup-archive.ts'
 import type { BackupConflictRule, BackupListItem, BackupPreview } from './backup-service.ts'
@@ -165,6 +168,7 @@ export class InvestmentPythonRuntime extends Service {
   private readonly notificationInternalToken = randomBytes(32).toString('base64url')
   private readonly positionRiskToken = randomBytes(32).toString('base64url')
   private readonly backups: BackupService
+  private readonly notificationSettings: NotificationSettings
   private readonly deploymentSnapshot: DeploymentCapabilitySnapshot
 
   private deployment(): DeploymentCapabilitySnapshot {
@@ -186,11 +190,15 @@ export class InvestmentPythonRuntime extends Service {
     const dshHome = resolveDshHome(config.dshHome)
     const dataTransferToken = randomBytes(32).toString('base64url')
     const coordinatorDirectory = join(dshHome, 'investment-research', 'transfer-transactions')
+    this.notificationSettings = new NotificationSettings(ctx.credentials, this.notificationInternalToken)
     this.manager = new InvestmentBackendManager({
       subprocess: ctx.subprocess,
       config,
       resolveCredential: ctx.credentials.resolve.bind(ctx.credentials),
       describeCredential: ctx.credentials.describe.bind(ctx.credentials),
+      onOwnedReady: async (definition, signal) => {
+        if (definition.id === 'trading-core') await this.notificationSettings.sync(definition.baseUrl, signal)
+      },
       dataTransferEnvironment: {
         'trading-core': {
           DSH_HOLDINGS_NATIVE_TOKEN: this.holdingsNativeToken,
@@ -198,6 +206,7 @@ export class InvestmentPythonRuntime extends Service {
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
           DSH_DATA_TRANSFER_COORDINATOR_DIR: coordinatorDirectory,
           NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
+          DSH_NOTIFICATION_MANAGED: '1',
           DSH_POSITION_RISK_TOKEN: this.positionRiskToken,
         },
         'market-watch': {
@@ -250,7 +259,12 @@ export class InvestmentPythonRuntime extends Service {
         }
       },
     })
-    ctx.on('credentials/updated', (ref) => { this.manager.credentialUpdated(ref) })
+    ctx.on('credentials/updated', (ref) => {
+      this.manager.credentialUpdated(ref)
+      if (ref === NOTIFICATION_CHANNEL_CREDENTIAL) {
+        void this.syncNotificationChannels().catch(() => { ctx.logger.warn('通知渠道配置尚未同步，请在通知设置中重试。') })
+      }
+    })
     ctx.effect(() => async () => {
       await this.backups.dispose()
       await this.manager.dispose()
@@ -342,6 +356,30 @@ export class InvestmentPythonRuntime extends Service {
         if (detail === undefined) throw error
         throw investmentDataRemoteFailure(error, detail)
       })
+  }
+
+  private async syncNotificationChannels(): Promise<void> {
+    const lease = await this.manager.acquire('trading-core')
+    try {
+      if (lease.ownership !== 'owned') throw new NotificationSettingsError('渠道配置需要由本应用管理的本机后台。')
+      await this.notificationSettings.sync(lease.baseUrl)
+    } finally { await lease.release() }
+  }
+
+  /** Local-only configuration seam; never routed through browser-safe request-data. */
+  @Remote('notification-channels')
+  async notificationChannels(request: NotificationChannelRequest): Promise<NotificationChannelResult> {
+    try {
+      if (this.deployment().surface === 'cloud-web') throw new NotificationSettingsError('请在本机应用中配置通知渠道。')
+      const lease = await this.manager.acquire('trading-core')
+      try {
+        if (lease.ownership !== 'owned') throw new NotificationSettingsError('渠道配置需要由本应用管理的本机后台。')
+        return await this.notificationSettings.execute(lease.baseUrl, request)
+      } finally { await lease.release() }
+    } catch (error) {
+      // No cause/raw backend exception: dynamic credentials are not part of the startup log redactor.
+      throw new TypertRemoteFailure({ code: 'remote-rejected', details: {}, message: error instanceof NotificationSettingsError ? error.message : '通知渠道暂不可用，请检查本机后台后重试。' })
+    }
   }
 
   /**

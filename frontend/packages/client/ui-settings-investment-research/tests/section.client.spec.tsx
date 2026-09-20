@@ -392,13 +392,14 @@ describe('InvestmentReadinessSection', () => {
   it('shows the project default model, explains module routing, and persists a new default', async () => {
     const { saveProjectModel } = mount(CONFIGURED)
 
-    const select = await screen.findByRole<HTMLSelectElement>('combobox', { name: '默认主模型' })
-    expect(select.value).toBe('deepseek-official\u0000deepseek-chat')
+    const select = await screen.findByRole<HTMLButtonElement>('combobox', { name: '默认主模型' })
+    expect(select.textContent).toBe('DeepSeek Chat · DeepSeek')
     expect(screen.getByText('跟随会话主模型')).toBeTruthy()
     expect(screen.getAllByText('后端专用 DeepSeek')).toHaveLength(2)
     expect(screen.getByText('检索无需模型')).toBeTruthy()
 
-    fireEvent.change(select, { target: { value: 'openai\u0000gpt-5' } })
+    fireEvent.click(select)
+    fireEvent.click(screen.getByRole('option', { name: 'GPT-5 · OpenAI' }))
     await waitFor(() => {
       expect(saveProjectModel).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-5' }, 3)
     })
@@ -421,11 +422,12 @@ describe('InvestmentReadinessSection', () => {
       })
       const { requestRestart } = mount(CONFIGURED, { requestData })
 
-      const select = await screen.findByRole<HTMLSelectElement>('combobox', { name: '数据源' })
-      fireEvent.change(select, { target: { value: 'mac_ths' } })
+      const select = await screen.findByRole<HTMLButtonElement>('combobox', { name: '数据源' })
+      fireEvent.click(select)
+      fireEvent.click(screen.getByRole('option', { name: '同花顺（macOS）' }))
 
       expect(await screen.findByText('已切换为同花顺（macOS），当前窗口已生效。')).toBeTruthy()
-      expect(select.value).toBe('mac_ths')
+      expect(select.textContent).toBe('同花顺（macOS）')
       expect(requestData).toHaveBeenCalledWith({
         operation: 'trading-core.holdings-user-config-update',
         input: { entries: { HOLDINGS_PROVIDER: 'mac_ths' } },
@@ -545,9 +547,15 @@ describe('InvestmentReadinessSection', () => {
 
     expect(await screen.findByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
     expect(screen.getByText('导入只更新当前状态，不会修改、移动或删除来源备份。')).toBeTruthy()
-    const rule = screen.getByRole<HTMLSelectElement>('combobox', { name: /持仓/ })
-    expect(within(rule).getAllByRole('option').map(option => option.textContent)).toEqual(['保留本地', '使用导入数据'])
-    fireEvent.change(rule, { target: { value: 'use_import' } })
+    const rule = screen.getByRole<HTMLButtonElement>('combobox', { name: /持仓/ })
+    fireEvent.click(rule)
+    fireEvent.keyDown(screen.getByRole('option', { name: '保留本地' }), { key: 'Escape' })
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(screen.getByRole('dialog', { name: '确认增量导入' })).toBeTruthy()
+    expect(document.activeElement).toBe(rule)
+    fireEvent.click(rule)
+    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['保留本地', '使用导入数据'])
+    fireEvent.click(screen.getByRole('option', { name: '使用导入数据' }))
     const safety = screen.getByRole('checkbox', { name: /导入前备份当前数据/ }) as HTMLInputElement
     expect(safety.checked).toBe(true)
     fireEvent.click(safety)
