@@ -109,7 +109,7 @@ describe('investment container delivery contract', () => {
     const dockerfile = await readFile(join(repoRoot, 'Dockerfile'), 'utf8')
     const dockerignore = await readFile(join(repoRoot, '.dockerignore'), 'utf8')
 
-    const pinnedBase = 'node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106'
+    const pinnedBase = 'node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6'
     const sidecarBuild = 'RUN CI=true pnpm run investment:sidecar:build --target linux-x64'
     const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
     expect(dockerfile).toContain(`FROM ${pinnedBase} AS build`)
@@ -181,6 +181,30 @@ describe('investment container delivery contract', () => {
     expect(workflow).not.toContain('chmod 0644')
     expect(workflow).not.toContain('test "$exit_code" = 0 || test "$exit_code" = 143')
     expect(workflow).not.toMatch(/(?:^|\s)--push(?:\s|$)/mu)
+  })
+
+  it('blocks all image uploads and publication until the exact archive passes security checks', async () => {
+    const workflow = await readFile(join(repoRoot, '.github/workflows/investment-container.yml'), 'utf8')
+    const parsed = load(workflow) as { jobs: Record<string, {
+      needs?: string
+      steps: { name?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean }[]
+    }> }
+    const smoke = parsed.jobs['image-smoke']!
+    const scanIndex = smoke.steps.findIndex(step => step.run?.includes('image_security.py scan'))
+    expect(scanIndex).toBeGreaterThan(0)
+    expect(smoke.steps[scanIndex]?.if).toBeUndefined()
+    expect(smoke.steps[scanIndex]?.['continue-on-error']).toBeUndefined()
+    for (const [index, step] of smoke.steps.entries()) {
+      if (step.uses?.includes('upload-artifact')) expect(index).toBeGreaterThan(scanIndex)
+      expect(step.run ?? '').not.toContain('--cache-to')
+    }
+    expect(parsed.jobs.publish?.needs).toBe('image-smoke')
+    const publish = parsed.jobs.publish!.steps
+    const verifyIndex = publish.findIndex(step => step.run?.includes('image_security.py verify'))
+    const loginIndex = publish.findIndex(step => step.uses?.includes('docker/login-action'))
+    expect(verifyIndex).toBeGreaterThan(0)
+    expect(verifyIndex).toBeLessThan(loginIndex)
+    expect(workflow).toContain('investment-container.security.json')
   })
 
   it('fails closed for an invalid deployment surface, timezone, or remote-auth input', async () => {

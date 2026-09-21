@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { backendPathAllowed, scanPackagedBackends } from './investment-backend-package-policy.ts'
+import { backendPathAllowed, prunePythonDependencyTests, scanPackagedBackends } from './investment-backend-package-policy.ts'
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
@@ -52,4 +52,43 @@ it('rejects symbolic links without reading their targets', async () => {
   const root = await fixture()
   await symlink(root, join(root, 'backends/dsh-trading-core/adapter/link'), 'junction')
   await expect(scanPackagedBackends(root)).rejects.toThrow(/symbolic-link/)
+})
+
+async function dependencyFixture() {
+  const root = await fixture()
+  await mkdir(join(root, 'py_vapid/tests'), { recursive: true })
+  await mkdir(join(root, 'py_vapid-1.9.4.dist-info'))
+  await writeFile(join(root, 'py_vapid-1.9.4.dist-info/METADATA'), 'Name: py-vapid\nVersion: 1.9.4\n')
+  await writeFile(join(root, 'py_vapid/__init__.py'), 'runtime module')
+  await writeFile(join(root, 'py_vapid/tests/test_vapid.py'), 'inert fixture')
+  await writeFile(join(root, 'py_vapid/tests/.test_vapid.py.swp'), 'inert fixture')
+  return root
+}
+it('removes only reviewed dependency tests, preserving runtime modules and distribution metadata', async () => {
+  const root = await dependencyFixture()
+  const paths: string[] = []
+  await prunePythonDependencyTests(root, async path => {
+    paths.push(path)
+    return path.endsWith('.swp')
+      ? '178ec9b7bce4f39fcfbf8eb04207abaa8ec3b891eb1def7d75dd81e93c5c092d'
+      : '460d5b05d85452117db2046ec1c0dc25dd3018b4df7fb1e6c8e0627c6b413897'
+  })
+  expect(paths).toHaveLength(2)
+  expect(await readdir(join(root, 'py_vapid'))).toEqual(['__init__.py'])
+  expect(await readFile(join(root, 'py_vapid/__init__.py'), 'utf8')).toBe('runtime module')
+  expect(await readFile(join(root, 'py_vapid-1.9.4.dist-info/METADATA'), 'utf8')).toContain('Version: 1.9.4')
+})
+it('blocks changed test content and unexpected files instead of deleting unreviewed payloads', async () => {
+  const root = await dependencyFixture()
+  await expect(prunePythonDependencyTests(root)).rejects.toThrow(/unreviewed py-vapid/)
+  await writeFile(join(root, 'py_vapid/tests/new.py'), 'keep me')
+  await expect(prunePythonDependencyTests(root)).rejects.toThrow(/unreviewed py-vapid/)
+  expect(await readFile(join(root, 'py_vapid/tests/new.py'), 'utf8')).toBe('keep me')
+})
+it('does not follow a symlink during dependency test cleanup', async () => {
+  const root = await dependencyFixture()
+  await rm(join(root, 'py_vapid/tests/test_vapid.py'))
+  await symlink(join(root, 'py_vapid/__init__.py'), join(root, 'py_vapid/tests/test_vapid.py'))
+  await expect(prunePythonDependencyTests(root)).rejects.toThrow(/unreviewed py-vapid/)
+  expect(await readFile(join(root, 'py_vapid/__init__.py'), 'utf8')).toBe('runtime module')
 })

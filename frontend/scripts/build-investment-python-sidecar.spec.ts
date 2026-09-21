@@ -173,6 +173,21 @@ describe('investment Python sidecar builder', () => {
     expect(await readFile(join(setup.output, 'runtime.json'), 'utf8')).toBe(previous)
   })
 
+  it('blocks unreviewed dependency tests before replacing the packaged output', async () => {
+    const setup = await fixture()
+    const options = { target: TARGET, output: setup.output, cache: setup.cache, offline: true }
+    await buildInvestmentPythonSidecar(options, setup.dependencies)
+    const previous = await readFile(join(setup.output, 'runtime.json'), 'utf8')
+    const runCommand = async (_command: string, args: readonly string[]) => {
+      const sitePackages = args[args.indexOf('--target') + 1]!
+      await write(join(sitePackages, 'py_vapid/tests/test_vapid.py'), 'unreviewed fixture')
+      return 0
+    }
+    await expect(buildInvestmentPythonSidecar(options, { ...setup.dependencies, runCommand }))
+      .rejects.toThrow(/unreviewed py-vapid/)
+    expect(await readFile(join(setup.output, 'runtime.json'), 'utf8')).toBe(previous)
+  })
+
   it('fails closed for missing targets, cache/hash failures, requirements drift, and traversal', async () => {
     const setup = await fixture()
     const options = { target: TARGET, output: setup.output, cache: setup.cache, offline: true }

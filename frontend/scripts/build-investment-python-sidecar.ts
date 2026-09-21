@@ -11,7 +11,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
-import { backendPathAllowed, scanPackagedBackends } from './investment-backend-package-policy.ts'
+import { backendPathAllowed, prunePythonDependencyTests, scanPackagedBackends } from './investment-backend-package-policy.ts'
 
 const execFileAsync = promisify(execFile)
 const TARGETS = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'] as const
@@ -437,6 +437,8 @@ export async function buildInvestmentPythonSidecar(
     ], staging)
     console.log(`Python sidecar: pip finished in ${Date.now() - pipStarted}ms (exit ${pipExit})`)
     if (pipExit !== 0) throw new Error(`locked dependency installation failed with exit code ${pipExit}`)
+
+    await prunePythonDependencyTests(sitePackages)
 
     await mkdir(join(staging, 'backends'))
     for (const backend of BACKENDS) {

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106 AS build
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build
 
 ARG TARGETPLATFORM
 ENV COREPACK_HOME=/opt/corepack
@@ -8,6 +8,7 @@ WORKDIR /src
 
 RUN test "$TARGETPLATFORM" = "linux/amd64" \
     && apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable \
@@ -21,7 +22,7 @@ RUN pnpm run build:lib && pnpm run build:web
 RUN CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 RUN node --import tsx/esm scripts/build-investment-container-app.ts --output /opt/dsh
 
-FROM node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106 AS runtime
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS runtime
 
 ARG VCS_REF=unknown
 ENV DSH_HOME=/var/lib/dsh \
@@ -33,6 +34,7 @@ LABEL org.opencontainers.image.source="https://github.com/PABIPRG/pa-investment-
       org.opencontainers.image.revision="$VCS_REF"
 
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates libgomp1 tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 dsh \

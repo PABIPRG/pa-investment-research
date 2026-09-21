@@ -34,3 +34,4 @@ frontend/docs
 docs
 secrets
 *.pabackup
+**/.pab29-cache

@@ -133,3 +133,46 @@ git diff --check
 测试使用临时目录与模拟 Docker，不访问生产、不构建镜像。Linux CI 额外运行真实 GNU tar 归档/恢复测试；Mac 跳过该用例。真实服务器上的文件权限、sudoers、Docker、OIDC、停机时长与业务数据恢复仍需环境验证。
 
 接口依据：[GitHub Environment 保护](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)、[部署分支规则 API](https://docs.github.com/en/rest/deployments/branch-policies)、[Docker registry manifest 检查](https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/)、[GHCR 可见性](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+
+## 镜像公开前安全门禁（PAB-29）
+
+`investment-container.yml` 在 Compose smoke 后导出受测归档，使用
+`image_security.py` 扫描，再上传镜像 artifact；GHCR publish 依赖同一 job
+成功并在登录 registry 前复核安全摘要。构建不再通过 `cache-to` 提前上传镜像层。
+安全摘要仅包含计数、固定版本、数据库时间和镜像/归档/策略哈希，不上传秘密正文、
+原始报告或解包目录。脚本需要 Python 3.11+，CI 扫描器为 Linux amd64。
+
+- 官方 Gitleaks 8.30.1 和 Trivy 0.74.0 的下载 URL 与 SHA256 固定在
+  `image-security-policy.json`，下载校验失败不执行二进制。
+- 秘密检查包括所有历史层的所有常规文件、重复路径的旧内容、完整 config/history、
+  路径/链接目标/归档扩展 metadata；不应用 whiteout，不创建或跟随链接，不运行镜像代码。
+  内层文件通过字节签名识别压缩格式，避免将名字以 `.gz` 结尾的普通 dpkg 文本当压缩包；
+  这些普通文本仍完整送入扫描器。嵌套归档深度 2、解码深度 5，不能据此保证识别所有编码秘密。
+- Trivy 分析同一归档的最终文件系统，必须识别 Debian、Node 与 Python 包清单。
+  所有 HIGH、CRITICAL、UNKNOWN 告警阻断，包括未修复告警；不会以“第三方”或“未确认利用”放行。
+  不把漏洞扫描宣称为对已删除历史包的 CVE 扫描；已删除层的秘密仍受上述全层检查。
+- 全部秘密命中、敏感路径、扫描错误、超时、不完整扫描、缺失报告、身份不一致和超过
+  72 小时的漏洞数据库均阻断。安全摘要超过 24 小时不能用于发布，应重新构建/验证。
+- 门禁的临时工作目录为 0700；解包限制为 250,000 条目、单文件 2 GiB、累计声明大小
+  8 GiB（含外层归档与层内容），不满足限制时失败，不静默跳过文件。
+- 当前 `exceptions` 必须为空。误报、不适用或无修复版本的例外需要另行评审：记录具体
+  CVE/规则、包名和版本、目标文件/层与哈希、官方证据、风险、到期日期、审核人和明确授权；
+  未授权前继续阻断，不接受整目录或全部未修复漏洞例外。
+
+Python sidecar 在写入 `runtime.json` 及进入镜像层前，仅删除官方
+`py-vapid==1.9.4` 的 `py_vapid/tests/test_vapid.py` 与 `.test_vapid.py.swp`。
+两文件 SHA256 逐个匹配后才删除整个已核验 tests 目录；运行模块和 dist-info 保留。
+新版、内容变化、额外文件或符号链接都需重新核验，不能盲删。原 wheel RECORD 保留发行源记录，
+实际发行文件清单由重新生成的 `runtime.json` 负责。
+
+聚焦验证：
+
+```sh
+python3 -B -m unittest discover -s ops/pa-investment -p 'test_*.py'
+pnpm --dir frontend exec vitest run scripts/investment-container.spec.ts scripts/build-investment-python-sidecar.spec.ts scripts/investment-backend-package-policy.spec.ts packages/client/ui-investment-research/tests/holdings-import.client.spec.ts
+```
+
+完整设计、官方依赖来源和验证债务见
+[镜像安全加固设计](../../docs/superpowers/specs/2026-09-21-pab29-image-security.md)。
+本机通过的解析/门禁测试不等于 Linux 新镜像安全通过；发布前必须取得新候选的扫描、
+运行依赖加载、Compose smoke 和表格导入真实产品验收证据。
