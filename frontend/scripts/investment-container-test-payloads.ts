@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { lstat, readFile, rm, writeFile } from 'node:fs/promises'
+import { lstat, opendir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 type HashFile = (path: string) => Promise<string>
@@ -21,10 +21,7 @@ const NODE_PAYLOADS: readonly ReviewedTest[] = [
   { path: 'node_modules/.pnpm/@aws-sdk+nested-clients@3.997.20/node_modules/@aws-sdk/nested-clients/dist-types/submodules/sso-oidc/commands/CreateTokenCommand.d.ts', sha256: '3ad424e44a64663b5e74e2a9184cabffbae4b267dfc10b64b45408a3558d3e4c' },
   { path: 'node_modules/.pnpm/@aws-sdk+nested-clients@3.997.20/node_modules/@aws-sdk/nested-clients/dist-types/submodules/sts/auth/httpAuthSchemeProvider.d.ts', sha256: '7ff06ab6c7ce16eb4be74ebb36e59027cdec5aff4e687a739101ed01eb5781b8' },
 ]
-const NODE_MODEL_MANIFEST: ReviewedTest = {
-  path: 'node_modules/.pnpm/@earendil-works+pi-ai@0.82.1_@modelcontextprotocol+sdk@1.29.0_zod@4.4.3__ws@8.21.0_zod@4.4.3/node_modules/@earendil-works/pi-ai/dist/providers/data/.manifest.json',
-  sha256: 'c2d89b03ccb2c095c59ead0437592b21e9676d049ad8e92ea90a466adf10b24d',
-}
+const NODE_MODEL_MANIFEST_SHA256 = 'c2d89b03ccb2c095c59ead0437592b21e9676d049ad8e92ea90a466adf10b24d'
 // Official pinned wheel contents, independently checksum-verified; sources are recorded in the PAB-29 audit.
 const PYTHON_PAYLOADS: readonly ReviewedTest[] = [
   { path: 'kubernetes/aio/config/kube_config_test.py', sha256: '2e98b92ea15cf277de5738ee1430ee29718940c547367680d533fe63a6b9ca48', optionalPackage: 'kubernetes' },
@@ -71,10 +68,29 @@ async function prune(root: string, payloads: readonly ReviewedTest[], hash: Hash
   for (const path of verified) await rm(path)
 }
 
+async function findReviewedFile(root: string, name: string, sha256: string, hash: HashFile): Promise<string> {
+  const base = resolve(root)
+  const baseInfo = await lstat(base).catch(() => undefined)
+  if (!baseInfo?.isDirectory() || baseInfo.isSymbolicLink()) throw new Error('unreviewed container test payload')
+  const matches: string[] = []
+  const pending = [base]
+  while (pending.length > 0) {
+    const directory = pending.pop()
+    if (directory === undefined) break
+    for await (const entry of await opendir(directory)) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) pending.push(path)
+      else if (entry.isFile() && entry.name === name && await hash(path) === sha256) matches.push(path)
+    }
+  }
+  const [match] = matches
+  if (matches.length !== 1 || match === undefined) throw new Error('unreviewed container test payload')
+  return match
+}
+
 /** Strip checksum-reviewed inert files and shrink a runtime manifest to the only consumed field. */
 export async function sanitizeContainerNodePayloads(root: string, hash: HashFile = hashFile): Promise<void> {
-  const manifestPath = (await reviewedPaths(root, [NODE_MODEL_MANIFEST], hash))[0]
-  if (manifestPath === undefined) throw new Error('unreviewed container test payload')
+  const manifestPath = await findReviewedFile(root, '.manifest.json', NODE_MODEL_MANIFEST_SHA256, hash)
   let manifest: unknown
   try {
     manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
