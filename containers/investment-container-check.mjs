@@ -1,4 +1,4 @@
-import { lstat, opendir } from 'node:fs/promises'
+import { lstat, opendir, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -21,13 +21,23 @@ async function exists(path) {
   }
 }
 
-/** Reject links in copied runtime trees without relying on a shell or following a link target. */
-export async function assertNoSymlinks(roots) {
+/** Reject unresolved links in copied runtime trees without relying on a shell. */
+export async function assertNoBrokenSymlinks(roots) {
   const pending = roots.map(root => resolve(root))
   while (pending.length > 0) {
     const path = pending.pop()
     const metadata = await lstat(path)
-    if (metadata.isSymbolicLink()) throw new Error('runtime tree contains a symbolic link')
+    if (metadata.isSymbolicLink()) {
+      try {
+        await stat(path)
+      } catch (error) {
+        if (isMissing(error) || (error instanceof Error && error.code === 'ELOOP')) {
+          throw new Error('runtime tree contains a broken symbolic link')
+        }
+        throw error
+      }
+      continue
+    }
     if (!metadata.isDirectory()) continue
     for await (const entry of await opendir(path)) pending.push(join(path, entry.name))
   }
@@ -42,7 +52,7 @@ export async function lockState(root = '/state') {
 
 async function run(mode) {
   if (mode === 'boundary') {
-    await assertNoSymlinks(['/opt/dsh', '/opt/investment-python'])
+    await assertNoBrokenSymlinks(['/opt/dsh', '/opt/investment-python'])
     return
   }
   const state = await lockState()

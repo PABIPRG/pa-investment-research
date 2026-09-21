@@ -35,7 +35,7 @@ interface HealthcheckModule {
 }
 
 interface ContainerCheckModule {
-  assertNoSymlinks(roots: string[]): Promise<void>
+  assertNoBrokenSymlinks(roots: string[]): Promise<void>
   lockState(root: string): Promise<{ application: boolean; container: boolean }>
 }
 
@@ -282,9 +282,11 @@ describe('investment container delivery contract', () => {
     const state = join(root, 'state')
     await mkdir(join(runtime, 'nested'), { recursive: true })
     await writeFile(join(runtime, 'nested', 'module.js'), 'export default true\n')
-    await expect(check.assertNoSymlinks([runtime])).resolves.toBeUndefined()
+    await expect(check.assertNoBrokenSymlinks([runtime])).resolves.toBeUndefined()
     await symlink(join(runtime, 'nested', 'module.js'), join(runtime, 'linked.js'))
-    await expect(check.assertNoSymlinks([runtime])).rejects.toThrow(/symbolic link/u)
+    await expect(check.assertNoBrokenSymlinks([runtime])).resolves.toBeUndefined()
+    await symlink(join(runtime, 'nested', 'missing.js'), join(runtime, 'broken.js'))
+    await expect(check.assertNoBrokenSymlinks([runtime])).rejects.toThrow(/broken symbolic link/u)
 
     expect(await check.lockState(state)).toEqual({ application: false, container: false })
     await mkdir(join(state, 'investment-research', '.container-instance.lock'), { recursive: true })
