@@ -80,6 +80,7 @@ async function fixture() {
   const runCommand = vi.fn(async (_command: string, args: readonly string[]) => {
     const sitePackages = args[args.indexOf('--target') + 1]!
     await write(join(sitePackages, 'native-extension.so'), 'native')
+    await write(join(sitePackages, 'cryptography/hazmat/bindings/_rust/openssl/hpke.pyi'), 'type-only fixture')
     return 0
   })
   const dependencies = {
@@ -93,8 +94,14 @@ async function fixture() {
         'runtime bytecode cache',
       )
       await write(join(destination, 'python/install/lib/python3.10/site.pyc'), 'runtime bytecode cache')
+      await write(join(destination, 'python/install/lib/python3.10/distutils/msvccompiler.py'), 'windows-only fixture')
     },
     runCommand,
+    payloadFileSha256: async (path: string) => {
+      if (path.endsWith('distutils/msvccompiler.py')) return '658b27520202e2d653d969096d39135325520807369c533d0d5288b887cf054d'
+      if (path.endsWith('openssl/hpke.pyi')) return 'a7f8462e7e981fe11aac91755796d4b14b638a9be2100a5c4793b4b141c92ed7'
+      return hash(await readFile(path))
+    },
   }
   return { root, lock, cache, output, dependencies, runCommand }
 }

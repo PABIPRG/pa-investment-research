@@ -133,7 +133,7 @@ describe('investment container delivery contract', () => {
     const dockerignore = await readFile(join(repoRoot, '.dockerignore'), 'utf8')
 
     const pinnedBuildBase = 'node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697'
-    const pinnedRuntimeBase = 'gcr.io/distroless/nodejs24-debian13:nonroot@sha256:4ac45c93b6c4b2304876569196e5962e55e8ba4ba095e7dde7bf6d7e00efc3b8'
+    const pinnedRuntimeBase = 'gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d'
     const sidecarBuild = 'RUN CI=true pnpm run investment:sidecar:build --target linux-x64'
     const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
     expect(dockerfile).toContain(`FROM ${pinnedBuildBase} AS build`)

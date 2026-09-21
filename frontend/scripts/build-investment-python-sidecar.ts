@@ -12,7 +12,10 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { backendPathAllowed, prunePythonDependencyTests, scanPackagedBackends } from './investment-backend-package-policy.ts'
-import { pruneContainerPythonTests } from './investment-container-test-payloads.ts'
+import {
+  pruneContainerPythonPayloads,
+  pruneContainerPythonRuntime,
+} from './investment-container-test-payloads.ts'
 
 const execFileAsync = promisify(execFile)
 const TARGETS = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'] as const
@@ -56,6 +59,7 @@ export interface BuildInvestmentSidecarDependencies {
   readonly listArchive?: (archive: string) => Promise<readonly string[]>
   readonly extractArchive?: (archive: string, destination: string) => Promise<void>
   readonly runCommand?: (command: string, args: readonly string[], cwd: string) => Promise<number>
+  readonly payloadFileSha256?: (path: string) => Promise<string>
   readonly descriptorFileSha256?: (path: string) => Promise<string>
 }
 
@@ -424,6 +428,9 @@ export async function buildInvestmentPythonSidecar(
     const runtimeDestination = join(staging, 'runtime')
     if (!(await lstat(runtimeSource)).isDirectory()) throw new Error(`${target} archive runtime root is missing`)
     await cp(runtimeSource, runtimeDestination, { recursive: true, dereference: true })
+    if (target === 'linux-x64') {
+      await pruneContainerPythonRuntime(runtimeDestination, dependencies.payloadFileSha256)
+    }
     await rm(extracted, { recursive: true, force: true })
 
     console.log(`Python sidecar: runtime extracted in ${Date.now() - extractStarted}ms`)
@@ -440,7 +447,9 @@ export async function buildInvestmentPythonSidecar(
     if (pipExit !== 0) throw new Error(`locked dependency installation failed with exit code ${pipExit}`)
 
     await prunePythonDependencyTests(sitePackages)
-    if (target === 'linux-x64') await pruneContainerPythonTests(sitePackages)
+    if (target === 'linux-x64') {
+      await pruneContainerPythonPayloads(sitePackages, dependencies.payloadFileSha256)
+    }
 
     await mkdir(join(staging, 'backends'))
     for (const backend of BACKENDS) {

@@ -23,7 +23,7 @@ RUN CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/i
 RUN node --import tsx/esm scripts/build-investment-container-app.ts --output /opt/dsh
 RUN install -d -m 0700 -o 10001 -g 10001 /opt/runtime-root/var/lib/dsh
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:4ac45c93b6c4b2304876569196e5962e55e8ba4ba095e7dde7bf6d7e00efc3b8 AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d AS runtime
 
 ARG VCS_REF=unknown
 ENV DSH_HOME=/var/lib/dsh \

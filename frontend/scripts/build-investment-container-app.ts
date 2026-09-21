@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { materializePackagingWorkspaceLinks } from '../apps/electron/src/packaging.ts'
-import { pruneContainerNodeTests } from './investment-container-test-payloads.ts'
+import { sanitizeContainerNodePayloads } from './investment-container-test-payloads.ts'
 
 interface BuildContainerAppOptions {
   readonly output: string
@@ -127,7 +127,7 @@ export async function buildContainerApp(options: BuildContainerAppOptions): Prom
   try {
     await run(plan.command, plan.args, plan.workspaceDir)
     await materializePackagingWorkspaceLinks(plan.stagingDir, plan.workspaceDir, plan.appSourceDir, 'linux')
-    await pruneContainerNodeTests(plan.stagingDir)
+    await sanitizeContainerNodePayloads(plan.stagingDir)
     const profileHome = join(rootDir, 'profile-home')
     const defaultConfig = await capture(
       process.execPath,
