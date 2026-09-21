@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 import image_security as gate
@@ -23,7 +24,7 @@ def tar_bytes(entries):
                 info.linkname = value
                 archive.addfile(info)
             else:
-                data = value.encode()
+                data = value.encode() if isinstance(value, str) else value
                 info.size = len(data)
                 archive.addfile(info, io.BytesIO(data))
     return output.getvalue()
@@ -94,6 +95,56 @@ class ArchiveTests(unittest.TestCase):
         evidence = self.prepare(layers=[[('app/.env.production', 'opaque', 'file')]])
         self.assertEqual(evidence['sensitive_paths'], 1)
 
+    def test_diagnostic_locations_preserve_duplicate_and_old_layer_identity(self):
+        path = 'opt/investment-python/site-packages/example/SECRET_PATH_CANARY.py'
+        evidence = self.prepare(layers=[[(path, 'old', 'file'), (path, 'new', 'file')],
+                                       [(path, 'newer', 'file')]])
+        findings = [{'RuleID': 'generic-api-key', 'File': str(evidence['scan_root'] / location),
+                     'StartLine': 7, 'Secret': 'SECRET_VALUE_CANARY'}
+                    for location in ('layer-0/file-0.data', 'layer-0/file-1.data', 'layer-1/file-0.data')]
+        diagnostic = gate.secret_diagnostics(findings, evidence)
+        samples = diagnostic['secretSamples']
+        self.assertEqual([(s['location']['layer'], s['location']['entry']) for s in samples],
+                         [(0, 0), (0, 1), (1, 0)])
+        self.assertEqual({s['location']['pathSha256'] for s in samples},
+                         {hashlib.sha256(path.encode()).hexdigest()})
+        self.assertEqual({s['location']['class'] for s in samples}, {'python-dependency'})
+        self.assertNotIn('CANARY', json.dumps(diagnostic))
+
+    def test_diagnostic_output_is_bounded_and_does_not_echo_report_fields(self):
+        count = 57
+        evidence = self.prepare(layers=[[(f'app/SECRET_PATH_CANARY-{i}/.env', 'opaque', 'file')
+                                        for i in range(count)]])
+        finding = {'RuleID': 'SECRET_RULE_CANARY', 'File': 'layer-0/file-0.data!SECRET_NESTED_CANARY',
+                   'StartLine': 3, 'Secret': 'SECRET_VALUE_CANARY', 'Match': 'SECRET_MATCH_CANARY',
+                   'Description': 'SECRET_DESCRIPTION_CANARY', 'Fingerprint': 'SECRET_FINGERPRINT_CANARY',
+                   'Author': 'SECRET_AUTHOR_CANARY', 'Email': 'SECRET_EMAIL_CANARY'}
+        diagnostic = gate.secret_diagnostics([finding] * count, evidence)
+        self.assertEqual(diagnostic['secretFindings'], count)
+        self.assertEqual(diagnostic['sensitivePaths'], count)
+        self.assertEqual(diagnostic['secretsByRule'], {'other': count})
+        self.assertEqual(diagnostic['sensitivePathsByReason'], {'sensitive-name': count})
+        self.assertEqual(len(diagnostic['secretSamples']), 50)
+        self.assertEqual(diagnostic['secretSamplesOmitted'], 7)
+        self.assertEqual(diagnostic['sensitivePathSamplesOmitted'], 7)
+        self.assertTrue(diagnostic['secretSamples'][0]['location']['nested'])
+        self.assertNotIn('CANARY', json.dumps(diagnostic))
+        self.assertNotIn(str(self.root), json.dumps(diagnostic))
+
+    def test_invalid_secret_report_fails_without_echoing_fields(self):
+        evidence = self.prepare()
+        for finding in [None, {}, {'RuleID': 'SECRET_CANARY', 'File': 7},
+                        {'RuleID': 'private-key', 'File': 'SECRET_CANARY', 'StartLine': 'SECRET_CANARY'}]:
+            with self.subTest(finding=finding), self.assertRaisesRegex(gate.GateError, '^invalid-secret-report$'):
+                gate.secret_diagnostics([finding], evidence)
+
+    def test_unmapped_report_location_is_hashed_instead_of_echoed(self):
+        evidence = self.prepare()
+        diagnostic = gate.secret_diagnostics([{'RuleID': 'private-key',
+            'File': '/SECRET_ABSOLUTE_CANARY/../../layer-0/file-0.data', 'StartLine': 1}], evidence)
+        self.assertEqual(diagnostic['secretSamples'][0]['location']['class'], 'unmapped')
+        self.assertNotIn('CANARY', json.dumps(diagnostic))
+
     def test_cli_rejects_unsafe_archive_without_disclosing_image_content(self):
         archive, image, revision, _ = fixture(self.root, layers=[[('../SECRET_CLI_CANARY', 'payload', 'file')]])
         identity = self.root / 'image-id'
@@ -161,6 +212,8 @@ class OrchestrationTests(unittest.TestCase):
         self.archive, self.image, self.revision, self.layers = fixture(self.root)
         self.summary = self.root / 'summary.json'
         self.mode = 'clean'
+        self.output = io.StringIO()
+        self.vulnerability_scans = 0
 
     def scanner(self, command, cwd, **kwargs):
         from datetime import datetime, timezone
@@ -171,8 +224,11 @@ class OrchestrationTests(unittest.TestCase):
             if self.mode == 'no-secret-report':
                 return subprocess.CompletedProcess(command, 0, b'', b'')
             report = Path(command[command.index('--report-path') + 1])
-            report.write_text(json.dumps([{'Secret': 'SECRET_REPORT_CANARY'}] if self.mode == 'secret' else []))
+            report.write_text(json.dumps([{'RuleID': 'private-key', 'File': 'layer-0/file-0.data',
+                                           'StartLine': 1, 'Secret': 'SECRET_REPORT_CANARY'}]
+                                         if self.mode == 'secret' else []))
         else:
+            self.vulnerability_scans += 1
             report = Path(command[command.index('--output') + 1])
             if self.mode != 'no-vuln-report':
                 report.write_text(json.dumps({'SchemaVersion': 2, 'Trivy': {'Version': '0.74.0'},
@@ -190,8 +246,29 @@ class OrchestrationTests(unittest.TestCase):
         return subprocess.CompletedProcess(command, 10 if tool == 'gitleaks' and self.mode == 'secret' else 0, b'', b'')
 
     def invoke(self):
-        with patch.object(gate.subprocess, 'run', side_effect=self.scanner):
+        with patch.object(gate.subprocess, 'run', side_effect=self.scanner), redirect_stdout(self.output):
             return gate.scan(self.archive, self.image, self.revision, self.root, self.root, self.summary)
+
+    def test_secret_and_path_only_failures_print_distinct_safe_diagnostics_and_do_not_publish(self):
+        for mode in ('secret', 'path-only'):
+            self.mode = mode
+            self.output = io.StringIO()
+            if mode == 'path-only':
+                self.archive, self.image, self.revision, self.layers = fixture(
+                    self.root, layers=[[('app/SECRET_PATH_CANARY/.env', 'opaque', 'file')]])
+            with self.assertRaisesRegex(gate.GateError, 'secret-findings-block-publication'):
+                self.invoke()
+            diagnostic = json.loads(self.output.getvalue())
+            self.assertIs(diagnostic['passed'], False)
+            self.assertEqual(diagnostic['revision'], self.revision)
+            self.assertEqual(diagnostic['archiveSha256'], gate.digest(self.archive))
+            self.assertEqual(diagnostic['secretFindings'], int(mode == 'secret'))
+            self.assertEqual(diagnostic['sensitivePaths'], int(mode == 'path-only'))
+            self.assertEqual(diagnostic['vulnerabilityScan'], 'not-run')
+            self.assertNotIn('CANARY', self.output.getvalue())
+            self.assertFalse(self.summary.exists())
+            self.assertEqual(self.vulnerability_scans, 0)
+            self.assertFalse(any(p.name.startswith('image-security-') for p in self.root.iterdir()))
 
     def test_success_is_bound_to_archive_and_publish_rejects_changed_archive(self):
         self.assertTrue(self.invoke()['passed'])

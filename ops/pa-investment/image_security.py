@@ -1,5 +1,6 @@
 """Fail-closed Docker-save gate. Never runs image code or prints scanner material."""
 import argparse
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 import gzip
 import hashlib
@@ -17,6 +18,9 @@ POLICY_PATH = Path(__file__).with_name('image-security-policy.json')
 MAX_TOTAL_BYTES = 8 * 1024**3
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_ENTRIES = 250000
+MAX_DIAGNOSTIC_SAMPLES = 50
+# Display labels only, never scanner exceptions: every rule still blocks publication.
+DIAGNOSTIC_RULE_IDS = frozenset(('generic-api-key', 'private-key'))
 SEVERITIES = ('UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
 SENSITIVE_PATH = re.compile(
     r'(^|/)(?:\.env(?:\.[^/]*)?|\.git|\.ssh|\.aws|\.netrc|\.pypirc|credentials\.json|'
@@ -91,6 +95,47 @@ def archive_suffix(prefix):
     return '.tar' if prefix[257:262] == b'ustar' else '.data'
 
 
+def path_location(path, layer, entry):
+    parts = PurePosixPath(path).parts
+    category = ('python-dependency' if 'site-packages' in parts else
+                'node-dependency' if 'node_modules' in parts else
+                'application' if path.startswith(('opt/dsh/', 'app/')) else 'other')
+    return {'layer': layer, 'entry': entry, 'class': category,
+            'pathSha256': hashlib.sha256(path.encode()).hexdigest()}
+
+
+def secret_diagnostics(findings, evidence):
+    """Bounded, allowlisted projection; never return report strings or secret fingerprints."""
+    require(isinstance(findings, list), 'invalid-secret-report')
+    counts, samples = Counter(), []
+    for finding in findings:
+        require(isinstance(finding, dict), 'invalid-secret-report')
+        rule, file, line = finding.get('RuleID'), finding.get('File'), finding.get('StartLine', 0)
+        require(isinstance(rule, str) and 0 < len(rule) <= 256
+                and isinstance(file, str) and 0 < len(file) <= 16384
+                and type(line) is int and 0 <= line <= 2147483647, 'invalid-secret-report')
+        label = rule if rule in DIAGNOSTIC_RULE_IDS else 'other'
+        counts[label] += 1
+        if len(samples) >= MAX_DIAGNOSTIC_SAMPLES:
+            continue
+        relative = file.removeprefix(str(evidence['scan_root']) + '/')
+        # Gitleaks separates archive members with '!'. Only the known outer scan file is resolved.
+        outer = relative.split('!', 1)[0]
+        location = evidence['locations'].get(outer)
+        if location is None:
+            location = {'class': 'unmapped', 'scanPathSha256': hashlib.sha256(relative.encode()).hexdigest()}
+        sample = {'rule': label, 'line': line, 'location': {**location, 'nested': outer != relative}}
+        if label == 'other':
+            sample['ruleIdSha256'] = hashlib.sha256(rule.encode()).hexdigest()
+        samples.append(sample)
+    return {'secretFindings': len(findings), 'sensitivePaths': evidence['sensitive_paths'],
+            'secretsByRule': dict(sorted(counts.items())),
+            'sensitivePathsByReason': dict(sorted(evidence['sensitive_reasons'].items())),
+            'secretSamples': samples, 'secretSamplesOmitted': len(findings) - len(samples),
+            'sensitivePathSamples': evidence['sensitive_samples'],
+            'sensitivePathSamplesOmitted': evidence['sensitive_paths'] - len(evidence['sensitive_samples'])}
+
+
 def prepare_archive(archive_path, work, image_id, revision):
     require(re.fullmatch(r'sha256:[0-9a-f]{64}', image_id) is not None
             and re.fullmatch(r'[0-9a-f]{40}', revision) is not None, 'invalid-expected-identity')
@@ -120,12 +165,16 @@ def prepare_archive(archive_path, work, image_id, revision):
             and len(layer_names) <= 128, 'invalid-layer-manifest')
     shutil.copyfile(config_path, scan_root / 'image-config-history.json')
     shutil.copyfile(outer / 'manifest.json', scan_root / 'image-manifest.json')
+    locations = {name: {'class': 'image-metadata'}
+                 for name in ('image-config-history.json', 'image-manifest.json')}
     # Additional OCI metadata is also scanned; binary layer blobs are scanned through their entries below.
     referenced = {safe_name(entry['Config']), *(safe_name(name) for name in layer_names), 'manifest.json'}
     for index, path in enumerate(outer.rglob('*')):
         if path.is_file() and path.relative_to(outer).as_posix() not in referenced:
             shutil.copyfile(path, scan_root / f'outer-metadata-{index}.txt')
+            locations[f'outer-metadata-{index}.txt'] = {'class': 'image-metadata'}
     sensitive_paths = files = 0
+    sensitive_reasons, sensitive_samples = Counter(), []
     for index, name in enumerate(layer_names):
         blob = outer / safe_name(name)
         # Docker-save normally stores uncompressed tar, but diff IDs always hash the uncompressed bytes.
@@ -143,6 +192,7 @@ def prepare_archive(archive_path, work, image_id, revision):
         require('sha256:' + digest(layer) == diff_ids[index], 'layer-identity-mismatch')
         layer_root = scan_root / f'layer-{index}'
         layer_root.mkdir(mode=0o700)
+        locations[f'layer-{index}/headers.jsonl'] = {'class': 'layer-metadata', 'layer': index}
         with tarfile.open(layer, 'r|') as archive, (layer_root / 'headers.jsonl').open('x') as headers:
             for serial, member in enumerate(archive):
                 budget.charge(member)
@@ -153,9 +203,15 @@ def prepare_archive(archive_path, work, image_id, revision):
                 if member.isdir():
                     continue
                 require(member.isfile() or member.issym() or member.islnk(), 'unsupported-layer-entry')
-                sensitive_paths += int(bool(SENSITIVE_PATH.search(path)) or
-                                       (path.startswith(('var/lib/dsh/', 'run/secrets/')) and member.size > 0) or
-                                       (PurePosixPath(path).name == '.npmrc' and member.size > 0))
+                location = path_location(path, index, serial)
+                reason = ('sensitive-name' if SENSITIVE_PATH.search(path) else
+                          'runtime-state' if path.startswith(('var/lib/dsh/', 'run/secrets/')) and member.size > 0 else
+                          'npm-config' if PurePosixPath(path).name == '.npmrc' and member.size > 0 else None)
+                if reason:
+                    sensitive_paths += 1
+                    sensitive_reasons[reason] += 1
+                    if len(sensitive_samples) < MAX_DIAGNOSTIC_SAMPLES:
+                        sensitive_samples.append({'reason': reason, 'location': location})
                 if member.isfile():
                     # Ordinals retain duplicate/overwritten files and case variants on every host filesystem.
                     # Keep suffixes for nested archive recognition. Never use image paths as host paths.
@@ -165,11 +221,13 @@ def prepare_archive(archive_path, work, image_id, revision):
                         suffix = archive_suffix(source.read(512))
                     if suffix != '.data':
                         target.rename(layer_root / f'file-{serial}{suffix}')
+                    locations[f'layer-{index}/file-{serial}{suffix}'] = location
                     files += 1
         if compressed:
             layer.unlink()
     return {'scan_root': scan_root, 'diff_ids': diff_ids, 'layers': len(layer_names),
-            'files': files, 'sensitive_paths': sensitive_paths}
+            'files': files, 'sensitive_paths': sensitive_paths, 'locations': locations,
+            'sensitive_reasons': sensitive_reasons, 'sensitive_samples': sensitive_samples}
 
 
 def scanner_env(root):
@@ -264,6 +322,12 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
         # Raw fields (including redacted Match/Secret) never reach the summary.
         secrets_count = len(secrets)
         require(secrets_result.returncode == (10 if secrets_count else 0), 'secret-report-exit-mismatch')
+        diagnostic = secret_diagnostics(secrets, evidence)
+        if secrets_count or evidence['sensitive_paths']:
+            # Failure diagnostics cannot be used as a passing publication summary.
+            print(json.dumps({'schemaVersion': 1, 'kind': 'secret-gate-diagnostics', 'passed': False,
+                              'archiveSha256': archive_hash, 'imageId': image_id, 'revision': revision,
+                              'vulnerabilityScan': 'not-run', **diagnostic}, sort_keys=True), flush=True)
         require(secrets_count == 0 and evidence['sensitive_paths'] == 0, 'secret-findings-block-publication')
         report = work / 'vulnerabilities.json'
         cache = work / 'trivy-cache'
