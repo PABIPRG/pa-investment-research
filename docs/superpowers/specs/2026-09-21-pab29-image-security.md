@@ -57,7 +57,7 @@ Gitleaks 所有命中阻断；Trivy HIGH/CRITICAL/UNKNOWN 阻断，不忽略未�
 | ip-address | 10.2.0 → 10.3.1 精确 override | [官方 npm 元数据](https://registry.npmjs.org/ip-address/10.3.1)，同主版本；旧基镜像工具链中的 9.0.5 不用跨主版本 override 盲替换 |
 | js-yaml | 所有匹配 4.x 当前依赖 → 4.3.2 精确 override | [官方 npm 元数据](https://registry.npmjs.org/js-yaml/4.3.2)，沿用 argparse 2.x；loader/CLI 的 YAML 消费需聚焦验证 |
 | sharp | 0.35.3 → 0.35.4，包含对应 @img 平台包 | [官方 npm 元数据](https://registry.npmjs.org/sharp/0.35.4)，Node 要求 ≥20.9.0；目标 Linux 原生库仍需 CI 运行证据 |
-| SheetJS xlsx | 0.18.5 → 官方 CDN 0.20.3，并由 pnpm 记录 SHA512 integrity | [官方安装方式](https://docs.sheetjs.com/docs/getting-started/installation/frameworks/)，保留 `xlsx/xlsx.mjs` 现有入口；不使用非官方 fork |
+| SheetJS xlsx | 0.18.5 → 官方 CDN 0.20.3 原始归档，随 UI 包存放并通过 `file:` 引用，由 pnpm 记录 SHA512 integrity | [官方本地归档方式](https://docs.sheetjs.com/docs/getting-started/installation/nodejs/#vendoring)，保留 `xlsx/xlsx.mjs` 现有入口；不使用非官方 fork |
 | py-vapid | 不升级或改运行代码，精确删除两个测试文件 | [官方 PyPI 1.9.4](https://pypi.org/pypi/py-vapid/1.9.4/json)，wheel 下载摘要与两个文件摘要均实际核对；策略中固定文件哈希 |
 
 ChromaDB 1.5.9 的旧报告含 CVE-2026-45829、45830、45831、45833，未提供修复版本。
@@ -109,3 +109,18 @@ Python 3.14.4。源码为上述基准加本 PR 的安全加固实现；执行本
 产出的源码 SHA/归档 SHA/config ID、一致的扫描通过摘要、运行回归及真实导入验收证据。
 ChromaDB、第三方秘密候选与 MiniZip 适用性仍是明确的后续阻断项；本次不能宣称镜像全部安全，
 PAB-29 保持 In Progress。
+
+## PR #136 生产打包回归修复（2026-09-21）
+
+首轮 Linux 镜像及三个桌面平台的 CI 均在生产 `pnpm deploy --prod --legacy` 阶段报 `ERR_PNPM_EXOTIC_SUBDEP`：SheetJS 官方 URL 在工作区内作为直接依赖安装成功，但生产依赖树中的同一 UI 包成为间接依赖，触发 pnpm 的远程来源限制。此前的单元测试和编译没有覆盖实际生产 deploy。
+
+修复采用官方建议的本地归档方式，将原始 `xlsx-0.20.3.tgz` 放入 UI 包的 `vendor/`，通过 `file:vendor/xlsx-0.20.3.tgz` 引用，并在发布文件清单及其工作区约束中登记精确文件名。归档的 SHA512 与原 CDN 锁定值完全一致；包内源码、版本和许可证均未改动。工作区显式保持 `blockExoticSubdeps: true`，没有添加 URL 豁免或关闭供应链检查。来源、摘要和升级规则见该目录的 `README.md`。
+
+在 macOS arm64 上使用仓库固定 pnpm 11.7.0 完成以下验证：
+
+- frozen lockfile 安装及 1526 项供应链策略校验通过；锁文件仅替换 SheetJS 的来源路径，其他平台的可选依赖保持原状。
+- 容器所用 CLI 与桌面端 Electron 的两条真实 `pnpm deploy --prod --legacy` 均通过，依赖生命周期脚本正常执行，输出位于隔离临时目录。
+- 两份部署产物内的 SheetJS 归档 SHA512 均匹配；按实际 ESM 入口 `xlsx/xlsx.mjs` 加载并往返写入、读取中文持仓表成功，依赖解析路径位于各自产物内。
+- 持仓导入和容器约束两份 Vitest 文件共 21 项通过；第三方声明校验、工作区约束及 diff 检查通过。
+
+这些证据关闭本次依赖部署失败的本地回归验证。新提交的 Linux 镜像构建、安全扫描及各平台完整打包仍需 CI 结果；前述安全告警、Compose 和真实产品 UAT 的发布阻断条件保持有效。

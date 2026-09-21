@@ -148,6 +148,8 @@ const packageFileExtras: Readonly<Record<string, readonly string[]>> = {
   '@deepseek-ai/dsh-investment-market-watch-bundle': ['cordis.patch.yml'],
   '@deepseek-ai/dsh-investment-industry-chain-bundle': ['cordis.patch.yml'],
   '@deepseek-ai/dsh-client-ui-theme': ['lib/styles'],
+  // Keep the reviewed local SheetJS dependency available in packed UI packages.
+  '@deepseek-ai/dsh-client-ui-investment-research': ['vendor/xlsx-0.20.3.tgz'],
   // The Python runtime uses a distinct closed-resolution bin; the public CLI
   // keeps config-owned bare-package resolution through lib/bin.js.
   '@deepseek-ai/dsh-sdk-jsonrpc-demo': ['lib/packaged-bin.js'],

@@ -24,6 +24,9 @@ packages:
 # builds must resolve those matching names to this workspace's pinned sources.
 linkWorkspacePackages: true
 
+# Production deploys must keep rejecting unreviewed remote subdependencies.
+blockExoticSubdeps: true
+
 # This is pnpm's ordinary hidden-hoist default, recorded explicitly because
 # Electron Forge refuses pnpm packaging unless an on-disk hoist policy is visible.
 hoistPattern:
