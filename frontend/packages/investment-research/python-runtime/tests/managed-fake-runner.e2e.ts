@@ -178,6 +178,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_POSITION_RISK_TOKEN: positionRiskToken,
       DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'trading-core'),
       NOTIFICATION_INTERNAL_TOKEN: notificationInternalToken,
+      DSH_NOTIFICATION_MANAGED: '1',
     })
     expect(byModule.get('market_watch.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'market-visible',
