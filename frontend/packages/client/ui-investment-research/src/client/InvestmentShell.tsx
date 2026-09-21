@@ -1,7 +1,6 @@
 import { searchSecurities, type SecuritySearchItem } from './security-search.ts'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties, MutableRefObject, ReactNode, RefObject } from 'react'
-import { createPortal } from 'react-dom'
 import packageManifest from '@deepseek-ai/dsh-client-ui-investment-research/package.json' with { type: 'json' }
 import type {
   SessionId, SessionSearchResultItem,
@@ -9,7 +8,7 @@ import type {
 import type {
   HostObservable, InjectFace, PropsRuntime,
 } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconChevronDownOutline14, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, TextArea, IconChevronDownOutline14, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarSectionOwnerProps } from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { HeroWelcomeOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -168,6 +167,7 @@ export type InvestmentSidebarProps = PropsRuntime<'sidebar.workspaces'>
 
 export interface InvestmentShellInjected extends UiInjected {
   requestData: RequestData
+  requestNotificationChannels?: import('./research-types.ts').RequestNotificationChannels
   trackTelemetry?: TrackLocalTelemetry
   setHistory: (open: boolean) => void
   setReports: (open: boolean) => void
@@ -885,7 +885,7 @@ export function InvestmentShell(props: InvestmentShellProps) {
 }
 
 function InvestmentShellContent({
-  useInvestmentUi, hostDescription, useSessions, useWorkspaces, requestData, trackTelemetry = NOOP_TELEMETRY,
+  useInvestmentUi, hostDescription, useSessions, useWorkspaces, requestData, requestNotificationChannels, trackTelemetry = NOOP_TELEMETRY,
   navigate, setHistory, setReports,
   setAssistantMode, setModuleDraft, selectStrategy, startSession, openSession, searchSessions, renameSession,
   archiveSession, prepareAssistant, toggleTheme,
@@ -1415,7 +1415,7 @@ function InvestmentShellContent({
       <header className={css.topbar}>
         <GlobalStockSearch requestData={requestData} navigate={navigate} trackTelemetry={trackTelemetry} />
         <div className={css.topActions} role="group" aria-label="页面操作">
-          <NotificationCenter requestData={requestData} navigate={navigate} />
+          <NotificationCenter requestData={requestData} requestNotificationChannels={requestNotificationChannels} navigate={navigate} />
           <button
             type="button"
             className={css.fundsPrivacyToggle}
@@ -1429,15 +1429,15 @@ function InvestmentShellContent({
           </button>
           {conversationPrimary && (
             <>
-              <button
+              <Button variant="primary"
                 type="button"
                 className={css.primaryButton}
                 disabled={startingSession}
                 aria-busy={startingSession}
                 aria-label="新对话"
                 onClick={startNewConversation}
-              ><PlusIcon /><span className={css.actionLabel}>{startingSession ? '创建中…' : '新对话'}</span></button>
-              <button
+              ><PlusIcon /><span className={css.actionLabel}>{startingSession ? '创建中…' : '新对话'}</span></Button>
+              <Button variant="outline"
                 ref={historyTriggerRef}
                 type="button"
                 className={css.secondaryButton}
@@ -1445,10 +1445,10 @@ function InvestmentShellContent({
                 aria-haspopup="dialog"
                 aria-expanded={snapshot.historyOpen}
                 onClick={() => { setHistoryClosing(false); setHistory(true) }}
-              ><HistoryIcon /><span className={css.actionLabel}>历史对话</span></button>
+              ><HistoryIcon /><span className={css.actionLabel}>历史对话</span></Button>
             </>
           )}
-          <button
+          <Button variant="outline"
             ref={reportTriggerRef}
             type="button"
             className={css.secondaryButton}
@@ -1460,7 +1460,7 @@ function InvestmentShellContent({
             onClick={() => { setReports(true) }}
           >
             <ReportIcon /><span className={css.actionLabel}>投研报告</span>
-          </button>
+          </Button>
           <button
             type="button"
             className={css.themeToggle}
@@ -2001,13 +2001,13 @@ export function OpportunityPage({
       } as CSSProperties}
     >
       <PageHeader title="实时盯盘" description="通过大盘快照和实时扫描发现研究线索">
-        <button
+        <Button variant="outline"
           type="button"
           className={css.secondaryButton}
           aria-busy={busy}
           disabled={busy}
           onClick={() => { setNonce(value => value + 1) }}
-        >{busy ? '加载中…' : '刷新数据'}</button>
+        >{busy ? '加载中…' : '刷新数据'}</Button>
       </PageHeader>
       <section className={css.marketOverview} aria-busy={indices.busy} aria-labelledby="market-overview-title">
         <div className={css.sectionHeading}>
@@ -2172,13 +2172,13 @@ function AddHoldingDialog({
       eyebrow="持仓录入"
       onClose={onClose}
       actions={<>
-        <button type="button" className={css.secondaryButton} disabled={saving} onClick={onClose}>取消</button>
-        <button
+        <Button variant="outline" type="button" className={css.secondaryButton} disabled={saving} onClick={onClose}>取消</Button>
+        <Button variant="primary"
           type="button"
           className={css.primaryButton}
           disabled={!valid || saving}
           onClick={() => { onConfirm(resolvedQuantity, resolvedCost) }}
-        >{saving ? '正在保存…' : '确认加入持仓'}</button>
+        >{saving ? '正在保存…' : '确认加入持仓'}</Button>
       </>}
     >
       <div className={css.detailFormGrid}>
@@ -2359,38 +2359,38 @@ function StockDetailPage({
   return (
     <div className={css.pageScroll}>
       <PageHeader title={loading ? `${code} · 个股详情` : `${name} · ${resolvedCode}`} description="实时行情、技术位置、资金与个股资讯的统一研究视图">
-        <button
+        <Button variant="outline"
           type="button"
           className={css.secondaryButton}
           aria-label={`返回${STOCK_RETURN_LABELS[backDestination]}`}
           title={`返回${STOCK_RETURN_LABELS[backDestination]}`}
           onClick={onBack}
-        >返回</button>
-        <button type="button" className={css.secondaryButton} onClick={() => { setNonce(value => value + 1) }}>刷新详情</button>
+        >返回</Button>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { setNonce(value => value + 1) }}>刷新详情</Button>
         {!loading && error === '' && (
-          <button
+          <Button variant="outline"
             type="button"
             className={css.secondaryButton}
             disabled={!ownershipReady || actionBusy !== '' || inWatchlist}
             onClick={() => { void addWatchlist() }}
-          >{actionBusy === 'watchlist' ? '正在加入…' : inWatchlist ? '已在自选' : '加入自选'}</button>
+          >{actionBusy === 'watchlist' ? '正在加入…' : inWatchlist ? '已在自选' : '加入自选'}</Button>
         )}
         {!loading && error === '' && (
-          <button
+          <Button variant="outline"
             type="button"
             className={css.secondaryButton}
             disabled={!ownershipReady || actionBusy !== '' || inHoldings}
             onClick={() => { setHoldingError(''); setHoldingOpen(true) }}
-          >{inHoldings ? '已在持仓' : '加入持仓'}</button>
+          >{inHoldings ? '已在持仓' : '加入持仓'}</Button>
         )}
         {!loading && error === '' && (
-          <button
+          <Button variant="primary"
             type="button"
             className={css.primaryButton}
             onClick={() => {
               onAnalyze({ kind: 'stock', code: resolvedCode, name })
             }}
-          >带入智能分析</button>
+          >带入智能分析</Button>
         )}
       </PageHeader>
       {actionNotice !== '' && <div className={css.importNotice} role="status">{actionNotice}</div>}
@@ -2468,37 +2468,11 @@ function StockDetailPage({
 function HoldingsImportDialog({
   requestData, onClose, onImported,
 }: { requestData: RequestData; onClose: () => void; onImported: (count: number) => void }) {
-  const dialogRef = useRef<HTMLElement>(null)
-  const closeButtonRef = useRef<HTMLButtonElement>(null)
-  const savingRef = useRef(false)
   const [source, setSource] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const result = useMemo(() => parseHoldingsImport(source), [source])
   const canSubmit = result.items.length > 0 && result.errors.length === 0 && !saving
-
-  useEffect(() => { savingRef.current = saving }, [saving])
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    closeButtonRef.current?.focus()
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !savingRef.current) { onClose(); return }
-      if (event.key !== 'Tab') return
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable === undefined || focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      window.requestAnimationFrame(() => { previousFocus?.focus() })
-    }
-  }, [onClose])
 
   const save = async () => {
     if (!canSubmit) return
@@ -2516,21 +2490,12 @@ function HoldingsImportDialog({
     }
   }
 
-  const dialog = (
-    <div
-      className={`${css.drawerBackdrop} ${css.importBackdrop}`}
-      role="presentation"
-      onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose() }}
-    >
-      <section ref={dialogRef} className={css.importDialog} role="dialog" aria-modal="true" aria-labelledby="holdings-import-title">
-        <div className={css.importHead}>
-          <div>
-            <strong id="holdings-import-title">导入持仓</strong>
-            <span>支持 CSV、TSV 和从表格复制的文本</span>
-          </div>
-          <button ref={closeButtonRef} type="button" aria-label="关闭导入持仓" disabled={saving} onClick={onClose}>×</button>
-        </div>
-        <div className={css.importBody}>
+  return (
+    <DetailDialog title="导入持仓" description="支持 CSV、TSV 和从表格复制的文本" wide closeDisabled={saving} onClose={onClose}
+      actions={<>
+        <Button variant="outline" disabled={saving} onClick={onClose}>取消</Button>
+        <Button variant="primary" disabled={!canSubmit} onClick={() => { void save() }}>{saving ? '正在导入…' : `替换并导入 ${result.items.length} 条`}</Button>
+      </>}>
           <div className={css.importGuide}>
             <strong>导入会整体替换当前持仓</strong>
             <span>至少需要“股票代码、数量、成本价”三列，导入成功后会重新计算组合风险。</span>
@@ -2552,8 +2517,7 @@ function HoldingsImportDialog({
           </label>
           <label className={css.importField}>
             <span>或粘贴表格内容</span>
-            <textarea
-              autoFocus
+            <TextArea
               aria-label="持仓导入内容"
               value={source}
               disabled={saving}
@@ -2589,18 +2553,8 @@ function HoldingsImportDialog({
               {result.items.length > 20 && <p>仅预览前 20 项，保存时会导入全部数据。</p>}
             </div>
           )}
-        </div>
-        <div className={css.importActions}>
-          <button type="button" className={css.secondaryButton} disabled={saving} onClick={onClose}>取消</button>
-          <button type="button" className={css.primaryButton} disabled={!canSubmit} onClick={() => { void save() }}>
-            {saving ? '正在导入…' : `替换并导入 ${result.items.length} 条`}
-          </button>
-        </div>
-      </section>
-    </div>
+    </DetailDialog>
   )
-
-  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body)
 }
 
 /** My Research portfolio overview. Preference review now belongs to Research Workbench. */
@@ -2728,23 +2682,23 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
   return (
     <div className={css.pageScroll}>
       <PageHeader title="我的投研" description="汇总后端已保存的持仓、风险预算与真实预警结果，承接研究到组合决策">
-        <button type="button" className={css.secondaryButton} onClick={() => { setNotice(''); setImportOpen(true) }}>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { setNotice(''); setImportOpen(true) }}>
           <ImportIcon /><span className={css.actionLabel}>导入持仓</span>
-        </button>
-        <button
+        </Button>
+        <Button variant="outline"
           type="button"
           className={css.secondaryButton}
           aria-busy={busy}
           disabled={busy}
           onClick={() => { setNonce(value => value + 1) }}
-        >{busy ? '加载中…' : '刷新'}</button>
-        <button
+        >{busy ? '加载中…' : '刷新'}</Button>
+        <Button variant="primary"
           type="button"
           className={css.primaryButton}
           onClick={() => {
             onAnalyze({ kind: 'portfolio' })
           }}
-        >带入智能分析持仓</button>
+        >带入智能分析持仓</Button>
       </PageHeader>
       {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
       <ResourceProgress label="持仓数据" resources={resources} />
@@ -2797,13 +2751,13 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
                     <span>{code}</span>
                   </button>
                   <div>
-                    <button type="button" className={css.secondaryButton} onClick={() => { onViewStock(code) }}>查看详情</button>
-                    <button
+                    <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onViewStock(code) }}>查看详情</Button>
+                    <Button variant="outline"
                       type="button"
                       className={css.secondaryButton}
                       disabled={removingWatch !== ''}
                       onClick={() => { void removeWatch(code) }}
-                    >{removingWatch === code ? '移出中…' : '移出'}</button>
+                    >{removingWatch === code ? '移出中…' : '移出'}</Button>
                   </div>
                 </article>
               )
@@ -2818,7 +2772,7 @@ function PortfolioOverviewPage({ requestData, onAnalyze, onViewStock, trackTelem
             <strong id="holdings-title">当前持仓</strong>
             <div className={css.positionRiskHeadingActions}>
               <ResourceLabel state={positionRiskPlans.state} settled="止盈止损已解析" />
-              <button type="button" className={css.secondaryButton} onClick={() => { setPositionRiskEditor({}) }}>全局止盈止损</button>
+              <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { setPositionRiskEditor({}) }}>全局止盈止损</Button>
               <ResourceLabel state={holdings.state} settled={`${positions.length} 项`} />
             </div>
           </div>

@@ -100,6 +100,7 @@ class StubCredentials extends CredentialProvider {
 
   resolve(ref: CredentialRef): Promise<ResolvedCredential | undefined> {
     this.resolveCalls.push(ref)
+    if (ref === 'INVESTMENT_NOTIFICATION_CHANNELS') return Promise.resolve(undefined)
     return Promise.resolve({ value: 'runtime-bound-secret', source: 'memory' })
   }
 
@@ -117,6 +118,74 @@ class StubCredentials extends CredentialProvider {
 }
 
 describe('InvestmentBackendManager', () => {
+  it('cancels an owned initializer without waiting for a queued callback to settle', async () => {
+    const base = await harness()
+    base.handle.autoExitOnTerminate = true
+    let probe = 0
+    const barrier = Promise.withResolvers<void>()
+    const initialize = vi.fn(() => barrier.promise)
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home },
+      checkHealth: async () => probe++ === 0 ? refused : healthy,
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: '/fake/python' }),
+      executableExists: async () => true, onOwnedReady: initialize,
+    })
+    manager.register(definition)
+    const controller = new AbortController()
+    const result = captureRejection(manager.acquire('trading-core', controller.signal))
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce())
+    controller.abort(new Error('cancelled during initialization'))
+    await expect(result).resolves.toBeInstanceOf(Error)
+    await manager.dispose()
+    expect(base.handle.terminateCalls).toBe(1)
+    barrier.resolve()
+  })
+  it('waits for one owned initializer before exposing concurrent leases', async () => {
+    const base = await harness()
+    const barrier = Promise.withResolvers<void>()
+    const initialize = vi.fn(() => barrier.promise)
+    let probe = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home },
+      checkHealth: async () => probe++ === 0 ? refused : healthy,
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: '/fake/python' }),
+      executableExists: async () => true, onOwnedReady: initialize,
+    })
+    manager.register(definition)
+    const acquired = vi.fn()
+    const first = manager.acquire('trading-core').then(lease => { acquired(); return lease })
+    const second = manager.acquire('trading-core')
+    await vi.waitFor(() => expect(initialize).toHaveBeenCalledOnce())
+    expect(acquired).not.toHaveBeenCalled()
+    barrier.resolve()
+    const leases = await Promise.all([first, second])
+    expect(leases.every(lease => lease.ownership === 'owned')).toBe(true)
+    base.handle.autoExitOnTerminate = true
+    await Promise.all(leases.map(lease => lease.release()))
+    await manager.dispose()
+  })
+
+  it('cleans up when owned initialization fails and never initializes attached backends', async () => {
+    const base = await harness()
+    base.handle.autoExitOnTerminate = true
+    let probe = 0
+    const initialize = vi.fn(async () => { throw new Error('safe initialization failure') })
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home },
+      checkHealth: async () => probe++ === 0 ? refused : healthy,
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: '/fake/python' }),
+      executableExists: async () => true, onOwnedReady: initialize,
+    })
+    manager.register(definition)
+    await expect(manager.acquire('trading-core')).rejects.toThrow('safe initialization failure')
+    expect(base.handle.terminateCalls).toBe(1)
+    const attached = await manager.acquire('trading-core')
+    expect(attached.ownership).toBe('attached')
+    expect(initialize).toHaveBeenCalledOnce()
+    await attached.release()
+    await manager.dispose()
+  })
+
   it('single-flights concurrent acquire, refcounts leases, and stops only after the last release', async () => {
     const { manager, handle, specs } = await harness([refused, refused, healthy])
     manager.register(definition)
@@ -1327,7 +1396,7 @@ describe('InvestmentBackendManager', () => {
       credentialEnv: [{ ref: credentialRef('DEEPSEEK_API_KEY'), env: 'DEEPSEEK_API_KEY', role: 'required' }],
     })
     const lease = await runtime.acquire('trading-core')
-    expect(credentials.resolveCalls).toEqual([credentialRef('DEEPSEEK_API_KEY')])
+    expect(credentials.resolveCalls).toEqual([credentialRef('DEEPSEEK_API_KEY'), credentialRef('INVESTMENT_NOTIFICATION_CHANNELS')])
     expect(credentials.describeCalls).toEqual([credentialRef('DEEPSEEK_API_KEY')])
     expect(spawn).toHaveBeenCalledOnce()
     expect(spawnSpecs.at(0)?.env).toMatchObject({ DEEPSEEK_API_KEY: 'runtime-bound-secret' })

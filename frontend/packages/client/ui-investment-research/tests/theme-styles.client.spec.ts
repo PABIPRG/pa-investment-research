@@ -6,6 +6,10 @@ const styles = readFileSync(
   fileURLToPath(new URL('../src/client/InvestmentShell.module.css', import.meta.url)),
   'utf8',
 )
+const notificationStyles = readFileSync(
+  fileURLToPath(new URL('../src/client/NotificationCenter.module.css', import.meta.url)),
+  'utf8',
+)
 const analysisPageSource = readFileSync(
   fileURLToPath(new URL('../src/client/AnalysisPage.tsx', import.meta.url)),
   'utf8',
@@ -34,12 +38,21 @@ const baseStyles = readFileSync(
   fileURLToPath(new URL('../../web/src/base.css', import.meta.url)),
   'utf8',
 )
+const modalStyles = readFileSync(
+  fileURLToPath(new URL('../../ui-primitives/src/Modal.module.css', import.meta.url)),
+  'utf8',
+)
 const design = readFileSync(
   fileURLToPath(new URL('../../../../../DESIGN.md', import.meta.url)),
   'utf8',
 )
 
 describe('投研工作台主题样式', () => {
+  it('通知详情复用共享主按钮的完整配色而不覆盖单一状态', () => {
+    expect(notificationStyles).not.toMatch(/\.detailActions \.primary(?:[\s:{])/u)
+    expect(notificationStyles).not.toMatch(/\.detailActions button\s*\{[^}]*(?:color|background):/u)
+  })
+
   it('只通过语义 token 映射投研专用颜色', () => {
     expect(styles).toContain('--investment-primary: var(--dsw-alias-state-business-primary)')
     expect(styles).toContain('--investment-sidebar: var(--dsw-specific-sidebar-fill)')
@@ -60,7 +73,7 @@ describe('投研工作台主题样式', () => {
   })
 
   it('详情和报告使用同一模态层级，由后打开的 Portal 自然置顶', () => {
-    expect(styles).toMatch(/\.detailBackdrop\s*\{[^}]*z-index:\s*1000;/s)
+    expect(modalStyles).toMatch(/\.root\s*\{[^}]*z-index:\s*1000;/s)
     expect(styles).toMatch(/\.reportBackdrop\s*\{[^}]*z-index:\s*1000;/s)
   })
 
@@ -124,7 +137,7 @@ describe('投研工作台主题样式', () => {
     expect(styles).toMatch(/\.detailDialogBody\s*\{[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
     expect(styles).toMatch(/\.workbenchOverviewTableWrap\s*\{[^}]*border:\s*1px solid var\(--dsw-alias-border-l2\);[^}]*background:\s*var\(--dsw-alias-bg-base\);/s)
     expect(styles).toMatch(/\.workbenchOverviewTable thead th\s*\{[^}]*background:\s*var\(--dsw-alias-bg-layer-2\);/s)
-    expect(styles).toMatch(/\.workbenchHoldingActions button\[aria-label\^='删除 '\]\s*\{[^}]*color:\s*var\(--dsw-alias-state-error-primary\);/s)
+    expect(styles).toMatch(/\.holdingDangerButton\.holdingDangerButton\s*\{[^}]*color:\s*var\(--dsw-alias-state-error-primary\);/s)
   })
 
   it('为指定一级路由建立统一的页面与大模块层级', () => {

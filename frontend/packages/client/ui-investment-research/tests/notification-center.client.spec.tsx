@@ -114,6 +114,21 @@ describe('NotificationCenter', () => {
     expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.notification-read')).toBe(false)
   })
 
+  it('returns focus to the persistent bell after closing view-all without changing the route', async () => {
+    const navigate = vi.fn()
+    render(<NotificationCenter requestData={requestMock()} navigate={navigate} />)
+    const bell = await screen.findByRole('button', { name: '消息中心，2 条未读' })
+    fireEvent.click(bell)
+    const viewAll = await screen.findByRole('menuitem', { name: '查看全部通知' })
+    viewAll.focus()
+    fireEvent.click(viewAll)
+    expect(await screen.findByRole('dialog', { name: '通知中心' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '关闭通知中心' }))
+    await waitFor(() => { expect(document.activeElement).toBe(bell) })
+    expect(document.body.style.pointerEvents).not.toBe('none')
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
   it('offers an in-place undo after archiving a notification', async () => {
     const requestData = requestMock()
     render(<NotificationCenter requestData={requestData} navigate={vi.fn()} />)
@@ -132,6 +147,27 @@ describe('NotificationCenter', () => {
       expect(archiveCalls[0]?.input).toEqual({ notification_id: ITEMS[0]?.id, archived: true })
       expect(archiveCalls[1]?.input).toEqual({ notification_id: ITEMS[0]?.id, archived: false })
     })
+  })
+
+  it('puts app configuration before preferences and guidance without claiming credentials are configured', async () => {
+    const requestData = requestMock()
+    render(<NotificationCenter requestData={requestData} navigate={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: '消息中心，2 条未读' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '查看全部通知' }))
+    fireEvent.click(screen.getByRole('tab', { name: '设置' }))
+    expect(screen.getByText(/勾选渠道不代表已配置或发送成功/)).toBeTruthy()
+    expect(screen.getByText('如何获取配置？')).toBeTruthy()
+    expect(screen.queryByText(/backend.env/)).toBeNull()
+    expect(screen.getByText(/此运行环境尚未提供本机渠道配置/)).toBeTruthy()
+    const settingsTable = screen.getByRole('table', { name: '通知渠道设置' })
+    const setup = screen.getByRole('region', { name: '外部渠道配置说明' })
+    expect(settingsTable.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('region', { name: '外部渠道配置' }).compareDocumentPosition(settingsTable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Server 酱 Turbo' }).getAttribute('href')).toBe('https://sct.ftqq.com/')
+    expect(screen.getByText(/专用授权码/)).toBeTruthy()
+    expect(screen.getByText(/不支持 465 隐式 TLS/)).toBeTruthy()
+    expect((screen.getByRole('checkbox', { name: '行情与风险 · 邮件' }) as HTMLInputElement).disabled).toBe(true)
+    expect(requestData.mock.calls.every(([request]) => ['trading-core.notifications', 'trading-core.notification-preferences', 'trading-core.notification-capabilities'].includes(request.operation))).toBe(true)
   })
 
   it('loads detail by id when a macOS notification points outside the current list page', async () => {

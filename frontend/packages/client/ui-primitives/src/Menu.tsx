@@ -87,7 +87,7 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * by a hairline; they stay visible while the items above scroll.
  * @returns anchor wrapper with the conditional list.
  */
-export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, closeOnPointerLeave = false, dense = false, compact = false, getAnchorRect, footer, className, content, listClassName }: {
+export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, onClose, align = 'start', side = 'bottom', portal = false, portalContainer, closeOnPointerLeave = false, dense = false, compact = false, getAnchorRect, footer, className, content, listClassName }: {
   open: boolean
   anchor: ReactNode
   items: readonly MenuEntry[]
@@ -99,6 +99,8 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
   align?: 'start' | 'end'
   side?: 'bottom' | 'top' | 'right'
   portal?: boolean
+  /** Keep popup descendants inside an owning modal's focus and pointer boundary. */
+  portalContainer?: Element | undefined
   closeOnPointerLeave?: boolean
   dense?: boolean
   compact?: boolean
@@ -161,9 +163,13 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
     place()
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(place)
+    if (listRef.current) observer?.observe(listRef.current)
+    if (rootRef.current) observer?.observe(rootRef.current)
     return () => {
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
+      observer?.disconnect()
     }
   }, [open, portal, align, side, getAnchorRect])
 
@@ -276,7 +282,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       // (open/toggle) after onSelect.
       onClick={(e) => { e.stopPropagation() }}
     >
-      <div className={css.viewport} role="presentation">
+      <div className={css.viewport} role="presentation" data-menu-viewport>
         {content ?? items.map(renderEntry)}
       </div>
       {footer !== undefined && footer.length > 0 && (
@@ -299,7 +305,7 @@ export function Menu({ open, anchor, items, selectedId, selectedIds, onSelect, o
       onPointerLeave={closeOnPointerLeave ? () => { if (open) armClose() } : undefined}
     >
       {anchor}
-      {portal ? (list !== false && createPortal(list, document.body)) : list}
+      {portal ? (list !== false && createPortal(list, portalContainer ?? document.body)) : list}
     </span>
   )
 }

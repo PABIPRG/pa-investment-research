@@ -11,9 +11,6 @@ import {
 import {
   WorkbenchOverviewDialog,
 } from './WorkbenchOverviewDialog.tsx'
-import {
-  PortfolioPerformanceDialog,
-} from './PortfolioPerformanceDialog.tsx'
 import type {
   PerformanceMethod, PerformancePeriod,
 } from './PortfolioPerformanceDialog.tsx'
@@ -120,12 +117,6 @@ function displayTime(value: unknown): string {
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(parsed)
-}
-
-function costAmount(positions: readonly Record<string, unknown>[]): number {
-  return positions.reduce((sum, item) => (
-    sum + (number(item.quantity) ?? 0) * (number(item.cost_price) ?? 0)
-  ), 0)
 }
 
 function completeCostAmount(positions: readonly Record<string, unknown>[]): number | undefined {
@@ -256,16 +247,6 @@ function holdingReasonCode(value: string): string | undefined {
 
 function comparableCopy(value: string): string {
   return value.replace(/\s+/g, '').replace(/[。！？!?；;，,：:]+$/g, '')
-}
-
-function resolvedSecurityName(
-  item: Record<string, unknown>,
-  code: string,
-  securityNames: Readonly<Record<string, string>>,
-): string {
-  const stored = text(item.name, '').trim()
-  const resolved = securityNames[code]?.trim() ?? ''
-  return stored !== '' && stored !== code ? stored : resolved !== '' ? resolved : code
 }
 
 function holdingSecurityName(
@@ -478,7 +459,7 @@ export function ResearchWorkbenchPage({
     setInitialHoldingsFlow(holdingsEntry.flow)
     setSelectedOverview('holdings')
   }, [holdingsEntry])
-  const [performanceOpen, setPerformanceOpen] = useState(false)
+  const performanceOpen = selectedOverview === 'holdings'
   const [performancePeriod, setPerformancePeriod] = useState<PerformancePeriod>('since_inception')
   const [performanceMethod, setPerformanceMethod] = useState<PerformanceMethod>('twr')
   const [customStart, setCustomStart] = useState('')
@@ -569,13 +550,13 @@ export function ResearchWorkbenchPage({
     ...missingHoldingCodes,
     ...reasonCodes.filter(code => !knownCardCodes.has(code)),
     ...strategyItems.flatMap(strategySymbols),
-  ])
+  ], { ...Object.fromEntries(positions.map(item => [text(item.ticker, ''), text(item.name, '')])), ...quoteSecurityNames })
   const resolvedSecurityNames = { ...securityNames, ...quoteSecurityNames }
   const overviewPositions: WorkbenchPositionDetail[] = positions.map((item) => {
     const code = text(item.ticker, '')
     return {
       code,
-      name: resolvedSecurityName(item, code, resolvedSecurityNames),
+      name: holdingSecurityName(item, code, resolvedSecurityNames),
       quantity: number(item.quantity),
       costPrice: number(item.cost_price),
       currentPrice: number(asRecord(quoteMap.get(code)).price),
@@ -607,8 +588,8 @@ export function ResearchWorkbenchPage({
     performance.run({
       operation: 'trading-core.portfolio-performance',
       ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
-    }, { retainPrevious: true })
-  }, [performance.run, performanceOpen, performancePeriod, selectedPerformanceRange])
+    }, { retainPrevious: true, fresh: refreshVersion > 0 })
+  }, [performance.run, performanceOpen, performancePeriod, refreshVersion, selectedPerformanceRange])
 
   useEffect(() => {
     if (!cards.state.loaded || cards.state.error !== '') return
@@ -774,10 +755,16 @@ export function ResearchWorkbenchPage({
       )}
 
       <section className={css.dashboardSummary} aria-label="投研概览">
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('holdings') }}><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong><small>查看已保存持仓 →</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('cost') }}><span>持仓成本金额</span><strong>{privateFunds(holdings.state.loaded && positions.length > 0 ? compactMoney(costAmount(positions)) : '—', fundsHidden)}</strong><small>数量 × 成本价 →</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setPerformanceOpen(true) }}><span>总资产现价</span><strong>{privateFunds(holdings.state.loaded ? (totalCurrent === undefined ? '—' : compactMoney(totalCurrent)) : '—', fundsHidden)}</strong><small data-tone={currentProfit === undefined || currentProfit === 0 ? undefined : currentProfit > 0 ? 'positive' : 'negative'}>盈亏 {privateFunds(holdings.state.loaded && quotes.state.loaded ? signedCompactMoney(currentProfit) : '—', fundsHidden)} · 成本收益率 {holdings.state.loaded && quotes.state.loaded ? signedReturn(currentCostReturn) : '—'} →</small></button>
-        <button type="button" aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
+        <button type="button" className={css.dashboardPortfolioCard} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('holdings') }}>
+          <span className={css.dashboardPortfolioHeader}><span className={css.dashboardPortfolioHeading}>持仓资产</span><small>查看持仓与收益详情 →</small></span>
+          <span className={css.dashboardPortfolioMetrics}>
+            <span><span>持仓数量</span><strong>{holdings.state.loaded ? String(positions.length) : '—'}</strong></span>
+            <span><span>持仓成本金额</span><strong>{privateFunds(holdings.state.loaded && totalCost !== undefined ? compactMoney(totalCost) : '—', fundsHidden)}</strong></span>
+            <span><span>总资产现价</span><strong>{privateFunds(holdings.state.loaded && totalCurrent !== undefined ? compactMoney(totalCurrent) : '—', fundsHidden)}</strong></span>
+          </span>
+          <small data-tone={currentProfit === undefined || currentProfit === 0 ? undefined : currentProfit > 0 ? 'positive' : 'negative'}>盈亏 {privateFunds(holdings.state.loaded && quotes.state.loaded ? signedCompactMoney(currentProfit) : '—', fundsHidden)} · 成本收益率 {holdings.state.loaded && quotes.state.loaded ? signedReturn(currentCostReturn) : '—'}</small>
+        </button>
+        <button type="button" className={css.dashboardRiskCard} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span className={css.dashboardPortfolioHeading}>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
       </section>
 
       <div className={css.dashboardGrid}>
@@ -1113,6 +1100,59 @@ export function ResearchWorkbenchPage({
       </div>
       {selectedOverview !== undefined && (
         <WorkbenchOverviewDialog
+          performance={{
+            value: performance.state.value,
+            loaded: performance.state.loaded,
+            busy: performance.busy,
+            error: performance.state.error,
+            positions: overviewPositions,
+            period: performancePeriod,
+            method: performanceMethod,
+            customStart,
+            customEnd,
+            customError,
+            onPeriodChange: (period) => {
+              setCustomError('')
+              if (period === 'custom') {
+                const current = localDate(new Date())
+                setCustomStart(value => value || text(asRecord(performance.state.value).available_since, current))
+                setCustomEnd(value => value || current)
+                setAppliedCustom(undefined)
+              }
+              setPerformancePeriod(period)
+            },
+            onMethodChange: setPerformanceMethod,
+            onCustomStartChange: (value) => { setCustomStart(value); setCustomError('') },
+            onCustomEndChange: (value) => { setCustomEnd(value); setCustomError('') },
+            onApplyCustom: () => {
+              if (customStart === '' || customEnd === '') {
+                setCustomError('请选择完整的开始日期和结束日期')
+                return
+              }
+              if (customStart > customEnd) {
+                setCustomError('开始日期不能晚于结束日期')
+                return
+              }
+              setCustomError('')
+              setAppliedCustom({ start_date: customStart, end_date: customEnd })
+            },
+            onHistoryStartSave: async (effectiveDate) => {
+              await requestData({
+                operation: 'trading-core.portfolio-history-start',
+                input: { effective_date: effectiveDate },
+              })
+              performance.run({
+                operation: 'trading-core.portfolio-performance',
+                ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
+              }, { fresh: true })
+            },
+            onRetry: () => {
+              performance.run({
+                operation: 'trading-core.portfolio-performance',
+                ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
+              }, { fresh: true })
+            },
+          }}
           kind={selectedOverview}
           initialHoldingsFlow={initialHoldingsFlow}
           positions={overviewPositions}
@@ -1141,62 +1181,6 @@ export function ResearchWorkbenchPage({
           brokerSync={brokerSync}
           holdingsProviders={holdingsProviders}
           onClose={() => { setSelectedOverview(undefined); setInitialHoldingsFlow('view') }}
-        />
-      )}
-      {performanceOpen && (
-        <PortfolioPerformanceDialog
-          value={performance.state.value}
-          loaded={performance.state.loaded}
-          busy={performance.busy}
-          error={performance.state.error}
-          positions={overviewPositions}
-          period={performancePeriod}
-          method={performanceMethod}
-          customStart={customStart}
-          customEnd={customEnd}
-          customError={customError}
-          onPeriodChange={(period) => {
-            setCustomError('')
-            if (period === 'custom') {
-              const current = localDate(new Date())
-              setCustomStart(value => value || text(asRecord(performance.state.value).available_since, current))
-              setCustomEnd(value => value || current)
-              setAppliedCustom(undefined)
-            }
-            setPerformancePeriod(period)
-          }}
-          onMethodChange={setPerformanceMethod}
-          onCustomStartChange={(value) => { setCustomStart(value); setCustomError('') }}
-          onCustomEndChange={(value) => { setCustomEnd(value); setCustomError('') }}
-          onApplyCustom={() => {
-            if (customStart === '' || customEnd === '') {
-              setCustomError('请选择完整的开始日期和结束日期')
-              return
-            }
-            if (customStart > customEnd) {
-              setCustomError('开始日期不能晚于结束日期')
-              return
-            }
-            setCustomError('')
-            setAppliedCustom({ start_date: customStart, end_date: customEnd })
-          }}
-          onHistoryStartSave={async (effectiveDate) => {
-            await requestData({
-              operation: 'trading-core.portfolio-history-start',
-              input: { effective_date: effectiveDate },
-            })
-            performance.run({
-              operation: 'trading-core.portfolio-performance',
-              ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
-            }, { fresh: true })
-          }}
-          onRetry={() => {
-            performance.run({
-              operation: 'trading-core.portfolio-performance',
-              ...(selectedPerformanceRange === undefined ? {} : { input: selectedPerformanceRange }),
-            }, { fresh: true })
-          }}
-          onClose={() => { setPerformanceOpen(false) }}
         />
       )}
       {selectedRisk !== undefined && (

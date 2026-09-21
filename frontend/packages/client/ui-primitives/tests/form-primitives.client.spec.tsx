@@ -93,6 +93,16 @@ describe('TextArea and Button style contracts', () => {
     expect(declaration(cssText('Button'), '.button:focus-visible', 'outline'))
       .toBe('2px solid var(--dsw-alias-state-business-primary)')
   })
+
+  it('uses semantic rounded-rectangle corners for both sizes and every variant', () => {
+    const source = cssText('Button')
+    const radius = declaration(source, '.button', 'border-radius')
+    expect(radius).toBe('var(--dsw-alias-radius-control)')
+    expect(declaration(source, '.sm', 'border-radius')).toBe('var(--dsw-alias-radius-compact)')
+    for (const selector of ['.md', '.primary', '.ghost', '.outline', '.toolbar']) {
+      expect(declaration(source, selector, 'border-radius') ?? radius).toBe('var(--dsw-alias-radius-control)')
+    }
+  })
 })
 
 function SegmentedHarness() {

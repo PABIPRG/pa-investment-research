@@ -21,7 +21,7 @@ import css from './Modal.module.css'
  * @returns null when closed; otherwise the overlay tree.
  */
 export function Modal({
-  open, onClose, title, closeLabel = 'Close', description, children, footer, className, contentClassName, headless = false, onEscapeKeyDown,
+  open, onClose, title, closeLabel = 'Close', description, children, footer, className, contentClassName, headless = false, onEscapeKeyDown, onOpenAutoFocus, preventOutsideClose = false,
 }: {
   open: boolean
   onClose: () => void
@@ -35,6 +35,10 @@ export function Modal({
   headless?: boolean
   /** Allow an owned dropdown to consume Escape before the dialog dismisses. */
   onEscapeKeyDown?: ((event: KeyboardEvent) => void) | undefined
+  /** Override initial focus for safety-sensitive dialogs. */
+  onOpenAutoFocus?: ((event: Event) => void) | undefined
+  /** Require an explicit action or Escape instead of dismissing on outside interaction. */
+  preventOutsideClose?: boolean
 }) {
   const restoreFocusRef = useRef<HTMLElement | null>(null)
 
@@ -53,11 +57,19 @@ export function Modal({
         <div className={css.root} role="presentation">
           <DialogPrimitive.Overlay className={css.mask} />
           <DialogPrimitive.Content
-            onEscapeKeyDown={event => { onEscapeKeyDown?.(event) }}
+            onEscapeKeyDown={(event) => {
+              if (event.target instanceof Element && event.target.closest('[data-ui-popup-open="true"], [data-ui-popup-content]')) {
+                event.preventDefault()
+                return
+              }
+              onEscapeKeyDown?.(event)
+            }}
+            onInteractOutside={(event) => { if (preventOutsideClose) event.preventDefault() }}
             className={clsx(css.dialog, className)}
-            onOpenAutoFocus={() => {
+            onOpenAutoFocus={(event) => {
               const activeElement = document.activeElement
               restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null
+              onOpenAutoFocus?.(event)
             }}
             onCloseAutoFocus={(event) => {
               event.preventDefault()

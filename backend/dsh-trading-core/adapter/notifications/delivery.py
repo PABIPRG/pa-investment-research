@@ -55,6 +55,7 @@ class NotificationDeliveryWorker:
         lease_seconds: int = 60,
         max_attempts: int = 5,
         batch_size: int = 20,
+        ready: Callable[[], bool] | None = None,
     ):
         self.repository = repository
         self.adapters = dict(adapters)
@@ -62,9 +63,12 @@ class NotificationDeliveryWorker:
         self.lease_seconds = lease_seconds
         self.max_attempts = max_attempts
         self.batch_size = batch_size
+        self.ready = ready or (lambda: True)
 
     def run_once(self) -> dict[str, int]:
         result = {"claimed": 0, "sent": 0, "failed": 0}
+        if not self.ready():
+            return result
         jobs = self.repository.claim_delivery_jobs(
             channels=set(self.adapters),
             now=self.now(),

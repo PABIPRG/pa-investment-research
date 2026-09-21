@@ -221,7 +221,7 @@ describe('研究工作台', () => {
     expect(view.queryByText('100 股')).toBeNull()
     expect(view.queryByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeNull()
     expect(view.getByText(/成本 \*\*\* · 现价 ¥1450\.00 · 市值 \*\*\*/)).toBeTruthy()
-    expect(view.getByText('成本收益率 -3.33% →', { exact: false })).toBeTruthy()
+    expect(view.getByText('成本收益率 -3.33%', { exact: false })).toBeTruthy()
   })
 
   it('名称查询完成前保留稳定加载状态，完成后展示股票名称', async () => {
@@ -236,9 +236,12 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
 
     expect((await view.findByText('名称加载中')).classList.contains(securityNameLoadingClass)).toBe(true)
+    fireEvent.click(view.getByRole('button', { name: /持仓资产/ }))
+    const dialog = view.getByRole('dialog', { name: '持仓明细' })
+    expect(within(dialog).getByRole('rowheader', { name: /名称加载中\s*002131/ })).toBeTruthy()
+    expect(within(dialog).queryByRole('rowheader', { name: '002131 002131' })).toBeNull()
     nameLookup.resolve({ items: [{ code: '002131', name: '利欧股份' }] })
-    expect(await view.findByText('利欧股份')).toBeTruthy()
-    expect(view.getByText('002131')).toBeTruthy()
+    expect(await within(dialog).findByRole('rowheader', { name: /利欧股份\s*002131/ })).toBeTruthy()
   })
 
   it('从页头操作区打开偏好复盘', () => {
@@ -277,8 +280,8 @@ describe('研究工作台', () => {
     expect(view.getByText('稳健画像与策略风险需求匹配')).toBeTruthy()
     expect(view.getByText('持仓成本金额')).toBeTruthy()
     expect(view.getByText('总资产现价')).toBeTruthy()
-    expect(view.getByText('数量 × 成本价 →')).toBeTruthy()
-    expect(view.getByText('盈亏 -¥5,000 · 成本收益率 -3.33% →')).toBeTruthy()
+    expect(view.getByText('查看持仓与收益详情 →')).toBeTruthy()
+    expect(view.getByText('盈亏 -¥5,000 · 成本收益率 -3.33%')).toBeTruthy()
     expect(view.getByText('¥15.0 万')).toBeTruthy()
     expect(view.getByText('¥14.5 万')).toBeTruthy()
     expect(view.getByText('成本 ¥1500.00 · 现价 ¥1450.00 · 市值 ¥14.5 万')).toBeTruthy()
@@ -343,15 +346,15 @@ describe('研究工作台', () => {
         },
         cards: offset === 0
           ? [{
-              card_id: 'radar-1', bucket: 'watchlist', business_view: 'radar_opportunity',
-              direction: '利好', title: '雷达机会一', source: '交易所', time: '2026-08-26 09:20:00',
-              tickers: [], reasons: [], risk: { level: '低' }, matched: { strategies: [] },
-            }]
+            card_id: 'radar-1', bucket: 'watchlist', business_view: 'radar_opportunity',
+            direction: '利好', title: '雷达机会一', source: '交易所', time: '2026-08-26 09:20:00',
+            tickers: [], reasons: [], risk: { level: '低' }, matched: { strategies: [] },
+          }]
           : [{
-              card_id: 'radar-11', bucket: 'fresh', business_view: 'radar_opportunity',
-              direction: '利空', title: '雷达线索十一', source: '交易所', time: '2026-08-26 09:10:00',
-              tickers: [], reasons: [], risk: { level: '中' }, matched: { strategies: [] },
-            }],
+            card_id: 'radar-11', bucket: 'fresh', business_view: 'radar_opportunity',
+            direction: '利空', title: '雷达线索十一', source: '交易所', time: '2026-08-26 09:10:00',
+            tickers: [], reasons: [], risk: { level: '中' }, matched: { strategies: [] },
+          }],
       }
     })
     const view = renderWorkbench(requestData)
@@ -609,21 +612,35 @@ describe('研究工作台', () => {
     expect(view.queryByText('¥0')).toBeNull()
   })
 
-  it('投研概览的独立卡片在当前页打开对应详情，不再跳转或移动锚点', async () => {
+  it('持仓指标共用一个卡片和详情，风险画像保留独立入口', async () => {
     const view = renderWorkbench()
     await view.findByText('白酒板块经营数据改善')
 
     const cases = [
       { trigger: /持仓数量/, dialog: '持仓明细', content: '100 股' },
-      { trigger: /持仓成本金额/, dialog: '持仓成本明细', content: '¥15.0 万' },
       { trigger: /风险画像/, dialog: '风险画像详情', content: '风险数据时间' },
     ] as const
+
+    const overview = view.getByRole('region', { name: '投研概览' })
+    expect(within(overview).getAllByRole('button')).toHaveLength(2)
+    const portfolio = within(overview).getByRole('button', { name: /持仓数量/ })
+    expect(portfolio).toBe(within(overview).getByRole('button', { name: /持仓成本金额/ }))
+    expect(portfolio).toBe(within(overview).getByRole('button', { name: /总资产现价/ }))
 
     for (const item of cases) {
       const trigger = view.getByRole('button', { name: item.trigger })
       fireEvent.click(trigger)
       const dialog = view.getByRole('dialog', { name: item.dialog })
       expect(within(dialog).getByText(item.content, { exact: false })).toBeTruthy()
+      if (item.dialog === '持仓明细') {
+        expect(view.getAllByRole('dialog')).toHaveLength(1)
+        expect(within(dialog).getByRole('columnheader', { name: '成本金额' })).toBeTruthy()
+        expect(within(dialog).getByRole('columnheader', { name: '现价 / 市值' })).toBeTruthy()
+        expect(within(dialog).getByRole('region', { name: '历史收益与贡献' })).toBeTruthy()
+        const history = within(dialog).getByRole('region', { name: '历史收益与贡献' })
+        const positions = within(dialog).getByRole('region', { name: '已保存持仓' })
+        expect(history.compareDocumentPosition(positions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      }
       expect(view.navigate).not.toHaveBeenCalledWith('portfolio')
       fireEvent.click(within(dialog).getByRole('button', { name: `关闭${item.dialog}` }))
       await waitFor(() => { expect(document.activeElement).toBe(trigger) })
@@ -642,9 +659,9 @@ describe('研究工作台', () => {
     expect(view.requestData.mock.calls.some(([request]) => request.operation === 'trading-core.portfolio-performance')).toBe(false)
 
     fireEvent.click(trigger)
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
     expect(view.queryByRole('dialog', { name: '总资产现价明细' })).toBeNull()
-    expect(within(dialog).getByRole('button', { name: '持仓以来' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(dialog).getByRole('combobox', { name: '预设时间区间' }).textContent).toBe('持仓以来')
     expect((within(dialog).getByRole('radio', { name: /时间加权收益率/ }) as HTMLInputElement).checked).toBe(true)
     expect(within(dialog).getByText('+3.57%')).toBeTruthy()
     expect(within(dialog).getByText('历史记录始于 2026-08-01')).toBeTruthy()
@@ -659,6 +676,7 @@ describe('研究工作台', () => {
     const selectedPoint = within(chart).getByText('2026-08-01').parentElement
     expect(selectedPoint?.textContent).toContain('总资产 ¥14.0 万')
     expect(selectedPoint?.textContent).toContain('累计盈亏 ¥0')
+    fireEvent.click(within(dialog).getByText(/查看区间盈亏贡献/))
     const contributionTable = within(dialog).getByRole('table', { name: '标的区间盈亏贡献明细' })
     const contributionRow = within(contributionTable).getByRole('row', { name: /贵州茅台600519/ })
     expect(within(contributionTable).getByRole('columnheader', { name: '期末成本价' })).toBeTruthy()
@@ -670,7 +688,7 @@ describe('研究工作台', () => {
     expect(contributionRow.textContent).toContain('-3.33%')
     expect(contributionRow.textContent).toContain('+¥5,000')
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '关闭盈亏详情' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭持仓明细' }))
     await waitFor(() => { expect(document.activeElement).toBe(trigger) })
   })
 
@@ -680,12 +698,13 @@ describe('研究工作台', () => {
     const view = renderWorkbench()
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
     await waitFor(() => {
       expect(view.requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')).toHaveLength(1)
     })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '30日' }))
+    fireEvent.click(within(dialog).getByRole('combobox', { name: '预设时间区间' }))
+    fireEvent.click(within(dialog).getByRole('option', { name: '30日' }))
     await waitFor(() => {
       const calls = view.requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')
       expect(calls.at(-1)?.[0].input).toEqual({ start_date: '2026-08-11', end_date: '2026-09-09' })
@@ -695,7 +714,7 @@ describe('研究工作台', () => {
     expect(within(dialog).getByText('+36.88%')).toBeTruthy()
     expect(view.requestData).toHaveBeenCalledTimes(beforeMethod)
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '自定义' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '自定义时间段' }))
     fireEvent.change(within(dialog).getByLabelText('开始日期'), { target: { value: '2026-09-09' } })
     fireEvent.change(within(dialog).getByLabelText('结束日期'), { target: { value: '2026-09-01' } })
     fireEvent.click(within(dialog).getByRole('button', { name: '应用日期' }))
@@ -722,8 +741,9 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
-    const contributionTable = await within(dialog).findByRole('table', { name: '标的区间盈亏贡献明细' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
+    fireEvent.click(await within(dialog).findByText(/查看区间盈亏贡献/))
+    const contributionTable = within(dialog).getByRole('table', { name: '标的区间盈亏贡献明细' })
     const contributionRow = within(contributionTable).getByRole('row', { name: /贵州茅台600519/ })
 
     expect(within(contributionTable).getByRole('columnheader', { name: '期末成本价' })).toBeTruthy()
@@ -733,6 +753,47 @@ describe('研究工作台', () => {
     expect(contributionRow.textContent).toContain('+10.00%')
     expect(within(dialog).getByText('部分数据')).toBeTruthy()
     expect(within(dialog).getByText('50%')).toBeTruthy()
+  })
+
+  it('预设与自定义时间段互切，并与窄屏收益口径共用选择状态', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
+    await within(dialog).findByText('+3.57%')
+    const period = within(dialog).getByRole('combobox', { name: '预设时间区间' })
+    const custom = within(dialog).getByRole('button', { name: '自定义时间段' })
+    fireEvent.click(custom)
+    expect(period.textContent).toBe('自定义时间段')
+    expect(custom.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.change(within(dialog).getByLabelText('开始日期'), { target: { value: '2026-08-01' } })
+    fireEvent.change(within(dialog).getByLabelText('结束日期'), { target: { value: '2026-08-31' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '应用日期' }))
+    await waitFor(() => {
+      const calls = view.requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')
+      expect(calls.at(-1)?.[0].input).toEqual({ start_date: '2026-08-01', end_date: '2026-08-31' })
+    })
+    fireEvent.click(period)
+    fireEvent.click(within(dialog).getByRole('option', { name: '持仓以来' }))
+    expect(within(dialog).queryByLabelText('开始日期')).toBeNull()
+    expect(custom.getAttribute('aria-expanded')).toBe('false')
+    await waitFor(() => { expect(period.textContent).toBe('持仓以来') })
+    const method = within(dialog).getByRole('combobox', { name: '收益口径' })
+    fireEvent.click(method)
+    fireEvent.click(within(dialog).getByRole('option', { name: /金额加权收益率/ }))
+    expect((within(dialog).getByRole('radio', { name: /金额加权收益率/ }) as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(within(dialog).getByRole('radio', { name: /成本收益率/ }))
+    expect(method.textContent).toBe('成本收益率')
+    expect(dialog.querySelector('select')).toBeNull()
+    fireEvent.keyDown(period, { key: 'ArrowDown' })
+    const first = within(dialog).getByRole('option', { name: '持仓以来' })
+    expect(document.activeElement).toBe(first)
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(within(dialog).getByRole('option', { name: '7日' }))
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+    expect(within(dialog).queryByRole('listbox')).toBeNull()
+    expect(document.activeElement).toBe(period)
+    expect(view.getByRole('dialog', { name: '持仓明细' })).toBe(dialog)
   })
 
   it('切换收益区间时保留上一份结果并允许继续选择区间', async () => {
@@ -748,14 +809,15 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
     expect(await within(dialog).findByText('+3.57%')).toBeTruthy()
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '30日' }))
+    fireEvent.click(within(dialog).getByRole('combobox', { name: '预设时间区间' }))
+    fireEvent.click(within(dialog).getByRole('option', { name: '30日' }))
 
     expect(within(dialog).getByText('+3.57%')).toBeTruthy()
     expect(within(dialog).getByRole('status').textContent).toContain('更新中')
-    expect(within(dialog).getByRole<HTMLButtonElement>('button', { name: '15日' }).disabled).toBe(false)
+    expect(within(dialog).getByRole<HTMLButtonElement>('combobox', { name: '预设时间区间' }).disabled).toBe(false)
 
     releaseRange?.()
     await waitFor(() => { expect(performanceCalls).toBe(2) })
@@ -782,7 +844,7 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
 
     fireEvent.click(within(dialog).getByRole('button', { name: '校正历史起点' }))
     fireEvent.change(within(dialog).getByLabelText('首次持仓日期'), { target: { value: '2026-07-15' } })
@@ -801,7 +863,7 @@ describe('研究工作台', () => {
     const view = renderWorkbench()
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
     const controls = within(dialog).getByRole('group', { name: '收益时间区间' }).parentElement
     const content = await within(dialog).findByRole('region', { name: '组合收益内容' })
 
@@ -853,7 +915,7 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
 
     expect(await within(dialog).findByText('当前区间至少需要两个估值日，无法计算时间加权收益率。')).toBeTruthy()
     const metricGrid = dialog.querySelector(`.${css.performanceMetricGrid}`)
@@ -862,10 +924,55 @@ describe('研究工作台', () => {
 
     fireEvent.click(within(dialog).getByRole('radio', { name: /成本收益率/ }))
     expect(within(metricGrid as HTMLElement).getByText('-3.33%')).toBeTruthy()
-    expect(within(dialog).getByText('当前持仓盈亏').nextElementSibling?.textContent).toBe('-¥5,000')
-    expect(within(dialog).getByText('当前持仓成本').nextElementSibling?.textContent).toBe('¥15.0 万')
+    const currentProfit = within(dialog).getByText('当前持仓盈亏').nextElementSibling
+    expect(currentProfit?.textContent).toBe('-¥5,000-3.33%')
+    expect(currentProfit?.getAttribute('data-tone')).toBe('negative')
+    expect(within(dialog).getByText('成本金额合计').nextElementSibling?.textContent).toBe('¥15.0 万')
     expect(within(dialog).getByText('当前持仓市值').nextElementSibling?.textContent).toBe('¥14.5 万')
-    expect(within(dialog).getByText('-¥0.40')).toBeTruthy()
+    expect(within(dialog).queryByRole('table', { name: '标的当前盈亏明细' })).toBeNull()
+    expect(within(dialog).queryByText(/查看区间盈亏贡献/)).toBeNull()
+    const holdings = within(dialog).getByRole('region', { name: '已保存持仓' })
+    expect(within(holdings).getByRole('columnheader', { name: '较成本' })).toBeTruthy()
+    expect(within(holdings).getByText('-0.47%').getAttribute('data-tone')).toBe('negative')
+    const notes = within(dialog).getByRole('region', { name: '口径与数据质量' })
+    expect(holdings.nextElementSibling).toBe(notes)
+  })
+
+  it('收益口径通过独立说明按钮打开帮助，关闭后保留选择和焦点', async () => {
+    const view = renderWorkbench()
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
+    const help = within(dialog).getByRole('button', { name: '金额加权收益率（XIRR，估算）说明' })
+    help.focus()
+    fireEvent.click(help)
+    const helpDialog = await view.findByRole('tooltip')
+    expect(within(helpDialog).getByText('考虑资金进入时点并年化，适合观察个人资金的实际使用效率。')).toBeTruthy()
+    expect(view.getAllByRole('dialog')).toHaveLength(1)
+    fireEvent.keyDown(help, { key: 'Escape' })
+    await waitFor(() => { expect(document.activeElement).toBe(help) })
+    expect((within(dialog).getByRole('radio', { name: /时间加权收益率/ }) as HTMLInputElement).checked).toBe(true)
+  })
+
+  it.each([
+    { cost: 1000, quote: 1450, ratio: '+45.00%', tone: 'positive' },
+    { cost: 0, quote: 1450, ratio: '—', tone: 'positive' },
+    { cost: 1450, quote: 1450, ratio: '0.00%', tone: null },
+    { cost: 1450, quote: undefined, ratio: '—', tone: null },
+  ])('持仓收益比例处理成本 $cost、行情 $quote', async ({ cost, quote, ratio, tone }) => {
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'trading-core.holdings') return { items: [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: cost }] }
+      if (request.operation === 'market-watch.quotes-batch') return { items: quote === undefined ? [] : [{ code: '600519', price: quote }] }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    await view.findByText('白酒板块经营数据改善')
+    fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
+    expect(within(dialog).getByLabelText('当前持仓成本收益率').textContent).toBe(ratio)
+    expect(within(dialog).getByText('当前持仓盈亏').nextElementSibling?.getAttribute('data-tone')).toBe(tone)
+    const holdings = within(dialog).getByRole('region', { name: '已保存持仓' })
+    expect(within(holdings).getByText(ratio).getAttribute('data-tone')).toBe(ratio === '—' ? null : tone)
   })
 
   it('盈亏详情为空或刷新失败时保留解释和重试入口', async () => {
@@ -876,7 +983,7 @@ describe('研究工作台', () => {
     const view = renderWorkbench(requestData)
     await view.findByText('白酒板块经营数据改善')
     fireEvent.click(view.getByRole('button', { name: /总资产现价/ }))
-    const dialog = await view.findByRole('dialog', { name: '盈亏详情' })
+    const dialog = await view.findByRole('dialog', { name: '持仓明细' })
 
     expect((await within(dialog).findByRole('alert')).textContent).toContain('历史行情暂不可用，请稍后重试')
     fireEvent.click(within(dialog).getByRole('button', { name: '重试' }))
@@ -1140,7 +1247,7 @@ describe('研究工作台', () => {
     })
   })
 
-  it('在持仓明细内编辑并经二次确认删除已有持仓', async () => {
+  it('在统一详情内编辑持仓会刷新收益，并经二次确认删除', async () => {
     let savedHoldings = [{ ticker: '600519', name: '贵州茅台', quantity: 100, cost_price: 1500 }]
     const requestData = vi.fn(async (request: InvestmentDataRequest) => {
       if (request.operation === 'trading-core.holdings') return { items: savedHoldings }
@@ -1155,6 +1262,9 @@ describe('研究工作台', () => {
     fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
     const dialog = view.getByRole('dialog', { name: '持仓明细' })
 
+    await waitFor(() => {
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')).toHaveLength(1)
+    })
     fireEvent.click(within(dialog).getByRole('button', { name: '编辑 贵州茅台 600519' }))
     fireEvent.change(within(dialog).getByRole('spinbutton', { name: '持仓数量' }), { target: { value: '120' } })
     fireEvent.change(within(dialog).getByRole('spinbutton', { name: '成本价' }), { target: { value: '1490' } })
@@ -1169,6 +1279,7 @@ describe('研究工作台', () => {
     })
     await waitFor(() => {
       expect(dialog.contains(document.activeElement)).toBe(true)
+      expect(requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.portfolio-performance')).toHaveLength(2)
     })
 
     const saveCallsAfterEdit = requestData.mock.calls.filter(([request]) => request.operation === 'trading-core.holdings-save').length
@@ -1415,7 +1526,7 @@ describe('研究工作台', () => {
       if (request.operation === 'trading-core.holdings-source') {
         attempts += 1
         if (attempts === 1) return { provider: 'mac_ths', available: true }
-        if (attempts === 2) return new Promise(resolve => { resolveLate = resolve })
+        if (attempts === 2) return new Promise((resolve) => { resolveLate = resolve })
         return { provider: 'mac_ths', available: false, blocking_reason: 'accessibility_required' }
       }
       return completeResponse(request.operation)
@@ -1467,7 +1578,7 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       let dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-    dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+      dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
       const preparation = await within(dialog).findByRole('note')
       expect(within(preparation).getByText('请先打开同花顺左侧「交易」页')).toBeTruthy()
       expect(within(preparation).getByText(/模拟 → 股票 → 持仓/)).toBeTruthy()
@@ -1500,7 +1611,7 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       let dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-    dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+      dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
       fireEvent.click(await within(dialog).findByRole('button', { name: '我已打开，开始读取' }))
       fireEvent.click(await within(dialog).findByRole('button', { name: '取消读取' }))
 
@@ -1530,7 +1641,7 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       let dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-    dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+      dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
       const persistent = await within(dialog).findByRole<HTMLInputElement>('radio', { name: '长期允许主动读取' })
       await waitFor(() => { expect(persistent.checked).toBe(true) })
       fireEvent.click(within(dialog).getByRole('button', { name: '我已打开，开始读取' }))
@@ -1577,7 +1688,7 @@ describe('研究工作台', () => {
       fireEvent.click(view.getByRole('button', { name: /持仓数量/ }))
       let dialog = view.getByRole('dialog', { name: '持仓明细' })
       fireEvent.click(within(dialog).getByRole('button', { name: '从券商同步持仓' }))
-    dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
+      dialog = view.getByRole('dialog', { name: '同步同花顺持仓' })
       fireEvent.click(await within(dialog).findByRole('button', { name: '我已打开，开始读取' }))
 
       expect(await within(dialog).findByText('持仓已读取，成交明细未完成')).toBeTruthy()

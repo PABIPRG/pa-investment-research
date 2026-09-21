@@ -1,3 +1,4 @@
+import { Button, Modal, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SessionLogDownloadState } from '@deepseek-ai/dsh-session-log-export/client'
@@ -167,7 +168,7 @@ function CategoryPicker(props: {
   </fieldset>
 }
 
-function Modal(props: {
+function BackupDialog(props: {
   t: DataBackupSectionProps['t']
   title: string
   children: ReactNode
@@ -180,63 +181,22 @@ function Modal(props: {
   onConfirm: () => void
 }): ReactNode {
   const cancelButton = useRef<HTMLButtonElement>(null)
-  const modal = useRef<HTMLElement>(null)
-  const cancelRef = useRef(props.onCancel)
-  const busyRef = useRef(props.busy)
-  cancelRef.current = props.onCancel
-  busyRef.current = props.busy
 
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
-    cancelButton.current?.focus({ preventScroll: true })
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        event.stopPropagation()
-        if (!busyRef.current) cancelRef.current()
-        return
-      }
-      if (event.key !== 'Tab') return
-      const focusable = [...(modal.current?.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])',
-      ) ?? [])]
-      if (!focusable.length) return
-      const first = focusable[0]
-      const last = focusable.at(-1)
-      if (!first || !last) return
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      }
-      else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true)
-      previousFocus?.focus()
-    }
-  }, [])
-
-  return <div className={css.backdrop} role="presentation">
-    <section ref={modal} className={css.modal} role="dialog" aria-modal="true" aria-labelledby="backup-dialog-title">
-      <h3 id="backup-dialog-title">{props.title}</h3>
+  return <Modal open headless title={props.title} className={css.modal} preventOutsideClose
+    onClose={() => { if (!props.busy) props.onCancel() }}
+    onEscapeKeyDown={event => { event.stopPropagation() }}
+    onOpenAutoFocus={event => { event.preventDefault(); cancelButton.current?.focus({ preventScroll: true }) }}>
+      <h3>{props.title}</h3>
       <div className={css.modalBody}>{props.children}</div>
       {props.feedback && <p className={css.modalFeedback} role="alert">{props.feedback}</p>}
       <div className={css.modalActions}>
-        <button ref={cancelButton} type="button" className={css.secondaryButton} disabled={props.busy} onClick={props.onCancel}>{props.t('backupCancel')}</button>
-        <button
-          type="button"
-          className={props.destructive ? css.dangerButton : css.primaryButton}
-          disabled={props.busy || props.confirmDisabled}
-          aria-busy={props.busy}
-          onClick={props.onConfirm}
-        >{props.busy ? props.t('backupProcessing') : props.confirmLabel}</button>
+        <Button ref={cancelButton} variant="outline" className={css.secondaryButton} disabled={props.busy} onClick={props.onCancel}>{props.t('backupCancel')}</Button>
+        <Button variant="primary" className={props.destructive ? css.dangerButton : css.primaryButton}
+          disabled={props.busy || props.confirmDisabled} aria-busy={props.busy} onClick={props.onConfirm}>
+          {props.busy ? props.t('backupProcessing') : props.confirmLabel}
+        </Button>
       </div>
-    </section>
-  </div>
+    </Modal>
 }
 
 export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
@@ -618,15 +578,15 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
         <p>{props.t('backupIntro')}</p>
       </div>
       <div className={css.heroActions}>
-        <button type="button" className={css.primaryButton} disabled={busy} onClick={() => {
+        <Button variant="primary" type="button" className={css.primaryButton} disabled={busy} onClick={() => {
           setFeedback('')
           setSelected(ALL_CATEGORIES)
           setDialog('create')
-        }}>{props.t('backupCreate')}</button>
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={(event) => {
+        }}>{props.t('backupCreate')}</Button>
+        <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={(event) => {
           transferTrigger.current = event.currentTarget
           fileInput.current?.click()
-        }}>{props.t('backupImport')}</button>
+        }}>{props.t('backupImport')}</Button>
         <input ref={fileInput} className={css.fileInput} type="file" accept=".pabackup,application/zip" onChange={selectFile} />
       </div>
     </header>
@@ -706,13 +666,13 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
 
     <section className={css.conversationExport}>
       <div><h3>{props.t('conversationExportTitle')}</h3><p>{props.t(currentSession === undefined ? 'exportNoCurrentConversation' : 'exportCurrentConversationScope')}</p></div>
-      <button
+      <Button variant="outline"
         type="button"
         className={css.secondaryButton}
         disabled={currentSession === undefined || downloadBusy}
         aria-busy={downloadBusy}
         onClick={currentSession === undefined ? undefined : () => { void props.downloadSession(currentSession) }}
-      >{props.t(downloadBusy ? 'exportingCurrentConversation' : 'exportCurrentConversation')}</button>
+      >{props.t(downloadBusy ? 'exportingCurrentConversation' : 'exportCurrentConversation')}</Button>
     </section>
 
     <section className={css.industryDataCard} aria-labelledby="industry-data-title">
@@ -722,14 +682,14 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
         <span className={css.industryDataStatus} data-status={industryStatus?.status ?? (industryStatusFailed ? 'error' : 'loading')}>{industryStatusLabel}</span>
       </div>
       <div className={css.industryDataActions}>
-        <button
+        <Button variant="outline"
           type="button"
           className={css.secondaryButton}
           disabled={busy || !canDownloadIndustryData}
           aria-busy={industryDownloading}
           aria-label={props.t('industryDataDownloadAriaLabel')}
           onClick={downloadIndustryData}
-        >{props.t(industryDownloading ? 'industryDataDownloadingAction' : 'industryDataDownloadAction')}</button>
+        >{props.t(industryDownloading ? 'industryDataDownloadingAction' : 'industryDataDownloadAction')}</Button>
         <button type="button" className={css.dangerOutlineButton} disabled={busy || !canDeleteIndustryData} aria-label={props.t('industryDataDeleteAriaLabel')} onClick={() => {
           setDialog('industry-delete')
         }}>{props.t('industryDataDeleteAction')}</button>
@@ -745,15 +705,15 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       }}>{props.t('backupResetAction')}</button>
     </section>
 
-    {dialog === 'create' && <Modal t={props.t} title={props.t('backupCreateDialogTitle')} busy={busy} feedback={feedback} confirmLabel={props.t('backupCreate')} confirmDisabled={!selected.length} onCancel={() => {
+    {dialog === 'create' && <BackupDialog t={props.t} title={props.t('backupCreateDialogTitle')} busy={busy} feedback={feedback} confirmLabel={props.t('backupCreate')} confirmDisabled={!selected.length} onCancel={() => {
       setDialog(null)
     }} onConfirm={create}>
       <p>{props.t('backupCreateDialogHint')}</p>
       <CategoryPicker selected={selected} onChange={setSelected} t={props.t} />
       <p className={css.note}>{props.t('backupReadableFilenameHint')}</p>
-    </Modal>}
+    </BackupDialog>}
 
-    {dialog === 'import' && preview && <Modal t={props.t} title={props.t('backupImportDialogTitle')} busy={busy} feedback={feedback} confirmLabel={props.t('backupConfirmImport')} onCancel={() => {
+    {dialog === 'import' && preview && <BackupDialog t={props.t} title={props.t('backupImportDialogTitle')} busy={busy} feedback={feedback} confirmLabel={props.t('backupConfirmImport')} onCancel={() => {
       setDialog(null)
       setPreview(undefined)
       releasePreview(preview)
@@ -772,20 +732,18 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
           : undefined
         return <label key={category}>
           <span><strong>{categoryLabel(category, props.t)}</strong><small>{summary ? `${props.t('backupAdded')} ${summary.added} · ${props.t('backupConflicts')} ${summary.conflicts}` : props.t('backupNoChanges')}</small></span>
-          <select value={rules[category] ?? 'keep_local'} onChange={(event) => {
-            setRules(current => ({ ...current, [category]: event.target.value as BackupConflictRule }))
-          }}>
-            {ruleOptions(category).map(rule => <option key={rule} value={rule}>{ruleLabel(rule, props.t)}</option>)}
-          </select>
+          <Select aria-label={`${categoryLabel(category, props.t)}冲突处理`} value={rules[category] ?? 'keep_local'}
+            onValueChange={value => { setRules(current => ({ ...current, [category]: value as BackupConflictRule })) }}
+            options={ruleOptions(category).map(rule => ({ value: rule, label: ruleLabel(rule, props.t) }))} />
         </label>
       })}</div>
       <label className={css.safetyCheck}><input type="checkbox" checked={backupBefore} onChange={(event) => {
         setBackupBefore(event.target.checked)
       }} /><span><strong>{props.t('backupBeforeImport')}</strong><small>{props.t('backupBeforeOptional')}</small></span></label>
       {!backupBefore && <p className={css.warning}>{props.t('backupNoSafetyWarning')}</p>}
-    </Modal>}
+    </BackupDialog>}
 
-    {dialog === 'reset' && <Modal t={props.t} title={props.t('backupResetDialogTitle')} busy={busy} destructive confirmLabel={props.t('backupConfirmReset')} confirmDisabled={!selected.length} onCancel={() => {
+    {dialog === 'reset' && <BackupDialog t={props.t} title={props.t('backupResetDialogTitle')} busy={busy} destructive confirmLabel={props.t('backupConfirmReset')} confirmDisabled={!selected.length} onCancel={() => {
       setDialog(null)
     }} onConfirm={resetData}>
       <p>{props.t('backupResetDialogHint')}</p>
@@ -795,19 +753,19 @@ export function DataBackupSection(props: DataBackupSectionProps): ReactNode {
       }} /><span><strong>{props.t('backupBeforeReset')}</strong><small>{props.t('backupBeforeOptional')}</small></span></label>
       {!backupBefore && <p className={css.warning}>{props.t('backupNoSafetyWarning')}</p>}
       <p className={css.note}>{props.t('backupResetKeepsBackups')}</p>
-    </Modal>}
+    </BackupDialog>}
 
-    {dialog === 'delete' && <Modal t={props.t} title={props.t('backupDeleteDialogTitle')} busy={busy} destructive confirmLabel={props.t('backupConfirmDelete')} onCancel={() => {
+    {dialog === 'delete' && <BackupDialog t={props.t} title={props.t('backupDeleteDialogTitle')} busy={busy} destructive confirmLabel={props.t('backupConfirmDelete')} onCancel={() => {
       setDialog(null)
     }} onConfirm={deleteBackup}>
       <p>{props.t('backupDeleteDialogHint')}</p><strong className={css.deleteTarget}>{deleteTarget}</strong>
-    </Modal>}
+    </BackupDialog>}
 
-    {dialog === 'industry-delete' && <Modal t={props.t} title={props.t('industryDataDeleteDialogTitle')} busy={busy} destructive confirmLabel={props.t('industryDataConfirmDelete')} onCancel={() => {
+    {dialog === 'industry-delete' && <BackupDialog t={props.t} title={props.t('industryDataDeleteDialogTitle')} busy={busy} destructive confirmLabel={props.t('industryDataConfirmDelete')} onCancel={() => {
       setDialog(null)
     }} onConfirm={deleteIndustryData}>
       <p>{props.t('industryDataDeleteDialogHint')}</p>
-    </Modal>}
+    </BackupDialog>}
 
     {recovering && <div className={css.recoveryBackdrop} role="status" aria-live="assertive">
       <div className={css.recoveryCard}>

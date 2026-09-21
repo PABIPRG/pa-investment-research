@@ -32,7 +32,7 @@
   font-weight: 500;
 }
 
-.selectRow select {
+.selectRow [role="combobox"] {
   width: 100%;
   height: 36px;
   box-sizing: border-box;
@@ -45,7 +45,7 @@
   font-size: 13px;
 }
 
-.selectRow select:focus-visible {
+.selectRow [role="combobox"]:focus-visible {
   outline: 2px solid var(--dsw-alias-state-business-primary);
   outline-offset: 2px;
 }

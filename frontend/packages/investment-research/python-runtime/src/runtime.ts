@@ -133,6 +133,8 @@ function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T
 
 /** Injectable runtime dependencies used by deterministic lifecycle tests. */
 export interface InvestmentBackendManagerOptions {
+  /** Initialize owned backends after health but before exposing the first lease. */
+  readonly onOwnedReady?: (definition: PythonBackendDefinition, signal: AbortSignal) => Promise<void>
   readonly subprocess: SubprocessRuntime
   readonly config?: Config
   readonly checkHealth?: HealthCheck
@@ -270,6 +272,7 @@ export class InvestmentBackendManager {
   private readonly lifetime = new AbortController()
   private disposed = false
   private readonly subprocess: SubprocessRuntime
+  private readonly onOwnedReady: InvestmentBackendManagerOptions['onOwnedReady']
   private readonly config: RuntimeConfig
   private readonly checkHealth: HealthCheck
   private readonly resolvePaths: (definition: PythonBackendDefinition) => ResolvedBackendPaths
@@ -290,6 +293,7 @@ export class InvestmentBackendManager {
 
   constructor(options: InvestmentBackendManagerOptions) {
     this.subprocess = options.subprocess
+    this.onOwnedReady = options.onOwnedReady
     this.config = { ...DEFAULT_CONFIG, ...options.config, dshHome: resolveDshHome(options.config?.dshHome) }
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
     this.resolvePaths = options.resolvePaths ?? defaultCreatePathResolver({ dshHome: this.config.dshHome })
@@ -775,6 +779,8 @@ export class InvestmentBackendManager {
         await this.internals.sleep(this.config.healthPollMs)
       }
 
+      if (this.onOwnedReady) await waitWithSignal(this.onOwnedReady(definition, signal), signal)
+      signal.throwIfAborted()
       await writeOwnedBackendState(ownedBackendStatePath(this.config.dshHome, definition.id), state)
       const entry: ActiveEntry = {
         definition,

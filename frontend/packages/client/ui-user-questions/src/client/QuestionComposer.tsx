@@ -3,7 +3,7 @@ import clsx from 'clsx'
 import {
   Button, IconCheckOutline14, IconChevronDownOutline14, IconChevronLeftOutline14,
   IconChevronRightOutline14, IconChevronUpOutline14, IconCloseOutline16,
-  IconEditOutline16, MarkdownText,
+  IconEditOutline16, MarkdownText, TextArea,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   PendingQuestion, planReviewOf,
@@ -307,7 +307,7 @@ function QuestionFlow({ pending, t }: { pending: PendingQuestion } & Pick<Questi
                     </div>
                   )
                   : (
-                    <textarea
+                    <TextArea
                       autoFocus={!focusedQuestions.current.has(index)}
                       className={css.customTextarea}
                       value={draft.custom}

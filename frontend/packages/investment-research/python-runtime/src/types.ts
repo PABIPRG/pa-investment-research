@@ -1,5 +1,32 @@
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 
+export type NotificationExternalChannel = 'serverchan' | 'wecom' | 'email'
+/** Secrets are accepted only by the loopback-only dedicated Remote. Never returned. */
+export type NotificationChannelRequest =
+  | { action: 'describe' }
+  | { action: 'reset' }
+  | { action: 'save'; channel: NotificationExternalChannel; revision: string; enabled: boolean; fields: Record<string, string> }
+  | { action: 'remove'; channel: NotificationExternalChannel; revision: string }
+  | { action: 'test'; channel: NotificationExternalChannel; revision: string; requestId: string }
+
+export interface NotificationChannelStatus {
+  channel: NotificationExternalChannel
+  configured: boolean
+  enabled: boolean
+  revision: string
+  fields: Record<string, string>
+  secretConfigured: boolean
+}
+
+export interface NotificationChannelResult {
+  channels: NotificationChannelStatus[]
+  writable: boolean
+  applied: boolean
+  deliveryEnabled: boolean
+  testNotificationId?: string
+  configurationInvalid?: boolean
+}
+
 export type {
   BackupCategory,
   BackupManifest,

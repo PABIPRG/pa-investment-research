@@ -4,7 +4,7 @@ import type {
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
-import { MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, MarkdownText, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
@@ -565,10 +565,10 @@ function HypothesisPreviewDialog({
       wide
       onClose={onClose}
       actions={<>
-        <button type="button" className={css.secondaryButton} onClick={onClose}>关闭预览</button>
-        <button type="button" className={css.primaryButton} disabled={busy || preview.hypotheses.length === 0} onClick={onConfirm}>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={onClose}>关闭预览</Button>
+        <Button variant="primary" type="button" className={css.primaryButton} disabled={busy || preview.hypotheses.length === 0} onClick={onConfirm}>
           {busy ? '正在加入…' : '确认加入候选池'}
-        </button>
+        </Button>
       </>}
     >
       {status !== '' && <div className={css.contextHint} role="status">{status}</div>}
@@ -636,9 +636,9 @@ function StrategyDetailDialog({
       wide
       onClose={onClose}
       actions={<>
-        <button type="button" className={css.secondaryButton} onClick={onClose}>关闭</button>
-        <button type="button" className={css.secondaryButton} onClick={onAnalyze}>AI 评审</button>
-        <button type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={onShadow}>进入影子验证</button>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={onClose}>关闭</Button>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={onAnalyze}>AI 评审</Button>
+        <Button variant="primary" type="button" className={css.primaryButton} disabled={status !== 'active'} onClick={onShadow}>进入影子验证</Button>
       </>}
     >
       <div data-testid="strategy-detail-dialog" className={css.detailTags} aria-label="策略标签">
@@ -723,12 +723,12 @@ function BacktestManagementDialog({
       eyebrow="回测管理"
       wide
       onClose={onClose}
-      actions={<button type="button" className={css.secondaryButton} onClick={onClose}>关闭</button>}
+      actions={<Button variant="outline" type="button" className={css.secondaryButton} onClick={onClose}>关闭</Button>}
     >
       {reportReady && (
         <div className={css.detailReportReady} role="status">
           <span>本次回测报告已归档。</span>
-          <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport('') }}>查看本次投研报告</button>
+          <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport('') }}>查看本次投研报告</Button>
         </div>
       )}
       <section className={`${css.detailSection} ${css.backtestManagement}`} data-testid="backtest-management" aria-label="回测管理">
@@ -756,10 +756,10 @@ function BacktestManagementDialog({
           <p className={css.detailFootnote}>失败原因：{text(latestTask.failure_reason)}</p>
         )}
         <div className={css.moduleToolbar}>
-          <button type="button" className={css.secondaryButton} disabled={tasksBusy || busy} onClick={onRefreshTasks}>刷新任务</button>
-          <button type="button" className={css.primaryButton} disabled={manageDisabled} onClick={onCreateTask}>
+          <Button variant="outline" type="button" className={css.secondaryButton} disabled={tasksBusy || busy} onClick={onRefreshTasks}>刷新任务</Button>
+          <Button variant="primary" type="button" className={css.primaryButton} disabled={manageDisabled} onClick={onCreateTask}>
             {busy ? '回测中…' : '新建回测任务'}
-          </button>
+          </Button>
         </div>
         {tasks.length > 0 ? (
           <div className={css.backtestTaskList} role="list" aria-label="回测任务历史">
@@ -784,13 +784,13 @@ function BacktestManagementDialog({
                   </dl>
                   <div className={css.moduleToolbar}>
                     {(taskStatus === 'pending' || taskStatus === 'running') && (
-                      <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onCancelTask(taskIdText) }}>取消任务</button>
+                      <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onCancelTask(taskIdText) }}>取消任务</Button>
                     )}
                     {(taskStatus === 'completed' || taskStatus === 'failed' || taskStatus === 'cancelled') && (
-                      <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onRetryTask(taskIdText) }}>重新运行</button>
+                      <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={() => { onRetryTask(taskIdText) }}>重新运行</Button>
                     )}
                     {reportId !== '' && (
-                      <button type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport(reportId) }}>查看报告</button>
+                      <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenTaskReport(reportId) }}>查看报告</Button>
                     )}
                   </div>
                 </article>
@@ -863,25 +863,16 @@ function NewBacktestTaskDialog({
       closeDisabled={busy}
       onClose={onClose}
       actions={<>
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onClose}>取消</button>
-        <button type="button" className={css.primaryButton} disabled={busy} onClick={submit}>
+        <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={onClose}>取消</Button>
+        <Button variant="primary" type="button" className={css.primaryButton} disabled={busy} onClick={submit}>
           {busy ? '回测中…' : '开始回测'}
-        </button>
+        </Button>
       </>}
     >
       <label className={css.importField}>
         <span>回测时间窗口</span>
-        <select
-          className={css.backtestWindowSelect}
-          value={mode}
-          disabled={busy}
-          onChange={(event) => { setMode(event.target.value) }}
-        >
-          {BACKTEST_WINDOW_OPTIONS.map(option => (
-            <option key={option.value} value={String(option.value)}>{option.label}</option>
-          ))}
-          <option value={CUSTOM_WINDOW_VALUE}>自定义起止日期</option>
-        </select>
+        <Select className={css.backtestWindowSelect} aria-label="回测时间窗口" value={mode} disabled={busy} onValueChange={setMode}
+          options={[...BACKTEST_WINDOW_OPTIONS.map(option => ({ value: String(option.value), label: option.label })), { value: CUSTOM_WINDOW_VALUE, label: '自定义起止日期' }]} />
       </label>
       {mode === CUSTOM_WINDOW_VALUE && (
         <>
@@ -932,7 +923,7 @@ function ArchiveStrategyDialog({
       closeDisabled={busy}
       onClose={onClose}
       actions={<>
-        <button type="button" className={css.secondaryButton} disabled={busy} onClick={onClose}>取消</button>
+        <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={onClose}>取消</Button>
         <button type="button" className={css.dangerButton} disabled={busy} onClick={onConfirm}>
           {busy ? '归档中…' : '确认归档'}
         </button>
@@ -1254,18 +1245,18 @@ export function StrategyResearchPage({
   return (
     <div className={`${css.pageScroll} ${css.primaryRouteSurface}`}>
       <PageHeading title="策略研究" description="策略池与影子验证已合并；从假设、样本外证据到纸面验证在同一处完成">
-        <button
+        <Button variant="outline"
           type="button"
           className={css.secondaryButton}
           aria-haspopup="dialog"
           onClick={() => { setLifecycleHelpOpen(true) }}
-        >了解策略生命周期</button>
+        >了解策略生命周期</Button>
         {view === 'pool' && <>
           <span className={css.backtestWindow} title="从策略卡片直接打开回测管理，可自选预设窗口或自定义起止日期">回测入口：策略卡片 → 回测</span>
-          <button type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</button>
-          <button type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
+          <Button variant="outline" type="button" className={css.secondaryButton} disabled={busyAction !== ''} onClick={load}>刷新</Button>
+          <Button variant="primary" type="button" className={css.primaryButton} disabled={busyAction !== ''} onClick={() => { void previewHypotheses() }}>
             {busyAction === 'hypothesize-preview' ? '生成预览中…' : '从事件新建策略'}
-          </button>
+          </Button>
         </>}
       </PageHeading>
       <div className={`${css.segmented} ${css.strategyViewTabs}`} role="group" aria-label="策略研究视图">
@@ -1279,7 +1270,7 @@ export function StrategyResearchPage({
           eyebrow="帮助"
           wide
           onClose={() => { setLifecycleHelpOpen(false) }}
-          actions={<button type="button" className={css.primaryButton} onClick={() => { setLifecycleHelpOpen(false) }}>知道了</button>}
+          actions={<Button variant="primary" type="button" className={css.primaryButton} onClick={() => { setLifecycleHelpOpen(false) }}>知道了</Button>}
         >
           <section className={css.lifecyclePanel}>
             <div className={css.lifecycleIntro}>
@@ -1345,7 +1336,7 @@ export function StrategyResearchPage({
         {notice !== '' && <div className={css.importNotice} role="status">{notice}</div>}
         {reportReady && currentDetailItem === undefined && currentBacktestItem === undefined && (
           <div className={css.moduleToolbar}>
-            <button type="button" className={css.secondaryButton} onClick={() => { onOpenReports() }}>查看本次投研报告</button>
+            <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenReports() }}>查看本次投研报告</Button>
           </div>
         )}
         <div className={`${css.segmented} ${css.strategyFilters}`} role="group" aria-label="策略验证分类">
@@ -1425,9 +1416,9 @@ export function StrategyResearchPage({
                   aria-label="策略操作"
                   data-action-count={category === 'archived' ? '4' : '5'}
                 >
-                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>策略</button>
-                  <button type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setBacktestItem(item) }}>回测</button>
-                  <button type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</button>
+                  <Button variant="outline" type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setDetailItem(item) }}>策略</Button>
+                  <Button variant="outline" type="button" className={css.secondaryButton} aria-haspopup="dialog" onClick={() => { setBacktestItem(item) }}>回测</Button>
+                  <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onSelectStrategy(id); onAnalyze({ kind: 'strategy', strategyId: id }) }}>AI 评审</Button>
                   <button type="button" className={`${css.secondaryButton} ${css.strategyShadowAction}`} disabled={status !== 'active'} onClick={() => { onSelectStrategy(id); setView('shadow'); onOpenShadow(id) }}>影子验证</button>
                   {category !== 'archived' && (
                     <button type="button" className={css.dangerButton} aria-haspopup="dialog" disabled={busyAction !== ''} onClick={() => { setArchiveItem(item) }}>
@@ -1515,17 +1506,14 @@ export function StrategyResearchPage({
         />
       )}
       {evolutionEducationOpen && (
-        <div className={css.dialogBackdrop} role="presentation">
-          <section className={css.moduleCard} role="dialog" aria-modal="true" aria-label="进入当前策略的进化诊断">
-            <h2>进入当前策略的进化诊断</h2>
-            <p>这里仅展示当前策略证据、预计判定和自动执行历史；所有动作由统一自动闭环执行。</p>
-            <label><input type="checkbox" checked={suppressEvolutionEducation} onChange={(event) => { setSuppressEvolutionEducation(event.target.checked) }} />以后不再提示（仅保存在此浏览器）</label>
-            <div className={css.moduleToolbar}>
-              <button type="button" className={css.secondaryButton} onClick={() => { setEvolutionEducationOpen(false) }}>取消</button>
-              <button type="button" className={css.primaryButton} onClick={continueEvolutionDiagnostics}>继续进入</button>
-            </div>
-          </section>
-        </div>
+        <DetailDialog title="进入当前策略的进化诊断" onClose={() => { setEvolutionEducationOpen(false) }}
+          actions={<>
+            <Button variant="outline" onClick={() => { setEvolutionEducationOpen(false) }}>取消</Button>
+            <Button variant="primary" onClick={continueEvolutionDiagnostics}>继续进入</Button>
+          </>}>
+          <p>这里仅展示当前策略证据、预计判定和自动执行历史；所有动作由统一自动闭环执行。</p>
+          <label><input type="checkbox" checked={suppressEvolutionEducation} onChange={(event) => { setSuppressEvolutionEducation(event.target.checked) }} />以后不再提示（仅保存在此浏览器）</label>
+        </DetailDialog>
       )}
     </div>
   )
@@ -1663,14 +1651,14 @@ export function ShadowValidationPage({
       <div className={css.embeddedShadowHeader}>
         <div><h2>影子验证</h2><p>用真实行情在纸面账户验证参与中的策略，不触发真实交易</p></div>
         <div>
-          <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
-          <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</button>
+          <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</Button>
+          <Button variant="primary" type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</Button>
           {runningTaskId !== '' && <button type="button" className={css.dangerButton} disabled={cancellingTaskId !== ''} onClick={() => { void cancelTask(runningTaskId) }}>取消当前任务</button>}
         </div>
       </div>
     ) : <PageHeading title="影子验证" description="用真实行情在纸面账户验证参与中的策略，不触发真实交易">
-      <button type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</button>
-      <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</button>
+      <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={load}>刷新</Button>
+      <Button variant="primary" type="button" className={css.primaryButton} disabled={busy} onClick={() => { void start() }}>{busy ? '验证中…' : '运行影子验证'}</Button>
       {runningTaskId !== '' && <button type="button" className={css.dangerButton} disabled={cancellingTaskId !== ''} onClick={() => { void cancelTask(runningTaskId) }}>取消当前任务</button>}
     </PageHeading>}
     <div className={css.shadowScopeBar} aria-label="当前影子验证范围">
@@ -1681,7 +1669,7 @@ export function ShadowValidationPage({
       </div>
       <div className={css.shadowScopeActions}>
         {selectedStrategyId !== '' && onShowAllStrategies !== undefined && (
-          <button type="button" className={css.secondaryButton} onClick={onShowAllStrategies}>查看全部策略</button>
+          <Button variant="outline" type="button" className={css.secondaryButton} onClick={onShowAllStrategies}>查看全部策略</Button>
         )}
         <span>真实行情 · 虚拟资金 · 不会下单</span>
       </div>
@@ -1864,13 +1852,13 @@ export function ShadowValidationPage({
                     </div>
                   </details>
                   <div className={css.shadowTaskActions}>
-                    {reportId !== '' && <button type="button" className={css.secondaryButton} onClick={() => { onOpenReports(reportId) }}>查看报告</button>}
+                    {reportId !== '' && <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenReports(reportId) }}>查看报告</Button>}
                     {canCancel ? (
                       <button type="button" className={css.dangerButton} disabled={cancellingTaskId !== ''} onClick={() => { void cancelTask(taskIdValue) }}>
                         {cancellingTaskId === taskIdValue ? '取消中…' : '取消任务'}
                       </button>
                     ) : (
-                      <button type="button" className={css.secondaryButton} disabled={busy} onClick={() => { void start(true, rerunStrategyId) }}>重新运行并保留历史</button>
+                      <Button variant="outline" type="button" className={css.secondaryButton} disabled={busy} onClick={() => { void start(true, rerunStrategyId) }}>重新运行并保留历史</Button>
                     )}
                   </div>
                 </article>
@@ -1890,11 +1878,11 @@ export function ShadowValidationPage({
       </section>
     </>}
     <div className={css.shadowFooterActions}>
-      {latestReportId !== '' && <button type="button" className={css.secondaryButton} onClick={() => { onOpenReports(latestReportId) }}>查看本次投研报告</button>}
-      <button type="button" className={css.secondaryButton} onClick={() => {
+      {latestReportId !== '' && <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenReports(latestReportId) }}>查看本次投研报告</Button>}
+      <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => {
         onAnalyze(selectedStrategyId === '' ? { kind: 'shadow' } : { kind: 'shadow', strategyId: selectedStrategyId })
-      }}>AI 解读验证证据</button>
-      <button type="button" className={css.primaryButton} onClick={onOpenEvolution}>进入自进化</button>
+      }}>AI 解读验证证据</Button>
+      <Button variant="primary" type="button" className={css.primaryButton} onClick={onOpenEvolution}>进入自进化</Button>
     </div>
   </>
   return embedded
@@ -2016,8 +2004,8 @@ export function EvolutionPage({ requestData, onAnalyze, onOpenStock = () => {} }
   return (
     <div className={css.pageScroll}>
       <PageHeading title="自进化 · 全自动闭环" description="闭环每日自动执行 影子验证 → 归因 → 进化应用 → 候选验证，无需人工确认。本页实时展示各策略当前判定与最近自动进化记录。">
-        <button type="button" className={css.secondaryButton} onClick={load}>刷新</button>
-        <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'evolution' }) }}>AI 复核当前判定</button>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={load}>刷新</Button>
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'evolution' }) }}>AI 复核当前判定</Button>
       </PageHeading>
       <div className={css.evolutionGuide}>闭环在每日收盘后自动运行，自动应用升级/降级/淘汰/变异并验证衍生候选。下方为全自动流程各环节的当前状态，仅作留痕与查看。</div>
       <section className={css.evolutionFlow} aria-label="自进化流程">
@@ -3393,16 +3381,16 @@ function IndustryGraphExplorer({
         )}
         <div className={css.industryGraphDetailActions}>
           {focusedNode.code !== '' && (
-            <button
+            <Button variant="primary"
               type="button"
               className={css.primaryButton}
               onClick={() => { onSetCenter({ code: focusedNode.code, name: focusedNode.name }) }}
             >
               {focusedNode.id === loadedCenterId ? '刷新当前中心' : `将${focusedNode.name}设为中心`}
-            </button>
+            </Button>
           )}
           {/^[0-9]{6,8}$/u.test(focusedNode.code) && (
-            <button type="button" className={css.secondaryButton} onClick={() => { onOpenStock(focusedNode.code) }}>查看个股</button>
+            <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenStock(focusedNode.code) }}>查看个股</Button>
           )}
         </div>
         {(asSupplier.length > 0 || asCustomer.length > 0 || related.length > 0) && (
@@ -3833,7 +3821,7 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
             </p>
           </div>
           <div className={css.moduleToolbar}>
-            <button ref={chainCloseButtonRef} type="button" className={css.secondaryButton} onClick={closeExpandedChain}>关闭</button>
+            <Button variant="outline" ref={chainCloseButtonRef} type="button" className={css.secondaryButton} onClick={closeExpandedChain}>关闭</Button>
           </div>
         </header>
         <IndustryGraphExplorer
@@ -3861,14 +3849,14 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   return (
     <div className={`${css.pageScroll} ${css.primaryRouteSurface}`}>
       <PageHeading title="产业链" description="检索真实公司产业链，按层查看上下游关系与传导依据；事件传导作为次级参考单独展示">
-        <button type="button" className={css.secondaryButton} onClick={refresh}>刷新</button>
-        <button
+        <Button variant="outline" type="button" className={css.secondaryButton} onClick={refresh}>刷新</Button>
+        <Button variant="primary"
           type="button"
           className={css.primaryButton}
           disabled={selectedReference === ''}
           title={selectedReference === '' ? '请先选择一家公司' : undefined}
           onClick={() => { onAnalyze({ kind: 'industry', reference: selectedReference }) }}
-        >AI 解读所选公司</button>
+        >AI 解读所选公司</Button>
       </PageHeading>
 
       {dataStatus.state.phase === 'loading' && dataStatus.state.value === undefined && <BusyRows />}
@@ -3912,13 +3900,13 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
             aria-valuemax={downloadActive ? progressMax : undefined}
             aria-valuenow={downloadActive ? progressValue : undefined}
           ><span style={{ width: `${progressPercent}%` }} /></div>
-          <button
+          <Button variant="primary"
             type="button"
             className={css.primaryButton}
             disabled={downloadActive}
             aria-busy={downloadActive}
             onClick={() => { void bootstrapData() }}
-          >{downloadActive ? '正在下载…' : downloadFailed ? '重新下载' : '下载并开始使用'}</button>
+          >{downloadActive ? '正在下载…' : downloadFailed ? '重新下载' : '下载并开始使用'}</Button>
         </section>
       )}
       {dataStatus.state.phase === 'success' && status === '' && (
@@ -4055,12 +4043,12 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
                   </div>
                   <span>{completeIndustryGraph.nodes.length} 节点 · {completeIndustryGraph.edges.length} 关系</span>
                   {selectedGraphNode !== undefined && (
-                    <button
+                    <Button variant="outline"
                       ref={chainExpandButtonRef}
                       type="button"
                       className={css.secondaryButton}
                       onClick={() => { setChainExpanded(true) }}
-                    >放大查看</button>
+                    >放大查看</Button>
                   )}
                 </div>
               )}
@@ -4261,7 +4249,7 @@ export function ReportCenter({ requestData, onClose, onAnalyze, initialReportId 
                     <p>{reportSubjectLabel(report, securityNames)
                       || reportSubjectLabel(asRecord(selectedListItem), securityNames)}</p>
                   </div>
-                  <button type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'reports', reportId: selectedId }); onClose() }}>AI 复核</button>
+                  <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onAnalyze({ kind: 'reports', reportId: selectedId }); onClose() }}>AI 复核</Button>
                 </div>
                 <dl className={css.reportMeta}>
                   <div><dt>类型</dt><dd>{reportKindLabel(report.kind ?? selectedListItem?.kind)}</dd></div>

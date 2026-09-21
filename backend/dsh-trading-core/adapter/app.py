@@ -436,14 +436,24 @@ def create_app(
             dedupe_window_seconds=settings.notification_dedupe_window_seconds,
         )
 
+    from .notifications.channel_settings import RuntimeNotificationChannels
+    runtime_channels = (
+        RuntimeNotificationChannels(notification_service.repository)
+        if os.environ.get("DSH_NOTIFICATION_MANAGED") == "1" else None
+    )
+    notification_service.runtime_channels = runtime_channels
     app = FastAPI(title="TradingAgents Adapter", version="0.1.0", lifespan=lifespan)
     app.state.manager = manager
     app.state.notification_service = notification_service
     app.state.notification_worker = None
     if settings.notification_delivery_enabled:
+        adapters = build_delivery_adapters(notification_service.repository, settings)
+        if runtime_channels is not None:
+            adapters.update(runtime_channels.adapters())
         app.state.notification_worker = NotificationDeliveryWorker(
             notification_service.repository,
-            build_delivery_adapters(notification_service.repository, settings),
+            adapters,
+            ready=(lambda: runtime_channels.ready) if runtime_channels is not None else None,
             lease_seconds=settings.notification_delivery_lease_seconds,
             max_attempts=settings.notification_delivery_max_attempts,
             batch_size=settings.notification_delivery_batch_size,
@@ -457,6 +467,8 @@ def create_app(
             else notification_internal_token
         ),
         vapid_public_key=settings.notification_vapid_public_key,
+        runtime_channels=runtime_channels,
+        delivery_enabled=settings.notification_delivery_enabled,
     )
     register_data_transfer_routes(
         app,

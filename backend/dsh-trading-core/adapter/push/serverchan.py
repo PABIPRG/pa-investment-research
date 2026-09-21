@@ -15,8 +15,8 @@ from .base import Pusher
 class ServerChanPusher(Pusher):
     name = "serverchan"
 
-    def __init__(self):
-        self.sendkey = settings.serverchan_sendkey
+    def __init__(self, *, sendkey: str | None = None):
+        self.sendkey = settings.serverchan_sendkey if sendkey is None else sendkey
 
     def available(self) -> bool:
         return bool(self.sendkey)

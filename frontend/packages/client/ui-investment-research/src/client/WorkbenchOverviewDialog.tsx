@@ -1,6 +1,8 @@
-import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Input, TextArea } from '@deepseek-ai/dsh-client-ui-primitives'
 import { HoldingsActionDialog } from './HoldingsActionDialog.tsx'
 import { ManualTradePanel } from './ManualTradePanel.tsx'
+import { PortfolioPerformanceContent, PortfolioPerformanceNotes, signedPercent, tone } from './PortfolioPerformanceDialog.tsx'
+import type { PortfolioPerformanceContentProps } from './PortfolioPerformanceDialog.tsx'
 import type { TradeSelection } from './ManualTradePanel.tsx'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -17,7 +19,6 @@ type RequestData = (request: InvestmentDataRequest) => Promise<unknown>
 
 export type WorkbenchDetailKind =
   | 'holdings'
-  | 'cost'
   | 'risk-profile'
   | 'risk-center'
 
@@ -38,6 +39,7 @@ export interface WorkbenchHoldingInput {
 export type WorkbenchHoldingSaveSource = 'manual' | 'bulk_import'
 
 interface WorkbenchOverviewDialogProps {
+  readonly performance?: PortfolioPerformanceContentProps
   readonly initialHoldingsFlow?: 'view' | 'sync'
   readonly kind: WorkbenchDetailKind
   readonly positions: readonly WorkbenchPositionDetail[]
@@ -68,8 +70,7 @@ export interface WorkbenchResourceStatus {
 }
 
 const DIALOG_COPY: Readonly<Record<WorkbenchDetailKind, { title: string; description: string }>> = Object.freeze({
-  holdings: { title: '持仓明细', description: '在当前工作台查看并维护研究持仓，保存后联动刷新风险与行情。' },
-  cost: { title: '持仓成本明细', description: '按持仓数量 × 成本价汇总，不代表当前市场价值。' },
+  holdings: { title: '持仓明细', description: '先查看资产汇总与历史收益，再核对和管理持仓标的；金额不含现金。' },
   'risk-profile': { title: '风险画像详情', description: '基于当前持仓与组合风险预算返回的画像结果。' },
   'risk-center': { title: '组合风险中心', description: '集中查看风险预算、预算突破与全部预警。' },
 })
@@ -101,11 +102,10 @@ function summedAmount(
 }
 
 function PositionTable({
-  positions, kind, saving, pendingDelete, positionPlans, onEdit, onTrade, onEditRisk, onRequestDelete, onConfirmDelete, onCancelDelete,
+  positions, saving, pendingDelete, positionPlans, onEdit, onTrade, onEditRisk, onRequestDelete, onConfirmDelete, onCancelDelete,
   editDraft, onChangeDraft, onCancelEdit,
 }: {
   positions: readonly WorkbenchPositionDetail[]
-  kind: 'holdings' | 'cost'
   saving?: boolean
   pendingDelete?: string
   onTrade?: (selection: TradeSelection) => void
@@ -125,20 +125,24 @@ function PositionTable({
   }
   return (
     <div className={css.workbenchOverviewTableWrap}>
-      <table className={css.workbenchOverviewTable} data-kind={kind}>
+      <table className={css.workbenchOverviewTable} data-kind="holdings">
         <thead>
           <tr>
             <th scope="col">标的</th>
             <th scope="col">持仓数量</th>
             <th scope="col">成本价</th>
-            {kind === 'cost' && <th scope="col">成本金额</th>}
-            {kind === 'holdings' && onEditRisk !== undefined && <th scope="col" className={css.holdingRiskHeading}>止盈止损</th>}
-            {kind === 'holdings' && onEdit !== undefined && <th scope="col">操作</th>}
+            <th scope="col">成本金额</th>
+            <th scope="col">现价 / 市值</th>
+            <th scope="col">较成本</th>
+            {onEditRisk !== undefined && <th scope="col" className={css.holdingRiskHeading}>止盈止损</th>}
+            {onEdit !== undefined && <th scope="col">操作</th>}
           </tr>
         </thead>
         <tbody>
           {positions.map((item, index) => {
             const price = item.costPrice
+            const priceReturn = price !== undefined && price > 0 && item.currentPrice !== undefined
+              ? (item.currentPrice - price) / price : undefined
             const editing = editDraft?.originalCode === item.code
             const actionsDisabled = saving || editDraft !== undefined
             return (
@@ -150,8 +154,10 @@ function PositionTable({
                 <td><span className={css.workbenchMobileLabel}>成本价</span>{editing && editDraft
                   ? <Input className={css.holdingInlineInput ?? ''} aria-label="成本价" type="number" min="0" step="any" disabled={saving} value={editDraft.costPrice} onChange={event => { onChangeDraft?.({ ...editDraft, costPrice: event.target.value }) }} />
                   : privateFunds(amount(item.costPrice), fundsHidden)}</td>
-                {kind === 'cost' && <td><span className={css.workbenchMobileLabel}>成本金额</span>{privateFunds(amount(positionAmount(item, price)), fundsHidden)}</td>}
-                {kind === 'holdings' && onEditRisk !== undefined && (
+                <td><span className={css.workbenchMobileLabel}>成本金额</span>{privateFunds(amount(positionAmount(item, price)), fundsHidden)}</td>
+                <td><span className={css.workbenchMobileLabel}>现价 / 市值</span><span>{amount(item.currentPrice)}<br />{privateFunds(amount(positionAmount(item, item.currentPrice)), fundsHidden)}</span></td>
+                <td data-tone={tone(priceReturn)}><span className={css.workbenchMobileLabel}>较成本</span>{signedPercent(priceReturn)}</td>
+                {onEditRisk !== undefined && (
                   <td>
                     <span className={css.workbenchMobileLabel}>止盈止损</span>
                     <PositionRiskPlanCell
@@ -161,7 +167,7 @@ function PositionTable({
                     />
                   </td>
                 )}
-                {kind === 'holdings' && onEdit !== undefined && (
+                {onEdit !== undefined && (
                   <td className={css.workbenchHoldingActions}>
                     <span className={css.workbenchMobileLabel}>操作</span>
                     {editing ? (
@@ -311,7 +317,7 @@ function HoldingsBulkImport({
       </div>
       <label className={css.workbenchImportField}>
         <span>或粘贴表格内容</span>
-        <textarea
+        <TextArea
           aria-label="持仓导入内容"
           value={source}
           disabled={saving}
@@ -624,8 +630,9 @@ function HoldingsSyncPanel({ requestData, onSync, onNativeSync, onImport, onClos
 
 function HoldingsEditor({
   positions, requestData, brokerSync, positionPlans, onEditRisk, initialFlow,
-  onSaveHoldings, onSyncHoldings, onSavingChange, onHoldingsChanged,
+  onSaveHoldings, onSyncHoldings, onSavingChange, onHoldingsChanged, performance,
 }: {
+  performance?: PortfolioPerformanceContentProps | undefined
   onHoldingsChanged?: () => void
   initialFlow: 'view' | 'sync'
   positions: readonly WorkbenchPositionDetail[]
@@ -795,7 +802,9 @@ function HoldingsEditor({
   return (
     <>
       {notice !== '' && <div className={css.workbenchHoldingNotice} role="status">{notice}</div>}
-        <section aria-label="已保存持仓">
+      <HoldingsSummary positions={effectivePositions} />
+      {performance !== undefined && <PortfolioPerformanceContent {...performance} />}
+        <section className={css.holdingsPositionSection} aria-label="已保存持仓">
           <div className={css.workbenchHoldingToolbar}>
             <div><strong>持仓标的</strong><span>{effectivePositions.length} 项</span></div>
             <div className={css.workbenchHoldingToolbarActions}>
@@ -807,29 +816,26 @@ function HoldingsEditor({
                   data-sync-unavailable={syncUnavailable || undefined}
                   {...(syncUnavailable ? { tabIndex: 0, 'aria-label': syncUnavailableMessage } : {})}
                 >
-                  <button
-                    type="button"
-                    className={css.secondaryButton}
+                  <Button
+                    className={css.holdingButton} variant="outline"
                     disabled={saving || editDraft !== undefined || pendingDelete !== '' || syncUnavailable}
                     onClick={beginSync}
-                  >从券商同步持仓</button>
+                  >从券商同步持仓</Button>
                   {syncUnavailable && <span className={css.workbenchSyncTooltip} role="tooltip">{syncUnavailableMessage}</span>}
                 </span>
               )}
-              <button
-                type="button"
-                className={css.secondaryButton}
+              <Button
+                className={css.holdingButton} variant="outline"
                 disabled={saving || editDraft !== undefined || pendingDelete !== ''}
                 onClick={() => { onEditRisk() }}
-              >全局止盈止损</button>
-              <button type="button" className={css.primaryButton} disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</button>
+              >全局止盈止损</Button>
+              <Button className={`${css.holdingButton} ${css.holdingPrimary}`} variant="primary" disabled={saving || editDraft !== undefined || pendingDelete !== ''} onClick={beginImport}>导入持仓</Button>
             </div>
           </div>
           {viewError !== '' && <div className={css.inlineError} role="alert">{viewError}</div>}
           <form ref={editFormRef} aria-label="持仓行内编辑" onSubmit={event => { event.preventDefault(); void saveEditDraft() }}>
           <PositionTable
             positions={effectivePositions}
-            kind="holdings"
             positionPlans={positionPlans}
             onEditRisk={onEditRisk}
             saving={saving}
@@ -845,6 +851,7 @@ function HoldingsEditor({
           />
           </form>
         </section>
+      {performance !== undefined && <PortfolioPerformanceNotes {...performance} />}
       {flow !== 'view' && (
         <HoldingsActionDialog
           title={flow === 'sync' ? '同步同花顺持仓' : '导入持仓'}
@@ -906,16 +913,20 @@ function HoldingsEditor({
   )
 }
 
-function CostDetail({ positions }: { positions: readonly WorkbenchPositionDetail[] }) {
+function HoldingsSummary({ positions }: { positions: readonly WorkbenchPositionDetail[] }) {
   const { hidden: fundsHidden } = useFundsPrivacy()
   const total = summedAmount(positions, item => item.costPrice)
+  const current = summedAmount(positions, item => item.currentPrice)
+  const profit = total === undefined || current === undefined ? undefined : current - total
+  const profitRatio = profit !== undefined && total !== undefined && total > 0 ? profit / total : undefined
   return (
     <>
-      <dl className={css.workbenchOverviewMetricGrid}>
+      <dl className={css.workbenchOverviewMetricGrid} aria-label="当前持仓汇总">
         <div><dt>持仓标的</dt><dd>{positions.length} 项</dd></div>
         <div><dt>成本金额合计</dt><dd>{privateFunds(total === undefined ? '—' : compactMoney(total), fundsHidden)}</dd></div>
+        <div><dt>当前持仓市值</dt><dd>{privateFunds(current === undefined ? '—' : compactMoney(current), fundsHidden)}</dd></div>
+        <div><dt>当前持仓盈亏</dt><dd data-tone={tone(profit)}><span>{privateFunds(profit === undefined ? '—' : `${profit > 0 ? '+' : profit < 0 ? '-' : ''}${compactMoney(Math.abs(profit))}`, fundsHidden)}</span><small className={css.holdingsProfitRatio} aria-label="当前持仓成本收益率">{signedPercent(profitRatio)}</small></dd></div>
       </dl>
-      <PositionTable positions={positions} kind="cost" />
       {positions.some(item => item.quantity === undefined || item.costPrice === undefined) && (
         <p className={css.workbenchOverviewFootnote}>部分持仓缺少数量或成本价，因此合计显示为“—”；缺失值不按零计算。</p>
       )}
@@ -1090,6 +1101,7 @@ export function WorkbenchOverviewDialog({
   kind, positions, risk, alerts, riskAsOf, alertsAsOf, alertsDegraded, alertsDegradedReason,
   holdingsState, riskState, alertsState, onOpenAlert, onSaveHoldings, onSyncHoldings, requestData,
   brokerSync = true, initialHoldingsFlow = 'view', onClose, onHoldingsChanged,
+  performance,
 }: WorkbenchOverviewDialogProps) {
   const copy = DIALOG_COPY[kind]
   const [holdingSaving, setHoldingSaving] = useState(false)
@@ -1101,14 +1113,15 @@ export function WorkbenchOverviewDialog({
   const positionPlans = positionRiskPlanMap(positionRisk.state.value)
   const close = (): void => { if (!holdingSaving) onClose() }
   let dialogContent: ReactNode
-  if (kind === 'holdings' || kind === 'cost') {
+  if (kind === 'holdings') {
     if (!holdingsState.loaded) {
       dialogContent = resourceMessage(holdingsState, '持仓详情')
-    } else if (kind === 'holdings') {
+    } else {
       dialogContent = <>
         {retainedResourceWarning(holdingsState, '持仓')}
         {initialHoldingsFlow === 'sync' && !brokerSync && <p role="status">当前环境不支持券商同步。请在支持的桌面环境同步，或使用下方“导入持仓”。</p>}
         <HoldingsEditor
+          performance={performance}
           initialFlow={initialHoldingsFlow}
           positions={positions}
           requestData={requestData}
@@ -1120,11 +1133,6 @@ export function WorkbenchOverviewDialog({
           onHoldingsChanged={() => { onHoldingsChanged?.(); positionRisk.run({ operation: 'trading-core.position-risk' }) }}
           onSavingChange={setHoldingSaving}
         />
-      </>
-    } else {
-      dialogContent = <>
-        {retainedResourceWarning(holdingsState, '持仓')}
-        <CostDetail positions={positions} />
       </>
     }
   } else if (kind === 'risk-profile') {

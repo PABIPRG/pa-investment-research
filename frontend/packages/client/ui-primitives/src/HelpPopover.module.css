@@ -1,0 +1,8 @@
+.trigger { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.trigger:hover, .trigger[aria-expanded='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.trigger:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+.popup { width: 300px; min-width: 0; max-width: calc(100vw - 24px); }
+.content { padding: 8px 10px; color: var(--dsw-alias-label-primary); font-size: 0.8571rem; line-height: 1.6; overflow-wrap: anywhere; }
+.content p { margin: 0; }
+.content p + p { margin-top: 8px; }
+@media (pointer: coarse), (max-width: 680px) { .trigger { width: 44px; height: 44px; } }

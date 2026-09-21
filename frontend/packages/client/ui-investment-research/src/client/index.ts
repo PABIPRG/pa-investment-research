@@ -484,6 +484,7 @@ export function apply(ctx: ClientContext): void {
   const shellInjected = (): InvestmentShellInjected => ({
     ...shared,
     requestData,
+    requestNotificationChannels: request => ctx.investmentResearchRuntimeClient.notificationChannels(request),
     trackTelemetry: telemetry.track,
     setHistory: (open) => { state.setHistory(open) },
     setReports: (open) => { state.setReports(open) },

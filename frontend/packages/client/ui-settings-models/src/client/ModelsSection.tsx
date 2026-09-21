@@ -1,3 +1,4 @@
+import { Select } from '@deepseek-ai/dsh-client-ui-primitives'
 /**
  * Models settings section: the provider rows joined from the configurable
  * directory, settings namespaces, and credential states, with one editor
@@ -400,21 +401,12 @@ function Loaded({ injected }: { injected: ModelsSectionInjected }): ReactNode {
             <div className={styles['addCard']}>
               <div className={styles['field']}>
                 <span className={styles['fieldLabel']}>{t('provider')}</span>
-                <select
-                  className={`${styles['input']} ${styles['selectInput']}`}
-                  value={addTarget.provider}
-                  aria-label={t('provider')}
-                  onChange={(event) => {
-                    const row = addable.find(candidate => candidate.entry.provider === event.target.value)
-                    /* v8 ignore next -- the select only lists addable rows */
-                    if (row === undefined) return
-                    setEditing(targetOf(row))
+                <Select className={styles['selectInput']} value={addTarget.provider} aria-label={t('provider')}
+                  onValueChange={value => {
+                    const row = addable.find(candidate => candidate.entry.provider === value)
+                    if (row !== undefined) setEditing(targetOf(row))
                   }}
-                >
-                  {addable.map(row => (
-                    <option key={row.entry.provider} value={row.entry.provider}>{row.entry.displayName}</option>
-                  ))}
-                </select>
+                  options={addable.map(row => ({ value: row.entry.provider, label: row.entry.displayName }))} />
               </div>
               <ProviderEditor
                 key={addTarget.provider}

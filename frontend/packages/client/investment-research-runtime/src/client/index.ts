@@ -19,10 +19,13 @@ import type {
   InvestmentJsonValue,
   InvestmentReadinessSnapshot,
   InvestmentRestartResult,
+  NotificationChannelRequest,
+  NotificationChannelResult,
 } from '@deepseek-ai/dsh-investment-python-runtime/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 
 export type { InvestmentDataRequest, InvestmentJsonValue } from '@deepseek-ai/dsh-investment-python-runtime/types'
+export type { NotificationChannelRequest, NotificationChannelResult, NotificationChannelStatus, NotificationExternalChannel } from '@deepseek-ai/dsh-investment-python-runtime/types'
 export type {
   BackupCategory,
   BackupDescription,
@@ -60,6 +63,7 @@ export interface InvestmentResearchRuntimeClient {
   refresh(): Promise<void>
   /** Execute one Host-allow-listed investment backend operation. */
   requestData(request: InvestmentDataRequest): Promise<InvestmentJsonValue>
+  notificationChannels(request: NotificationChannelRequest): Promise<NotificationChannelResult>
   /**
    * Ask the Host launcher to restart the complete application.
    * @returns the launcher-safe acknowledgement.
@@ -190,6 +194,11 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
     return unwrapRemote(await this.remote['backup-describe'](), 'backup-describe')
   }
 
+  async notificationChannels(request: NotificationChannelRequest): Promise<NotificationChannelResult> {
+    this.assertActive()
+    return unwrapRemote(await this.remote['notification-channels'](request), 'notification-channels')
+  }
+
   async backupSetDirectory(directory: string): Promise<{ directory: string }> {
     this.assertActive()
     return unwrapRemote(await this.remote['backup-set-directory'](directory), 'backup-set-directory')
@@ -303,6 +312,7 @@ class InvestmentResearchRuntimeFacade implements InvestmentResearchRuntimeClient
    */
   publicFace(): InvestmentResearchRuntimeClient {
     return Object.freeze({
+      notificationChannels: (request: NotificationChannelRequest) => this.notificationChannels(request),
       backupCreate: (input: { categories: BackupCategory[]; reason: BackupReason }) => this.backupCreate(input),
       backupDelete: (filename: string) => this.backupDelete(filename),
       backupDownloadBegin: (filename: string, signal?: AbortSignal) => this.backupDownloadBegin(filename, signal),
