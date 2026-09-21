@@ -48,6 +48,7 @@ jobs:
           scripts/investment-container.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
           scripts/investment-backend-package-policy.spec.ts
+          scripts/investment-container-test-payloads.spec.ts
 
       - uses: docker/setup-buildx-action@v3
 

@@ -109,10 +109,12 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual({s['location']['pathSha256'] for s in samples},
                          {hashlib.sha256(path.encode()).hexdigest()})
         self.assertEqual({s['location']['class'] for s in samples}, {'python-dependency'})
+        self.assertEqual([s['location']['fileSha256'] for s in samples],
+                         [hashlib.sha256(value).hexdigest() for value in (b'old', b'new', b'newer')])
         self.assertNotIn('CANARY', json.dumps(diagnostic))
 
     def test_diagnostic_output_is_bounded_and_does_not_echo_report_fields(self):
-        count = 57
+        count = 107
         evidence = self.prepare(layers=[[(f'app/SECRET_PATH_CANARY-{i}/.env', 'opaque', 'file')
                                         for i in range(count)]])
         finding = {'RuleID': 'SECRET_RULE_CANARY', 'File': 'layer-0/file-0.data!SECRET_NESTED_CANARY',
@@ -124,7 +126,7 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(diagnostic['sensitivePaths'], count)
         self.assertEqual(diagnostic['secretsByRule'], {'other': count})
         self.assertEqual(diagnostic['sensitivePathsByReason'], {'sensitive-name': count})
-        self.assertEqual(len(diagnostic['secretSamples']), 50)
+        self.assertEqual(len(diagnostic['secretSamples']), 100)
         self.assertEqual(diagnostic['secretSamplesOmitted'], 7)
         self.assertEqual(diagnostic['sensitivePathSamplesOmitted'], 7)
         self.assertTrue(diagnostic['secretSamples'][0]['location']['nested'])
@@ -164,6 +166,18 @@ class ArchiveTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_vulnerability_diagnostics_only_echo_recognized_public_identifiers(self):
+        report = {'Results': [{'Vulnerabilities': [
+            {'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'},
+            {'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'},
+            {'VulnerabilityID': 'SECRET_ID_CANARY', 'Severity': 'CRITICAL'},
+            {'VulnerabilityID': 'CVE-2099-9999', 'Severity': 'LOW'},
+        ]}]}
+        values = gate.blocking_vulnerability_ids(report, ('HIGH', 'CRITICAL', 'UNKNOWN'))
+        self.assertEqual(values[0], {'id': 'CVE-2099-1234', 'findings': 2})
+        self.assertEqual(values[1]['id'], 'sha256:' + hashlib.sha256(b'SECRET_ID_CANARY').hexdigest())
+        self.assertNotIn('CANARY', json.dumps(values))
+
     def test_no_report_and_malformed_reports_block(self):
         for report in [None, {}, {'Results': []}]:
             with self.subTest(report=report), self.assertRaises(gate.GateError):
@@ -226,7 +240,7 @@ class OrchestrationTests(unittest.TestCase):
             report = Path(command[command.index('--report-path') + 1])
             report.write_text(json.dumps([{'RuleID': 'private-key', 'File': 'layer-0/file-0.data',
                                            'StartLine': 1, 'Secret': 'SECRET_REPORT_CANARY'}]
-                                         if self.mode == 'secret' else []))
+                                         if self.mode in ('secret', 'secret-and-unfixed') else []))
         else:
             self.vulnerability_scans += 1
             report = Path(command[command.index('--output') + 1])
@@ -239,36 +253,51 @@ class OrchestrationTests(unittest.TestCase):
                                 for kind in ('node-pkg', 'python-pkg')] +
                                [{'Class': 'os-pkgs', 'Type': 'debian', 'Packages': [{'Name': 'example'}],
                                  'Vulnerabilities': [{'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]
-                                 if self.mode == 'unfixed' else []}]}))
+                                 if self.mode in ('unfixed', 'secret-and-unfixed') else []}]}))
             cache = Path(command[command.index('--cache-dir') + 1]) / 'db'
             cache.mkdir(parents=True)
             (cache / 'metadata.json').write_text(json.dumps({'UpdatedAt': datetime.now(timezone.utc).isoformat()}))
-        return subprocess.CompletedProcess(command, 10 if tool == 'gitleaks' and self.mode == 'secret' else 0, b'', b'')
+        return subprocess.CompletedProcess(command, 10 if tool == 'gitleaks' and self.mode in ('secret', 'secret-and-unfixed') else 0, b'', b'')
 
     def invoke(self):
         with patch.object(gate.subprocess, 'run', side_effect=self.scanner), redirect_stdout(self.output):
             return gate.scan(self.archive, self.image, self.revision, self.root, self.root, self.summary)
 
-    def test_secret_and_path_only_failures_print_distinct_safe_diagnostics_and_do_not_publish(self):
+    def test_secret_and_path_only_failures_still_scan_vulnerabilities_and_do_not_publish(self):
         for mode in ('secret', 'path-only'):
             self.mode = mode
             self.output = io.StringIO()
             if mode == 'path-only':
                 self.archive, self.image, self.revision, self.layers = fixture(
                     self.root, layers=[[('app/SECRET_PATH_CANARY/.env', 'opaque', 'file')]])
-            with self.assertRaisesRegex(gate.GateError, 'secret-findings-block-publication'):
+            with self.assertRaisesRegex(gate.GateError, 'security-findings-block-publication'):
                 self.invoke()
-            diagnostic = json.loads(self.output.getvalue())
+            diagnostic, final = map(json.loads, self.output.getvalue().splitlines())
             self.assertIs(diagnostic['passed'], False)
             self.assertEqual(diagnostic['revision'], self.revision)
             self.assertEqual(diagnostic['archiveSha256'], gate.digest(self.archive))
             self.assertEqual(diagnostic['secretFindings'], int(mode == 'secret'))
             self.assertEqual(diagnostic['sensitivePaths'], int(mode == 'path-only'))
-            self.assertEqual(diagnostic['vulnerabilityScan'], 'not-run')
+            self.assertEqual(diagnostic['vulnerabilityScan'], 'pending')
+            self.assertEqual(final['kind'], 'image-security-result')
+            self.assertIs(final['passed'], False)
             self.assertNotIn('CANARY', self.output.getvalue())
-            self.assertFalse(self.summary.exists())
-            self.assertEqual(self.vulnerability_scans, 0)
+            self.assertFalse(json.loads(self.summary.read_text())['passed'])
+            self.assertEqual(self.vulnerability_scans, 1 if mode == 'secret' else 2)
+            with self.assertRaises(gate.GateError):
+                gate.verify_summary(self.summary, self.archive, self.image, self.revision)
             self.assertFalse(any(p.name.startswith('image-security-') for p in self.root.iterdir()))
+
+    def test_combined_findings_are_reported_in_one_run_without_becoming_publishable(self):
+        self.mode = 'secret-and-unfixed'
+        with self.assertRaisesRegex(gate.GateError, 'security-findings-block-publication'):
+            self.invoke()
+        final = json.loads(self.output.getvalue().splitlines()[-1])
+        self.assertEqual(final['secretFindings'], 1)
+        self.assertEqual(final['vulnerabilities']['HIGH'], 1)
+        self.assertEqual(final['blockingVulnerabilityIds'], [{'id': 'CVE-2099-1234', 'findings': 1}])
+        self.assertIs(final['passed'], False)
+        self.assertNotIn('CANARY', self.output.getvalue())
 
     def test_success_is_bound_to_archive_and_publish_rejects_changed_archive(self):
         self.assertTrue(self.invoke()['passed'])

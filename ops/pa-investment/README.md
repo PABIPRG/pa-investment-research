@@ -153,13 +153,17 @@ git diff --check
   不把漏洞扫描宣称为对已删除历史包的 CVE 扫描；已删除层的秘密仍受上述全层检查。
 - 全部秘密命中、敏感路径、扫描错误、超时、不完整扫描、缺失报告、身份不一致和超过
   72 小时的漏洞数据库均阻断。安全摘要超过 24 小时不能用于发布，应重新构建/验证。
-- 秘密门禁失败时，Actions 日志输出一条 `secret-gate-diagnostics` JSON：分别统计秘密规则
-  与敏感路径命中，并明确 `passed: false`、漏洞扫描 `not-run`；它不能作为发布摘要。
+- 秘密检查命中时，Actions 日志先输出 `secret-gate-diagnostics` JSON：分别统计秘密规则
+  与敏感路径命中，并明确 `passed: false`、漏洞扫描 `pending`；随后继续执行独立的 Trivy
+  检查，一次收集两类阻断。完整结果为 `image-security-result`，任何秘密、敏感路径或
+  阻塞级漏洞都使摘要 `passed: false`、任务失败，禁止上传/发布。工具异常仍立即失败。
   `generic-api-key`、`private-key` 保留固定规则名称，其他规则显示 `other` 和规则名 SHA256。
-  两类命中各最多展示 50 条定位样本及省略数量，总计数不截断。定位只含从零开始的层号/
-  归档条目序号、固定来源类别、规范化镜像路径的 SHA256 与扫描文件行号；嵌套归档只定位
+  两类命中各最多展示 100 条定位样本及省略数量，总计数不截断。定位只含从零开始的层号/
+  归档条目序号、固定来源类别、规范化镜像路径和完整文件的 SHA256 与扫描文件行号；嵌套归档只定位
   外层文件，未知位置仅输出路径哈希。路径、匹配正文、秘密值及其指纹均不输出。
   相同路径跨历史层保留各自序号，路径哈希可用于与受限本地审计比对；命中仍全部阻断。
+  漏洞诊断仅公开规范的 CVE/GHSA 编号与计数（最多 100 个编号）；非规范标识转为哈希，
+  不输出扫描器原始描述、路径或镜像元数据正文。
 - 门禁的临时工作目录为 0700；解包限制为 250,000 条目、单文件 2 GiB、累计声明大小
   8 GiB（含外层归档与层内容），不满足限制时失败，不静默跳过文件。
 - 当前 `exceptions` 必须为空。误报、不适用或无修复版本的例外需要另行评审：记录具体
@@ -172,11 +176,18 @@ Python sidecar 在写入 `runtime.json` 及进入镜像层前，仅删除官方
 新版、内容变化、额外文件或符号链接都需重新核验，不能盲删。原 wheel RECORD 保留发行源记录，
 实际发行文件清单由重新生成的 `runtime.json` 负责。
 
+Linux 容器另在打包阶段按精确文件哈希剔除 Zod 4.4.3 的 mini/classic 字符串测试、
+本仓库 session-telemetry 脱敏测试、Kubernetes 36.0.3 的异步 kube config 测试和
+NumPy 2.2.6 的随机数生成器测试。清单见 `frontend/scripts/investment-container-test-payloads.ts`。
+仅删除这五个不参与运行的文件，保留其余运行模块、许可证与包元数据；Python 清理在
+`runtime.json` 生成前执行，全部发生在运行镜像 `COPY` 前。文件缺失/漂移或路径含符号链接
+时停止清理，不扩展到整目录，也没有向扫描器添加忽略项。
+
 聚焦验证：
 
 ```sh
 python3 -B -m unittest discover -s ops/pa-investment -p 'test_*.py'
-pnpm --dir frontend exec vitest run scripts/investment-container.spec.ts scripts/build-investment-python-sidecar.spec.ts scripts/investment-backend-package-policy.spec.ts packages/client/ui-investment-research/tests/holdings-import.client.spec.ts
+pnpm --dir frontend exec vitest run scripts/investment-container.spec.ts scripts/investment-container-test-payloads.spec.ts scripts/build-investment-python-sidecar.spec.ts scripts/investment-backend-package-policy.spec.ts packages/client/ui-investment-research/tests/holdings-import.client.spec.ts
 ```
 
 完整设计、官方依赖来源和验证债务见

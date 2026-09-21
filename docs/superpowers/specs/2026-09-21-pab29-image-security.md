@@ -132,3 +132,25 @@ PAB-29 保持 In Progress。
 本次只扩展失败诊断，不改变检测范围、阻断条件、例外策略或上传顺序。日志中的 JSON 单独绑定源码 SHA、镜像 ID、归档 SHA256，标记 `passed: false` 和 `vulnerabilityScan: not-run`，不写入可供发布复核的安全摘要。只输出固定规则标签（`generic-api-key`、`private-key`；其他为 `other` 加规则名哈希）、完整分类计数及每类最多 50 条样本；样本含层号、条目序号、固定来源类别、路径 SHA256 和扫描文件行号，不含原始路径、嵌套成员名、秘密值、匹配文本、作者或报告指纹。无法映射的位置只保留路径哈希，不能猜测其所属包。所有命中和格式异常仍阻断，临时资料仍自动删除。
 
 验证：先运行新增测试并观察失败，再实现诊断；ops Python 共 47 项，46 通过、1 项 Linux GNU tar 专属测试在 macOS 跳过。真实 Gitleaks 8.30.1 对两层无效私钥夹具检出 1 项，正确定位旧层及条目，后层 whiteout 不掩盖命中；嵌套 ZIP 夹具也正确定位外层文件。日志无原始路径/正文、无通过摘要，临时扫描目录已清理。新候选的 Linux 扫描结论仍以更新后的 CI 为准。
+
+## 容器测试载荷清理与完整安全结果（2026-09-21）
+
+`c61e8fbc03` 的 [Linux CI 35577389001](https://github.com/PABIPRG/pa-investment-research/actions/runs/35577389001/job/106262211249) 构建和 Compose 通过，秘密规则命中 69 条，敏感路径为 0。路径指纹比对发现五个不参与运行的测试文件触发 12 条命中；另有普通变量引用、公开文档示例、公共签名材料和第三方运行常量，需要逐项判断，不能整体放行。
+
+以下清理发生在构建暂存目录、进入运行镜像层之前。Node 产物在工作区链接实体化后清理，Linux Python 在收集 `runtime.json` 文件哈希前清理。每组先验证所有文件再删除，仅处理表内文件；遇到内容漂移、已安装包中缺失文件或符号链接就失败，保留其余文件和许可证。
+
+| 来源 | 相对文件 | SHA256 |
+|---|---|---|
+| Zod 4.4.3 | `src/v4/mini/tests/string.test.ts` | `efb9ef22f2179e700a2033edd4e1e03a6fe4f6b95fa4bc0bd29223065e1ec0a0` |
+| Zod 4.4.3 | `src/v4/classic/tests/string.test.ts` | `a69bdc042c58e8d940e6a5f09ed93646e697af04869a65cf45e9244e950cfb06` |
+| 仓库 session-telemetry | `tests/redact.spec.ts` | `f3d6c306aa2b61b28db31ee066fb3abac6118ad2ef6c7cafe11d85ad802e795e` |
+| Kubernetes 36.0.3 | `kubernetes/aio/config/kube_config_test.py` | `2e98b92ea15cf277de5738ee1430ee29718940c547367680d533fe63a6b9ca48` |
+| NumPy 2.2.6 | `numpy/random/tests/test_generator_mt19937.py` | `67b0fc3dc885a1a605fd70ad20d1f37e3a2f5991ea816995389d948ef3645a53` |
+
+来源核对：[Zod npm 发行包](https://registry.npmjs.org/zod/4.4.3)、[Kubernetes PyPI 36.0.3](https://pypi.org/pypi/kubernetes/36.0.3/json)、[NumPy PyPI 2.2.6](https://pypi.org/pypi/numpy/2.2.6/json)。实际下载发行归档并核对其完整 integrity/SHA256 和表内文件哈希；仓库测试文件与当前源码哈希相同。这是打包内容清理，不是秘密扫描例外。
+
+同时修正串行检查只暴露首个阻断的问题：秘密检查完成后，即使有命中，也继续进行同一归档的漏洞扫描；两类结果汇总后统一阻断。秘密诊断先标记漏洞扫描 pending，完整结果标记 completed；失败摘要绝不能用于发布，异常/超时仍立即阻断。脱敏样本上限从 50 提至 100，并加入完整文件 SHA256，便于将新候选与官方发行内容精确比对；漏洞只输出规范 CVE/GHSA 编号与计数。例外清单仍为空。
+
+本地验证：五份真实文件使用与 CI 相同的 Gitleaks 参数复现 12 条命中，精确清理后为 0；真实 CLI production deploy、工作区链接实体化、清理及默认 profile 插件解析通过。首次生产打包因沙箱 DNS 失败，获得联网执行权限后按同一构建入口成功重试。新的 Linux 镜像仍需 CI 证明整体剩余命中和漏洞情况，不将局部清理等同于镜像安全通过。
+
+聚焦自动验证：4 个 Vitest 文件共 44 项通过；ops Python 共 49 项，48 通过、1 项 Linux GNU tar 专属用例在 macOS 跳过；新增清理器及其测试的严格类型检查、受影响脚本 lint、actionlint 与 diff 检查通过。

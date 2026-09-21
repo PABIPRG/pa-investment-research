@@ -18,7 +18,7 @@ POLICY_PATH = Path(__file__).with_name('image-security-policy.json')
 MAX_TOTAL_BYTES = 8 * 1024**3
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_ENTRIES = 250000
-MAX_DIAGNOSTIC_SAMPLES = 50
+MAX_DIAGNOSTIC_SAMPLES = 100
 # Display labels only, never scanner exceptions: every rule still blocks publication.
 DIAGNOSTIC_RULE_IDS = frozenset(('generic-api-key', 'private-key'))
 SEVERITIES = ('UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
@@ -220,7 +220,8 @@ def prepare_archive(archive_path, work, image_id, revision):
                     with target.open('rb') as source:
                         suffix = archive_suffix(source.read(512))
                     if suffix != '.data':
-                        target.rename(layer_root / f'file-{serial}{suffix}')
+                        target = target.rename(layer_root / f'file-{serial}{suffix}')
+                    location['fileSha256'] = digest(target)
                     locations[f'layer-{index}/file-{serial}{suffix}'] = location
                     files += 1
         if compressed:
@@ -295,6 +296,20 @@ def install_scanners(destination):
         archive_path.unlink()
 
 
+def blocking_vulnerability_ids(report, severities):
+    counts = Counter()
+    for result in report['Results']:
+        for vulnerability in result.get('Vulnerabilities', []):
+            if vulnerability['Severity'] not in severities:
+                continue
+            identifier = vulnerability['VulnerabilityID']
+            require(isinstance(identifier, str), 'invalid-vulnerability-report')
+            if not re.fullmatch(r'(?:CVE-[0-9]{4}-[0-9]{4,10}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})', identifier):
+                identifier = 'sha256:' + hashlib.sha256(identifier.encode()).hexdigest()
+            counts[identifier] += 1
+    return [{'id': identifier, 'findings': count} for identifier, count in sorted(counts.items())]
+
+
 def scan(archive, image_id, revision, tools, work_parent, summary):
     rules = policy()
     summary.unlink(missing_ok=True)
@@ -327,8 +342,8 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
             # Failure diagnostics cannot be used as a passing publication summary.
             print(json.dumps({'schemaVersion': 1, 'kind': 'secret-gate-diagnostics', 'passed': False,
                               'archiveSha256': archive_hash, 'imageId': image_id, 'revision': revision,
-                              'vulnerabilityScan': 'not-run', **diagnostic}, sort_keys=True), flush=True)
-        require(secrets_count == 0 and evidence['sensitive_paths'] == 0, 'secret-findings-block-publication')
+                              'vulnerabilityScan': 'pending', **diagnostic}, sort_keys=True), flush=True)
+        # Collect both independent results before failing; any finding still prevents artifact upload.
         report = work / 'vulnerabilities.json'
         cache = work / 'trivy-cache'
         config = work / 'trivy.yaml'
@@ -355,6 +370,12 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
                   'databaseUpdatedAt': updated.isoformat(), 'policySha256': digest(POLICY_PATH),
                   'scannedAt': datetime.now(timezone.utc).isoformat()}
         summary.write_text(json.dumps(result, indent=2) + '\n')
+        identifiers = blocking_vulnerability_ids(data, rules['blockingSeverities'])
+        print(json.dumps({'kind': 'image-security-result', **result,
+                          'vulnerabilityScan': 'completed',
+                          'blockingVulnerabilityIds': identifiers[:MAX_DIAGNOSTIC_SAMPLES],
+                          'blockingVulnerabilityIdsOmitted': max(0, len(identifiers) - MAX_DIAGNOSTIC_SAMPLES)},
+                         sort_keys=True), flush=True)
         require(blocked == 0, 'security-findings-block-publication')
         return result
 
