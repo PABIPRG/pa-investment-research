@@ -58,6 +58,24 @@ describe('investment container delivery contract', () => {
     expect(linux.archiveUrl).toContain('cpython-3.10.20%2B20260718-x86_64-unknown-linux-gnu-install_only.tar.gz')
     expect(linux.archiveSha256).toBe('9c28d8017eeaf692f24dbaf26fd4679ce496c7f58e48b897d278739661794e37')
     expect(requirements.toString('utf8')).not.toMatch(/^pyobjc-/mu)
+    for (const omitted of [
+      'bcrypt', 'build', 'chromadb', 'coloredlogs', 'durationpy', 'filelock', 'flatbuffers', 'fsspec',
+      'googleapis-common-protos', 'grpcio', 'hf-xet', 'huggingface_hub', 'humanfriendly',
+      'importlib_resources', 'jsonschema', 'jsonschema-specifications', 'kubernetes', 'mmh3', 'mpmath',
+      'oauthlib', 'onnxruntime', 'opentelemetry-api', 'opentelemetry-exporter-otlp-proto-common',
+      'opentelemetry-exporter-otlp-proto-grpc', 'opentelemetry-proto', 'opentelemetry-sdk',
+      'opentelemetry-semantic-conventions', 'overrides', 'pybase64', 'pydantic-settings', 'PyPika',
+      'pyproject_hooks', 'referencing', 'requests-oauthlib', 'rpds-py', 'sympy', 'tokenizers',
+    ]) {
+      expect(requirements.toString('utf8')).not.toMatch(new RegExp(`^${omitted}==`, 'mu'))
+    }
+    for (const target of ['darwin-arm64', 'win32-x64'] as const) {
+      const desktopRequirements = await readFile(
+        join(repoRoot, ...lock.targets[target]!.requirementsLock.split('/')),
+        'utf8',
+      )
+      expect(desktopRequirements).toMatch(/^chromadb==1\.5\.9$/mu)
+    }
   })
 
   it('assembles a relocatable production CLI deployment', () => {
@@ -109,7 +127,7 @@ describe('investment container delivery contract', () => {
     const dockerfile = await readFile(join(repoRoot, 'Dockerfile'), 'utf8')
     const dockerignore = await readFile(join(repoRoot, '.dockerignore'), 'utf8')
 
-    const pinnedBase = 'node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6'
+    const pinnedBase = 'node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697'
     const sidecarBuild = 'RUN CI=true pnpm run investment:sidecar:build --target linux-x64'
     const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
     expect(dockerfile).toContain(`FROM ${pinnedBase} AS build`)

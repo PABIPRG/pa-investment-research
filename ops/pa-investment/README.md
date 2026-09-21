@@ -147,6 +147,11 @@ git diff --check
 - 运行镜像将 Node 基镜像随附的 npm 11.19.0 更新至 11.19.1，保留 npm/npx 能力。
   官方完整归档由 Dockerfile 固定 SHA256，经临时只读挂载离线安装，不运行安装脚本；
   不单独强换其内部依赖，也不把安装缓存或下载归档留在运行层中。
+- build/runtime 统一使用官方 `node:24.21.0-trixie-slim` 的 Linux amd64 manifest digest，
+  继续在同一镜像层执行 Debian 安全更新；固定摘要的来源核验不能代替 CI 实际构建和扫描。
+- 容器 adapter 在合并配置后强制关闭 memory；图模块只在 memory 启用时导入 Chroma。
+  Linux sidecar 锁不安装 ChromaDB 及其专用传递依赖，macOS/Windows 桌面锁仍保留
+  ChromaDB 和原有 memory 能力。该依赖边界由容器契约与引擎深度测试约束。
 - 秘密检查包括所有历史层的所有常规文件、重复路径的旧内容、完整 config/history、
   路径/链接目标/归档扩展 metadata；不应用 whiteout，不创建或跟随链接，不运行镜像代码。
   内层文件通过字节签名识别压缩格式，避免将名字以 `.gz` 结尾的普通 dpkg 文本当压缩包；
@@ -182,10 +187,13 @@ Python sidecar 在写入 `runtime.json` 及进入镜像层前，仅删除官方
 实际发行文件清单由重新生成的 `runtime.json` 负责。
 
 Linux 容器另在打包阶段按精确文件哈希剔除 Zod 4.4.3 的 mini/classic 字符串测试、
-本仓库 session-telemetry 脱敏测试、Kubernetes 36.0.3 的异步 kube config 测试和
+本仓库 session-telemetry 脱敏测试，以及目标锁中存在时的 Kubernetes 36.0.3
+异步 kube config 测试和
 NumPy 2.2.6 的随机数生成器测试、pywebpush 2.5.0 与 websocket-client 1.9.0 的测试。
 清单见 `frontend/scripts/investment-container-test-payloads.ts`。
-仅删除这七个不参与运行的文件，保留其余运行模块、许可证与包元数据；Python 清理在
+当前 Linux 锁已随 Chroma 依赖闭包移除 Kubernetes，因此不会产生其测试文件；后续目标锁若重新安装
+表中包，仍必须先匹配精确文件哈希。仅删除实际存在且已核验的不参与运行文件，保留其余运行模块、
+许可证与包元数据；Python 清理在
 `runtime.json` 生成前执行，全部发生在运行镜像 `COPY` 前。文件缺失/漂移或路径含符号链接
 时停止清理，不扩展到整目录，也没有向扫描器添加忽略项。
 

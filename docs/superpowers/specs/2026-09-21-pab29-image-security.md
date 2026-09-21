@@ -9,6 +9,7 @@
 |---|---|---|---|---|---|
 | 构建运行镜像 | Dockerfile、build-investment-container-app.ts | pnpm production deploy 与独立 sidecar，单次构建 | 基镜像和部分运行依赖存在可修复告警 | Extend | 旧镜像 Trivy 报告；升级后需 Linux 重建 |
 | 打包 Python 后端 | build-investment-python-sidecar.ts、investment-backend-package-policy.ts | 暂存目录、白名单、哈希描述文件 | 第三方 py_vapid 测试私钥不属于后端白名单范围 | Extend | py-vapid 1.9.4 的测试文件与官方 wheel 哈希一致 |
+| 容器执行投研图 | adapter/engine_bridge.py、trading_graph.py | adapter 在合并配置后强制关闭 memory；桌面目标可启用 Chroma memory | 图模块曾在关闭 memory 时仍顶层导入 Chroma，使容器必须携带整套依赖 | Extend | 将 memory 导入移入启用分支；只从 Linux 锁移除 Chroma 闭包，桌面锁保留 |
 | 验证候选身份 | investment-container.yml 的 config ID、源码标签、docker save | 同一受测归档进入 artifact 和 publish | 尚无全层安全门禁 | Extend | 旧归档 config ID c53ef7ac…；既有发布不重建 |
 | 阻止带秘密的产物上传 | 既有一次性全层审计脚本 | 只读解析所有历史层及 metadata | CI 尚未调用，归档解包需资源限制和链接保护 | Create | ops 下新增离线门禁，复用审计算法；不增加服务 |
 | 阻止漏洞镜像发布 | 官方 Trivy 镜像归档扫描 | 最终文件系统、包版本、漏洞数据库 | 无确定性裁决及缺失报告阻断 | Compose | Trivy 与现有 image-smoke/upload/publish 顺序组合 |
@@ -52,7 +53,7 @@ Gitleaks 所有命中阻断；Trivy HIGH/CRITICAL/UNKNOWN 阻断，不忽略未�
 
 | 对象 | 本次修改 | 核验来源与边界 |
 |---|---|---|
-| Node 基镜像 | 24.8.0 → 24.21.0，build/runtime 同一固定 index digest `sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6`；同层 apt upgrade | [Node 官方发行](https://nodejs.org/en/blog/release/v24.21.0)、[Docker 官方 repo-info](https://github.com/docker-library/repo-info/blob/master/repos/node/remote/24.21.0-bookworm-slim.md)；registry 在本机不可达，摘要从官方 repo-info 读取，Linux CI 必须实际拉取核对 |
+| Node 基镜像 | 24.8.0 → 24.21.0，并由 Bookworm 切换到 Trixie；build/runtime 使用 Linux amd64 manifest digest `sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697`；同层 apt upgrade | [Node 官方发行](https://nodejs.org/en/blog/release/v24.21.0)、[Docker 官方 repo-info](https://github.com/docker-library/repo-info/blob/master/repos/node/remote/24.21.0-trixie-slim.md)；摘要从官方 repo-info 读取，Linux CI 必须实际拉取核对 |
 | fast-uri | 3.1.3 → 3.1.6 精确 override | [官方 npm 元数据](https://registry.npmjs.org/fast-uri/3.1.6)，同主版本，不新增依赖 |
 | ip-address | 10.2.0 → 10.3.1 精确 override | [官方 npm 元数据](https://registry.npmjs.org/ip-address/10.3.1)，同主版本；旧基镜像工具链中的 9.0.5 不用跨主版本 override 盲替换 |
 | js-yaml | 所有匹配 4.x 当前依赖 → 4.3.2 精确 override | [官方 npm 元数据](https://registry.npmjs.org/js-yaml/4.3.2)，沿用 argparse 2.x；loader/CLI 的 YAML 消费需聚焦验证 |
@@ -63,13 +64,11 @@ Gitleaks 所有命中阻断；Trivy HIGH/CRITICAL/UNKNOWN 阻断，不忽略未�
 ChromaDB 1.5.9 的旧报告含 CVE-2026-45829、45830、45831、45833，未提供修复版本。
 [45829 官方公告](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c) 描述 Chroma HTTP collections
 接口接受不可信模型仓库与远端代码选项。本项目 `adapter/engine_bridge.py` 在所有配置覆盖之后
-强制 `memory_enabled=false`；`trading_graph.py` 的 memory 分支才创建 Chroma manager。
-`test_engine_depth.py` 的 3 个测试验证了配置覆盖后仍关闭 memory。runtime 的服务启动采用
-`python -m uvicorn` 加 sidecar 中三个后端模块，没有配置 `chroma run` 或 `chromadb.server` 入口。
-仓库内其他 Chroma 调用使用 `chromadb.Client(Settings(...))`；旧镜像实际包的默认实现为
-`chromadb.api.rust.RustBindingsAPI`，但 Settings 继承 BaseSettings、可读取环境与 `.env`，且包中
-仍存在 HTTP 客户端/服务及 embedding 实现。因此只能说明正常 adapter 分析路径没有启动该
-memory/HTTP 服务，不能证明整包、其他调用或所有部署环境不可达。本次不创建豁免，保持阻断。
+强制 `memory_enabled=false`，容器运行路径不创建 memory。此前 `trading_graph.py` 仍顶层导入
+memory 模块，使关闭功能也必须安装 Chroma。现将该导入移入 `memory_enabled` 分支，并只从
+`linux-x64` 运行锁删除 ChromaDB 及其 36 个专用传递依赖；macOS/Windows 桌面锁继续保留
+ChromaDB 1.5.9 和原有 memory 能力。该处理不依赖漏洞豁免；Linux CI 必须证明 sidecar 安装、
+图加载、Compose smoke 和完整扫描均通过，才能关闭此项阻断。
 
 CVE-2023-45853 的 [Debian 官方跟踪](https://security-tracker.debian.org/tracker/CVE-2023-45853)
 指出 MiniZip 与 zlib 发行构建的适用性差异。旧候选没有发现 minizip/libminizip/pyminizip；
@@ -181,3 +180,13 @@ Dockerfile 使用独立下载阶段，固定官方 npm 归档 SHA256 `9f58bff016
 本地隔离前缀完成相同官方归档的离线安装，核对 npm 和三个随附依赖的实际版本；真实 Trivy 0.74.0 rootfs 扫描识别 144 个包，HIGH/CRITICAL/UNKNOWN 为 0。13 项容器契约测试通过。新运行镜像整体结果仍需后续 CI 证明，不能用 npm 子树的通过结论代替。
 
 54 条秘密命中的内容哈希全部与受限本地来源一致：48 条归入文档示例、类型/变量引用、文件哈希、公开证书/签名材料或 OAuth 公共标识候选，6 条涉及第三方运行常量。Node 当前发行包的 npm 文档与 Corepack 文件另经官方整包 SHA256 和逐文件哈希核对，Corepack 两份签名材料可解析为 EC 公钥。上述分类仍非例外授权；运行 token 候选、ChromaDB 及基础系统告警继续阻断，未以第三方公开发行或正常路径关闭 memory 证明其无影响。
+
+## Linux 容器依赖收敛与 Trixie 基线（2026-09-21）
+
+`a2c8b9ffcf` 的 [Linux CI 35584055076](https://github.com/PABIPRG/pa-investment-research/actions/runs/35584055076/job/106283168440) 完成镜像构建、边界检查、Compose 启动/健康/退出和两类扫描，最终由 `security-findings-block-publication` 正确阻断。秘密命中为 61，敏感路径为 0；漏洞为 CRITICAL 6、HIGH 54、UNKNOWN 1，共 23 个阻塞编号。镜像 ID 为 `sha256:cac3f2b6cb0b2599481377de5342f8a0c6ce1d098d10abb13b1b3a0ed7037b2c`，归档 SHA256 为 `bfbc928ec20469d87d49040cc21e391d781b596ad7123e6ceed451a8995211b4`，CI 合并测试源码为 `2f52e640cf1bf30211a29fa87665c7bea4578b33`。npm 补丁已消除前述四个工具链漏洞；镜像 artifact 和 GHCR publish 仍被跳过。
+
+基础系统的阻塞告警中，Debian 已在 Trixie 修复 Bookworm 仍受影响的 util-linux 与 Perl 漏洞。build/runtime 因此统一改用官方 `node:24.21.0-trixie-slim` 的 Linux amd64 manifest digest，并继续在同层执行安全更新。该摘要来自 docker-library 官方 repo-info；不能用来源核对代替 CI 实际拉取、构建和扫描。
+
+ChromaDB 在 Linux 容器中属于已关闭的 memory 能力，但此前顶层导入使包仍成为启动依赖。现有容器 adapter 在应用外部配置后强制 `memory_enabled=false`，所以将 memory 模块导入移入启用分支，并从 Linux 锁精确删除 ChromaDB 及由旧镜像 `dist-info` 依赖图计算出的 36 个专用传递依赖，共 37 个包。macOS/Windows 锁保持 ChromaDB 1.5.9，桌面 memory 能力不变；其他后端直接依赖保持原版本。
+
+本地聚焦验证包括 4 个 Vitest 文件共 44 项、`test_engine_depth.py` 4 项、图模块语法编译、锁文件摘要和 `git diff --check`，均通过。本机成功下载并校验固定 Linux CPython 归档，但 macOS 无法执行 Linux ELF，sidecar 安装在启动 Linux Python 时返回 `ENOEXEC`；这不是通过证据。实际依赖安装、图加载、Compose smoke 和完整安全结果必须由下一次 Linux CI 给出，结果出来前 PR 继续保持 Draft，`exceptions` 继续为空。

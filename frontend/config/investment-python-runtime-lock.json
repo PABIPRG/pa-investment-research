@@ -31,7 +31,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/linux-x64.txt",
-      "requirementsSha256": "c83995ca6ffea1f985b42f68891280013d8549b3e58c92697e7876bc13484930"
+      "requirementsSha256": "e962b9a1906cd36e8d5fcb4161f5ea9b224f2b22af3fd5a9bbb2e70ae920910f"
     },
     "win32-x64": {
       "pythonVersion": "3.10.20",

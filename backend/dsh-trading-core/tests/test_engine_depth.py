@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """adapter 分析深度与引擎构建的无网络契约。"""
 
+import ast
 import importlib
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -183,6 +185,37 @@ class EngineDepthTests(unittest.TestCase):
         self.assertFalse(graph.config["memory_enabled"])
         self.assertNotIn("use_memory", graph.config)
         self.assertEqual(FakeTradingAgentsGraph.embedding_calls, 0)
+
+    def test_graph_loads_chroma_memory_only_inside_enabled_branch(self):
+        graph_path = (
+            Path(__file__).resolve().parents[1]
+            / "tradingagents"
+            / "graph"
+            / "trading_graph.py"
+        )
+        module = ast.parse(graph_path.read_text(encoding="utf-8"))
+        top_level_memory_imports = [
+            node
+            for node in module.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "tradingagents.agents.utils.memory"
+        ]
+        self.assertEqual(top_level_memory_imports, [])
+
+        guarded_imports = [
+            node
+            for conditional in ast.walk(module)
+            if isinstance(conditional, ast.If)
+            and any(
+                isinstance(candidate, ast.Name)
+                and candidate.id == "memory_enabled"
+                for candidate in ast.walk(conditional.test)
+            )
+            for node in ast.walk(conditional)
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "tradingagents.agents.utils.memory"
+        ]
+        self.assertEqual(len(guarded_imports), 1)
 
 
 if __name__ == "__main__":

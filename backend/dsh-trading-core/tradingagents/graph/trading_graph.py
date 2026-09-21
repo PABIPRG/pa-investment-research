@@ -14,7 +14,6 @@ from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import Toolkit
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.agents.utils.memory import FinancialSituationMemory
 
 # 导入统一日志系统
 from tradingagents.utils.logging_init import get_logger
@@ -648,6 +647,8 @@ class TradingAgentsGraph:
         # Initialize memories (如果启用)
         memory_enabled = self.config.get("memory_enabled", True)
         if memory_enabled:
+            # Container adapters force memory off. Import Chroma only for targets that enable it.
+            from tradingagents.agents.utils.memory import FinancialSituationMemory
             # 使用单例ChromaDB管理器，避免并发创建冲突
             self.bull_memory = FinancialSituationMemory("bull_memory", self.config)
             self.bear_memory = FinancialSituationMemory("bear_memory", self.config)
