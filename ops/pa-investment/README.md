@@ -144,11 +144,12 @@ git diff --check
 
 - 官方 Gitleaks 8.30.1 和 Trivy 0.74.0 的下载 URL 与 SHA256 固定在
   `image-security-policy.json`，下载校验失败不执行二进制。
-- 运行镜像将 Node 基镜像随附的 npm 11.19.0 更新至 11.19.1，保留 npm/npx 能力。
-  官方完整归档由 Dockerfile 固定 SHA256，经临时只读挂载离线安装，不运行安装脚本；
-  不单独强换其内部依赖，也不把安装缓存或下载归档留在运行层中。
-- build/runtime 统一使用官方 `node:24.21.0-trixie-slim` 的 Linux amd64 manifest digest，
-  继续在同一镜像层执行 Debian 安全更新；固定摘要的来源核验不能代替 CI 实际构建和扫描。
+- 构建阶段使用官方 `node:24.21.0-trixie-slim` Linux amd64 manifest digest，完成 frozen
+  安装、前端构建、production deploy 和 Linux Python sidecar；运行阶段使用固定 digest 的官方
+  Node 24 Debian 13 Distroless，只复制最终产物。运行层没有 shell、apt、npm 或 Corepack。
+- Distroless 内部检查通过 `/nodejs/bin/node` 与 `investment-container-check.mjs` 完成，不依赖
+  `sh/find/test`。运行用户为数值 UID/GID `10001:10001`，方便 Compose tmpfs、秘密文件和持久卷
+  保持原权限边界；固定摘要的来源核验不能代替 CI 实际构建、ABI 验证和扫描。
 - 容器 adapter 在合并配置后强制关闭 memory；图模块只在 memory 启用时导入 Chroma。
   Linux sidecar 锁不安装 ChromaDB 及其专用传递依赖，macOS/Windows 桌面锁仍保留
   ChromaDB 和原有 memory 能力。该依赖边界由容器契约与引擎深度测试约束。

@@ -7,7 +7,7 @@
 
 | 用户动作 | 现有入口/接口 | 权威状态及副作用 | 重叠或缺口 | 决策 | 证据/未知 |
 |---|---|---|---|---|---|
-| 构建运行镜像 | Dockerfile、build-investment-container-app.ts | pnpm production deploy 与独立 sidecar，单次构建 | 基镜像和部分运行依赖存在可修复告警 | Extend | 旧镜像 Trivy 报告；升级后需 Linux 重建 |
+| 构建运行镜像 | Dockerfile、build-investment-container-app.ts | Trixie 构建 pnpm production deploy 与独立 sidecar，Distroless 只承载运行产物 | 普通 Debian slim 运行层包含应用不需要且暂无稳定版修复的系统工具 | Extend | 精简为官方 Node 24 Debian 13 Distroless；Linux CI 验证 ABI、Compose 和扫描 |
 | 打包 Python 后端 | build-investment-python-sidecar.ts、investment-backend-package-policy.ts | 暂存目录、白名单、哈希描述文件 | 第三方 py_vapid 测试私钥不属于后端白名单范围 | Extend | py-vapid 1.9.4 的测试文件与官方 wheel 哈希一致 |
 | 容器执行投研图 | adapter/engine_bridge.py、trading_graph.py | adapter 在合并配置后强制关闭 memory；桌面目标可启用 Chroma memory | 图模块曾在关闭 memory 时仍顶层导入 Chroma，使容器必须携带整套依赖 | Extend | 将 memory 导入移入启用分支；只从 Linux 锁移除 Chroma 闭包，桌面锁保留 |
 | 验证候选身份 | investment-container.yml 的 config ID、源码标签、docker save | 同一受测归档进入 artifact 和 publish | 尚无全层安全门禁 | Extend | 旧归档 config ID c53ef7ac…；既有发布不重建 |
@@ -53,7 +53,7 @@ Gitleaks 所有命中阻断；Trivy HIGH/CRITICAL/UNKNOWN 阻断，不忽略未�
 
 | 对象 | 本次修改 | 核验来源与边界 |
 |---|---|---|
-| Node 基镜像 | 24.8.0 → 24.21.0，并由 Bookworm 切换到 Trixie；build/runtime 使用 Linux amd64 manifest digest `sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697`；同层 apt upgrade | [Node 官方发行](https://nodejs.org/en/blog/release/v24.21.0)、[Docker 官方 repo-info](https://github.com/docker-library/repo-info/blob/master/repos/node/remote/24.21.0-trixie-slim.md)；摘要从官方 repo-info 读取，Linux CI 必须实际拉取核对 |
+| Node 构建/运行基线 | 构建阶段使用 Node 24.21.0 Trixie Linux amd64 manifest digest `sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697`；运行阶段使用 Node 24 Debian 13 Distroless digest `sha256:4ac45c93b6c4b2304876569196e5962e55e8ba4ba095e7dde7bf6d7e00efc3b8` | [Node 官方发行](https://nodejs.org/en/blog/release/v24.21.0)、[Docker 官方 repo-info](https://github.com/docker-library/repo-info/blob/master/repos/node/remote/24.21.0-trixie-slim.md)、[Distroless 官方支持列表](https://github.com/GoogleContainerTools/distroless#what-images-are-available)；运行镜像无 shell/包管理器，Linux CI 必须实际拉取并核对 Node 24、ABI 和运行行为 |
 | fast-uri | 3.1.3 → 3.1.6 精确 override | [官方 npm 元数据](https://registry.npmjs.org/fast-uri/3.1.6)，同主版本，不新增依赖 |
 | ip-address | 10.2.0 → 10.3.1 精确 override | [官方 npm 元数据](https://registry.npmjs.org/ip-address/10.3.1)，同主版本；旧基镜像工具链中的 9.0.5 不用跨主版本 override 盲替换 |
 | js-yaml | 所有匹配 4.x 当前依赖 → 4.3.2 精确 override | [官方 npm 元数据](https://registry.npmjs.org/js-yaml/4.3.2)，沿用 argparse 2.x；loader/CLI 的 YAML 消费需聚焦验证 |
@@ -190,3 +190,11 @@ Dockerfile 使用独立下载阶段，固定官方 npm 归档 SHA256 `9f58bff016
 ChromaDB 在 Linux 容器中属于已关闭的 memory 能力，但此前顶层导入使包仍成为启动依赖。现有容器 adapter 在应用外部配置后强制 `memory_enabled=false`，所以将 memory 模块导入移入启用分支，并从 Linux 锁精确删除 ChromaDB 及由旧镜像 `dist-info` 依赖图计算出的 36 个专用传递依赖，共 37 个包。macOS/Windows 锁保持 ChromaDB 1.5.9，桌面 memory 能力不变；其他后端直接依赖保持原版本。
 
 本地聚焦验证包括 4 个 Vitest 文件共 44 项、`test_engine_depth.py` 4 项、图模块语法编译、锁文件摘要和 `git diff --check`，均通过。本机成功下载并校验固定 Linux CPython 归档，但 macOS 无法执行 Linux ELF，sidecar 安装在启动 Linux Python 时返回 `ENOEXEC`；这不是通过证据。实际依赖安装、图加载、Compose smoke 和完整安全结果必须由下一次 Linux CI 给出，结果出来前 PR 继续保持 Draft，`exceptions` 继续为空。
+
+## Trixie 完整扫描与 Distroless 运行层（2026-09-21）
+
+`56034cf907` 的 [Linux CI 35615318536](https://github.com/PABIPRG/pa-investment-research/actions/runs/35615318536/job/106384390633) 实际拉取 Trixie、安装裁剪后的 Linux sidecar，并通过镜像构建、边界检查、Compose 启动/健康/正常退出和归档导出。完整门禁仍以 `security-findings-block-publication` 阻断；秘密命中为 43，敏感路径为 0，漏洞为 CRITICAL 0、HIGH 43、UNKNOWN 2，共 10 个阻塞编号。镜像 ID 为 `sha256:050c26303e3fb36bedfa94bdc61b51354a0cc0d25edfb29663894de2bae1e66e`，归档 SHA256 为 `b900acdda202cb74b0b76b3042730e7722294d22be2d52596539cce4ba37a50b`，CI 合并测试源码为 `b1deb497f602a2cf7e04679c40be3a8e9a400918`。artifact 上传和 GHCR 发布均被跳过。
+
+Chroma 裁剪和 Trixie 升级使 CRITICAL 6 → 0、HIGH 54 → 43、秘密命中 61 → 43、阻塞编号 23 → 10，证明 sidecar 依赖边界可运行。剩余 HIGH 全部来自普通 Debian slim 运行层中的 ncurses、systemd、acl、util-linux 和 Perl；其中 util-linux 的新问题在 Trixie 尚无稳定版修复。继续升级同一 slim 家族不能消除这些非运行工具，因此运行阶段改用官方 Node 24 Debian 13 Distroless，只保留 Node、glibc/编译运行库、CA 和时区等运行依赖；构建阶段继续使用固定 Node 24.21.0 Trixie。
+
+Distroless 没有 shell、apt、npm 或 Corepack。容器的 `dsh plugin` 命令依赖 pnpm，而当前运行镜像没有提供 pnpm，继承的 npm 单独存在并未形成可用插件安装路径；固定投资研究 profile 仍由构建阶段完整部署。CI 中原先依赖 `sh/find/test` 的镜像内部检查改为只使用 Node 标准库的 `investment-container-check.mjs`，覆盖复制树符号链接和持久卷锁状态。运行用户继续为数值 UID/GID `10001:10001`，`HOME` 与 `DSH_HOME` 均为持久卷目录；Compose 的只读根文件系统、cap drop、tmpfs、秘密挂载和持久卷边界不变。新基线的实际 Node 版本、Python native 依赖、Compose 和全量扫描仍须下一次 Linux CI 证明；当前不能宣称安全门禁通过。

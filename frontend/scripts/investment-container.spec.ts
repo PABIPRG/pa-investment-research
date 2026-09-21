@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -32,6 +32,11 @@ interface EntrypointModule {
 
 interface HealthcheckModule {
   checkReadiness(): Promise<void>
+}
+
+interface ContainerCheckModule {
+  assertNoSymlinks(roots: string[]): Promise<void>
+  lockState(root: string): Promise<{ application: boolean; container: boolean }>
 }
 
 async function containerModule<T>(name: string): Promise<T> {
@@ -127,23 +132,26 @@ describe('investment container delivery contract', () => {
     const dockerfile = await readFile(join(repoRoot, 'Dockerfile'), 'utf8')
     const dockerignore = await readFile(join(repoRoot, '.dockerignore'), 'utf8')
 
-    const pinnedBase = 'node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697'
+    const pinnedBuildBase = 'node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697'
+    const pinnedRuntimeBase = 'gcr.io/distroless/nodejs24-debian13:nonroot@sha256:4ac45c93b6c4b2304876569196e5962e55e8ba4ba095e7dde7bf6d7e00efc3b8'
     const sidecarBuild = 'RUN CI=true pnpm run investment:sidecar:build --target linux-x64'
     const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
-    expect(dockerfile).toContain(`FROM ${pinnedBase} AS build`)
+    expect(dockerfile).toContain(`FROM ${pinnedBuildBase} AS build`)
     expect(dockerfile).toContain('pnpm install --frozen-lockfile')
     expect(dockerfile).toContain(sidecarBuild)
     expect(dockerfile).toContain(applicationDeploy)
     expect(dockerfile.indexOf(sidecarBuild)).toBeLessThan(dockerfile.indexOf(applicationDeploy))
     expect(dockerfile).not.toContain('confirmModulesPurge=false')
     expect(dockerfile).not.toMatch(/^ENV CI=/mu)
-    expect(dockerfile).toContain(`FROM ${pinnedBase} AS runtime`)
-    expect(dockerfile).toMatch(/^USER dsh$/mu)
-    expect(dockerfile).toContain('install -d -m 0700 -o dsh -g dsh /var/lib/dsh')
-    expect(dockerfile).toContain('ENTRYPOINT ["/opt/container/investment-entrypoint.mjs"]')
+    expect(dockerfile).toContain(`FROM ${pinnedRuntimeBase} AS runtime`)
+    expect(dockerfile).toMatch(/^USER 10001:10001$/mu)
+    expect(dockerfile).toMatch(/^\s+HOME=\/var\/lib\/dsh \\/mu)
+    expect(dockerfile).toContain('install -d -m 0700 -o 10001 -g 10001 /opt/runtime-root/var/lib/dsh')
+    expect(dockerfile).toContain('ENTRYPOINT ["/nodejs/bin/node", "/opt/container/investment-entrypoint.mjs"]')
     expect(dockerfile).not.toContain('ln -s /opt/container/investment-entrypoint.mjs')
     expect(dockerfile).toContain('org.opencontainers.image.revision="$VCS_REF"')
-    expect(dockerfile.split(`FROM ${pinnedBase} AS runtime`)[1]).not.toMatch(/pnpm install|pip install/u)
+    expect(dockerfile.split(`FROM ${pinnedRuntimeBase} AS runtime`)[1]).not.toMatch(/^RUN |pnpm install|pip install/mu)
+    expect(dockerfile).not.toContain('AS npm-release')
     expect(dockerignore).toMatch(/^\.git$/mu)
     expect(dockerignore).toMatch(/^\.env\*$/mu)
     expect(dockerignore).toMatch(/^\*\*\/\.npmrc$/mu)
@@ -173,7 +181,7 @@ describe('investment container delivery contract', () => {
     expect(service.volumes).toContain('dsh-data:/var/lib/dsh')
     expect(service.secrets).toContain('web-admin-password-hash')
     expect(service.healthcheck).toEqual(expect.objectContaining({
-      test: ['CMD', 'node', '/opt/container/investment-healthcheck.mjs'],
+      test: ['CMD', '/nodejs/bin/node', '/opt/container/investment-healthcheck.mjs'],
     }))
     expect(compose.volumes).toHaveProperty('dsh-data')
   })
@@ -187,14 +195,16 @@ describe('investment container delivery contract', () => {
     expect(workflow).toContain('container_id=$(docker compose ps -aq investment)')
     expect(workflow).toContain("'status={{.State.Status}} exitCode={{.State.ExitCode}} error={{json .State.Error}}")
     expect(workflow).toContain('docker logs "$failed_container_id"')
-    expect(workflow).toContain('container-lock=present')
-    expect(workflow).toContain('application-lock=present')
+    expect(workflow).toContain('investment-container-check.mjs state')
     expect(workflow).toContain('test "$(docker inspect --format \'{{.State.Status}}\' "$container_id")" = running')
     expect(workflow).toContain('docker save "$IMAGE"')
     expect(workflow).toContain('investment-container-build.json')
     expect(workflow).toContain('sudo chmod 0400 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"')
     expect(workflow).toContain('test "$exit_code" = 0')
-    expect(workflow).toContain('test ! -e /state/investment-research/.container-instance.lock')
+    expect(workflow).toContain('investment-container-check.mjs state-clean')
+    expect(workflow).toContain('/opt/container/investment-container-check.mjs')
+    expect(workflow).toContain('--entrypoint /nodejs/bin/node "$IMAGE" --version')
+    expect(workflow).not.toContain('--entrypoint sh')
     expect(workflow).toContain("-H 'Host: investment.test:39080'")
     expect(workflow).not.toContain('chmod 0644')
     expect(workflow).not.toContain('test "$exit_code" = 0 || test "$exit_code" = 143')
@@ -262,6 +272,23 @@ describe('investment container delivery contract', () => {
     expect(entrypointSource).toMatch(
       /env:\s*\{\s*\.\.\.process\.env,\s*DSH_DEPLOYMENT_SURFACE: configuration\.deploymentSurface,/u,
     )
+  })
+
+  it('checks distroless runtime trees and volume lock state without a shell', async () => {
+    const check = await containerModule<ContainerCheckModule>('investment-container-check.mjs')
+    const root = await mkdtemp(join(tmpdir(), 'investment-container-check-'))
+    roots.push(root)
+    const runtime = join(root, 'runtime')
+    const state = join(root, 'state')
+    await mkdir(join(runtime, 'nested'), { recursive: true })
+    await writeFile(join(runtime, 'nested', 'module.js'), 'export default true\n')
+    await expect(check.assertNoSymlinks([runtime])).resolves.toBeUndefined()
+    await symlink(join(runtime, 'nested', 'module.js'), join(runtime, 'linked.js'))
+    await expect(check.assertNoSymlinks([runtime])).rejects.toThrow(/symbolic link/u)
+
+    expect(await check.lockState(state)).toEqual({ application: false, container: false })
+    await mkdir(join(state, 'investment-research', '.container-instance.lock'), { recursive: true })
+    expect(await check.lockState(state)).toEqual({ application: false, container: true })
   })
 
   it('never mounts profile-file HMR inside the container runtime', () => {

@@ -37,7 +37,7 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=256m,uid=10001,gid=10001,mode=1777
       - /run/dsh:rw,noexec,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700
     healthcheck:
-      test: [CMD, node, /opt/container/investment-healthcheck.mjs]
+      test: [CMD, /nodejs/bin/node, /opt/container/investment-healthcheck.mjs]
       interval: 10s
       timeout: 5s
       retries: 6
