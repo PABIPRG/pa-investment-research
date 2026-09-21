@@ -153,6 +153,8 @@ git diff --check
   不把漏洞扫描宣称为对已删除历史包的 CVE 扫描；已删除层的秘密仍受上述全层检查。
 - 全部秘密命中、敏感路径、扫描错误、超时、不完整扫描、缺失报告、身份不一致和超过
   72 小时的漏洞数据库均阻断。安全摘要超过 24 小时不能用于发布，应重新构建/验证。
+  Trivy 0.74.0 成功退出时，官方固定文本“使用其他厂商的严重性评级”是来源通知，
+  不表示扫描不完整；仅排除这一条完整通知，报告中的漏洞仍按原阈值阻断，其他警告仍失败。
 - 秘密检查命中时，Actions 日志先输出 `secret-gate-diagnostics` JSON：分别统计秘密规则
   与敏感路径命中，并明确 `passed: false`、漏洞扫描 `pending`；随后继续执行独立的 Trivy
   检查，一次收集两类阻断。完整结果为 `image-security-result`，任何秘密、敏感路径或
@@ -178,8 +180,9 @@ Python sidecar 在写入 `runtime.json` 及进入镜像层前，仅删除官方
 
 Linux 容器另在打包阶段按精确文件哈希剔除 Zod 4.4.3 的 mini/classic 字符串测试、
 本仓库 session-telemetry 脱敏测试、Kubernetes 36.0.3 的异步 kube config 测试和
-NumPy 2.2.6 的随机数生成器测试。清单见 `frontend/scripts/investment-container-test-payloads.ts`。
-仅删除这五个不参与运行的文件，保留其余运行模块、许可证与包元数据；Python 清理在
+NumPy 2.2.6 的随机数生成器测试、pywebpush 2.5.0 与 websocket-client 1.9.0 的测试。
+清单见 `frontend/scripts/investment-container-test-payloads.ts`。
+仅删除这七个不参与运行的文件，保留其余运行模块、许可证与包元数据；Python 清理在
 `runtime.json` 生成前执行，全部发生在运行镜像 `COPY` 前。文件缺失/漂移或路径含符号链接
 时停止清理，不扩展到整目录，也没有向扫描器添加忽略项。
 

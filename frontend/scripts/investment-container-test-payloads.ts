@@ -14,10 +14,12 @@ const NODE_TESTS: readonly ReviewedTest[] = [
   { path: 'node_modules/.pnpm/zod@4.4.3/node_modules/zod/src/v4/classic/tests/string.test.ts', sha256: 'a69bdc042c58e8d940e6a5f09ed93646e697af04869a65cf45e9244e950cfb06' },
   { path: 'node_modules/.dsh-workspace-links/packages/session/session-telemetry/tests/redact.spec.ts', sha256: 'f3d6c306aa2b61b28db31ee066fb3abac6118ad2ef6c7cafe11d85ad802e795e' },
 ]
-// Official kubernetes 36.0.3 and numpy 2.2.6 wheel contents, independently checksum-verified.
+// Official pinned wheel contents, independently checksum-verified; sources are recorded in the PAB-29 audit.
 const PYTHON_TESTS: readonly ReviewedTest[] = [
   { path: 'kubernetes/aio/config/kube_config_test.py', sha256: '2e98b92ea15cf277de5738ee1430ee29718940c547367680d533fe63a6b9ca48', optionalPackage: 'kubernetes' },
   { path: 'numpy/random/tests/test_generator_mt19937.py', sha256: '67b0fc3dc885a1a605fd70ad20d1f37e3a2f5991ea816995389d948ef3645a53', optionalPackage: 'numpy' },
+  { path: 'pywebpush/tests/test_webpush.py', sha256: 'e0b6f8a8bb5e830d67a2337693b1f93558a48797c6881798a645c97357d2ac23', optionalPackage: 'pywebpush' },
+  { path: 'websocket/tests/test_websocket.py', sha256: '3513609599e545922bc911b16107695064cf934022e37eb01e80353b0e580b99', optionalPackage: 'websocket' },
 ]
 const hashFile: HashFile = async path => createHash('sha256').update(await readFile(path)).digest('hex')
 
@@ -54,7 +56,7 @@ export async function pruneContainerNodeTests(root: string, hash: HashFile = has
   await prune(root, NODE_TESTS, hash)
 }
 
-/** Strip two checksum-reviewed Linux dependency tests before the sidecar file manifest is collected. */
+/** Strip checksum-reviewed Linux dependency tests before the sidecar file manifest is collected. */
 export async function pruneContainerPythonTests(root: string, hash: HashFile = hashFile): Promise<void> {
   await prune(root, PYTHON_TESTS, hash)
 }

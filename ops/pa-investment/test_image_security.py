@@ -217,6 +217,22 @@ class ReportTests(unittest.TestCase):
             with self.assertRaises(gate.GateError):
                 gate.run_scanner(['scanner'], Path(directory), timeout=1)
 
+    def test_trivy_severity_source_notice_is_not_an_incomplete_scan(self):
+        notice = (b'2026-09-21T08:00:00Z\tWARN\tUsing severities from other vendors for some vulnerabilities. '
+                  b'Read https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details.\n')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            success = subprocess.CompletedProcess([], 0, b'', notice)
+            with patch.object(gate.subprocess, 'run', return_value=success):
+                self.assertEqual(gate.run_scanner(['/tools/trivy', 'image'], root).returncode, 0)
+                with self.assertRaises(gate.GateError):
+                    gate.run_scanner(['/tools/other-scanner', 'image'], root)
+            for diagnostic in (notice + b'WARN archive could not be opened SECRET_CANARY',
+                               notice.replace(b'other vendors', b'unexpected source SECRET_CANARY')):
+                with patch.object(gate.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'', diagnostic)):
+                    with self.assertRaisesRegex(gate.GateError, '^scanner-incomplete$'):
+                        gate.run_scanner(['/tools/trivy', 'image'], root)
+
 
 class OrchestrationTests(unittest.TestCase):
     def setUp(self):

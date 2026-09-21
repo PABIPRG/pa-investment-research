@@ -13,6 +13,8 @@ const nodeFiles = [
 const pythonFiles = [
   ['kubernetes/aio/config/kube_config_test.py', '2e98b92ea15cf277de5738ee1430ee29718940c547367680d533fe63a6b9ca48'],
   ['numpy/random/tests/test_generator_mt19937.py', '67b0fc3dc885a1a605fd70ad20d1f37e3a2f5991ea816995389d948ef3645a53'],
+  ['pywebpush/tests/test_webpush.py', 'e0b6f8a8bb5e830d67a2337693b1f93558a48797c6881798a645c97357d2ac23'],
+  ['websocket/tests/test_websocket.py', '3513609599e545922bc911b16107695064cf934022e37eb01e80353b0e580b99'],
 ] as const
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 
@@ -59,7 +61,6 @@ it('rejects missing tests in an installed package while allowing an absent optio
   const root = await fixture(pythonFiles)
   await rm(join(root, pythonFiles[0][0]))
   await expect(pruneContainerPythonTests(root)).rejects.toThrow('unreviewed container test payload')
-  await rm(join(root, 'kubernetes'), { recursive: true })
-  await rm(join(root, 'numpy'), { recursive: true })
+  for (const [path] of pythonFiles) await rm(join(root, path.split('/')[0]!), { recursive: true })
   await expect(pruneContainerPythonTests(root)).resolves.toBeUndefined()
 })

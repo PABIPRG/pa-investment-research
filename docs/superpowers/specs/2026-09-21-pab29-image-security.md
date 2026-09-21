@@ -154,3 +154,18 @@ PAB-29 保持 In Progress。
 本地验证：五份真实文件使用与 CI 相同的 Gitleaks 参数复现 12 条命中，精确清理后为 0；真实 CLI production deploy、工作区链接实体化、清理及默认 profile 插件解析通过。首次生产打包因沙箱 DNS 失败，获得联网执行权限后按同一构建入口成功重试。新的 Linux 镜像仍需 CI 证明整体剩余命中和漏洞情况，不将局部清理等同于镜像安全通过。
 
 聚焦自动验证：4 个 Vitest 文件共 44 项通过；ops Python 共 49 项，48 通过、1 项 Linux GNU tar 专属用例在 macOS 跳过；新增清理器及其测试的严格类型检查、受影响脚本 lint、actionlint 与 diff 检查通过。
+
+## Trivy 完整性判定修正与剩余测试载荷（2026-09-21）
+
+`a34e684993` 的 [Linux CI 35580274265](https://github.com/PABIPRG/pa-investment-research/actions/runs/35580274265/job/106271298853) 镜像构建、边界检查和 Compose smoke 通过；秘密命中从 69 降至 57，敏感路径为 0。Trivy 已执行，但其成功扫描后的严重性来源通知被门禁当作 `scanner-incomplete`，因此没有汇总漏洞结果，镜像未上传或发布。
+
+已用固定版本 Trivy 0.74.0 对保存的镜像归档复现：退出码为 0、报告完整，通知仅说明部分漏洞采用其他厂商评级，见[官方严重性选择说明](https://trivy.dev/docs/v0.74/guide/scanner/vulnerability/#severity-selection)。修正仅匹配该版本完整固定通知，且限定 `trivy image` 成功退出；其他警告、错误、改变后的文本仍阻断。真实扫描经过修正后的入口能够读取报告，原有 HIGH、CRITICAL、UNKNOWN 阈值保持不变；旧归档计数不作为新候选结果。
+
+完整诊断还定位到以下两个官方 wheel 内的非运行测试文件。发行归档 SHA256 与文件 SHA256 均已核对，按相同精确清理规则加入清单：
+
+| 来源 | 相对文件 | SHA256 |
+|---|---|---|
+| [pywebpush 2.5.0](https://pypi.org/pypi/pywebpush/2.5.0/json) | `pywebpush/tests/test_webpush.py` | `e0b6f8a8bb5e830d67a2337693b1f93558a48797c6881798a645c97357d2ac23` |
+| [websocket-client 1.9.0](https://pypi.org/pypi/websocket-client/1.9.0/json) | `websocket/tests/test_websocket.py` | `3513609599e545922bc911b16107695064cf934022e37eb01e80353b0e580b99` |
+
+七份真实文件以 CI 同参数 Gitleaks 复现 15 条命中，精确清理后为 0，许可证保留。4 个 Vitest 文件 44 项、清理器严格类型检查和受影响脚本 lint 通过；ops Python 50 项，49 通过、1 项 GNU tar 专属用例在 macOS 跳过。其他依赖文件命中及漏洞仍需审查，`exceptions` 仍为空，不以局部清理或通知修正宣称镜像安全通过。

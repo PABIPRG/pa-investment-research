@@ -248,6 +248,12 @@ def run_scanner(command, root, timeout=900, accepted=(0,)):
     if result.returncode == 10 and accepted == (0, 10):
         # Gitleaks reports its finding count as a warning; other diagnostics still block.
         diagnostics = re.sub(rb'(?m)^\S+\s+WRN leaks found: [0-9]+\r?$', b'', diagnostics)
+    if Path(command[0]).name == 'trivy' and command[1:2] == ['image'] and result.returncode == 0:
+        # Trivy's documented severity-source fallback is informational: findings remain in the report.
+        # Match only the pinned version's exact notice, never suppress parse/download/archive warnings.
+        notice = (b'Using severities from other vendors for some vulnerabilities. '
+                  b'Read https://trivy.dev/docs/v0.74/guide/scanner/vulnerability#severity-selection for details.')
+        diagnostics = re.sub(rb'(?m)^\S+[ \t]+WARN[ \t]+' + re.escape(notice) + rb'\r?$', b'', diagnostics)
     require(re.search(rb'(?i)\b(?:warn(?:ing)?|wrn|err(?:or)?|fatal)\b', diagnostics) is None,
             'scanner-incomplete')
     return result
