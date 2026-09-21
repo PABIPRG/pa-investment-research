@@ -1,0 +1,105 @@
+name: Investment production deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: '成功发布 GHCR 镜像的 Investment container image run ID'
+        required: true
+        type: string
+      mode:
+        description: '先使用 connectivity 验证 OIDC 和 SSH；deploy 会停服备份并更新'
+        required: true
+        default: connectivity
+        type: choice
+        options: [connectivity, deploy]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: investment-production-aly
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    name: Verify candidate and Production protections
+    if: github.repository == 'PABIPRG/pa-investment-research' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      image: ${{ steps.preflight.outputs.image }}
+      sha: ${{ steps.preflight.outputs.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Check build provenance, public image identity and environment rules
+        id: preflight
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B ops/pa-investment/ci.py preflight
+
+  deploy:
+    name: '${{ inputs.mode }} — ${{ needs.candidate.outputs.sha }}'
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: Production
+      url: https://pair-demo.xiexin.dev
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require completed server installation and OIDC inputs
+        env:
+          READY: ${{ vars.INVESTMENT_DEPLOY_GUARDS_READY }}
+          CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+        run: |
+          test "$READY" = true || { echo 'Production/server setup has not been confirmed.' >&2; exit 1; }
+          test -n "$CLIENT_ID" && test -n "$AUDIENCE"
+
+      - name: Join Tailnet with the existing federated identity
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci-deployer
+          hostname: pa-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Check the restricted SSH account without deploying
+        run: |
+          timeout 60 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
+            'test "$(id -un)" = pa-deployer && sudo -n -l /usr/local/sbin/pa-investment-deploy && ! sudo -n -l /usr/bin/docker'
+
+      - name: Deploy the approved immutable image
+        if: inputs.mode == 'deploy'
+        env:
+          IMAGE: ${{ needs.candidate.outputs.image }}
+        run: |
+          printf '%s\n' "$IMAGE" | tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
+            'sudo -n /usr/local/sbin/pa-investment-deploy'
+
+      - name: Record workflow result
+        if: always()
+        env:
+          IMAGE: ${{ needs.candidate.outputs.image }}
+          SHA: ${{ needs.candidate.outputs.sha }}
+          MODE: ${{ inputs.mode }}
+          RESULT: ${{ job.status }}
+        run: |
+          {
+            printf '## aly 部署工作流\n\n'
+            printf -- '- 模式：`%s`\n- 状态：`%s`\n- SHA：`%s`\n- 镜像：`%s`\n' "$MODE" "$RESULT" "$SHA" "$IMAGE"
+            printf '\n服务器保留完整备份和阶段记录。失败后检查 active.json，不自动回退镜像或数据。\n'
+          } >> "$GITHUB_STEP_SUMMARY"

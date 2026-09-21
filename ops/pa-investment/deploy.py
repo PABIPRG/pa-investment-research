@@ -1,0 +1,337 @@
+"""Root-only, single-instance deployment entry. No third-party Python dependencies."""
+
+import contextlib
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+
+REPOSITORY = "ghcr.io/pabiprg/pa-investment-research"
+DEPLOY_DIR = Path("/home/admin/pa-investment-deploy")
+BACKUP_DIR = Path("/home/admin/pa-investment-backups/controlled-deployments")
+STATE_DIR = Path("/var/lib/pa-investment-deploy")
+VOLUME = "pa-investment-research_dsh-data"
+VOLUME_ROOT = Path("/var/lib/docker/volumes")
+HEALTH_URL = "https://pair-demo.xiexin.dev/healthz"
+ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
+               "DOCKER_CONFIG": "/etc/pa-investment-deploy/docker"}
+
+
+class DeployError(RuntimeError):
+    """A failed precondition or deployment step requiring operator attention."""
+
+
+def require(condition, message):
+    if not condition:
+        raise DeployError(message)
+
+
+def read_image(stream):
+    value = stream.read(512)
+    require(re.fullmatch(re.escape(REPOSITORY) + r"@sha256:[0-9a-f]{64}\n?", value),
+            "expected exactly one allowed GHCR digest line")
+    return value.rstrip("\n")
+
+
+def replace_image(text, image):
+    candidates = re.findall(r"(?m)^[ \t]*(?:export[ \t]+)?DSH_IMAGE[ \t]*=.*$", text)
+    require(len(candidates) == 1 and candidates[0].startswith("DSH_IMAGE="),
+            ".env must have exactly one unindented DSH_IMAGE assignment")
+    return re.sub(r"(?m)^DSH_IMAGE=.*$", lambda _: "DSH_IMAGE=" + image, text)
+
+
+def atomic_write(path, text, mode=0o600, owner=None):
+    fd, temporary = tempfile.mkstemp(prefix=".deploy-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as output:
+            os.fchmod(output.fileno(), mode)
+            if owner is not None:
+                os.fchown(output.fileno(), *owner)
+            output.write(text)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+
+
+def write_json(path, value):
+    atomic_write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
+def read_json(path):
+    return json.loads(path.read_text())
+
+
+def checked_path(path, owners, secret=False):
+    """Reject links and writable ancestors; admin remains a trusted operator."""
+    require(path.is_absolute(), "deployment path must be absolute")
+    for entry in [*reversed(path.parents), path]:
+        info = entry.lstat()
+        require(not stat.S_ISLNK(info.st_mode), "symlink in deployment path: " + str(entry))
+        allowed = owners | {10001} if secret and entry == path else owners
+        require(info.st_uid in allowed and not info.st_mode & 0o022,
+                "untrusted owner or writable deployment path: " + str(entry))
+    return path.stat()
+
+
+def transact(image, state, driver):
+    """A durable marker survives crashes; only a completed run removes it."""
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (state / "deploy.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise DeployError("another deployment is active") from error
+        active = state / "active.json"
+        require(not active.exists(), "previous deployment requires recovery; inspect " + str(active))
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        record = driver.record_root if hasattr(driver, "record_root") else state
+        record = record / (stamp + "-" + uuid.uuid4().hex[:12])
+        record.mkdir(mode=0o700)
+        status = {"image": image, "record": str(record), "phase": "preparing"}
+
+        def phase(name):
+            status["phase"] = name
+            write_json(record / "status.json", status)
+            write_json(active, status)
+            print(json.dumps({"phase": name, "record": str(record)}), flush=True)
+
+        phase("preparing")
+        try:
+            status.update(driver.prepare(image, record))
+            phase("stopping")
+            driver.stop()
+            phase("backing-up")
+            driver.backup(record)
+            phase("switching")
+            driver.switch(image)
+            phase("starting")
+            driver.start()
+            phase("verifying")
+            driver.verify(image)
+            phase("complete")
+            active.unlink()
+            directory = os.open(state, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            return record
+        except BaseException as error:
+            # Diagnostics never include .env, Docker Config.Env, or a full inspect.
+            status["failed_phase"] = status["phase"]
+            status["error_type"] = type(error).__name__
+            if isinstance(error, DeployError):
+                status["reason"] = str(error)
+            phase("recovery-required")
+            try:
+                driver.diagnose(record)
+            except Exception:
+                print("diagnostics unavailable; recovery marker retained", file=sys.stderr)
+            raise
+
+
+class DockerDriver:
+    def __init__(self):
+        self.record_root = BACKUP_DIR
+        self.compose = ["docker", "compose", "--project-directory", str(DEPLOY_DIR),
+                        "--env-file", str(DEPLOY_DIR / ".env"), "-f", str(DEPLOY_DIR / "compose.yaml"),
+                        "-p", "pa-investment-research"]
+
+    def run(self, args, timeout=120):
+        try:
+            result = subprocess.run(args, env=ENVIRONMENT, cwd="/", capture_output=True,
+                                    text=True, timeout=timeout, check=True)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            # stderr may contain interpolated application secrets; retain no raw output.
+            raise DeployError("command failed: " + args[0] + " " + args[1]) from error
+        return result.stdout.strip()
+
+    def inspect(self, reference, kind="container"):
+        values = json.loads(self.run(["docker", kind, "inspect", reference]))
+        require(len(values) == 1, "expected one inspected object")
+        return values[0]
+
+    def container(self):
+        ids = self.run(self.compose + ["ps", "-a", "-q", "investment"]).split()
+        require(len(ids) == 1, "expected exactly one existing investment container")
+        return self.inspect(ids[0])
+
+    def volume_users(self):
+        return self.run(["docker", "ps", "-q", "--no-trunc", "--filter", "volume=" + VOLUME]).split()
+
+    def prepare(self, image, record):
+        admin = pwd.getpwnam("admin").pw_uid
+        for name in ["compose.yaml", ".env", "web-admin-password.hash"]:
+            info = checked_path(DEPLOY_DIR / name, {0, admin}, secret=name.endswith(".hash"))
+            require(stat.S_ISREG(info.st_mode), "deployment configuration must be regular files")
+            if name == ".env":
+                require(not info.st_mode & 0o077, ".env must be private to its owner")
+            if name.endswith(".hash"):
+                require(info.st_uid == 10001 and stat.S_IMODE(info.st_mode) == 0o400,
+                        "password hash must be owned by UID 10001 with mode 0400")
+        checked_path(Path(ENVIRONMENT["DOCKER_CONFIG"]), {0})
+        self.before = (DEPLOY_DIR / ".env").read_text()
+        self.after = replace_image(self.before, image)
+        config = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        service = config["services"]["investment"]
+        require(not service.get("privileged") and not service.get("devices"), "privileged service rejected")
+        require(service.get("read_only") and "ALL" in service.get("cap_drop", []), "runtime hardening missing")
+        mounts = service.get("volumes", [])
+        require(len(mounts) == 1 and mounts[0].get("type") == "volume"
+                and mounts[0].get("target") == "/var/lib/dsh"
+                and config["volumes"][mounts[0]["source"]]["name"] == VOLUME,
+                "unexpected persistent volume mapping")
+        require(any(config.get("networks", {}).get(name, {}).get("name", name) == "1panel-network"
+                    for name in service.get("networks", {})), "existing 1Panel network missing")
+        self.old = self.container()
+        require(self.old["State"].get("Running") and self.old["State"].get("Health", {}).get("Status") == "healthy",
+                "current service must be running and healthy")
+        require(self.volume_users() == [self.old["Id"]], "another container uses the production volume")
+        require(self.old["Config"]["Image"] == service["image"], "Compose and running image differ")
+        mounted = [m for m in self.old["Mounts"] if m["Destination"] == "/var/lib/dsh"]
+        require(len(mounted) == 1 and mounted[0].get("Name") == VOLUME, "running volume differs")
+        volume = self.inspect(VOLUME, "volume")
+        require(volume["Driver"] == "local" and not volume.get("Options"), "only local Docker volumes supported")
+        self.volume_path = Path(volume["Mountpoint"])
+        require(self.volume_path == VOLUME_ROOT / VOLUME / "_data",
+                "unexpected Docker volume root")
+        checked_path(self.volume_path.parent, {0})
+        require(not self.volume_path.is_symlink() and self.volume_path.is_dir(), "invalid data root")
+        size = int(self.run(["du", "-sb", str(self.volume_path)]).split()[0])
+        require(shutil.disk_usage(record).free > size * 2 + 1024 ** 3, "insufficient backup space")
+        self.run(["docker", "pull", image], timeout=900)
+        candidate = self.inspect(image, "image")
+        require(candidate.get("Os") == "linux" and candidate.get("Architecture") == "amd64",
+                "candidate must be linux/amd64")
+        require(candidate["Config"].get("User") == "dsh", "candidate must run as dsh")
+        labels = candidate["Config"].get("Labels", {})
+        require(labels.get("org.opencontainers.image.source") == "https://github.com/PABIPRG/pa-investment-research",
+                "candidate source label differs")
+        revision = labels.get("org.opencontainers.image.revision", "")
+        require(re.fullmatch(r"[0-9a-f]{40}", revision), "candidate revision missing")
+        require(shutil.disk_usage(record).free > size * 2 + 1024 ** 3,
+                "insufficient backup space after image pull")
+        self.new_id = candidate["Id"]
+        return {"old_image": self.old["Config"]["Image"], "old_image_id": self.old["Image"],
+                "new_image_id": self.new_id, "revision": revision, "volume": VOLUME}
+
+    def stop(self):
+        self.run(self.compose + ["stop", "--timeout", "30", "investment"])
+        stopped = self.inspect(self.old["Id"])
+        require(not stopped["State"]["Running"] and stopped["State"]["ExitCode"] == 0,
+                "service did not stop gracefully")
+        require(not self.volume_users(), "volume still has a running writer")
+
+    def backup(self, record):
+        for name in ["compose.yaml", ".env", "web-admin-password.hash"]:
+            target = record / name
+            with (DEPLOY_DIR / name).open("rb") as source, target.open("xb") as output:
+                shutil.copyfileobj(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+        archive = record / "dsh-data.tar.gz"
+        self.run(["tar", "--acls", "--xattrs", "--numeric-owner", "--one-file-system", "-czpf",
+                  str(archive), "-C", str(self.volume_path), "."], timeout=1800)
+        self.run(["tar", "-tzf", str(archive)], timeout=600)
+        hashes = {}
+        for name in ["compose.yaml", ".env", "web-admin-password.hash", "dsh-data.tar.gz"]:
+            digest = hashlib.sha256()
+            with (record / name).open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+                os.fsync(stream.fileno())
+            hashes[name] = digest.hexdigest()
+        write_json(record / "backup-sha256.json", hashes)
+        require(not self.volume_users(), "unexpected writer during backup")
+
+    def switch(self, image):
+        require((DEPLOY_DIR / ".env").read_text() == self.before, "configuration changed during deployment")
+        info = (DEPLOY_DIR / ".env").stat()
+        atomic_write(DEPLOY_DIR / ".env", self.after, stat.S_IMODE(info.st_mode), (info.st_uid, info.st_gid))
+
+    def start(self):
+        self.run(self.compose + ["up", "-d", "--no-build", "--no-deps", "--pull", "never",
+                                 "--force-recreate", "investment"], timeout=180)
+
+    def verify(self, image):
+        for _ in range(90):
+            container = self.container()
+            require(container["Image"] == self.new_id and container["Config"]["Image"] == image,
+                    "running image identity differs")
+            require(container["State"]["Running"], "new service exited")
+            health = container["State"].get("Health", {}).get("Status")
+            require(health != "unhealthy", "new service unhealthy")
+            if health == "healthy":
+                break
+            time.sleep(5)
+        else:
+            raise DeployError("health wait expired")
+        require(self.volume_users() == [container["Id"]], "single-instance check failed")
+        self.run(["docker", "exec", container["Id"], "node", "/opt/container/investment-healthcheck.mjs"])
+        response = self.run(["curl", "--fail", "--silent", "--show-error", "--proto", "=https",
+                             "--max-time", "30", HEALTH_URL])
+        require(json.loads(response).get("status") == "ok", "HTTPS healthz did not return ok")
+
+    def diagnose(self, record):
+        container = self.container()
+        state = container["State"]
+        write_json(record / "diagnostics.json", {
+            "container": container["Id"], "image_id": container["Image"],
+            "status": state.get("Status"), "exit_code": state.get("ExitCode"),
+            "health": state.get("Health", {}).get("Status"),
+            "restart_count": container.get("RestartCount"),
+        })
+        # Application logs may contain private data: retain only on the server.
+        with (record / "container.log").open("w") as output:
+            subprocess.run(["docker", "logs", "--tail", "200", container["Id"]], env=ENVIRONMENT,
+                           cwd="/", stdout=output, stderr=output, timeout=30, check=False)
+
+
+def main():
+    require(len(sys.argv) == 1, "command-line arguments are forbidden")
+    require(os.geteuid() == 0, "run through the installed sudo entry")
+    os.umask(0o077)
+    image = read_image(sys.stdin)
+    admin = pwd.getpwnam("admin").pw_uid
+    checked_path(STATE_DIR, {0})
+    checked_path(BACKUP_DIR, {0, admin})
+    require(STATE_DIR.stat().st_uid == 0 and BACKUP_DIR.stat().st_uid == 0,
+            "state and backup directories must be root-owned")
+    def interrupted(*_):
+        raise DeployError("deployment interrupted")
+
+    signal.signal(signal.SIGTERM, interrupted)
+    transact(image, STATE_DIR, DockerDriver())
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (DeployError, OSError, ValueError, KeyError) as error:
+        # Avoid serializing exception payloads from parsed configuration or commands.
+        print("Deployment failed (" + type(error).__name__ + "). Inspect /var/lib/pa-investment-deploy/active.json.",
+              file=sys.stderr)
+        if isinstance(error, DeployError):
+            print(str(error), file=sys.stderr)
+        sys.exit(1)

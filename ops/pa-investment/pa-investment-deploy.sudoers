@@ -1,0 +1,3 @@
+# Empty argument string means no command-line arguments are permitted.
+Defaults:pa-deployer env_reset
+pa-deployer ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/pa-investment-deploy ""

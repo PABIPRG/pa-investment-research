@@ -1,0 +1,5 @@
+#!/bin/sh
+# Reset the caller environment before starting the root-owned isolated module.
+test "$#" -eq 0 || exit 64
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 \
+  /usr/bin/python3 -I -B /usr/local/libexec/pa-investment/deploy.py
