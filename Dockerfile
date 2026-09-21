@@ -22,6 +22,10 @@ RUN pnpm run build:lib && pnpm run build:web
 RUN CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 RUN node --import tsx/esm scripts/build-investment-container-app.ts --output /opt/dsh
 
+FROM scratch AS npm-release
+# Node 24.21.0 bundles npm 11.19.0 with vulnerable brace-expansion, ip-address and tar.
+ADD --checksum=sha256:9f58bff01604cb1b14008fef14dceb14d836a49225e45c6c2e37de3be3e707f0 https://registry.npmjs.org/npm/-/npm-11.19.1.tgz /npm.tgz
+
 FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS runtime
 
 ARG VCS_REF=unknown
@@ -32,6 +36,11 @@ ENV DSH_HOME=/var/lib/dsh \
     TZ=Asia/Shanghai
 LABEL org.opencontainers.image.source="https://github.com/PABIPRG/pa-investment-research" \
       org.opencontainers.image.revision="$VCS_REF"
+
+RUN --mount=type=bind,from=npm-release,source=/npm.tgz,target=/tmp/npm.tgz \
+    npm install --global --offline --ignore-scripts --no-audit --no-fund --cache /tmp/npm-update-cache /tmp/npm.tgz \
+    && test "$(npm --version)" = "11.19.1" \
+    && rm -rf /tmp/npm-update-cache
 
 RUN apt-get update \
     && apt-get upgrade -y \

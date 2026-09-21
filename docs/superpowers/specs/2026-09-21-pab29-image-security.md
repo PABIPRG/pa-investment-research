@@ -169,3 +169,15 @@ PAB-29 保持 In Progress。
 | [websocket-client 1.9.0](https://pypi.org/pypi/websocket-client/1.9.0/json) | `websocket/tests/test_websocket.py` | `3513609599e545922bc911b16107695064cf934022e37eb01e80353b0e580b99` |
 
 七份真实文件以 CI 同参数 Gitleaks 复现 15 条命中，精确清理后为 0，许可证保留。4 个 Vitest 文件 44 项、清理器严格类型检查和受影响脚本 lint 通过；ops Python 50 项，49 通过、1 项 GNU tar 专属用例在 macOS 跳过。其他依赖文件命中及漏洞仍需审查，`exceptions` 仍为空，不以局部清理或通知修正宣称镜像安全通过。
+
+## 新镜像完整结果与 npm 工具链补丁（2026-09-21）
+
+`b49b33febd` 的 [Linux CI 35582415199](https://github.com/PABIPRG/pa-investment-research/actions/runs/35582415199/job/106278063614) 构建、边界、Compose 启动/健康/退出检查通过，两类扫描完整执行。秘密命中为 54，敏感路径为 0；漏洞为 CRITICAL 6、HIGH 58、UNKNOWN 1，按安装位置统计，共 27 个阻塞编号。镜像 ID 为 `sha256:5f62fdccdf0abe9299a22ceeec1bc8ae744360a0d5999f8cf387f76c89d37bba`，归档 SHA256 为 `3db8a8657d07c1c465af534b8d4a11818267b5150bbf4a2b4a3961d41ccfe95b`，CI 合并测试源码为 `3a9e17998fcaf43ca0692865ab15c21e7b1e0e80`。Trivy 数据库更新时间为 2026-09-21 07:13:21 UTC；没有上传镜像 artifact 或发布 GHCR。
+
+其中 CVE-2026-14257、CVE-2026-69152、CVE-2026-69192、CVE-2026-73566 对应 Node 24.21.0 随附 npm 11.19.0 的 brace-expansion 5.0.7、ip-address 10.2.0、tar 7.5.19。已核验 [Node 官方固定源码](https://github.com/nodejs/node/tree/v24.21.0/deps/npm) 与 [npm 11.19.1 官方发行信息](https://registry.npmjs.org/npm/11.19.1)：补丁版完整发行包包含 brace-expansion 5.0.9、ip-address 10.5.0、tar 7.5.22。
+
+Dockerfile 使用独立下载阶段，固定官方 npm 归档 SHA256 `9f58bff01604cb1b14008fef14dceb14d836a49225e45c6c2e37de3be3e707f0`，运行镜像构建时只读挂载、离线全局安装、禁用脚本和审计网络并删除缓存。保留 npm/npx，不跨 npm 主版本，也不修改项目锁文件或应用依赖。全历史层秘密扫描照常包含旧 npm 文件，不能用后续覆盖隐藏旧层。
+
+本地隔离前缀完成相同官方归档的离线安装，核对 npm 和三个随附依赖的实际版本；真实 Trivy 0.74.0 rootfs 扫描识别 144 个包，HIGH/CRITICAL/UNKNOWN 为 0。13 项容器契约测试通过。新运行镜像整体结果仍需后续 CI 证明，不能用 npm 子树的通过结论代替。
+
+54 条秘密命中的内容哈希全部与受限本地来源一致：48 条归入文档示例、类型/变量引用、文件哈希、公开证书/签名材料或 OAuth 公共标识候选，6 条涉及第三方运行常量。Node 当前发行包的 npm 文档与 Corepack 文件另经官方整包 SHA256 和逐文件哈希核对，Corepack 两份签名材料可解析为 EC 公钥。上述分类仍非例外授权；运行 token 候选、ChromaDB 及基础系统告警继续阻断，未以第三方公开发行或正常路径关闭 memory 证明其无影响。
