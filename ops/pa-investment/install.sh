@@ -24,13 +24,10 @@ test ! -L /usr/local/libexec/pa-investment
 test ! -L /usr/local/sbin/pa-investment-deploy
 test ! -L /etc/sudoers.d/pa-investment-deploy
 test ! -L /var/lib/pa-investment-deploy
-test ! -L /etc/pa-investment-deploy
-test ! -L /etc/pa-investment-deploy/docker
 test ! -L /home/admin/pa-investment-backups/controlled-deployments
 visudo -cf "$source_dir/pa-investment-deploy.sudoers"
 install -d -o root -g root -m 0755 /usr/local/libexec/pa-investment
 install -d -o root -g root -m 0700 /var/lib/pa-investment-deploy
-install -d -o root -g root -m 0700 /etc/pa-investment-deploy/docker
 install -d -o root -g root -m 0700 /home/admin/pa-investment-backups/controlled-deployments
 install -o root -g root -m 0644 "$source_dir/deploy.py" /usr/local/libexec/pa-investment/deploy.py
 install -o root -g root -m 0755 "$source_dir/pa-investment-deploy" /usr/local/sbin/pa-investment-deploy

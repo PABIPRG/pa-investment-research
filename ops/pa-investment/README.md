@@ -1,6 +1,6 @@
 # aly 受控部署运维手册（PAB-29）
 
-本目录扩展 PAB-20 的容器交付，目标是既有 Linux 服务器 **aly**，不是在 Mac 部署。GitHub 托管 runner 构建和测试镜像；公开 GHCR 保存镜像；管理员批准后，通过既有 Tailscale OIDC/SSH 调用服务器固定入口。Mac 不需要 Docker，服务器不需要 Git、Node、pnpm 或构建工具。
+本目录扩展 PAB-20 的容器交付，目标是既有 Linux 服务器 **aly**，不是在 Mac 部署。GitHub 托管 runner 构建和测试镜像；私有 GHCR 保存镜像；管理员批准后，通过既有 Tailscale OIDC/SSH 调用服务器固定入口。Mac 不需要 Docker，服务器不需要 Git、Node、pnpm 或构建工具。
 
 这份代码进入仓库不代表生产链路已启用。首次启用必须完成下列检查；不能以单元测试代替 Linux 容器测试、服务器检查、业务验收和恢复演练。设计与追溯见 [PAB-29 规格](../../docs/superpowers/specs/2026-09-21-pab29-controlled-deployment.md)。
 
@@ -14,7 +14,7 @@
 | 唯一持久卷 | `pa-investment-research_dsh-data` → `/var/lib/dsh`；Docker 默认本地卷根目录 |
 | 网络与健康入口 | 复用 `1panel-network`；`https://pair-demo.xiexin.dev/healthz` |
 | 镜像 | `ghcr.io/pabiprg/pa-investment-research@sha256:<64位digest>`，只支持 Linux amd64 |
-| root 部署入口 | `/usr/local/sbin/pa-investment-deploy`，无参数，stdin 仅一行镜像 digest |
+| root 部署入口 | `/usr/local/sbin/pa-investment-deploy`，无参数；stdin 为镜像 digest、GitHub actor、短期 token 三行 |
 | 安装脚本 | `/usr/local/libexec/pa-investment/deploy.py`，root 所有且不可由部署账号修改 |
 | 锁与失败标记 | `/var/lib/pa-investment-deploy/deploy.lock`、`active.json` |
 | 备份与记录 | `/home/admin/pa-investment-backups/controlled-deployments/<UTC时间-随机ID>/`，root 私有 |
@@ -29,9 +29,9 @@
 
 publish job 载入 **同次 smoke 测试通过的归档**，核对归档 SHA-256、镜像 config ID 和源码 revision 后直接推送，不重新构建。标签包含完整源码 SHA、run ID 和 attempt；发布清单保存 registry digest，生产仅使用该 digest。没有 `latest`，没有每次合并自动部署。
 
-### 2. 公开 GHCR 与 Production 设置
+### 2. 私有 GHCR 与 Production 设置
 
-用户已同意公开镜像。首次发布后，在 GitHub 组织 Packages 中将 `pa-investment-research` 包设置为 Public，并确认该公仓 Actions 具有包写入权限。**公仓不等于包自动公开**；未能匿名读取镜像时部署前置检查会拒绝，不把拉取凭据装到服务器。不要把运行时 `.env`、密码哈希、备份或真实用户数据加入镜像或 Actions 产物。
+组织策略不允许公开 `pa-investment-research` 包。包保持 Private，并在 Package settings 的 Manage Actions access 中允许 `PABIPRG/pa-investment-research` 读取。部署 workflow 只申请 `packages: read`，使用每个 job 的短期 `GITHUB_TOKEN`：候选 job 登录后核对 registry config ID；deploy job 经受限 SSH stdin 将 token 交给 root 入口。服务器只在 `/run/pa-investment-deploy` 下创建 root 私有临时 Docker 配置，精确 digest 拉取完成后、停服前即删除，不保存个人或机器账号 PAT。不要把运行时 `.env`、密码哈希、token、备份或真实用户数据加入镜像、Actions 产物、状态文件或日志。
 
 在公仓 `Settings → Environments → Production` 核对：
 
@@ -46,7 +46,7 @@ publish job 载入 **同次 smoke 测试通过的归档**，核对归档 SHA-256
 repo:PABIPRG@315199386/pa-investment-research@1337955404:environment:Production
 ```
 
-环境名大小写必须保持 `Production`；标签继续为 `tag:ci-deployer` → `tag:prod-server`，SSH 用户 `pa-deployer`。不要改成 `action:check` 的人工 admin 登录路径。2026-09-21 的只读检查显示 Production 尚无 reviewers/分支规则且允许管理员绕过；以上是待启用配置，不是声称已经完成的配置。
+环境名大小写必须保持 `Production`；标签继续为 `tag:ci-deployer` → `tag:prod-server`，SSH 用户 `pa-deployer`。不要改成 `action:check` 的人工 admin 登录路径。2026-09-22 的只读检查显示 reviewer 为 `jiahim`、部署分支仅 `master`、管理员绕过已关闭，两个 Tailscale secret 名称已登记；`INVESTMENT_DEPLOY_GUARDS_READY` 仍为 `false`，服务器入口更新并复核前保持关闭。
 
 ### 3. 服务器一次性安装（管理员明确批准后）
 
@@ -62,7 +62,7 @@ id pa-deployer
 
 安装仅创建 root-owned 入口、私有备份目录和最小 sudoers，不停止或更新容器。启用前核对完整 sudo 列表只允许本入口；若已有更宽规则，先由管理员处理，不能用本模板掩盖。现有 `.env` 应为 admin/root 私有文件；密码哈希保持 `10001:10001`、`0400`。所有部署路径及父目录不得是符号链接或 group/world-writable。现有 Compose 必须保留只读根文件系统、cap_drop ALL、唯一数据卷和 1Panel 网络。
 
-`/etc/pa-investment-deploy/docker` 保持空的 root 私有配置目录，不复制人工账号的 registry 凭据。检查磁盘预算：脚本要求可用空间大于卷表观大小的两倍加 1 GiB，并在停机前拉取候选镜像；这不是长期容量保证。
+不在 `/etc`、admin HOME 或部署目录保存 registry 凭据。短期 token 只用于停服前的 `docker login --password-stdin` 和精确 digest 拉取，临时 `DOCKER_CONFIG` 随后删除。检查磁盘预算：脚本要求可用空间大于卷表观大小的两倍加 1 GiB，并在停机前拉取候选镜像；这不是长期容量保证。
 
 还应审查一次完整备份的预估时长、当前卷数据量和恢复路径，确认短暂停机窗口。备份在同一主机只用于升级恢复，**不替代异机灾备**；按 PAB-18 将备份安全复制到独立故障域并做恢复演练。自动保留清理暂未实现，管理员监控磁盘，不运行无差别 prune 或删除历史卷。
 
@@ -70,7 +70,7 @@ id pa-deployer
 
 服务器安装和权限检查通过后，设置 Production 的 `INVESTMENT_DEPLOY_GUARDS_READY=true`。
 
-在公仓 Actions 选择 `Investment production deployment`，分支 master，输入成功发布的 `Investment container image` **run ID**，先选 `mode=connectivity`。候选 job 验证构建属于公仓 master、已成功、源码在主干历史、发布清单属于同一次 attempt、公开 registry 中 config ID 与测试镜像一致，以及 Production 的保护规则。然后等待人工审批。
+在公仓 Actions 选择 `Investment production deployment`，分支 master，输入成功发布的 `Investment container image` **run ID**，先选 `mode=connectivity`。候选 job 使用短期 `GITHUB_TOKEN` 读取私有包，验证构建属于公仓 master、已成功、源码在主干历史、发布清单属于同一次 attempt、registry config ID 与测试镜像一致，以及 Production 的保护规则。然后等待人工审批。
 
 批准 connectivity 只做 Tailscale OIDC、SSH 身份和受限 sudo 检查，不调用部署入口，不停服，不备份。记录成功 run 链接；若 admin 的 `ssh aly` 提示人工登录确认，这是人工维护身份的要求，不等于 CI OIDC 未配置。
 
@@ -118,7 +118,7 @@ sudo docker compose --project-directory /home/admin/pa-investment-deploy \
 
 ## 身份撤销与轮换
 
-本链路不保存长期 Tailscale auth key、OAuth client secret 或服务器 GHCR token。需要轮换已有联邦身份时，先暂停部署并将 ready variable 设为 false；由管理员在 Tailscale 替换/撤销对应身份，保持受限 Subject、audience、标签和 SSH 用户边界，更新 Production 的 client ID/audience。核对 Tailnet 中已接入的旧 CI 节点并撤销其访问，不只删除 GitHub secrets。按首次启用顺序复核后重新打开 ready variable，以 connectivity 模式验证；不要为轮换临时授予 admin 或通用 Docker 权限。GitHub `GITHUB_TOKEN` 由每次 job 获取，不在服务器持久化；包写入权限从 GitHub 仓库/包访问规则撤销。
+本链路不保存长期 Tailscale auth key、OAuth client secret 或服务器 GHCR token。需要轮换已有联邦身份时，先暂停部署并将 ready variable 设为 false；由管理员在 Tailscale 替换/撤销对应身份，保持受限 Subject、audience、标签和 SSH 用户边界，更新 Production 的 client ID/audience。核对 Tailnet 中已接入的旧 CI 节点并撤销其访问，不只删除 GitHub secrets。按首次启用顺序复核后重新打开 ready variable，以 connectivity 模式验证；不要为轮换临时授予 admin 或通用 Docker 权限。GitHub `GITHUB_TOKEN` 由每个 job 获取，拉取后即从服务器临时目录删除，并在 job 结束后失效；撤销包读取权限应通过 Package settings 的 Actions access 完成。
 
 ## 聚焦验证
 
@@ -132,9 +132,9 @@ git diff --check
 
 测试使用临时目录与模拟 Docker，不访问生产、不构建镜像。Linux CI 额外运行真实 GNU tar 归档/恢复测试；Mac 跳过该用例。真实服务器上的文件权限、sudoers、Docker、OIDC、停机时长与业务数据恢复仍需环境验证。
 
-接口依据：[GitHub Environment 保护](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)、[部署分支规则 API](https://docs.github.com/en/rest/deployments/branch-policies)、[Docker registry manifest 检查](https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/)、[GHCR 可见性](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+接口依据：[GitHub Environment 保护](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)、[部署分支规则 API](https://docs.github.com/en/rest/deployments/branch-policies)、[Docker registry manifest 检查](https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/)、[GHCR 认证](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 
-## 镜像公开前安全门禁（PAB-29）
+## 镜像发布前安全门禁（PAB-29）
 
 `investment-container.yml` 在 Compose smoke 后导出受测归档，使用
 `image_security.py` 扫描，再上传镜像 artifact；GHCR publish 依赖同一 job

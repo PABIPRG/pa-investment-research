@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      packages: read
     outputs:
       image: ${{ steps.preflight.outputs.image }}
       sha: ${{ steps.preflight.outputs.sha }}
@@ -38,7 +39,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@v3
-      - name: Check build provenance, public image identity and environment rules
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Check build provenance, private image identity and environment rules
         id: preflight
         env:
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
@@ -56,6 +62,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: read
     defaults:
       run:
         shell: bash
@@ -86,9 +93,15 @@ jobs:
         if: inputs.mode == 'deploy'
         env:
           IMAGE: ${{ needs.candidate.outputs.image }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
         run: |
-          printf '%s\n' "$IMAGE" | tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
-            'sudo -n /usr/local/sbin/pa-investment-deploy'
+          {
+            printf '%s\n' "$IMAGE"
+            printf '%s\n' "$REGISTRY_USERNAME"
+            printf '%s\n' "$REGISTRY_TOKEN"
+          } | tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
+              'sudo -n /usr/local/sbin/pa-investment-deploy'
 
       - name: Record workflow result
         if: always()

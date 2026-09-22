@@ -73,7 +73,7 @@ def preflight():
                         "--dir", directory], check=True)
         manifest = json.loads((Path(directory) / "published-image.json").read_text())
     image = validate_manifest(manifest, run)
-    # Registry access uses no login; a private package fails before production access.
+    # The workflow authenticates with its short-lived GITHUB_TOKEN before this check.
     inspected = json.loads(subprocess.check_output(["docker", "buildx", "imagetools", "inspect", image,
                                                    "--raw"], text=True))
     require(inspected.get("config", {}).get("digest") == manifest["image_id"],

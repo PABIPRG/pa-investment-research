@@ -16,18 +16,36 @@ import deploy
 
 
 IMAGE = "ghcr.io/pabiprg/pa-investment-research@sha256:" + "a" * 64
+REGISTRY_USERNAME = "jiahim"
+REGISTRY_TOKEN = "ghs_" + "b" * 36
 
 
 class InputTests(unittest.TestCase):
-    def test_exact_digest_line(self):
-        self.assertEqual(deploy.read_image(io.StringIO(IMAGE + "\n")), IMAGE)
+    def test_exact_private_registry_request(self):
+        self.assertEqual(
+            deploy.read_request(io.StringIO(
+                IMAGE + "\n" + REGISTRY_USERNAME + "\n" + REGISTRY_TOKEN + "\n")),
+            (IMAGE, REGISTRY_USERNAME, REGISTRY_TOKEN),
+        )
 
-    def test_rejects_tags_other_registries_and_extra_input(self):
-        for value in [IMAGE + "\n\n", IMAGE + "\necho bad\n", IMAGE + " ",
-                      IMAGE.replace("pabiprg", "other"), IMAGE.replace("a" * 64, "A" * 64),
-                      "ghcr.io/pabiprg/pa-investment-research:latest", "$(id)", ""]:
-            with self.subTest(value=value), self.assertRaises(deploy.DeployError):
-                deploy.read_image(io.StringIO(value))
+    def test_rejects_invalid_or_incomplete_private_registry_request(self):
+        valid = IMAGE + "\n" + REGISTRY_USERNAME + "\n" + REGISTRY_TOKEN + "\n"
+        values = [
+            IMAGE + "\n",
+            valid + "extra\n",
+            IMAGE.replace("pabiprg", "other") + "\n" + REGISTRY_USERNAME + "\n" + REGISTRY_TOKEN + "\n",
+            IMAGE.replace("a" * 64, "A" * 64) + "\n" + REGISTRY_USERNAME + "\n" + REGISTRY_TOKEN + "\n",
+            "ghcr.io/pabiprg/pa-investment-research:latest\n" + REGISTRY_USERNAME + "\n" + REGISTRY_TOKEN + "\n",
+            IMAGE + "\ninvalid user\n" + REGISTRY_TOKEN + "\n",
+            IMAGE + "\n" + REGISTRY_USERNAME + "\nshort\n",
+            IMAGE + "\n" + REGISTRY_USERNAME + "\ncontains space\n",
+            "x" * 4097,
+            "",
+        ]
+        for value in values:
+            with self.subTest(value=value[:80]), self.assertRaises(deploy.DeployError) as error:
+                deploy.read_request(io.StringIO(value))
+            self.assertNotIn(REGISTRY_TOKEN, str(error.exception))
 
     def test_updates_one_assignment_without_changing_other_settings(self):
         before = "# unchanged\nTZ=Asia/Shanghai\n\nDSH_IMAGE=old\nSECRET=opaque\n"
@@ -144,6 +162,12 @@ class DriverTests(unittest.TestCase):
         self.enterContext(patch.object(deploy, "DEPLOY_DIR", self.config_dir))
         self.enterContext(patch.object(deploy, "VOLUME_ROOT", self.volume_root))
         self.enterContext(patch.object(deploy, "BACKUP_DIR", self.root))
+        self.state_dir = self.root / "state"
+        self.state_dir.mkdir()
+        self.enterContext(patch.object(deploy, "STATE_DIR", self.state_dir))
+        self.registry_runtime_dir = self.root / "runtime"
+        self.registry_runtime_dir.mkdir()
+        self.enterContext(patch.object(deploy, "REGISTRY_RUNTIME_DIR", self.registry_runtime_dir))
         self.enterContext(patch.object(deploy.pwd, "getpwnam", return_value=type("User", (), {"pw_uid": os.getuid()})()))
         # Production ownership checks are covered separately; fixtures live under /tmp.
         def fixture_path(path, *args, **kwargs):
@@ -153,8 +177,9 @@ class DriverTests(unittest.TestCase):
         (self.config_dir / ".env").chmod(0o600)
         self.enterContext(patch.object(deploy, "checked_path", side_effect=fixture_path))
         self.enterContext(patch.object(deploy.shutil, "disk_usage", return_value=type("Disk", (), {"free": 10 ** 12})()))
-        self.driver = deploy.DockerDriver()
+        self.driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
         self.calls = []
+        self.run_metadata = []
         self.running = True
         self.current_image = "old"
         self.current_id = "sha256:" + "b" * 64
@@ -169,8 +194,9 @@ class DriverTests(unittest.TestCase):
                        "volumes": {"dsh-data": {"name": deploy.VOLUME}}}
         self.driver.run = self.fake_run
 
-    def fake_run(self, args, timeout=120):
+    def fake_run(self, args, timeout=120, input_text=None, environment=None):
         self.calls.append(args)
+        self.run_metadata.append((args, input_text, environment))
         if args[:3] == ["docker", "compose", "--project-directory"]:
             command = args[len(self.driver.compose):]
             if command[:1] == ["config"]:
@@ -195,6 +221,8 @@ class DriverTests(unittest.TestCase):
             return json.dumps([{"Driver": "local", "Options": None, "Mountpoint": str(self.volume)}])
         if args[:2] == ["docker", "ps"]:
             return "container-id" if self.running else ""
+        if args[:2] == ["docker", "login"]:
+            return ""
         if args[:2] == ["docker", "pull"]:
             return ""
         if args[:3] == ["docker", "image", "inspect"]:
@@ -213,6 +241,49 @@ class DriverTests(unittest.TestCase):
         result = self.driver.prepare(IMAGE, self.root)
         self.assertEqual(result["revision"], "c" * 40)
         self.assertIn(["docker", "pull", IMAGE], self.calls)
+        login = next(item for item in self.run_metadata if item[0][:2] == ["docker", "login"])
+        pull = next(item for item in self.run_metadata if item[0][:2] == ["docker", "pull"])
+        self.assertEqual(login[1], REGISTRY_TOKEN + "\n")
+        self.assertNotIn(REGISTRY_TOKEN, login[0])
+        self.assertEqual(login[2]["DOCKER_CONFIG"], pull[2]["DOCKER_CONFIG"])
+        self.assertFalse(Path(login[2]["DOCKER_CONFIG"]).exists())
+        self.assertLess(self.calls.index(login[0]), self.calls.index(pull[0]))
+        self.assertTrue(self.running)
+
+    def test_registry_login_failure_does_not_stop_service(self):
+        docker_config = None
+
+        def reject_login(args, **kwargs):
+            nonlocal docker_config
+            if args[:2] == ["docker", "login"]:
+                docker_config = kwargs["environment"]["DOCKER_CONFIG"]
+                raise deploy.DeployError("command failed: docker login")
+            return self.fake_run(args, **kwargs)
+
+        self.driver.run = reject_login
+        with self.assertRaisesRegex(deploy.DeployError, "docker login"):
+            self.driver.prepare(IMAGE, self.root)
+        self.assertIsNone(self.driver.registry_token)
+        self.assertIsNotNone(docker_config)
+        self.assertFalse(Path(docker_config).exists())
+        self.assertTrue(self.running)
+
+    def test_registry_pull_failure_removes_credentials_before_stop(self):
+        docker_config = None
+
+        def reject_pull(args, **kwargs):
+            nonlocal docker_config
+            if args[:2] == ["docker", "pull"]:
+                docker_config = kwargs["environment"]["DOCKER_CONFIG"]
+                raise deploy.DeployError("command failed: docker pull")
+            return self.fake_run(args, **kwargs)
+
+        self.driver.run = reject_pull
+        with self.assertRaisesRegex(deploy.DeployError, "docker pull"):
+            self.driver.prepare(IMAGE, self.root)
+        self.assertIsNone(self.driver.registry_token)
+        self.assertIsNotNone(docker_config)
+        self.assertFalse(Path(docker_config).exists())
         self.assertTrue(self.running)
 
     def test_incorrect_architecture_and_root_image_fail_before_stop(self):
@@ -324,7 +395,7 @@ class FileSafetyTests(unittest.TestCase):
         for mode in [stat.S_IFLNK | 0o777, stat.S_IFDIR | 0o775]:
             with self.subTest(mode=mode), patch.object(Path, "lstat", return_value=type("Stat", (), {"st_mode": mode, "st_uid": 0})()):
                 with self.assertRaises(deploy.DeployError):
-                    deploy.checked_path(Path("/etc/pa-investment-deploy/docker"), {0})
+                    deploy.checked_path(Path("/run/pa-investment-deploy"), {0})
 
 
 if __name__ == "__main__":

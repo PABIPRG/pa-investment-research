@@ -26,8 +26,9 @@ STATE_DIR = Path("/var/lib/pa-investment-deploy")
 VOLUME = "pa-investment-research_dsh-data"
 VOLUME_ROOT = Path("/var/lib/docker/volumes")
 HEALTH_URL = "https://pair-demo.xiexin.dev/healthz"
-ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
-               "DOCKER_CONFIG": "/etc/pa-investment-deploy/docker"}
+REGISTRY_RUNTIME_DIR = Path("/run/pa-investment-deploy")
+ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
+MAX_REQUEST_BYTES = 4096
 
 
 class DeployError(RuntimeError):
@@ -39,11 +40,20 @@ def require(condition, message):
         raise DeployError(message)
 
 
-def read_image(stream):
-    value = stream.read(512)
-    require(re.fullmatch(re.escape(REPOSITORY) + r"@sha256:[0-9a-f]{64}\n?", value),
-            "expected exactly one allowed GHCR digest line")
-    return value.rstrip("\n")
+def read_request(stream):
+    value = stream.read(MAX_REQUEST_BYTES + 1)
+    require(len(value.encode("utf-8")) <= MAX_REQUEST_BYTES and value.endswith("\n"),
+            "invalid deployment request")
+    lines = value.splitlines()
+    require(len(lines) == 3, "invalid deployment request")
+    image, username, token = lines
+    require(re.fullmatch(re.escape(REPOSITORY) + r"@sha256:[0-9a-f]{64}", image),
+            "invalid deployment image")
+    require(re.fullmatch(r"[A-Za-z0-9_.@\[\]-]{1,128}", username),
+            "invalid registry username")
+    require(re.fullmatch(r"[\x21-\x7e]{20,1024}", token),
+            "invalid registry credential")
+    return image, username, token
 
 
 def replace_image(text, image):
@@ -152,20 +162,33 @@ def transact(image, state, driver):
 
 
 class DockerDriver:
-    def __init__(self):
+    def __init__(self, registry_username, registry_token):
         self.record_root = BACKUP_DIR
+        self.registry_username = registry_username
+        self.registry_token = registry_token
         self.compose = ["docker", "compose", "--project-directory", str(DEPLOY_DIR),
                         "--env-file", str(DEPLOY_DIR / ".env"), "-f", str(DEPLOY_DIR / "compose.yaml"),
                         "-p", "pa-investment-research"]
 
-    def run(self, args, timeout=120):
+    def run(self, args, timeout=120, input_text=None, environment=None):
         try:
-            result = subprocess.run(args, env=ENVIRONMENT, cwd="/", capture_output=True,
-                                    text=True, timeout=timeout, check=True)
+            result = subprocess.run(args, env=environment or ENVIRONMENT, cwd="/", capture_output=True,
+                                    text=True, input=input_text, timeout=timeout, check=True)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             # stderr may contain interpolated application secrets; retain no raw output.
             raise DeployError("command failed: " + args[0] + " " + args[1]) from error
         return result.stdout.strip()
+
+    def pull_private_image(self, image):
+        token = self.registry_token
+        self.registry_token = None
+        require(token is not None, "registry credential already consumed")
+        with tempfile.TemporaryDirectory(prefix="registry-", dir=REGISTRY_RUNTIME_DIR) as directory:
+            os.chmod(directory, 0o700)
+            environment = {**ENVIRONMENT, "DOCKER_CONFIG": directory}
+            self.run(["docker", "login", "ghcr.io", "--username", self.registry_username,
+                      "--password-stdin"], input_text=token + "\n", environment=environment)
+            self.run(["docker", "pull", image], timeout=900, environment=environment)
 
     def inspect(self, reference, kind="container"):
         values = json.loads(self.run(["docker", kind, "inspect", reference]))
@@ -190,7 +213,6 @@ class DockerDriver:
             if name.endswith(".hash"):
                 require(info.st_uid == 10001 and stat.S_IMODE(info.st_mode) == 0o400,
                         "password hash must be owned by UID 10001 with mode 0400")
-        checked_path(Path(ENVIRONMENT["DOCKER_CONFIG"]), {0})
         self.before = (DEPLOY_DIR / ".env").read_text()
         self.after = replace_image(self.before, image)
         config = json.loads(self.run(self.compose + ["config", "--format", "json"]))
@@ -220,7 +242,7 @@ class DockerDriver:
         require(not self.volume_path.is_symlink() and self.volume_path.is_dir(), "invalid data root")
         size = int(self.run(["du", "-sb", str(self.volume_path)]).split()[0])
         require(shutil.disk_usage(record).free > size * 2 + 1024 ** 3, "insufficient backup space")
-        self.run(["docker", "pull", image], timeout=900)
+        self.pull_private_image(image)
         candidate = self.inspect(image, "image")
         require(candidate.get("Os") == "linux" and candidate.get("Architecture") == "amd64",
                 "candidate must be linux/amd64")
@@ -312,17 +334,21 @@ def main():
     require(len(sys.argv) == 1, "command-line arguments are forbidden")
     require(os.geteuid() == 0, "run through the installed sudo entry")
     os.umask(0o077)
-    image = read_image(sys.stdin)
+    image, registry_username, registry_token = read_request(sys.stdin)
     admin = pwd.getpwnam("admin").pw_uid
     checked_path(STATE_DIR, {0})
     checked_path(BACKUP_DIR, {0, admin})
     require(STATE_DIR.stat().st_uid == 0 and BACKUP_DIR.stat().st_uid == 0,
             "state and backup directories must be root-owned")
+    REGISTRY_RUNTIME_DIR.mkdir(mode=0o700, exist_ok=True)
+    runtime = checked_path(REGISTRY_RUNTIME_DIR, {0})
+    require(runtime.st_uid == 0 and stat.S_IMODE(runtime.st_mode) == 0o700,
+            "registry runtime directory must be root-owned with mode 0700")
     def interrupted(*_):
         raise DeployError("deployment interrupted")
 
     signal.signal(signal.SIGTERM, interrupted)
-    transact(image, STATE_DIR, DockerDriver())
+    transact(image, STATE_DIR, DockerDriver(registry_username, registry_token))
 
 
 if __name__ == "__main__":
