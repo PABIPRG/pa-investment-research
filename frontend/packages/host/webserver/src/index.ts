@@ -20,9 +20,11 @@ import z from '@deepseek-ai/schemastery'
 export {
   authorizeProtectedWebRequest,
   assertTrustedAuthority,
+  assertTrustedOrigin,
   assertTrustedProxyAddress,
   isLoopbackRequestPeer,
   isTrustedApiRequest,
+  isTrustedPublicReadRequest,
   isTrustedForwardedHttps,
   requestClientAddress,
   type BrowserTrustRequest,

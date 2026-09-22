@@ -186,6 +186,76 @@ describe('InvestmentBackendManager', () => {
     await manager.dispose()
   })
 
+  it('public reads never start an idle backend or hold a lifecycle lease', async () => {
+    const { manager, specs, handle } = await harness([refused, healthy])
+    manager.register(definition)
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/not running/)
+    expect(specs).toHaveLength(0)
+    const owner = await manager.acquire('trading-core')
+    const endpoint = await manager.getRunningBackend('trading-core')
+    expect(endpoint).toEqual({ id: 'trading-core', baseUrl: definition.baseUrl })
+    expect(specs).toHaveLength(1)
+    const releasing = owner.release()
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/not running/)
+    handle.exit()
+    await releasing
+    expect(handle.terminateCalls).toBe(1)
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/not running/)
+    expect(specs).toHaveLength(1)
+    await manager.dispose()
+  })
+
+  it.each(['attached', 'external'] as const)('borrows active %s without owning it', async (ownership) => {
+    const { manager, specs, handle } = await harness()
+    manager.register({ ...definition, mode: ownership === 'external' ? 'external' : 'managed' })
+    const owner = await manager.acquire('trading-core')
+    expect((await manager.getRunningBackend('trading-core')).baseUrl).toBe(definition.baseUrl)
+    await owner.release()
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/not running/)
+    expect(handle.terminateCalls).toBe(0)
+    expect(specs).toHaveLength(0)
+    await manager.dispose()
+  })
+
+  it('public reads fail on unhealthy backends or cancelled callers without spawning', async () => {
+    const { manager, specs } = await harness([healthy, refused])
+    const remove = manager.register(definition)
+    const owner = await manager.acquire('trading-core')
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/health/)
+    await expect(manager.getRunningBackend('trading-core', AbortSignal.abort(new Error('cancelled')))).rejects.toThrow('cancelled')
+    expect(specs).toHaveLength(0)
+    await owner.release()
+    remove()
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/not registered/)
+    await manager.dispose()
+    await expect(manager.getRunningBackend('trading-core')).rejects.toThrow(/disposed/)
+  })
+
+  it.each(['release', 'unregister', 'dispose'] as const)('rejects public health checks racing %s', async (action) => {
+    const base = await harness()
+    const pending = Promise.withResolvers<BackendHealthResult>()
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess,
+      config: { dshHome: base.home, healthFreshnessMs: 0 },
+      checkHealth: async () => probes++ === 0 ? healthy : pending.promise,
+    })
+    const remove = manager.register(definition)
+    const owner = await manager.acquire('trading-core')
+    const reading = manager.getRunningBackend('trading-core')
+    const rejection = expect(reading).rejects.toThrow()
+    let disposing: Promise<void> | undefined
+    if (action === 'release') await owner.release()
+    if (action === 'unregister') remove()
+    if (action === 'dispose') disposing = manager.dispose()
+    pending.resolve(healthy)
+    await rejection
+    await disposing
+    await owner.release()
+    await manager.dispose()
+    expect(base.specs).toHaveLength(0)
+  })
+
   it('single-flights concurrent acquire, refcounts leases, and stops only after the last release', async () => {
     const { manager, handle, specs } = await harness([refused, refused, healthy])
     manager.register(definition)
@@ -477,6 +547,8 @@ describe('InvestmentBackendManager', () => {
         events.push(`health:${result.status}`)
         return result
       },
+      resolvePaths: () => ({ source: 'source', projectDir: current.projectDir, pythonExecutable: join(current.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       resolveCredential,
     })
     manager.register({
@@ -530,6 +602,8 @@ describe('InvestmentBackendManager', () => {
     const earlyManager = new InvestmentBackendManager({
       subprocess: early.subprocess,
       config: { dshHome: early.home },
+      resolvePaths: () => ({ source: 'source', projectDir: early.projectDir, pythonExecutable: join(early.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       checkHealth: async () => refused,
       resolveCredential: async () => secret,
     })
@@ -553,6 +627,8 @@ describe('InvestmentBackendManager', () => {
     const cleanupManager = new InvestmentBackendManager({
       subprocess: cleanup.subprocess,
       config: { dshHome: cleanup.home },
+      resolvePaths: () => ({ source: 'source', projectDir: cleanup.projectDir, pythonExecutable: join(cleanup.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       checkHealth: async () => cleanup.specs.length === 0 ? refused : { status: 'occupied', healthUrl: 'x', httpStatus: 200 },
       resolveCredential: async () => secret,
     })
@@ -575,6 +651,8 @@ describe('InvestmentBackendManager', () => {
     current.handle.stdoutChunks.push(`early diagnostic ${secret.slice(0, splitAt)}`)
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
+      resolvePaths: () => ({ source: 'source', projectDir: current.projectDir, pythonExecutable: join(current.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       config: { dshHome: current.home },
       checkHealth: async () => refused,
       resolveCredential: async () => secret,
@@ -607,6 +685,8 @@ describe('InvestmentBackendManager', () => {
     const nowValues = [0, 0, 1]
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
+      resolvePaths: () => ({ source: 'source', projectDir: current.projectDir, pythonExecutable: join(current.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       config: { dshHome: current.home, startupTimeoutMs: 1 },
       checkHealth: async () => refused,
       resolveCredential: async () => secret,
@@ -645,6 +725,8 @@ describe('InvestmentBackendManager', () => {
     const nowValues = [0, 0, 1]
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
+      resolvePaths: () => ({ source: 'source', projectDir: current.projectDir, pythonExecutable: join(current.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       config: { dshHome: current.home, startupTimeoutMs: 1 },
       checkHealth: async () => refused,
       resolveCredential: async () => secret,
@@ -673,6 +755,8 @@ describe('InvestmentBackendManager', () => {
     current.handle.stdoutChunks.push(`cleanup diagnostic ${secret.slice(0, splitAt)}`)
     const manager = new InvestmentBackendManager({
       subprocess: current.subprocess,
+      resolvePaths: () => ({ source: 'source', projectDir: current.projectDir, pythonExecutable: join(current.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       config: { dshHome: current.home },
       checkHealth: async () => refused,
       resolveCredential: async () => secret,
@@ -703,6 +787,8 @@ describe('InvestmentBackendManager', () => {
     const unresolvedManager = new InvestmentBackendManager({
       subprocess: unresolved.subprocess,
       config: { dshHome: unresolved.home },
+      resolvePaths: () => ({ source: 'source', projectDir: unresolved.projectDir, pythonExecutable: join(unresolved.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       checkHealth: async () => unresolved.specs.length === 0 ? refused : healthy,
       resolveCredential: resolveUndefined,
     })
@@ -725,6 +811,8 @@ describe('InvestmentBackendManager', () => {
     const failedManager = new InvestmentBackendManager({
       subprocess: failed.subprocess,
       config: { dshHome: failed.home },
+      resolvePaths: () => ({ source: 'source', projectDir: failed.projectDir, pythonExecutable: join(failed.projectDir, 'env', 'bin', 'python') }),
+      executableExists: async () => true,
       checkHealth: async () => refused,
       resolveCredential: async () => secret,
     })
@@ -1138,6 +1226,8 @@ describe('InvestmentBackendManager', () => {
 
   it('publishes explicit schema defaults', () => {
     expect(InvestmentPythonRuntime.Config({})).toEqual({
+      backupExportAckTimeoutMs: 10_000,
+      backupExportRecoveryIntervalMs: 30_000,
       startupTimeoutMs: 30_000,
       healthPollMs: 250,
       healthFreshnessMs: 5_000,

@@ -1,0 +1,27 @@
+{
+  "name": "@deepseek-ai/dsh-public-observatory",
+  "description": "Login-free public investment performance observatory",
+  "version": "0.2.0-alpha.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1 --port 3198",
+    "preview": "vite preview --host 127.0.0.1 --port 3198"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-client-ui-primitives": "workspace:^",
+    "echarts": "^5.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.0.0",
+    "vitest": "^4.1.8"
+  }
+}

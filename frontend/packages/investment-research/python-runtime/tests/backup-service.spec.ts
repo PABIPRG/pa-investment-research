@@ -84,6 +84,7 @@ describe('BackupService storage', () => {
   it('uses the DSH home default, persists an explicit directory, and scans readable and damaged backups', async () => {
     const dshHome = await home()
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') return tradingSnapshot(requestCategories(input))
       throw new Error(`unexpected ${operation}`)
     })
@@ -144,6 +145,7 @@ describe('BackupService storage', () => {
       dshHome,
       appVersion: '0.1.0-rc.12',
       request: async (_backend, operation, input) => {
+        if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
         if (operation === 'export') return tradingSnapshot(requestCategories(input))
         throw new Error(`unexpected ${operation}`)
       },
@@ -160,6 +162,7 @@ describe('BackupService storage', () => {
       dshHome,
       appVersion: '0.1.0-rc.12',
       request: async (_backend, operation, input) => {
+        if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
         if (operation === 'export') return tradingSnapshot(requestCategories(input))
         throw new Error(`unexpected ${operation}`)
       },
@@ -192,6 +195,7 @@ describe('BackupService storage', () => {
       appVersion: '0.1.0-rc.12',
       now: () => new Date(nowMs),
       request: async (_backend, operation, input) => {
+        if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
         if (operation === 'export') return tradingSnapshot(requestCategories(input))
         throw new Error(`unexpected ${operation}`)
       },
@@ -223,6 +227,7 @@ describe('BackupService storage', () => {
       dshHome,
       appVersion: '0.1.0-rc.12',
       request: async (_backend, operation, input) => {
+        if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
         if (operation === 'export') return tradingSnapshot(requestCategories(input))
         if (operation === 'preview') return {
           currentRevision: 'local-revision',
@@ -317,6 +322,7 @@ describe('BackupService storage', () => {
       dshHome,
       appVersion: '0.1.0-rc.12',
       request: async (_backend, operation, input) => {
+        if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
         if (operation === 'export') return tradingSnapshot(requestCategories(input))
         if (operation === 'preview') {
           enterPreview?.()
@@ -370,6 +376,7 @@ describe('BackupService storage', () => {
     const dshHome = await home()
     const previewResolvers: Array<() => void> = []
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') return tradingSnapshot(requestCategories(input))
       if (operation === 'preview') {
         await new Promise<void>(resolve => { previewResolvers.push(resolve) })
@@ -401,6 +408,7 @@ describe('BackupService storage', () => {
   it('keeps cloud managed storage isolated from a stale local custom directory', async () => {
     const dshHome = await home()
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') return tradingSnapshot(requestCategories(input))
       if (operation === 'preview') return {
         currentRevision: 'local-revision',
@@ -478,6 +486,7 @@ describe('BackupService import safety', () => {
     const calls: string[] = []
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
       calls.push(operation)
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') return tradingSnapshot(requestCategories(input))
       if (operation === 'preview') return {
         currentRevision: 'local-revision',
@@ -496,7 +505,7 @@ describe('BackupService import safety', () => {
     await service.importPreview(preview.id, { holdings: 'keep_local' })
 
     expect(await readFile(created.path)).toEqual(before)
-    expect(calls).toEqual(['export', 'preview', 'prepare', 'commit', 'finalize'])
+    expect(calls).toEqual(['export', 'export-completed', 'preview', 'prepare', 'commit', 'finalize'])
     expect((await service.list()).some(item => item.filename === created.filename)).toBe(true)
   })
 
@@ -505,6 +514,7 @@ describe('BackupService import safety', () => {
     const calls: string[] = []
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
       calls.push(operation)
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') return tradingSnapshot(requestCategories(input))
       if (operation === 'preview') return {
         currentRevision: 'local-revision',
@@ -540,6 +550,7 @@ describe('BackupService import safety', () => {
       input: Record<string, unknown>,
     ) => {
       calls.push({ backend, operation, input })
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') {
         return {
           schemaVersion: 1,
@@ -588,6 +599,7 @@ describe('BackupService import safety', () => {
     const operations: string[] = []
     const request = vi.fn(async (_backend: 'trading-core' | 'market-watch', operation: BackupBackendOperation, input: Record<string, unknown>) => {
       operations.push(operation)
+      if (operation === 'export-completed') return { status: 'recorded', operation_id: input.operation_id }
       if (operation === 'export') return tradingSnapshot(requestCategories(input))
       if (operation === 'reset') return { status: 'prepared' }
       if (operation === 'commit') return { status: 'reset' }

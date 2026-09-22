@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { execFile } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
@@ -51,6 +51,7 @@ async function importLocalRuntime(): Promise<typeof import('../../../subprocess/
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -72,6 +73,9 @@ async function freePort(): Promise<number> {
 
 describe.skipIf(python === undefined)('managed fake Python runner', () => {
   it('owns all three fake backends and forwards each credential allowlist without exposing it in argv or diagnostics', async () => {
+    vi.stubEnv('DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS', '[]')
+    vi.stubEnv('DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN', '')
+    vi.stubEnv('DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE', '2026-09-21T00:00:00+08:00')
     const root = await mkdtemp(join(tmpdir(), 'dsh investment 运行时 '))
     roots.push(root)
     const projectDir = join(root, 'fake project')
@@ -179,6 +183,9 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_INVESTMENT_STATE_DIR: join(home, 'investment-research', 'trading-core'),
       NOTIFICATION_INTERNAL_TOKEN: notificationInternalToken,
       DSH_NOTIFICATION_MANAGED: '1',
+      DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS: '[]',
+      DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN: '',
+      DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE: '2026-09-21T00:00:00+08:00',
     })
     expect(byModule.get('market_watch.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'market-visible',

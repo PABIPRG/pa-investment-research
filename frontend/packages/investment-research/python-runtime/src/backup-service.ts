@@ -4,6 +4,7 @@ import { appendFile, lstat, mkdir, open, readFile, readdir, unlink, writeFile } 
 import type { FileHandle } from 'node:fs/promises'
 import { isAbsolute, basename, join, resolve } from 'node:path'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
+import { BackupExportJournal, ExportAuditPendingError } from './backup-export-journal.ts'
 import {
   createBackupArchive,
   inspectBackupArchive,
@@ -59,7 +60,7 @@ function expired(message: string, cause?: unknown): BackupPublicError {
 }
 
 /** Transactional operation names supported by each owned Python backend. */
-export type BackupBackendOperation = 'export' | 'preview' | 'prepare' | 'reset' | 'commit' | 'rollback' | 'finalize'
+export type BackupBackendOperation = 'export' | 'export-completed' | 'preview' | 'prepare' | 'reset' | 'commit' | 'rollback' | 'finalize'
 /** User-selectable conflict policy applied per logical backup category. */
 export type BackupConflictRule = 'keep_both' | 'keep_local' | 'use_import' | 'merge'
 
@@ -86,6 +87,8 @@ export interface BackupServiceOptions {
   now?: () => Date
   /** Ignore user-selected Host paths and use instance-managed storage only. */
   managedStorage?: boolean
+  /** Maximum wait for one private export-history acknowledgement. */
+  exportAckTimeoutMs?: number
   /** Host-only file adapters used to make archive failures and creation ordering deterministic. */
   fileOperations?: {
     readArchive?(path: string, signal?: AbortSignal): Promise<Uint8Array>
@@ -268,6 +271,8 @@ export class BackupService {
   private downloadCleanupTimer: ReturnType<typeof setTimeout> | undefined
   private previewCleanupTimer: ReturnType<typeof setTimeout> | undefined
   private uploadCleanupTimer: ReturnType<typeof setTimeout> | undefined
+  private exportRecoveryTimer: ReturnType<typeof setTimeout> | undefined
+  private readonly exportJournal: BackupExportJournal
   private disposed = false
   private resourceCreations = 0
   private resourceCreationDrain: Promise<void> | undefined
@@ -279,6 +284,13 @@ export class BackupService {
     this.request = options.request
     this.now = options.now ?? (() => new Date())
     this.managedStorage = options.managedStorage ?? false
+    const ackTimeout = options.exportAckTimeoutMs ?? 10_000
+    if (!Number.isSafeInteger(ackTimeout) || ackTimeout < 1 || ackTimeout > 2_147_483_647) throw new Error('备份回执超时配置无效')
+    this.exportJournal = new BackupExportJournal(
+      join(this.transactionDirectory, 'export-receipts'), this.now, this.lifecycleSignal,
+      operationId => this.request('trading-core', 'export-completed', { operation_id: operationId },
+        AbortSignal.any([this.lifecycleSignal, AbortSignal.timeout(ackTimeout)])),
+    )
     this.readArchive = options.fileOperations?.readArchive ?? (async (path, signal) => (
       readFile(path, signal === undefined ? undefined : { signal })
     ))
@@ -408,7 +420,18 @@ export class BackupService {
     categories: BackupCategory[]
     reason: BackupReason
   }): Promise<{ filename: string; path: string; manifest: BackupManifest }> {
+    const creation = this.beginResourceCreation()
+    try { return await this.createArchive(input, creation) }
+    catch (error) {
+      if (error instanceof ExportAuditPendingError) throw rejected(error.message, error)
+      this.creationFailure(error)
+    }
+    finally { creation.finish() }
+  }
+
+  private async createArchive(input: { categories: BackupCategory[]; reason: BackupReason }, creation: ResourceCreation): Promise<{ filename: string; path: string; manifest: BackupManifest }> {
     await this.recoverPendingTransactions()
+    this.assertCreationActive(creation)
     const categories = [...new Set(input.categories)]
     if (!categories.length) throw rejected('至少选择一个备份分类')
     const createdAt = this.now()
@@ -416,7 +439,8 @@ export class BackupService {
     for (const backend of ['trading-core', 'market-watch'] as const) {
       const selected = selectedForBackend(backend, categories)
       if (!selected.length) continue
-      const snapshot = await this.request(backend, 'export', { categories: selected })
+      const snapshot = await this.request(backend, 'export', { categories: selected }, creation.signal)
+      this.assertCreationActive(creation)
       validateDomainSnapshot(snapshot, backend)
       snapshots[backend] = snapshot
     }
@@ -428,38 +452,14 @@ export class BackupService {
       snapshots,
     })
     const directory = await this.directory()
-    await mkdir(directory, { recursive: true, mode: 0o700 })
     const desired = readableBackupFilename({
       reason: input.reason,
       categories,
       createdAt,
     })
-    const filename = await this.availableFilename(directory, desired)
-    const path = join(directory, filename)
-    await writeFileAtomic(path, archive.bytes, { mode: 0o600, dirMode: 0o700 })
-    try {
-      inspectBackupArchive(await readFile(path))
-    }
-    catch (error) {
-      await unlink(path).catch(() => undefined)
-      throw rejected('备份写入后校验失败，请重试', error)
-    }
-    return { filename, path, manifest: archive.manifest }
-  }
-
-  private async availableFilename(directory: string, desired: string): Promise<string> {
-    const stem = desired.slice(0, -'.pabackup'.length)
-    for (let index = 1; index < 10_000; index += 1) {
-      const filename = index === 1 ? desired : `${stem}-${index}.pabackup`
-      try {
-        await lstat(join(directory, filename))
-      }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return filename
-        throw error
-      }
-    }
-    throw rejected('无法生成唯一的备份文件名')
+    const path = await this.exportJournal.create({ path: join(directory, desired), bytes: archive.bytes,
+      startedAt: createdAt.toISOString(), reason: input.reason, categories })
+    return { filename: basename(path), path, manifest: archive.manifest }
   }
 
   /**
@@ -608,10 +608,13 @@ export class BackupService {
     if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
     if (this.previewCleanupTimer !== undefined) clearTimeout(this.previewCleanupTimer)
     if (this.uploadCleanupTimer !== undefined) clearTimeout(this.uploadCleanupTimer)
+    if (this.exportRecoveryTimer !== undefined) clearTimeout(this.exportRecoveryTimer)
+    this.exportRecoveryTimer = undefined
     this.downloadCleanupTimer = undefined
     this.previewCleanupTimer = undefined
     this.uploadCleanupTimer = undefined
     await this.waitForResourceCreations()
+    await this.exportJournal.drain()
     if (this.downloadCleanupTimer !== undefined) clearTimeout(this.downloadCleanupTimer)
     if (this.previewCleanupTimer !== undefined) clearTimeout(this.previewCleanupTimer)
     if (this.uploadCleanupTimer !== undefined) clearTimeout(this.uploadCleanupTimer)
@@ -1184,6 +1187,24 @@ export class BackupService {
       }
       await this.removeCoordinator(transactionId)
     }
+    try { await this.exportJournal.recover() }
+    catch (error) { throw rejected('存在待恢复的备份留痕，请稍后重试或检查后台；不会覆盖原备份。', error) }
+  }
+
+  /** Retry export receipts privately on startup and at the configured interval, without public traffic. */
+  startExportRecovery(intervalMs: number): void {
+    this.assertOpen()
+    if (!Number.isSafeInteger(intervalMs) || intervalMs < 1 || intervalMs > 2_147_483_647) throw new Error('备份恢复间隔无效')
+    if (this.exportRecoveryTimer !== undefined) clearTimeout(this.exportRecoveryTimer)
+    const run = async (): Promise<void> => {
+      try { await this.exportJournal.recover() }
+      catch { /* Keep durable evidence; private actions report pending state and the next tick retries. */ }
+      if (!this.disposed) {
+        this.exportRecoveryTimer = setTimeout(() => { void run() }, intervalMs)
+        this.exportRecoveryTimer.unref()
+      }
+    }
+    void run()
   }
 
   private async executeTransaction(targets: Array<{

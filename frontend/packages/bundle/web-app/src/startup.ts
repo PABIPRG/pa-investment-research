@@ -40,6 +40,8 @@ export interface WebStartupValues {
   authPasswordHashFile?: string
   /** Secure cookie policy; false is an explicit loopback-only development concession. */
   secureCookies: boolean
+  /** Exact public observatory browser origins; empty keeps the public gateway disabled. */
+  publicObservatoryOrigins: string[]
 }
 
 /** The web flag family, as commander parsed it. */
@@ -117,6 +119,10 @@ export function apply(ctx: Context): void {
       ...authUsername !== undefined && { authUsername },
       ...authPasswordHashFile !== undefined && { authPasswordHashFile },
       secureCookies: environment.get('DSH_WEB_INSECURE_COOKIES')?.value !== '1',
+      publicObservatoryOrigins: (() => {
+        const origin = environment.get('DSH_PUBLIC_OBSERVATORY_ORIGIN')?.value
+        return origin === undefined || origin === '' ? [] : [origin]
+      })(),
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

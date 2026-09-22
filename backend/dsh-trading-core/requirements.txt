@@ -40,6 +40,7 @@ sse-starlette
 pydantic
 apscheduler
 pywebpush
+cryptography         # 公开分页游标的认证加密，不暴露私有归档序号
 
 # ── 可选（均有 try/except 守卫，按需安装）────────────────────────
 # pymongo      # MongoDB 缓存 / 用量记录（USE_MONGODB_STORAGE=false 时不需要）

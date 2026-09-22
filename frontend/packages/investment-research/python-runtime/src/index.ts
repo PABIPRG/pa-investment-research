@@ -159,6 +159,8 @@ export class InvestmentPythonRuntime extends Service {
     healthFreshnessMs: z.number().step(1).min(0).max(MAX_TIMER_DELAY_MS).default(5_000),
     healthTimeoutMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(2_000),
     shutdownGraceMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(5_000),
+    backupExportRecoveryIntervalMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(30_000),
+    backupExportAckTimeoutMs: z.number().step(1).min(1).max(MAX_TIMER_DELAY_MS).default(10_000),
     logTailBytes: z.number().step(1).min(1).default(65_536),
     logMaxBytes: z.number().step(1).min(1).default(4_194_304),
   })
@@ -208,6 +210,9 @@ export class InvestmentPythonRuntime extends Service {
           NOTIFICATION_INTERNAL_TOKEN: this.notificationInternalToken,
           DSH_NOTIFICATION_MANAGED: '1',
           DSH_POSITION_RISK_TOKEN: this.positionRiskToken,
+          DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN: process.env.DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN ?? '',
+          DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS: process.env.DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS ?? '[]',
+          DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE: process.env.DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE ?? '',
         },
         'market-watch': {
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,
@@ -221,6 +226,7 @@ export class InvestmentPythonRuntime extends Service {
       dshHome,
       appVersion: BACKUP_CREATED_BY_APP_VERSION,
       managedStorage: this.deploymentSnapshot.surface === 'cloud-web',
+      exportAckTimeoutMs: config.backupExportAckTimeoutMs ?? 10_000,
       request: async (backend, operation, input, signal) => {
         const lease = await this.manager.acquire(backend, signal)
         try {
@@ -259,6 +265,7 @@ export class InvestmentPythonRuntime extends Service {
         }
       },
     })
+    this.backups.startExportRecovery(config.backupExportRecoveryIntervalMs ?? 30_000)
     ctx.on('credentials/updated', (ref) => {
       this.manager.credentialUpdated(ref)
       if (ref === NOTIFICATION_CHANNEL_CREDENTIAL) {
@@ -288,6 +295,16 @@ export class InvestmentPythonRuntime extends Service {
    */
   async acquire(id: InvestmentBackendId, signal?: AbortSignal): Promise<PythonBackendLease> {
     return this.manager.acquire(id, signal)
+  }
+
+  /**
+   * Read an already-running endpoint without starting, retaining, or stopping its process.
+   * @param id - backend currently held by a business plugin.
+   * @param signal - optional cancellation for the health check.
+   * @returns a non-owning endpoint; concurrent owner shutdown makes reads fail normally.
+   */
+  async getRunningBackend(id: InvestmentBackendId, signal?: AbortSignal): Promise<Readonly<{ id: InvestmentBackendId; baseUrl: string }>> {
+    return this.manager.getRunningBackend(id, signal)
   }
 
   /**

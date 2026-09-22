@@ -64,6 +64,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     '    authUsername: !!js ctx.webStartup.authUsername',
     '    authPasswordHashFile: !!js ctx.webStartup.authPasswordHashFile',
     '    secureCookies: !!js ctx.webStartup.secureCookies',
+    '    publicObservatoryOrigins: !!js ctx.webStartup.publicObservatoryOrigins',
     '    deploymentSurface: !!js ctx.webStartup.deploymentSurface',
     '- id: provider',
     `  name: ${pathToFileURL(join(dir, 'provider.mjs')).href}`,
@@ -109,6 +110,7 @@ describe('web command-line provider', () => {
       trustedProxyAddresses: ['127.0.0.1', '10.0.0.10'],
       authMode: 'disabled',
       secureCookies: true,
+      publicObservatoryOrigins: [],
     })
     expect(observed.readerConfig).toEqual(values)
     expect(observed.exits).toEqual([])
@@ -116,7 +118,7 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ deploymentSurface: 'local-web', trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true })
+    expect(values).toEqual({ deploymentSurface: 'local-web', trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true, publicObservatoryOrigins: [] })
     expect(observed.readerConfig).toEqual({
       host: '127.0.0.1',
       port: 3080,
@@ -125,6 +127,7 @@ describe('web command-line provider', () => {
       authMode: 'disabled',
       secureCookies: true,
       deploymentSurface: 'local-web',
+      publicObservatoryOrigins: [],
     })
   })
 
@@ -135,6 +138,13 @@ describe('web command-line provider', () => {
     const rejected = await bootProvider([])
     expect(rejected.values).toBeUndefined()
     expect(rejected.observed.out).toContain('DSH_DEPLOYMENT_SURFACE must be local-web or cloud-web')
+  })
+
+  it('publishes one explicit public observatory origin without enabling an implicit preview origin', async () => {
+    vi.stubEnv('DSH_PUBLIC_OBSERVATORY_ORIGIN', 'https://pair-observe.xiexin.dev')
+    expect((await bootProvider([])).values?.publicObservatoryOrigins).toEqual([
+      'https://pair-observe.xiexin.dev',
+    ])
   })
 
   it('prints its own help and leaves the consumer pending', async () => {

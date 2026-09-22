@@ -22,6 +22,10 @@
       "types": "./lib/types/invariant.d.ts",
       "default": "./lib/invariant.js"
     },
+    "./request-trust": {
+      "types": "./lib/types/request-trust.d.ts",
+      "default": "./lib/request-trust.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },

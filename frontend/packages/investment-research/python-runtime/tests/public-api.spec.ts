@@ -53,6 +53,8 @@ describe('InvestmentPythonRuntime public API', () => {
 
   it('exposes every deployment tunable through its Config schema', () => {
     expect(Object.keys(InvestmentPythonRuntime.Config.dict ?? {}).sort()).toEqual([
+      'backupExportAckTimeoutMs',
+      'backupExportRecoveryIntervalMs',
       'dshHome',
       'healthFreshnessMs',
       'healthPollMs',
@@ -72,6 +74,8 @@ describe('InvestmentPythonRuntime public API', () => {
       logTailBytes: 6,
       logMaxBytes: 7,
     })).toEqual({
+      backupExportAckTimeoutMs: 10_000,
+      backupExportRecoveryIntervalMs: 30_000,
       dshHome: '/tmp/dsh-home',
       startupTimeoutMs: 1,
       healthPollMs: 2,
@@ -82,6 +86,8 @@ describe('InvestmentPythonRuntime public API', () => {
       logMaxBytes: 7,
     })
     for (const field of [
+      'backupExportAckTimeoutMs',
+      'backupExportRecoveryIntervalMs',
       'startupTimeoutMs',
       'healthPollMs',
       'healthFreshnessMs',

@@ -45,6 +45,7 @@ from .portfolio_performance import (
     set_history_start_override,
 )
 from .portfolio_price_cache import PortfolioPriceHistoryCache
+from .public_observatory import register_public_observatory_routes
 from . import position_risk
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
@@ -336,10 +337,14 @@ async def lifespan(app: FastAPI):
     from .strategies import reconcile_completed_backtests
 
     recovery_store = JsonStore()
+    recovery_store.recover_mutation_history()
     recover_incomplete_transactions(
         recovery_store,
         notification_repository=app.state.notification_service.repository,
     )
+    from .holdings_operation_index import ensure as ensure_operation_index
+
+    ensure_operation_index(recovery_store)
     recovered = bt.recover_tasks(recovery_store)
     shadow_recovered = shadow_task_ledger.recover_tasks(recovery_store)
     reconciled = reconcile_completed_backtests(recovery_store)
@@ -475,6 +480,7 @@ def create_app(
         notification_repository=notification_service.repository,
         on_committed=lambda store: position_risk.reconcile(store, risk_rule_port),
     )
+    register_public_observatory_routes(app)
 
     def publish_holdings_notification(result: dict, source_name: str) -> None:
         """持仓事实提交后发布；通知失败不得回滚已经完成的持仓事务。"""
