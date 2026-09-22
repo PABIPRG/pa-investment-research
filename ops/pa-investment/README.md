@@ -62,6 +62,8 @@ id pa-deployer
 
 安装仅创建 root-owned 入口、私有备份目录和最小 sudoers，不停止或更新容器。启用前核对完整 sudo 列表只允许本入口；若已有更宽规则，先由管理员处理，不能用本模板掩盖。现有 `.env` 应为 admin/root 私有文件；密码哈希保持 `10001:10001`、`0400`。所有部署路径及父目录不得是符号链接或 group/world-writable。现有 Compose 必须保留只读根文件系统、cap_drop ALL、唯一数据卷和 1Panel 网络。
 
+服务器既有 Compose 的 `healthcheck.test` 必须为 `[CMD, /nodejs/bin/node, /opt/container/investment-healthcheck.mjs]`，且不得禁用健康检查。升级到当前镜像前应核对此项；仅更新镜像不会迁移既有 Compose。部署器会在拉取和停服前拒绝旧的 `node` 或 shell 形式探针，最终聚合检查也使用相同绝对路径。已运行的容器需要通过获准的重建才能应用 Compose 健康检查修改。
+
 不在 `/etc`、admin HOME 或部署目录保存 registry 凭据。短期 token 只用于停服前的 `docker login --password-stdin` 和精确 digest 拉取，临时 `DOCKER_CONFIG` 随后删除。检查磁盘预算：脚本要求可用空间大于卷表观大小的两倍加 1 GiB，并在停机前拉取候选镜像；这不是长期容量保证。
 
 还应审查一次完整备份的预估时长、当前卷数据量和恢复路径，确认短暂停机窗口。备份在同一主机只用于升级恢复，**不替代异机灾备**；按 PAB-18 将备份安全复制到独立故障域并做恢复演练。自动保留清理暂未实现，管理员监控磁盘，不运行无差别 prune 或删除历史卷。

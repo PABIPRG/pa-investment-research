@@ -189,7 +189,9 @@ class DriverTests(unittest.TestCase):
                               "org.opencontainers.image.revision": "c" * 40,
                               "org.opencontainers.image.source": "https://github.com/PABIPRG/pa-investment-research"}}}
         self.config = {"services": {"investment": {"image": "old", "read_only": True, "cap_drop": ["ALL"],
-                          "networks": {"panel": {}}, "volumes": [{"type": "volume", "source": "dsh-data", "target": "/var/lib/dsh"}]}},
+                          "networks": {"panel": {}},
+                          "healthcheck": {"test": ["CMD", "/nodejs/bin/node", "/opt/container/investment-healthcheck.mjs"]},
+                          "volumes": [{"type": "volume", "source": "dsh-data", "target": "/var/lib/dsh"}]}},
                        "networks": {"panel": {"name": "1panel-network"}},
                        "volumes": {"dsh-data": {"name": deploy.VOLUME}}}
         self.driver.run = self.fake_run
@@ -318,6 +320,25 @@ class DriverTests(unittest.TestCase):
                 self.assertTrue(self.running)
                 self.assertIsNone(self.driver.registry_token)
 
+    def test_incompatible_healthchecks_fail_before_pull_or_stop(self):
+        for healthcheck in [
+                {},
+                {"test": ["CMD", "node", "/opt/container/investment-healthcheck.mjs"]},
+                {"test": ["CMD-SHELL", "/nodejs/bin/node /opt/container/investment-healthcheck.mjs"]},
+                {"test": ["NONE"]},
+                {"test": ["CMD", "/nodejs/bin/node", "/opt/container/investment-healthcheck.mjs"],
+                 "disable": True}]:
+            with self.subTest(healthcheck=healthcheck):
+                self.driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+                self.driver.run = self.fake_run
+                self.calls.clear()
+                self.config["services"]["investment"]["healthcheck"] = healthcheck
+                with self.assertRaisesRegex(deploy.DeployError, "incompatible Compose healthcheck"):
+                    self.driver.prepare(IMAGE, self.root)
+                self.assertNotIn(["docker", "pull", IMAGE], self.calls)
+                self.assertEqual(self.driver.registry_token, REGISTRY_TOKEN)
+                self.assertTrue(self.running)
+
     def test_another_volume_or_writable_runtime_is_rejected(self):
         self.config["volumes"]["dsh-data"]["name"] = "other-volume"
         with self.assertRaises(deploy.DeployError):
@@ -371,6 +392,8 @@ class DriverTests(unittest.TestCase):
         self.driver.start()
         self.driver.verify(IMAGE)
         self.assertTrue(any(command[0] == "curl" for command in self.calls))
+        self.assertIn(["docker", "exec", "container-id", "/nodejs/bin/node",
+                       "/opt/container/investment-healthcheck.mjs"], self.calls)
         self.current_id = "sha256:" + "d" * 64
         with self.assertRaises(deploy.DeployError):
             self.driver.verify(IMAGE)
