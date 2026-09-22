@@ -10,6 +10,9 @@ from unittest.mock import patch
 import ci
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
 class ProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.run = {"id": 123, "run_attempt": 1, "status": "completed", "conclusion": "success",
@@ -85,6 +88,16 @@ class ProvenanceTests(unittest.TestCase):
                         with self.assertRaisesRegex(ci.CandidateError, "smoke-tested"):
                             ci.preflight()
                         self.assertFalse(output.exists())
+
+
+class WorkflowContractTests(unittest.TestCase):
+    def test_private_registry_uses_job_tokens_without_a_persistent_pat(self):
+        workflow = (ROOT / ".github/workflows/investment-deploy.yml").read_text()
+        self.assertEqual(workflow.count("packages: read"), 2)
+        self.assertIn("password: ${{ github.token }}", workflow)
+        self.assertIn("REGISTRY_TOKEN: ${{ github.token }}", workflow)
+        self.assertIn('printf \'%s\\n\' "$REGISTRY_TOKEN"', workflow)
+        self.assertNotIn("GHCR_PAT", workflow)
 
 
 if __name__ == "__main__":
