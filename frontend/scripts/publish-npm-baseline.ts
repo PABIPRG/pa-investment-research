@@ -19,6 +19,8 @@ import { createInterface } from 'node:readline/promises'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { validateTarballPayload } from './publication-payload.ts'
+import { isDeploymentOnlyApp } from './deployment-only-apps.ts'
+import { isEntry } from './release/process.ts'
 
 const DEFAULT_REGISTRY = 'https://registry.npm.harnessment.com'
 const DEFAULT_OUTPUT_DIRECTORY = '.artifacts/npm-baseline'
@@ -235,7 +237,7 @@ class DetachedWorktree {
 }
 
 /** Discovers and stages every package published in one repository baseline. */
-class WorkspacePackageSet {
+export class WorkspacePackageSet {
   private constructor(
     readonly packages: PackageTarget[],
     readonly baseVersion: string,
@@ -255,9 +257,11 @@ class WorkspacePackageSet {
     }
     for (const manifestPath of manifestPaths) {
       const manifest = readObject(resolve(root, manifestPath))
+      const directory = dirname(manifestPath).replaceAll('\\', '/')
+      if (isDeploymentOnlyApp(directory, manifest)) continue
       const name = expectString(manifest, 'name', manifestPath)
       const version = expectString(manifest, 'version', manifestPath)
-      const isVendored = manifestPath.startsWith('vendor/')
+      const isVendored = directory.startsWith('vendor/')
       // Vendored packages are rescoped too (vendor/README.md), so publication
       // never carries an upstream name that would squat it on the registry.
       if (!name.startsWith('@deepseek-ai/')) {
@@ -273,7 +277,7 @@ class WorkspacePackageSet {
       names.add(name)
       packages.push({
         name,
-        directory: dirname(manifestPath),
+        directory,
         origin: isVendored ? 'vendor' : 'harness',
       })
     }
@@ -291,6 +295,14 @@ class WorkspacePackageSet {
       stageInternalDependencies(manifest, internalNames, releaseVersion, manifestPath)
       writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
     }
+  }
+
+  /**
+   * 只打包已校验的发布集合，不重新用宽泛应用 glob 扩大范围。
+   * @returns 传给 pnpm pack 的精确包筛选参数。
+   */
+  packFilters(): string[] {
+    return this.packages.flatMap(pkg => ['--filter', pkg.name])
   }
 }
 
@@ -568,9 +580,7 @@ class BaselinePackager {
       this.runner.run('pnpm', ['run', 'publint'], worktree.path)
       this.runner.run('pnpm', ['run', 'verify-built-package-invariants'], worktree.path)
       this.runner.run('pnpm', [
-        '--filter', './vendor/**',
-        '--filter', './packages/**',
-        '--filter', './apps/**',
+        ...packageSet.packFilters(),
         '--recursive',
         'pack',
         '--pack-destination', artifactDirectory,
@@ -1075,9 +1085,11 @@ async function main(): Promise<void> {
   throw new Error(`unknown command: ${command}`)
 }
 
-try {
-  await main()
-} catch (error: unknown) {
-  console.error(`publish-npm-baseline: ${error instanceof Error ? error.message : String(error)}`)
-  process.exitCode = 1
+if (isEntry(import.meta.url)) {
+  try {
+    await main()
+  } catch (error: unknown) {
+    console.error(`publish-npm-baseline: ${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }

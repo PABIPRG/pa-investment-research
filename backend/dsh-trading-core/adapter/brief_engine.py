@@ -78,6 +78,11 @@ def _to_yi(value) -> float | None:
 _TRADE_CAL_CACHE: list[str] = []
 
 
+def cached_trade_dates() -> tuple[str, ...]:
+    """只读返回既有交易日历；公开页面不得触发拉取或工作日启发式降级。"""
+    return tuple(_TRADE_CAL_CACHE)
+
+
 def _sina_trade_dates() -> list[str]:
     """拉取新浪全年交易日历（进程内缓存 + 失败重试 1 次）。"""
     global _TRADE_CAL_CACHE

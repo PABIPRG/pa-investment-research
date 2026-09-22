@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import re
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -724,6 +725,93 @@ def _transaction_path(store: JsonStore, transaction_id: str):
     return store.transfer_directory / f"{transaction_id}.json"
 
 
+def _holdings_history_path(store: JsonStore, transaction_id: str) -> Path:
+    return store.base_dir / "_holdings_operation_history" / f"{transaction_id}.json"
+
+
+def _operation_time() -> str:
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
+
+
+def _sync_history_directory(directory: Path) -> None:
+    if os.name == "nt":
+        return  # Windows 不支持用普通只读句柄 fsync 目录。
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _persist_holdings_history(store: JsonStore, transaction: dict, coordinator_root: str | None) -> None:
+    """清理前保留私有持仓/成交前后镜像；同 UUID 只能追加一次且不能覆盖。"""
+    if "holdings" not in transaction["categories"]:
+        return
+    identity = transaction["transactionId"]
+    state = transaction["state"]
+    confirmation = "rolled_back" if state == "rolled_back" else "backend_only"
+    if state == "committed" and coordinator_root:
+        try:
+            decision = json.loads((Path(coordinator_root) / f"{identity}.json").read_text(encoding="utf-8"))
+        except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise TransferValidationError("缺少可核验的 Host 提交决定，保留数据事务以便恢复") from exc
+        if not (
+            isinstance(decision, dict)
+            and decision.get("schemaVersion") == 1
+            and decision.get("transactionId") == identity
+            and decision.get("phase") == "committed"
+            and isinstance(decision.get("targets"), list)
+            and "trading-core" in decision["targets"]
+        ):
+            raise TransferValidationError("Host 尚未确认本事务全局提交，保留数据事务以便恢复")
+        confirmation = "host_committed"
+    if "finalizedAt" not in transaction:
+        transaction["finalizedAt"] = _operation_time()
+        _write_transaction(store, transaction)
+    # 先让含稳定时间的恢复记录持久化，再发布对应归档。
+    _sync_history_directory(store.transfer_directory)
+    before = {name: transaction["before"].get(name, {}) for name in ("holdings", "trades")}
+    actual_after = transaction["before"] if state == "rolled_back" else {
+        **transaction["before"], **transaction["after"],
+    }
+    record = {
+        "schemaVersion": 1,
+        "transactionId": identity,
+        "kind": transaction["kind"],
+        "terminalState": state,
+        "confirmation": confirmation,
+        "startedAt": transaction.get("startedAt"),
+        "committedAt": transaction.get("committedAt"),
+        "rolledBackAt": transaction.get("rolledBackAt"),
+        "observedAt": transaction["finalizedAt"],
+        "before": before,
+        "after": {name: actual_after.get(name, {}) for name in ("holdings", "trades")},
+    }
+    content = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    path = _holdings_history_path(store, identity)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _sync_history_directory(store.base_dir)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".pending-", suffix=".tmp")
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # 同目录硬链接发布完整文件，已存在的历史永不替换。
+            os.link(temporary_path, path)
+        except FileExistsError:
+            if path.read_bytes() != content:
+                raise TransferValidationError("操作归档编号冲突，已有历史不能覆盖")
+        _sync_history_directory(path.parent)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+    from .holdings_operation_index import append
+
+    append(store, record)
+
+
 def _write_transaction(store: JsonStore, transaction: dict) -> None:
     store._write_path(  # noqa: SLF001 — 与 JsonStore 共享同一原子落盘原语
         _transaction_path(store, transaction["transactionId"]),
@@ -766,10 +854,13 @@ def prepare_import(
     selected = tuple(incoming)
     resolved_rules = _rules(rules, selected)
     with store.transaction(transaction_id):
+        store.recover_mutation_history()
         path = _transaction_path(store, transaction_id)
         if path.exists():
             transaction = _load_transaction(store, transaction_id)
             return {"status": transaction["state"], "categories": transaction["categories"]}
+        if _holdings_history_path(store, transaction_id).exists():
+            raise TransferValidationError("事务编号已完成，请使用新的操作编号")
         local = _snapshot_documents(store, selected, notification_repository)
         if _revision_for_documents(local) != expected_revision:
             raise TransferRevisionConflict("当前数据已更新，请重新预览")
@@ -782,6 +873,7 @@ def prepare_import(
             "transactionId": transaction_id,
             "kind": "import",
             "state": "prepared",
+            "startedAt": _operation_time(),
             "categories": list(selected),
             "before": before,
             "after": writes,
@@ -804,10 +896,13 @@ def prepare_reset(
     transaction_id = _validate_transaction_id(transaction_id)
     selected = _categories(categories)
     with store.transaction(transaction_id):
+        store.recover_mutation_history()
         path = _transaction_path(store, transaction_id)
         if path.exists():
             transaction = _load_transaction(store, transaction_id)
             return {"status": transaction["state"], "categories": transaction["categories"]}
+        if _holdings_history_path(store, transaction_id).exists():
+            raise TransferValidationError("事务编号已完成，请使用新的操作编号")
         local = _snapshot_documents(store, selected, notification_repository)
         if _revision_for_documents(local) != expected_revision:
             raise TransferRevisionConflict("当前数据已更新，请重新预览")
@@ -834,6 +929,7 @@ def prepare_reset(
             "transactionId": transaction_id,
             "kind": "reset",
             "state": "prepared",
+            "startedAt": _operation_time(),
             "categories": list(selected),
             "before": before,
             "after": after,
@@ -871,6 +967,7 @@ def commit_import(
                 _write_with_rollback(store, transaction["before"])
                 raise
         transaction["state"] = "committed"
+        transaction["committedAt"] = _operation_time()
         _write_transaction(store, transaction)
         status = "reset" if transaction.get("kind") == "reset" else "applied"
         return {"status": status, "categories": transaction["categories"]}
@@ -896,13 +993,14 @@ def rollback_import(
                     raise TransferValidationError("通知数据仓储不可用")
                 notification_repository.replace_portable(notification_before)
             transaction["state"] = "rolled_back"
+            transaction["rolledBackAt"] = _operation_time()
             _write_transaction(store, transaction)
         store.release_transfer(transaction_id)
         return {"status": "rolled_back", "categories": transaction["categories"]}
 
 
-def finalize_import(store: JsonStore, transaction_id: str) -> dict:
-    """完成已提交或已回滚事务并移除领域日志。"""
+def finalize_import(store: JsonStore, transaction_id: str, *, coordinator_directory: str | None = None) -> dict:
+    """先保留持仓账户私有操作历史，再清理终态事务；失败时保留恢复材料。"""
     transaction_id = _validate_transaction_id(transaction_id)
     with store.transaction(transaction_id):
         if not _transaction_path(store, transaction_id).exists():
@@ -911,6 +1009,10 @@ def finalize_import(store: JsonStore, transaction_id: str) -> dict:
         transaction = _load_transaction(store, transaction_id)
         if transaction.get("state") not in {"committed", "rolled_back"}:
             raise TransferValidationError("尚未提交的数据事务不能完成")
+        _persist_holdings_history(
+            store, transaction,
+            coordinator_directory or os.getenv("DSH_DATA_TRANSFER_COORDINATOR_DIR"),
+        )
         store.release_transfer(transaction_id)
         try:
             _transaction_path(store, transaction_id).unlink()
@@ -942,7 +1044,7 @@ def recover_incomplete_transactions(
             except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
                 committed = False
         if committed:
-            finalize_import(store, transaction_id)
+            finalize_import(store, transaction_id, coordinator_directory=coordinator_root)
         else:
             rollback_import(store, transaction_id, notification_repository)
             finalize_import(store, transaction_id)
@@ -957,6 +1059,7 @@ def register_data_transfer_routes(
 ) -> None:
     """把领域传输端点注册到 FastAPI；工厂注入使测试使用隔离数据目录。"""
     from fastapi import Header, HTTPException, Query
+    from .holdings_export_history import ExportReceiptError, record_completed_export
 
     expected_token = token if token is not None else os.getenv("DSH_DATA_TRANSFER_TOKEN")
 
@@ -972,7 +1075,7 @@ def register_data_transfer_routes(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except JsonStoreTransferBusyError as exc:
             raise HTTPException(status_code=423, detail=str(exc)) from exc
-        except (TransferValidationError, KeyError, TypeError) as exc:
+        except (TransferValidationError, ExportReceiptError, KeyError, TypeError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/data-transfer/export")
@@ -993,6 +1096,11 @@ def register_data_transfer_routes(
             payload.get("rules"),
             notification_repository,
         ))
+
+    @app.post("/data-transfer/export-completed")
+    def transfer_export_completed(payload: dict, authorization: str | None = Header(default=None)) -> dict:
+        authorize(authorization)
+        return invoke(lambda: record_completed_export(store_factory(), payload))
 
     @app.post("/data-transfer/prepare")
     def transfer_prepare(payload: dict, authorization: str | None = Header(default=None)) -> dict:

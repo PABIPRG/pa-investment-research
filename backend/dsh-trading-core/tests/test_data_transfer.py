@@ -518,7 +518,8 @@ class DataTransferTests(unittest.TestCase):
         prepare_import(self.store, commit_id, snapshot, revision, {"holdings": "use_import"})
         commit_import(self.store, commit_id)
         (coordinator / f"{commit_id}.json").write_text(
-            json.dumps({"phase": "committed"}), encoding="utf-8"
+            json.dumps({"schemaVersion": 1, "transactionId": commit_id,
+                        "phase": "committed", "targets": ["trading-core"]}), encoding="utf-8"
         )
         recover_incomplete_transactions(self.store, str(coordinator))
         self.assertEqual(self.store.get("holdings", "default"), [

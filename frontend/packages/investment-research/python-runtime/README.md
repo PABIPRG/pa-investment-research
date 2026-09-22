@@ -14,6 +14,8 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 | `healthFreshnessMs` | `5000` | Reuse window for a successful active-backend health probe; `0` disables reuse. |
 | `healthTimeoutMs` | `2000` | Maximum duration of one backend health request. |
 | `shutdownGraceMs` | `5000` | Grace passed to the subprocess tree termination ladder. |
+| `backupExportRecoveryIntervalMs` | `30000` | Private export-receipt recovery retry interval, independent of public traffic. |
+| `backupExportAckTimeoutMs` | `10000` | Deadline for each export-history acknowledgement from owned trading-core. |
 | `logTailBytes` | `65536` | Maximum retained diagnostic tail included in startup errors. |
 | `logMaxBytes` | `4194304` | Active backend log size that triggers one-file rotation on the next start. |
 
@@ -26,6 +28,8 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 Concurrent acquisitions for one backend id share one startup. Active acquisitions reuse a recent successful health result, while requests arriving after it expires share one health probe. Each probe has a bounded deadline; owned-process exit, restart-required credential updates, teardown, and non-healthy readiness invalidate the reusable result. Identical registrations are reference-counted; conflicting command, URL, mode, identity, or path definitions fail. Business tools are registered only after acquisition succeeds and are removed before their lease is released.
 
 ## Credentials and readiness
+
+`getRunningBackend(id, signal?)` is a non-owning read for public consumers. It requires an active healthy backend with a business-owned lease, does not start or retain a process, and rejects shutdown or unregister races. The owner may stop the endpoint after this call; the consumer must handle an unavailable read. The managed trading-core environment explicitly receives `DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS`, `DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE`, and `DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN` from the Host environment; their publication and private-writer rules are defined in the [public gateway](../../host/public-observatory/README.md).
 
 The investment profile reuses the Models settings page as the only product input for `DEEPSEEK_API_KEY`. The credential provider resolves that reference only while an `owned` managed child is being spawned, and the Runtime forwards it only to backend definitions that explicitly allow it. The value is never copied into a backend `.env`, Runtime state, logs, readiness snapshots, or Client Remote data. An `attached` or `external` endpoint receives no local credential; its operator owns that service's credentials.
 
@@ -70,6 +74,12 @@ Notification archive counts are validated against the rows in `notification_cent
 The Runtime consumes the Host deployment snapshot instead of inferring a browser platform. Cloud Web refuses broker discovery, broker synchronization, native holdings, and holdings-provider configuration, while manual entry and browser bulk import remain available. `backup-describe` returns a managed location without a path in Cloud Web; local deployments retain their directory description and directory management.
 
 Browser uploads use bounded chunk sessions followed by archive inspection and the existing import preview. Stored downloads use separate authenticated chunk sessions over an immutable validated archive snapshot. Only direct `.pabackup` files are accepted; symlinks, non-files, archives over 64 MiB, stale ids, and invalid offsets are rejected. The opened size is rechecked and a fixed-size read rejects concurrent growth. At most two compressed snapshots remain active (128 MiB resident ceiling); concurrent validation has a 384 MiB logical payload ceiling including bounded decompression, excluding allocator overhead. Every terminal path releases its session, and client cancellation aborts the in-flight Remote before best-effort server cleanup.
+
+Backups containing holdings notify owned trading-core of one export event only after durable file publication, read-back, and SHA256 verification. Internal snapshot reads, previews, downloads, and download cancellation do not create completion events. `manual`, `pre-import`, and `pre-reset` retain distinct purposes without claiming the browser saved the file.
+
+Private receipts live at `$DSH_HOME/investment-research/transfer-transactions/export-receipts`, shared with the backend through `DSH_DATA_TRANSFER_COORDINATOR_DIR`. Each DSH_HOME supports only one active Host owner. Startup and timer retries preserve the original UUID. Recovering a preparing receipt requires its original path, file identity, size, and hash; current account data must never be re-exported as historical evidence. Verified receipts remain valid if the user later deletes the backup. Receipts are removed only after backend archive and index persistence, so lost acknowledgements do not duplicate events.
+
+Pending acknowledgement preserves the backup and recovery evidence and reports that the file exists but history recovery is pending, without deleting the backup or claiming an import rollback. Conservative gates pause subsequent backups, import previews, imports, and resets until recovery succeeds or private maintenance verifies the evidence; public GETs never recover it. Upgrade Host and trading-core together: a missing endpoint in an old backend is not successful completion. Storage must support same-directory no-clobber hard links (such as local APFS, NTFS, and common Linux filesystems); unsupported media never falls back to overwriting files. Windows lacks directory fsync, and power-loss guarantees and deployment platforms require separate validation. An interruption after staging but before receipt creation can leave an unpublished `.part`; orphan staging files are not successful operations.
 
 ## Model Experience
 

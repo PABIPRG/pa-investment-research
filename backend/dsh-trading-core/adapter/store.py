@@ -6,12 +6,15 @@ collection 是 data/adapter/ 下的一个 JSON 文件，每文件一个 dict。
 """
 
 import json
+import logging
 import os
 import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
+
+from . import holdings_mutation_history as mutation_history
 
 
 _FILE_LOCKS: dict[Path, threading.Lock] = {}
@@ -29,8 +32,12 @@ class JsonStoreTransferBusyError(RuntimeError):
     """数据目录已被一个持久化导入或重置事务预留。"""
 
 
+class JsonStoreReadLimitError(RuntimeError):
+    """只读文档超过调用方允许的字节上限。"""
+
+
 class JsonStore:
-    def __init__(self, base_dir: Path | None = None):
+    def __init__(self, base_dir: Path | None = None, *, create: bool = True):
         from .config import settings
 
         if base_dir is not None:
@@ -39,7 +46,8 @@ class JsonStore:
             self.base_dir = settings.data_dir
         else:
             self.base_dir = settings.root / "data" / "adapter"
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        if create:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
     def _path(self, collection: str) -> Path:
         # 集合名只允许字母数字下划线，防路径穿越
         if not collection.replace("_", "").isalnum():
@@ -118,7 +126,7 @@ class JsonStore:
         contexts = getattr(_TRANSFER_CONTEXT, "transactions", {})
         inherited = contexts.get(root)
         authorized = transaction_id or inherited
-        with self._transaction_lock():
+        with self._transaction_lock(), mutation_history.process_lock(self.base_dir):
             active = self.active_transfer_id()
             if active is not None and active != authorized:
                 raise JsonStoreTransferBusyError("数据导入或重置正在进行，请稍后重试")
@@ -163,9 +171,47 @@ class JsonStore:
     def _write(self, collection: str, data: dict) -> None:
         path = self._path(collection)
         content = json.dumps(data, ensure_ascii=False, indent=2)
+        transferring = getattr(_TRANSFER_CONTEXT, "transactions", {}).get(str(self.base_dir.resolve()))
+        intent = None if transferring else mutation_history.prepare(self, collection, data)
         self._write_path(path, content)
+        if intent is not None:
+            try:
+                mutation_history.complete(self, intent)
+            except Exception:  # 业务已提交；保留 pending，后续写入须先恢复，不能伪报回滚。
+                logging.getLogger(__name__).exception("账户数据已保存，操作归档待恢复；后续写入将等待归档恢复")
+
+    def _recover_before_write(self) -> None:
+        mutation_history.recover(self)
+
+    def recover_mutation_history(self) -> None:
+        """私有启动／写入方恢复；匿名读取不得调用。"""
+        with self.transaction(self.active_transfer_id()):
+            mutation_history.recover(self)
 
     # ---- API -----------------------------------------------------
+
+    def read_bounded_snapshot(self, collection: str, *, max_bytes: int) -> dict:
+        """无写入、无锁等待地读取一次原子替换文档；导入期间拒绝，增长也不突破限额。"""
+        if max_bytes <= 0:
+            raise ValueError("读取字节限额必须大于零")
+        if self.active_transfer_id() is not None:
+            raise JsonStoreTransferBusyError("数据导入正在进行")
+        try:
+            with self._path(collection).open("rb") as stream:
+                if os.fstat(stream.fileno()).st_size > max_bytes:
+                    raise JsonStoreReadLimitError("只读文档超过字节限额")
+                raw = stream.read(max_bytes + 1)
+        except FileNotFoundError:
+            return {}
+        if len(raw) > max_bytes:
+            raise JsonStoreReadLimitError("只读文档超过字节限额")
+        try:
+            value = json.loads(raw)
+        except (ValueError, UnicodeError) as exc:
+            raise JsonStoreCorruptionError("只读文档不是有效 JSON") from exc
+        if not isinstance(value, dict):
+            raise JsonStoreCorruptionError("只读文档顶层必须是对象")
+        return value
 
     def get(self, collection: str, key: str, default: Any = None) -> Any:
         with self.transaction():
@@ -174,6 +220,7 @@ class JsonStore:
 
     def set(self, collection: str, key: str, value: Any) -> None:
         with self.transaction():
+            self._recover_before_write()
             with self._lock(collection):
                 data = self._read(collection)
                 data[key] = value
@@ -192,6 +239,7 @@ class JsonStore:
         回调抛错时不写文件，也不得在回调内重入同一 collection。
         """
         with self.transaction():
+            self._recover_before_write()
             with self._lock(collection):
                 data = self._read(collection)
                 value = transform(data.get(key, default))
@@ -206,6 +254,7 @@ class JsonStore:
     ) -> dict:
         """在单次文件锁内变换整个集合文档，并返回已提交的新文档。"""
         with self.transaction():
+            self._recover_before_write()
             with self._lock(collection):
                 current = self._read(collection)
                 value = transform(dict(current))
@@ -216,6 +265,7 @@ class JsonStore:
 
     def update(self, collection: str, key: str, **fields: Any) -> None:
         with self.transaction():
+            self._recover_before_write()
             with self._lock(collection):
                 data = self._read(collection)
                 item = data.get(key, {})
@@ -227,6 +277,7 @@ class JsonStore:
 
     def delete(self, collection: str, key: str) -> None:
         with self.transaction():
+            self._recover_before_write()
             with self._lock(collection):
                 data = self._read(collection)
                 data.pop(key, None)

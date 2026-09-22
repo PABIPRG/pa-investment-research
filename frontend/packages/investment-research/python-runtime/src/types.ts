@@ -341,6 +341,10 @@ export interface Config {
   healthTimeoutMs?: number
   /** Grace period before process-tree termination escalates. */
   shutdownGraceMs?: number
+  /** Private export-receipt retry interval; does not depend on public website traffic. */
+  backupExportRecoveryIntervalMs?: number
+  /** Maximum wait for a private export-history acknowledgement. */
+  backupExportAckTimeoutMs?: number
   /** Maximum in-memory diagnostic log tail in bytes. */
   logTailBytes?: number
   /** Maximum active backend log size before rotation in bytes. */

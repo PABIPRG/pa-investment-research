@@ -144,6 +144,64 @@ function isTrustedAuthority(hostUrl: URL, trustedHosts: readonly string[]): bool
   })
 }
 
+function hasTrustedRequestAuthority(
+  request: BrowserTrustRequest,
+  trustedHosts: readonly string[],
+  trustedProxyAddresses: readonly string[],
+): boolean {
+  const host = header(request.headers, 'host')
+  if (host === undefined) return false
+  const hostUrl = parseAuthority(host)
+  if (hostUrl === undefined) return false
+  return isLoopbackHostname(hostUrl.hostname)
+    ? isLoopbackRequestPeer(request, trustedProxyAddresses)
+    : isTrustedAuthority(hostUrl, trustedHosts)
+}
+
+/** Validate one exact browser Origin used by a cross-origin public-read route. */
+export function assertTrustedOrigin(origin: string): void {
+  try {
+    const parsed = new URL(origin)
+    const localHttp = parsed.protocol === 'http:' && isLoopbackHostname(parsed.hostname)
+    if ((parsed.protocol === 'https:' || localHttp)
+      && parsed.origin === origin
+      && parsed.username === ''
+      && parsed.password === ''
+      && parsed.pathname === '/'
+      && parsed.search === ''
+      && parsed.hash === '') return
+  }
+  catch { /* handled below */ }
+  throw new Error(`webserver: trusted origin ${JSON.stringify(origin)} is not a canonical HTTPS origin`)
+}
+
+/**
+ * Enforce the narrower trust contract for an unauthenticated, read-only route.
+ * It deliberately permits cross-site Fetch Metadata only after an exact Origin
+ * match, while retaining the same Host/reverse-proxy boundary as protected APIs.
+ */
+export function isTrustedPublicReadRequest(
+  request: BrowserTrustRequest,
+  trustedHosts: readonly string[],
+  allowedOrigins: readonly string[],
+  trustedProxyAddresses: readonly string[] = [],
+): boolean {
+  if (allowedOrigins.length === 0
+    || !hasTrustedRequestAuthority(request, trustedHosts, trustedProxyAddresses)) return false
+
+  const method = request.method?.toUpperCase()
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') return false
+
+  const origin = header(request.headers, 'origin')
+  if (method === 'OPTIONS') {
+    const requestedMethod = header(request.headers, 'access-control-request-method')?.toUpperCase()
+    return origin !== undefined
+      && allowedOrigins.includes(origin)
+      && (requestedMethod === 'GET' || requestedMethod === 'HEAD')
+  }
+  return origin === undefined || allowedOrigins.includes(origin)
+}
+
 /** Enforce Host, Fetch-Metadata, and same-origin browser request trust. */
 export function isTrustedApiRequest(
   request: BrowserTrustRequest,
@@ -155,10 +213,7 @@ export function isTrustedApiRequest(
   const hostUrl = parseAuthority(host)
   if (hostUrl === undefined) return false
   const loopbackAuthority = isLoopbackHostname(hostUrl.hostname)
-  const hostAccepted = loopbackAuthority
-    ? isLoopbackRequestPeer(request, trustedProxyAddresses)
-    : isTrustedAuthority(hostUrl, trustedHosts)
-  if (!hostAccepted) return false
+  if (!hasTrustedRequestAuthority(request, trustedHosts, trustedProxyAddresses)) return false
   if (header(request.headers, 'sec-fetch-site') === 'cross-site') return false
   const origin = header(request.headers, 'origin')
   if (origin === undefined) return true

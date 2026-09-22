@@ -1,0 +1,44 @@
+.trigger {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.trigger span { color: var(--dsw-alias-label-secondary); font-size: .8571rem; }
+.trigger:focus-visible, .navigation button:focus-visible, .grid button:focus-visible, .monthGrid button:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}
+
+.navigation {
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.navigation button, .grid button, .monthGrid button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.navigation button:hover, .grid button:hover, .monthGrid button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.grid button:disabled { color: var(--dsw-alias-label-dimmed); cursor: not-allowed; }
+.weekdays, .grid { display: grid; grid-template-columns: repeat(7, minmax(34px, 1fr)); gap: 4px; }
+.weekdays { margin-bottom: 4px; color: var(--dsw-alias-label-secondary); font-size: .8571rem; text-align: center; }
+.weekdays span { padding: 6px 0; }
+.grid .selected, .monthGrid .selected { background: var(--dsw-alias-interactive-bg-active); color: var(--dsw-alias-brand-text); font-weight: 600; }
+.monthGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }

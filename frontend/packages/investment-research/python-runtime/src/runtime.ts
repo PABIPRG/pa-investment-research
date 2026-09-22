@@ -40,7 +40,7 @@ const DEFAULT_CONFIG = {
   logMaxBytes: 4_194_304,
 } as const
 
-type RuntimeConfig = Required<Omit<Config, 'dshHome'>> & { readonly dshHome: string }
+type RuntimeConfig = Required<Pick<Config, keyof typeof DEFAULT_CONFIG>> & { readonly dshHome: string }
 
 interface RegistryEntry {
   readonly definition: PythonBackendDefinition
@@ -452,6 +452,30 @@ export class InvestmentBackendManager {
     }
     entry.refs += 1
     return this.lease(entry)
+  }
+
+  /**
+   * Verify an endpoint already held by a business owner, without starting or retaining it.
+   * @param id - registered backend id.
+   * @param signal - optional cancellation for this reader's health wait.
+   * @returns a non-owning endpoint; an owner may stop it immediately after this call.
+   */
+  async getRunningBackend(id: InvestmentBackendId, signal?: AbortSignal): Promise<Readonly<{ id: InvestmentBackendId; baseUrl: string }>> {
+    if (this.disposed) throw new Error('investment Python runtime is disposed')
+    signal?.throwIfAborted()
+    const registered = this.definitions.get(id)
+    if (registered === undefined) throw new Error(`investment Python backend "${id}" is not registered`)
+    const entry = this.active.get(id)
+    if (entry === undefined || entry.refs === 0 || this.stopping.has(id)) {
+      throw new Error(`investment Python backend "${id}" is not running`)
+    }
+    await this.verifyActiveHealth(id, entry, signal)
+    signal?.throwIfAborted()
+    if (this.disposed || this.definitions.get(id) !== registered
+      || this.active.get(id) !== entry || entry.refs === 0 || this.stopping.has(id)) {
+      throw new Error(`investment Python backend "${id}" is not running`)
+    }
+    return Object.freeze({ id, baseUrl: entry.definition.baseUrl })
   }
 
   private async verifyActiveHealth(id: InvestmentBackendId, entry: ActiveEntry, signal?: AbortSignal): Promise<void> {

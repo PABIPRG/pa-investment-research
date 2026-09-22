@@ -48,6 +48,7 @@ jobs:
         run: >-
           pnpm exec vitest run
           scripts/investment-release.spec.ts
+          scripts/deployment-only-apps.spec.ts
           apps/electron/tests/packaging.spec.ts
 
       - name: Type-check startup graph
@@ -87,6 +88,12 @@ jobs:
 
       - name: Build
         run: pnpm run build
+
+      - name: Verify built public observatory gateway
+        run: pnpm exec vitest run --config vitest.e2e.config.ts packages/host/public-observatory/tests/built-package.e2e.ts --retry=0
+
+      - name: Build independent public observatory
+        run: pnpm --filter @deepseek-ai/dsh-public-observatory run build
 
       - name: Run investment runtime matrix
         env:

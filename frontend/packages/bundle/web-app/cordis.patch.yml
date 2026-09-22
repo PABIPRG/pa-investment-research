@@ -195,6 +195,18 @@
         trustedHosts: !!js ctx.webRuntime.trustedHosts
         trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
 
+    # Login-free, read-only public observatory. An empty origin list keeps the
+    # route closed; production explicitly sets DSH_PUBLIC_OBSERVATORY_ORIGIN.
+    - id: public-observatory
+      name: '@deepseek-ai/dsh-host-public-observatory'
+      inject: [webStartup, webRuntime]
+      config:
+        enabled: !!js ctx.webStartup.publicObservatoryOrigins.length > 0
+        allowedOrigins: !!js ctx.webStartup.publicObservatoryOrigins
+        trustedHosts: !!js ctx.webRuntime.trustedHosts
+        trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses
+        requestsPerMinute: 120
+
     - id: api-remotes
       name: '@deepseek-ai/dsh-api-remotes'
 

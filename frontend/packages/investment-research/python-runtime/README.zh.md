@@ -14,6 +14,8 @@
 | `healthFreshnessMs` | `5000` | 活动 backend 成功健康探测的复用窗口；设为 `0` 可禁用复用。 |
 | `healthTimeoutMs` | `2000` | 单次 backend 健康请求的最长等待时间。 |
 | `shutdownGraceMs` | `5000` | 传给子进程树终止阶梯的宽限期。 |
+| `backupExportRecoveryIntervalMs` | `30000` | 私有导出回执恢复重试间隔，不依赖公开页面访问。 |
+| `backupExportAckTimeoutMs` | `10000` | 向 owned trading-core 确认导出留痕的单次超时。 |
 | `logTailBytes` | `65536` | 启动错误可附带的诊断日志尾部上限。 |
 | `logMaxBytes` | `4194304` | 下次启动时触发单文件轮转的活动 backend 日志大小。 |
 
@@ -26,6 +28,8 @@
 同一 backend id 的并发获取共享一次启动。活动获取会复用近期成功的健康结果；结果过期后同时到达的请求共享一次健康探测。每次探测都有明确的截止时间；owned 进程退出、凭据更新要求重启、teardown 和非健康就绪结果都会使可复用结果失效。相同定义按引用计数注册；命令、URL、模式、身份或路径定义冲突时明确失败。业务工具只在获取成功后注册，并在释放 lease 前移除。
 
 ## 凭据与就绪状态
+
+`getRunningBackend(id, signal?)` 为公开消费者提供不持有生命周期的读取：要求已有业务 lease 持有活动健康后端，不启动或保活进程，关闭或移除注册的竞态会使调用失败。owner 可以在方法返回后停止后端，消费者必须处理读取不可用。managed trading-core 环境显式接收 Host 环境中的 `DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS`、`DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE` 与 `DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN`；发布与私有写入规则见[公开网关](../../host/public-observatory/README.md)。
 
 投研 profile 复用 Models 设置页作为 `DEEPSEEK_API_KEY` 的唯一产品输入。只有在启动 `owned` managed child 时，凭据 provider 才会解析该引用；Runtime 也只会把它转发给显式允许该引用的 backend 定义。凭据值不会复制进 backend `.env`、Runtime state、日志、就绪快照或 Client Remote 数据。`attached` 与 `external` endpoint 不接收本机凭据，其凭据由该服务的 operator 负责。
 
@@ -70,6 +74,12 @@ Host 的 `request-data` Remote 只接受编译期列举的 operation（操作）
 Runtime 消费 Host 的部署能力快照，不再推断浏览器平台。云端 Web 会拒绝券商发现、券商同步、原生持仓以及持仓数据源配置；手工录入与浏览器批量导入仍然可用。云端 Web 的 `backup-describe` 返回不含路径的托管位置；本地部署继续返回目录说明，并允许管理目录。
 
 浏览器上传使用有界分块会话，随后执行归档检查并进入既有导入预览。已存备份下载使用独立的认证分块会话，底层是经过验证且不可变的归档快照。只接受备份目录中的直接 `.pabackup` 文件；符号链接、非普通文件、超过 64 MiB 的归档、过期 id 与非法 offset 都会被拒绝。打开文件后会复查大小，固定长度读取会拒绝并发增长。最多保留两个压缩快照（常驻上限 128 MiB）；并发校验计入有界解压后，逻辑载荷上限为 384 MiB，不含分配器开销。每条终止路径都会释放会话，客户端取消会先中止在途 Remote，再尽力清理服务端。
+
+包含持仓的备份仅在文件持久写入、发布后回读与 SHA256 校验成功时，向 owned trading-core 确认一次导出事件；内部读取快照、预览、下载和取消下载不新增成功记录。`manual`、`pre-import`、`pre-reset` 保留不同用途，但不宣称浏览器已保存文件。
+
+私有回执位于 `$DSH_HOME/investment-research/transfer-transactions/export-receipts`，与后端共享 `DSH_DATA_TRANSFER_COORDINATOR_DIR`。同一 DSH_HOME 只支持一个活动 Host 所有者。Host 启动及定时器重试原 UUID；preparing 恢复只能使用原始路径、文件身份、长度与哈希证明，不能重新导出当前数据替代旧记录。已验证回执不因用户随后删除备份而失效。后端归档与索引成功后才删除回执，回执丢响应不会重复记账。
+
+留痕未确认时保留备份及恢复资料，调用方收到“文件已生成，操作留痕待恢复”，不会删除备份或伪称导入已回滚。保守门禁会暂停后续备份、导入预览、导入和重置，直至恢复成功或私有维护核验；公开 GET 不触发恢复。需同步升级 Host 与 trading-core，旧后端缺少确认接口时不能视为正常完成。目录需支持同目录硬链接的 no-clobber 发布（如本机 APFS、NTFS、Linux 常用文件系统）；不支持硬链接的介质不降级为覆盖写入。Windows 没有目录 fsync，断电持久性及各部署平台还需单独验证。文件写入后、回执产生前的中断可能留下未发布 `.part`；不得把孤立临时文件当成功记录。
 
 ## 模型体验
 
