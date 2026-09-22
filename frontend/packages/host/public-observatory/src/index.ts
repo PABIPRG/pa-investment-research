@@ -173,7 +173,7 @@ function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 
 class ResponseTooLarge extends Error {}
 
-async function readBounded(response: Response, maximum: number, signal: AbortSignal): Promise<Uint8Array> {
+async function readBounded(response: Response, maximum: number, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
   if (Number(response.headers.get('content-length')) > maximum) {
     void response.body?.cancel().catch(() => {}) // Cancellation is best effort after rejecting the response.
     throw new ResponseTooLarge()

@@ -40,7 +40,7 @@ const DEFAULT_CONFIG = {
   logMaxBytes: 4_194_304,
 } as const
 
-type RuntimeConfig = Required<Omit<Config, 'dshHome'>> & { readonly dshHome: string }
+type RuntimeConfig = Required<Pick<Config, keyof typeof DEFAULT_CONFIG>> & { readonly dshHome: string }
 
 interface RegistryEntry {
   readonly definition: PythonBackendDefinition
