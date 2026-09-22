@@ -98,8 +98,9 @@ async function fixture() {
     },
     runCommand,
     payloadFileSha256: async (path: string) => {
-      if (path.endsWith('distutils/msvccompiler.py')) return '658b27520202e2d653d969096d39135325520807369c533d0d5288b887cf054d'
-      if (path.endsWith('openssl/hpke.pyi')) return 'a7f8462e7e981fe11aac91755796d4b14b638a9be2100a5c4793b4b141c92ed7'
+      const portablePath = path.replaceAll('\\', '/')
+      if (portablePath.endsWith('distutils/msvccompiler.py')) return '658b27520202e2d653d969096d39135325520807369c533d0d5288b887cf054d'
+      if (portablePath.endsWith('openssl/hpke.pyi')) return 'a7f8462e7e981fe11aac91755796d4b14b638a9be2100a5c4793b4b141c92ed7'
       return hash(await readFile(path))
     },
   }
