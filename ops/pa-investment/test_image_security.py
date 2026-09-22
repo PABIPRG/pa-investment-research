@@ -166,6 +166,57 @@ class ArchiveTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_secret_exceptions_require_exact_location_and_count(self):
+        path = 'opt/investment-python/site-packages/example/runtime.py'
+        evidence = {
+            'scan_root': Path('/scan'),
+            'locations': {'layer-0/file-0.data': {
+                'layer': 0, 'entry': 0, 'class': 'python-dependency',
+                'pathSha256': hashlib.sha256(path.encode()).hexdigest(),
+                'fileSha256': hashlib.sha256(b'public fixture').hexdigest(),
+            }},
+        }
+        finding = {'RuleID': 'generic-api-key', 'File': '/scan/layer-0/file-0.data', 'StartLine': 7}
+        exception = {
+            'kind': 'gitleaks-finding', 'rule': 'generic-api-key', 'sourceClass': 'python-dependency',
+            'pathSha256': evidence['locations']['layer-0/file-0.data']['pathSha256'],
+            'fileSha256': evidence['locations']['layer-0/file-0.data']['fileSha256'],
+            'line': 7, 'count': 2, 'package': 'example==1.0.0', 'reason': 'public-runtime-constant',
+            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
+        }
+
+        remaining, applied = gate.apply_secret_exceptions([finding, finding], evidence, [exception])
+        self.assertEqual(remaining, [])
+        self.assertEqual(applied, 2)
+        remaining, applied = gate.apply_secret_exceptions([finding, finding, finding], evidence, [exception])
+        self.assertEqual(remaining, [finding])
+        self.assertEqual(applied, 2)
+        with self.assertRaisesRegex(gate.GateError, '^unused-secret-exception$'):
+            gate.apply_secret_exceptions([finding], evidence, [exception])
+        for field, value in [('rule', 'private-key'), ('sourceClass', 'application'),
+                             ('pathSha256', '0' * 64), ('fileSha256', '1' * 64), ('line', 8)]:
+            changed = {**exception, field: value, 'count': 1}
+            with self.subTest(field=field), self.assertRaisesRegex(gate.GateError, '^unused-secret-exception$'):
+                gate.apply_secret_exceptions([finding], evidence, [changed])
+
+    def test_policy_rejects_expired_duplicate_and_broad_exceptions(self):
+        base = {
+            'kind': 'gitleaks-finding', 'rule': 'generic-api-key', 'sourceClass': 'python-dependency',
+            'pathSha256': '0' * 64, 'fileSha256': '1' * 64, 'line': 7, 'count': 1,
+            'package': 'example==1.0.0', 'reason': 'public-runtime-constant',
+            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
+        }
+        value = {'schemaVersion': 2, 'blockingSeverities': ['UNKNOWN', 'HIGH', 'CRITICAL'],
+                 'exceptions': [base], 'scanners': {
+                     'gitleaks': {'version': '8.30.1', 'url': 'https://example.invalid/gitleaks', 'sha256': '2' * 64},
+                     'trivy': {'version': '0.74.0', 'url': 'https://example.invalid/trivy', 'sha256': '3' * 64},
+                 }}
+        self.assertEqual(gate.validate_policy(value)['exceptions'], [base])
+        for exceptions in ([base, base], [{**base, 'expiresAt': '2020-01-01T00:00:00Z'}],
+                           [{**base, 'pathSha256': '*'}], [{**base, 'unexpected': True}]):
+            with self.subTest(exceptions=exceptions), self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+                gate.validate_policy({**value, 'exceptions': exceptions})
+
     def test_vulnerability_diagnostics_only_echo_recognized_public_identifiers(self):
         report = {'Results': [{'Vulnerabilities': [
             {'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'},
@@ -239,6 +290,13 @@ class OrchestrationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.policy_path = self.root / 'policy.json'
+        policy_value = json.loads(gate.POLICY_PATH.read_text())
+        policy_value['exceptions'] = []
+        self.policy_path.write_text(json.dumps(policy_value))
+        policy_patch = patch.object(gate, 'POLICY_PATH', self.policy_path)
+        policy_patch.start()
+        self.addCleanup(policy_patch.stop)
         self.archive, self.image, self.revision, self.layers = fixture(self.root)
         self.summary = self.root / 'summary.json'
         self.mode = 'clean'
@@ -313,6 +371,28 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(final['vulnerabilities']['HIGH'], 1)
         self.assertEqual(final['blockingVulnerabilityIds'], [{'id': 'CVE-2099-1234', 'findings': 1}])
         self.assertIs(final['passed'], False)
+        self.assertNotIn('CANARY', self.output.getvalue())
+
+    def test_exact_reviewed_secret_exception_passes_and_is_audited(self):
+        self.mode = 'secret'
+        policy_value = json.loads(self.policy_path.read_text())
+        path = 'app/safe.txt'
+        policy_value['exceptions'] = [{
+            'kind': 'gitleaks-finding', 'rule': 'private-key', 'sourceClass': 'application',
+            'pathSha256': hashlib.sha256(path.encode()).hexdigest(),
+            'fileSha256': hashlib.sha256(b'safe').hexdigest(), 'line': 1, 'count': 1,
+            'package': 'fixture==1.0.0', 'reason': 'public-runtime-constant',
+            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
+        }]
+        self.policy_path.write_text(json.dumps(policy_value))
+
+        result = self.invoke()
+
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['secretFindingsDetected'], 1)
+        self.assertEqual(result['secretExceptionsApplied'], 1)
+        self.assertEqual(result['secretFindings'], 0)
+        gate.verify_summary(self.summary, self.archive, self.image, self.revision)
         self.assertNotIn('CANARY', self.output.getvalue())
 
     def test_success_is_bound_to_archive_and_publish_rejects_changed_archive(self):

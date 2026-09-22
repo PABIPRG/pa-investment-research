@@ -19,8 +19,13 @@ MAX_TOTAL_BYTES = 8 * 1024**3
 MAX_FILE_BYTES = 2 * 1024**3
 MAX_ENTRIES = 250000
 MAX_DIAGNOSTIC_SAMPLES = 100
-# Display labels only, never scanner exceptions: every rule still blocks publication.
+# Only these rule identifiers may appear in public diagnostics or reviewed exact exceptions.
 DIAGNOSTIC_RULE_IDS = frozenset(('generic-api-key', 'private-key'))
+SECRET_EXCEPTION_KEYS = frozenset(('kind', 'rule', 'sourceClass', 'pathSha256', 'fileSha256', 'line',
+                                   'count', 'package', 'reason', 'reviewedBy', 'expiresAt'))
+SECRET_EXCEPTION_REASONS = frozenset(('generated-code-expression', 'public-runtime-constant'))
+SECRET_SOURCE_CLASSES = frozenset(('application', 'image-metadata', 'layer-metadata', 'node-dependency',
+                                   'other', 'python-dependency'))
 SEVERITIES = ('UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
 SENSITIVE_PATH = re.compile(
     r'(^|/)(?:\.env(?:\.[^/]*)?|\.git|\.ssh|\.aws|\.netrc|\.pypirc|credentials\.json|'
@@ -50,11 +55,53 @@ def read_json(path):
         raise GateError('invalid-json') from None
 
 
-def policy():
-    value = read_json(POLICY_PATH)
-    require(value.get('schemaVersion') == 1 and value.get('exceptions') == [], 'unapproved-policy')
+def exception_key(exception):
+    return (exception['rule'], exception['sourceClass'], exception['pathSha256'],
+            exception['fileSha256'], exception['line'])
+
+
+def validate_policy(value):
+    require(isinstance(value, dict) and set(value) == {
+        'schemaVersion', 'blockingSeverities', 'exceptions', 'scanners'
+    } and value.get('schemaVersion') == 2, 'unapproved-policy')
     require(value.get('blockingSeverities') == ['UNKNOWN', 'HIGH', 'CRITICAL'], 'unapproved-policy')
+    exceptions = value.get('exceptions')
+    require(isinstance(exceptions, list) and len(exceptions) <= MAX_DIAGNOSTIC_SAMPLES, 'unapproved-policy')
+    keys = []
+    for exception in exceptions:
+        require(isinstance(exception, dict) and set(exception) == SECRET_EXCEPTION_KEYS
+                and exception.get('kind') == 'gitleaks-finding'
+                and exception.get('rule') in DIAGNOSTIC_RULE_IDS
+                and exception.get('sourceClass') in SECRET_SOURCE_CLASSES
+                and re.fullmatch(r'[0-9a-f]{64}', exception.get('pathSha256', '')) is not None
+                and re.fullmatch(r'[0-9a-f]{64}', exception.get('fileSha256', '')) is not None
+                and type(exception.get('line')) is int and 0 < exception['line'] <= 2147483647
+                and type(exception.get('count')) is int and 0 < exception['count'] <= MAX_DIAGNOSTIC_SAMPLES
+                and isinstance(exception.get('package'), str) and 0 < len(exception['package']) <= 256
+                and exception.get('reason') in SECRET_EXCEPTION_REASONS
+                and isinstance(exception.get('reviewedBy'), str) and 0 < len(exception['reviewedBy']) <= 256
+                and isinstance(exception.get('expiresAt'), str), 'unapproved-policy')
+        try:
+            expires = datetime.fromisoformat(exception['expiresAt'].replace('Z', '+00:00'))
+        except ValueError:
+            raise GateError('unapproved-policy') from None
+        require(expires.utcoffset() == timedelta(0) and datetime.now(timezone.utc) < expires,
+                'unapproved-policy')
+        keys.append(exception_key(exception))
+    require(len(keys) == len(set(keys)), 'unapproved-policy')
+    scanners = value.get('scanners')
+    require(isinstance(scanners, dict) and set(scanners) == {'gitleaks', 'trivy'}, 'unapproved-policy')
+    for specification in scanners.values():
+        require(isinstance(specification, dict) and set(specification) == {'version', 'url', 'sha256'}
+                and isinstance(specification['version'], str) and specification['version']
+                and isinstance(specification['url'], str) and specification['url'].startswith('https://')
+                and re.fullmatch(r'[0-9a-f]{64}', specification['sha256']) is not None,
+                'unapproved-policy')
     return value
+
+
+def policy():
+    return validate_policy(read_json(POLICY_PATH))
 
 
 def safe_name(name):
@@ -104,27 +151,49 @@ def path_location(path, layer, entry):
             'pathSha256': hashlib.sha256(path.encode()).hexdigest()}
 
 
+def secret_finding_location(finding, evidence):
+    require(isinstance(finding, dict), 'invalid-secret-report')
+    rule, file, line = finding.get('RuleID'), finding.get('File'), finding.get('StartLine', 0)
+    require(isinstance(rule, str) and 0 < len(rule) <= 256
+            and isinstance(file, str) and 0 < len(file) <= 16384
+            and type(line) is int and 0 <= line <= 2147483647, 'invalid-secret-report')
+    prefix = str(evidence['scan_root']) + '/'
+    relative = file[len(prefix):] if file.startswith(prefix) else file
+    # Gitleaks separates archive members with '!'. Only the known outer scan file is resolved.
+    outer = relative.split('!', 1)[0]
+    location = evidence['locations'].get(outer)
+    if location is None:
+        location = {'class': 'unmapped', 'scanPathSha256': hashlib.sha256(relative.encode()).hexdigest()}
+    return rule, line, {**location, 'nested': outer != relative}
+
+
+def apply_secret_exceptions(findings, evidence, exceptions):
+    """Remove only the authorized count of exact findings; stale or unused exceptions fail closed."""
+    require(isinstance(findings, list), 'invalid-secret-report')
+    expected = Counter({exception_key(exception): exception['count'] for exception in exceptions})
+    applied, remaining = Counter(), []
+    for finding in findings:
+        rule, line, location = secret_finding_location(finding, evidence)
+        key = (rule, location.get('class'), location.get('pathSha256'), location.get('fileSha256'), line)
+        if not location['nested'] and applied[key] < expected[key]:
+            applied[key] += 1
+        else:
+            remaining.append(finding)
+    require(applied == expected, 'unused-secret-exception')
+    return remaining, sum(applied.values())
+
+
 def secret_diagnostics(findings, evidence):
     """Bounded, allowlisted projection; never return report strings or secret fingerprints."""
     require(isinstance(findings, list), 'invalid-secret-report')
     counts, samples = Counter(), []
     for finding in findings:
-        require(isinstance(finding, dict), 'invalid-secret-report')
-        rule, file, line = finding.get('RuleID'), finding.get('File'), finding.get('StartLine', 0)
-        require(isinstance(rule, str) and 0 < len(rule) <= 256
-                and isinstance(file, str) and 0 < len(file) <= 16384
-                and type(line) is int and 0 <= line <= 2147483647, 'invalid-secret-report')
+        rule, line, location = secret_finding_location(finding, evidence)
         label = rule if rule in DIAGNOSTIC_RULE_IDS else 'other'
         counts[label] += 1
         if len(samples) >= MAX_DIAGNOSTIC_SAMPLES:
             continue
-        relative = file.removeprefix(str(evidence['scan_root']) + '/')
-        # Gitleaks separates archive members with '!'. Only the known outer scan file is resolved.
-        outer = relative.split('!', 1)[0]
-        location = evidence['locations'].get(outer)
-        if location is None:
-            location = {'class': 'unmapped', 'scanPathSha256': hashlib.sha256(relative.encode()).hexdigest()}
-        sample = {'rule': label, 'line': line, 'location': {**location, 'nested': outer != relative}}
+        sample = {'rule': label, 'line': line, 'location': location}
         if label == 'other':
             sample['ruleIdSha256'] = hashlib.sha256(rule.encode()).hexdigest()
         samples.append(sample)
@@ -341,9 +410,12 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
         secrets = read_json(secrets_report)
         require(isinstance(secrets, list), 'invalid-secret-report')
         # Raw fields (including redacted Match/Secret) never reach the summary.
-        secrets_count = len(secrets)
-        require(secrets_result.returncode == (10 if secrets_count else 0), 'secret-report-exit-mismatch')
-        diagnostic = secret_diagnostics(secrets, evidence)
+        secrets_detected = len(secrets)
+        require(secrets_result.returncode == (10 if secrets_detected else 0), 'secret-report-exit-mismatch')
+        remaining_secrets, secret_exceptions_applied = apply_secret_exceptions(
+            secrets, evidence, rules['exceptions'])
+        secrets_count = len(remaining_secrets)
+        diagnostic = secret_diagnostics(remaining_secrets, evidence)
         if secrets_count or evidence['sensitive_paths']:
             # Failure diagnostics cannot be used as a passing publication summary.
             print(json.dumps({'schemaVersion': 1, 'kind': 'secret-gate-diagnostics', 'passed': False,
@@ -371,6 +443,8 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
         result = {'schemaVersion': 1, 'passed': blocked == 0, 'archiveSha256': archive_hash, 'imageId': image_id,
                   'revision': revision, 'diffIds': evidence['diff_ids'], 'layers': evidence['layers'],
                   'files': evidence['files'], 'secretFindings': secrets_count,
+                  'secretFindingsDetected': secrets_detected,
+                  'secretExceptionsApplied': secret_exceptions_applied,
                   'sensitivePaths': evidence['sensitive_paths'], 'vulnerabilities': counts,
                   'scanners': {name: spec['version'] for name, spec in rules['scanners'].items()},
                   'databaseUpdatedAt': updated.isoformat(), 'policySha256': digest(POLICY_PATH),
@@ -393,7 +467,11 @@ def verify_summary(summary, archive, image_id, revision):
             and data.get('archiveSha256') == digest(archive) and data.get('imageId') == image_id
             and data.get('revision') == revision and data.get('policySha256') == digest(POLICY_PATH),
             'security-summary-identity-mismatch')
-    require(data.get('secretFindings') == 0 and data.get('sensitivePaths') == 0
+    expected_exceptions = sum(exception['count'] for exception in rules['exceptions'])
+    require(data.get('secretFindings') == 0
+            and data.get('secretFindingsDetected') == expected_exceptions
+            and data.get('secretExceptionsApplied') == expected_exceptions
+            and data.get('sensitivePaths') == 0
             and all(data.get('vulnerabilities', {}).get(s) == 0 for s in rules['blockingSeverities'])
             and data.get('scanners') == {name: spec['version'] for name, spec in rules['scanners'].items()},
             'security-summary-not-passed')
