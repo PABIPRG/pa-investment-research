@@ -246,7 +246,8 @@ class DockerDriver:
         candidate = self.inspect(image, "image")
         require(candidate.get("Os") == "linux" and candidate.get("Architecture") == "amd64",
                 "candidate must be linux/amd64")
-        require(candidate["Config"].get("User") == "dsh", "candidate must run as dsh")
+        require(candidate["Config"].get("User") == "10001:10001",
+                "candidate must run as 10001:10001")
         labels = candidate["Config"].get("Labels", {})
         require(labels.get("org.opencontainers.image.source") == "https://github.com/PABIPRG/pa-investment-research",
                 "candidate source label differs")

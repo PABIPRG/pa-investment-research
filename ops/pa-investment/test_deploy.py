@@ -185,7 +185,7 @@ class DriverTests(unittest.TestCase):
         self.current_id = "sha256:" + "b" * 64
         self.health = "healthy"
         self.candidate = {"Id": "sha256:" + "a" * 64, "Os": "linux", "Architecture": "amd64",
-                          "Config": {"User": "dsh", "Labels": {
+                          "Config": {"User": "10001:10001", "Labels": {
                               "org.opencontainers.image.revision": "c" * 40,
                               "org.opencontainers.image.source": "https://github.com/PABIPRG/pa-investment-research"}}}
         self.config = {"services": {"investment": {"image": "old", "read_only": True, "cap_drop": ["ALL"],
@@ -286,18 +286,37 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(Path(docker_config).exists())
         self.assertTrue(self.running)
 
-    def test_incorrect_architecture_and_root_image_fail_before_stop(self):
+    def test_prepare_accepts_user_declared_by_dockerfile(self):
+        dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
+        users = [line.split()[1] for line in dockerfile.read_text().splitlines()
+                 if line.startswith("USER ")]
+        self.assertEqual(users[-1], "10001:10001")
+        self.candidate["Config"]["User"] = users[-1]
+        self.driver.prepare(IMAGE, self.root)
+        self.assertTrue(self.running)
+
+    def test_incorrect_architecture_fails_before_stop(self):
         for field, value in [("Architecture", "arm64"), ("Os", "windows")]:
             with self.subTest(field=field):
+                self.driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+                self.driver.run = self.fake_run
                 original = self.candidate[field]
                 self.candidate[field] = value
-                with self.assertRaises(deploy.DeployError):
+                with self.assertRaisesRegex(deploy.DeployError, "candidate must be linux/amd64"):
                     self.driver.prepare(IMAGE, self.root)
                 self.candidate[field] = original
-        self.candidate["Config"]["User"] = "root"
-        with self.assertRaises(deploy.DeployError):
-            self.driver.prepare(IMAGE, self.root)
-        self.assertTrue(self.running)
+                self.assertTrue(self.running)
+
+    def test_unapproved_users_fail_before_stop(self):
+        for user in ["root", "0", "0:0", "10001:0", "10002:10002", "", "dsh", "10001"]:
+            with self.subTest(user=user):
+                self.driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+                self.driver.run = self.fake_run
+                self.candidate["Config"]["User"] = user
+                with self.assertRaisesRegex(deploy.DeployError, "candidate must run as 10001:10001"):
+                    self.driver.prepare(IMAGE, self.root)
+                self.assertTrue(self.running)
+                self.assertIsNone(self.driver.registry_token)
 
     def test_another_volume_or_writable_runtime_is_rejected(self):
         self.config["volumes"]["dsh-data"]["name"] = "other-volume"
