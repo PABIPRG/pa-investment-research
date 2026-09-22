@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "requirements": {
-    "backend/dsh-trading-core/requirements.txt": "89a9515f7779b3745dbf6725f33287e73cef504cd263bb0b1c1c343adae57491",
+    "backend/dsh-trading-core/requirements.txt": "061f044ab291949104ae2f0655805c41343ca2d1cbae660985e46d3137ab72d0",
     "backend/industry-chain/requirements.txt": "e22996d7b257e1a574dacbfdc9427dc45f5924a6445c35c6740ad2265caeee28",
     "backend/market-watch/requirements.txt": "8ccd6f579039edeb2efba69301f4cd4d626b10b41f79a60cc820ab8af51fd39c"
   },

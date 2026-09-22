@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button } from '../../../packages/client/ui-primitives/src/Button.tsx'
-import { DatePicker } from '../../../packages/client/ui-primitives/src/DatePicker.tsx'
-import { Modal } from '../../../packages/client/ui-primitives/src/Modal.tsx'
-import { MonthPicker } from '../../../packages/client/ui-primitives/src/MonthPicker.tsx'
+import { Button, DatePicker, Modal, MonthPicker } from '@deepseek-ai/dsh-client-ui-primitives'
 import brandIcon from '../../../official-site/app-icon.png'
 import {
   loadActivityDetail,

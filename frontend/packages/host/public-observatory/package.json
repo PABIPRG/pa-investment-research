@@ -2,6 +2,14 @@
   "name": "@deepseek-ai/dsh-host-public-observatory",
   "description": "Exact-origin, unauthenticated read-only gateway for the public investment observatory",
   "version": "0.2.0-alpha.2",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+    "directory": "packages/host/public-observatory"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

@@ -3,7 +3,6 @@
 import { createHash } from 'node:crypto'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-host-webserver'
 import {
   assertTrustedAuthority,
   assertTrustedOrigin,
@@ -11,7 +10,7 @@ import {
   isTrustedPublicReadRequest,
   requestClientAddress,
   type BrowserTrustRequest,
-} from '@deepseek-ai/dsh-host-webserver/request-trust'
+} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-investment-python-runtime'
 import z from '@deepseek-ai/schemastery'
 
