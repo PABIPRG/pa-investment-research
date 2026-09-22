@@ -29,6 +29,7 @@ HEALTH_URL = "https://pair-demo.xiexin.dev/healthz"
 REGISTRY_RUNTIME_DIR = Path("/run/pa-investment-deploy")
 ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
 MAX_REQUEST_BYTES = 4096
+HEALTHCHECK_COMMAND = ["/nodejs/bin/node", "/opt/container/investment-healthcheck.mjs"]
 
 
 class DeployError(RuntimeError):
@@ -217,6 +218,11 @@ class DockerDriver:
         self.after = replace_image(self.before, image)
         config = json.loads(self.run(self.compose + ["config", "--format", "json"]))
         service = config["services"]["investment"]
+        healthcheck = service.get("healthcheck") or {}
+        require(not healthcheck.get("disable")
+                and healthcheck.get("test") == ["CMD", *HEALTHCHECK_COMMAND],
+                "incompatible Compose healthcheck; expected CMD /nodejs/bin/node "
+                "/opt/container/investment-healthcheck.mjs")
         require(not service.get("privileged") and not service.get("devices"), "privileged service rejected")
         require(service.get("read_only") and "ALL" in service.get("cap_drop", []), "runtime hardening missing")
         mounts = service.get("volumes", [])
@@ -311,7 +317,7 @@ class DockerDriver:
         else:
             raise DeployError("health wait expired")
         require(self.volume_users() == [container["Id"]], "single-instance check failed")
-        self.run(["docker", "exec", container["Id"], "node", "/opt/container/investment-healthcheck.mjs"])
+        self.run(["docker", "exec", container["Id"], *HEALTHCHECK_COMMAND])
         response = self.run(["curl", "--fail", "--silent", "--show-error", "--proto", "=https",
                              "--max-time", "30", HEALTH_URL])
         require(json.loads(response).get("status") == "ok", "HTTPS healthz did not return ok")
