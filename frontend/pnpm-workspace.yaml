@@ -24,12 +24,20 @@ packages:
 # builds must resolve those matching names to this workspace's pinned sources.
 linkWorkspacePackages: true
 
+# Production deploys must keep rejecting unreviewed remote subdependencies.
+blockExoticSubdeps: true
+
 # This is pnpm's ordinary hidden-hoist default, recorded explicitly because
 # Electron Forge refuses pnpm packaging unless an on-disk hoist policy is visible.
 hoistPattern:
   - '*'
 
 overrides:
+  # PAB-29: exact compatible fixes verified against official npm releases.
+  'fast-uri@3.1.3': 3.1.6
+  'ip-address@10.2.0': 10.3.1
+  'js-yaml@^4.1.0': 4.3.2
+  'sharp@^0.35.3': 0.35.4
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
   # Forge 7.8.3's rebuild helper names Electron's node-gyp fork by git URL.

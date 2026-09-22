@@ -47,6 +47,8 @@ jobs:
           packages/api/web-auth/tests/web-auth.spec.ts
           scripts/investment-container.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
+          scripts/investment-backend-package-policy.spec.ts
+          scripts/investment-container-test-payloads.spec.ts
 
       - uses: docker/setup-buildx-action@v3
 
@@ -61,17 +63,17 @@ jobs:
           --build-arg "VCS_REF=${GITHUB_SHA}"
           --metadata-file "${RUNNER_TEMP}/investment-container-build.json"
           --cache-from type=gha
-          --cache-to type=gha,mode=max
           .
 
       - name: Assert image boundary
         env:
           IMAGE: pa-investment-research:${{ github.sha }}
         run: |
-          test "$(docker image inspect --format '{{.Config.User}}' "$IMAGE")" = dsh
+          test "$(docker image inspect --format '{{.Config.User}}' "$IMAGE")" = 10001:10001
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE")" = "$GITHUB_SHA"
           test "$(docker image inspect --format '{{json .Config.ExposedPorts}}' "$IMAGE")" = '{"3080/tcp":{}}'
-          test -z "$(docker run --rm --entrypoint sh "$IMAGE" -c 'find -L /opt/dsh /opt/investment-python -type l -print -quit')"
+          test "$(docker run --rm --entrypoint /nodejs/bin/node "$IMAGE" --version | cut -d. -f1)" = v24
+          docker run --rm --entrypoint /nodejs/bin/node "$IMAGE" /opt/container/investment-container-check.mjs boundary
           docker image inspect --format '{{.Id}}' "$IMAGE" > "${RUNNER_TEMP}/investment-container.image-id"
 
       - name: Start the exact image with Compose
@@ -87,7 +89,7 @@ jobs:
           DSH_WEB_TRUSTED_PROXIES: 192.0.2.1
         run: |
           printf '%s\n' 'ci-container-password' \
-            | docker run --rm -i --entrypoint node "$DSH_IMAGE" /opt/dsh/lib/bin.js web-password-hash \
+            | docker run --rm -i --entrypoint /nodejs/bin/node "$DSH_IMAGE" /opt/dsh/lib/bin.js web-password-hash \
             > "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
           sudo chown 10001:10001 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
           sudo chmod 0400 "$DSH_WEB_ADMIN_PASSWORD_HASH_FILE"
@@ -103,15 +105,15 @@ jobs:
             fi
             docker run --rm \
               --mount source=pa-investment-research_dsh-data,target=/state,readonly \
-              --entrypoint sh "$DSH_IMAGE" -c \
-              'if test -e /state/investment-research/.container-instance.lock; then echo container-lock=present; else echo container-lock=absent; fi; if test -e /state/investment-research/application.lock; then echo application-lock=present; else echo application-lock=absent; fi'
+              --entrypoint /nodejs/bin/node "$DSH_IMAGE" \
+              /opt/container/investment-container-check.mjs state
           }
           trap diagnose_startup ERR
           container_id=$(docker compose ps -aq investment)
           test -n "$container_id"
           test "$(docker inspect --format '{{.State.Status}}' "$container_id")" = running
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" = true
-          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = dsh
+          test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = 10001:10001
           for attempt in $(seq 1 90); do
             health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id")
             if test "$health" = healthy; then break; fi
@@ -141,8 +143,9 @@ jobs:
           exit_code=$(docker inspect --format '{{.State.ExitCode}}' "$container_id")
           test "$exit_code" = 0
           test -z "$(docker logs "$container_id" 2>&1 | grep 'graceful shutdown timed out' || true)"
-          docker run --rm --volume pa-investment-research_dsh-data:/state --entrypoint sh "$DSH_IMAGE" -c \
-            'test ! -e /state/investment-research/.container-instance.lock && test ! -e /state/investment-research/application.lock'
+          docker run --rm --volume pa-investment-research_dsh-data:/state \
+            --entrypoint /nodejs/bin/node "$DSH_IMAGE" \
+            /opt/container/investment-container-check.mjs state-clean
 
       - name: Clean up Compose
         if: always()
@@ -169,6 +172,25 @@ jobs:
           cd "$RUNNER_TEMP"
           sha256sum investment-container.tar.gz > investment-container.tar.gz.sha256
 
+      - name: Install checksum-pinned security scanners
+        timeout-minutes: 5
+        run: >-
+          python3 -B ops/pa-investment/image_security.py install
+          --tools "${RUNNER_TEMP}/investment-security-tools"
+
+      - name: Gate the exact tested archive before any image upload
+        timeout-minutes: 40
+        env:
+          SHA: ${{ github.sha }}
+        run: >-
+          python3 -B ops/pa-investment/image_security.py scan
+          --tools "${RUNNER_TEMP}/investment-security-tools"
+          --archive "${RUNNER_TEMP}/investment-container.tar.gz"
+          --image-id-file "${RUNNER_TEMP}/investment-container.image-id"
+          --revision "$SHA"
+          --work-parent "$RUNNER_TEMP"
+          --summary "${RUNNER_TEMP}/investment-container.security.json"
+
       - name: Upload commit-addressed image delivery
         uses: actions/upload-artifact@v4
         with:
@@ -178,6 +200,7 @@ jobs:
             ${{ runner.temp }}/investment-container.tar.gz.sha256
             ${{ runner.temp }}/investment-container.image-id
             ${{ runner.temp }}/investment-container-build.json
+            ${{ runner.temp }}/investment-container.security.json
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -212,6 +235,11 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           (cd candidate && sha256sum --check investment-container.tar.gz.sha256)
+          python3 -B ops/pa-investment/image_security.py verify \
+            --archive candidate/investment-container.tar.gz \
+            --image-id-file candidate/investment-container.image-id \
+            --revision "$SHA" \
+            --summary candidate/investment-container.security.json
           gzip -dc candidate/investment-container.tar.gz | docker load
           expected=$(cat candidate/investment-container.image-id)
           test "$(docker image inspect --format '{{.Id}}' "pa-investment-research:$SHA")" = "$expected"

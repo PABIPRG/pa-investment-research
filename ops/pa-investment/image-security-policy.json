@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "blockingSeverities": ["UNKNOWN", "HIGH", "CRITICAL"],
+  "exceptions": [
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "c78e1e79688259bbbca82b1c4f3ec4c10bbcc0b1c96aab3bd45d612d04a8886d",
+      "fileSha256": "8c8edcfee145cd875bb2a269119170f763bbad6cba95fe8fb8b4451adcb8d77d",
+      "line": 35,
+      "count": 1,
+      "package": "tushare==1.4.29",
+      "reason": "public-runtime-constant",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    },
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "4b06cd325cfadf66029ac919a592350d8c68b01aa91ed18f04b543bf1d3d73db",
+      "fileSha256": "a859417d26049d7833e0c69619b2522463671e0cc9036ddce3dbfce74a1ea653",
+      "line": 22,
+      "count": 1,
+      "package": "tushare==1.4.29",
+      "reason": "generated-code-expression",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    },
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "9a56363cc5ab35a45ac78614b4485eedbdae68a2f0f97e871ffbae035d7e82b4",
+      "fileSha256": "91a0a2f2071b44bcbb8409290d53c93516ed826ee635789fe733ccfcb631ccb0",
+      "line": 37,
+      "count": 2,
+      "package": "akshare==1.18.88",
+      "reason": "public-runtime-constant",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    },
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "a7510f8fe8967b202cb4fb4b070ee2e3c670643055253d48c56fe8aabcfebb96",
+      "fileSha256": "6eab34f3a758bca1a032e6e8ae2b066b637dbd8c52147d13df48a1b3255760ef",
+      "line": 100,
+      "count": 1,
+      "package": "akshare==1.18.88",
+      "reason": "public-runtime-constant",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    },
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "d96b70ac42ed2dc1307edebe18463dc7246357d5202f9ae83acd26efe66d8c31",
+      "fileSha256": "f559b9b4393e8bc6b4c9bcd6c1ad77b1405b58fa791ec918cc195f72cfab17b8",
+      "line": 119,
+      "count": 1,
+      "package": "akshare==1.18.88",
+      "reason": "public-runtime-constant",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    },
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "f66bb52b3687fe6666452001e45c01aa805a829cc316895625dfb0b548507f33",
+      "fileSha256": "bad55450e94f5c3a54c1ce9823d6d784c20f40a0ec4019a02d50c701a90ef06f",
+      "line": 8,
+      "count": 1,
+      "package": "akshare==1.18.88",
+      "reason": "public-runtime-constant",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    },
+    {
+      "kind": "gitleaks-finding",
+      "rule": "generic-api-key",
+      "sourceClass": "python-dependency",
+      "pathSha256": "925ea1ba31cbf8683e42a5b0e4ef9365ef66fb8d3f1bd038c0efebdb3b3a5fe2",
+      "fileSha256": "b4c932fabcbe0d134e11fadd729de38392f3846b3655881a473d43f32c6021fa",
+      "line": 34,
+      "count": 1,
+      "package": "protobuf==7.35.1",
+      "reason": "generated-code-expression",
+      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
+      "expiresAt": "2026-10-06T23:59:00Z"
+    }
+  ],
+  "scanners": {
+    "gitleaks": {
+      "version": "8.30.1",
+      "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+      "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    },
+    "trivy": {
+      "version": "0.74.0",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz",
+      "sha256": "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+    }
+  }
+}

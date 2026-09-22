@@ -80,6 +80,7 @@ async function fixture() {
   const runCommand = vi.fn(async (_command: string, args: readonly string[]) => {
     const sitePackages = args[args.indexOf('--target') + 1]!
     await write(join(sitePackages, 'native-extension.so'), 'native')
+    await write(join(sitePackages, 'cryptography/hazmat/bindings/_rust/openssl/hpke.pyi'), 'type-only fixture')
     return 0
   })
   const dependencies = {
@@ -93,8 +94,15 @@ async function fixture() {
         'runtime bytecode cache',
       )
       await write(join(destination, 'python/install/lib/python3.10/site.pyc'), 'runtime bytecode cache')
+      await write(join(destination, 'python/install/lib/python3.10/distutils/msvccompiler.py'), 'windows-only fixture')
     },
     runCommand,
+    payloadFileSha256: async (path: string) => {
+      const portablePath = path.replaceAll('\\', '/')
+      if (portablePath.endsWith('distutils/msvccompiler.py')) return '658b27520202e2d653d969096d39135325520807369c533d0d5288b887cf054d'
+      if (portablePath.endsWith('openssl/hpke.pyi')) return 'a7f8462e7e981fe11aac91755796d4b14b638a9be2100a5c4793b4b141c92ed7'
+      return hash(await readFile(path))
+    },
   }
   return { root, lock, cache, output, dependencies, runCommand }
 }
@@ -170,6 +178,21 @@ describe('investment Python sidecar builder', () => {
     const previous = await readFile(join(setup.output, 'runtime.json'), 'utf8')
     await write(join(setup.root, 'backend/dsh-trading-core/adapter/app.py'), 'api_key = "private-canary-123"')
     await expect(buildInvestmentPythonSidecar(options, setup.dependencies)).rejects.toThrow(/credential-literal/)
+    expect(await readFile(join(setup.output, 'runtime.json'), 'utf8')).toBe(previous)
+  })
+
+  it('blocks unreviewed dependency tests before replacing the packaged output', async () => {
+    const setup = await fixture()
+    const options = { target: TARGET, output: setup.output, cache: setup.cache, offline: true }
+    await buildInvestmentPythonSidecar(options, setup.dependencies)
+    const previous = await readFile(join(setup.output, 'runtime.json'), 'utf8')
+    const runCommand = async (_command: string, args: readonly string[]) => {
+      const sitePackages = args[args.indexOf('--target') + 1]!
+      await write(join(sitePackages, 'py_vapid/tests/test_vapid.py'), 'unreviewed fixture')
+      return 0
+    }
+    await expect(buildInvestmentPythonSidecar(options, { ...setup.dependencies, runCommand }))
+      .rejects.toThrow(/unreviewed py-vapid/)
     expect(await readFile(join(setup.output, 'runtime.json'), 'utf8')).toBe(previous)
   })
 

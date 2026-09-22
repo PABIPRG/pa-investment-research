@@ -85,4 +85,25 @@ describe('holdings import parser', () => {
       errors: [],
     })
   })
+
+  it('preserves Chinese xlsx values and imports only the first worksheet', () => {
+    const workbook = utils.book_new()
+    utils.book_append_sheet(workbook, utils.aoa_to_sheet([
+      ['证券代码', '证券名称', '股份余额', '参考成本价'],
+      ['000858', '五粮液', 200, 135.25],
+    ]), '持仓')
+    utils.book_append_sheet(workbook, utils.aoa_to_sheet([
+      ['股票代码', '数量', '成本价'], ['600519', 100, 1500],
+    ]), '不应导入')
+    const binary = write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+    expect(parseHoldingsWorkbook(binary)).toEqual({
+      items: [{ ticker: '000858', quantity: 200, cost_price: 135.25 }], errors: [],
+    })
+  })
+
+  it('keeps corrupt workbooks in the recoverable error path without importing rows', () => {
+    const result = parseHoldingsWorkbook(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff]))
+    expect(result.items).toEqual([])
+    expect(result.errors).toEqual(['无法读取 Excel 文件，请确认文件未损坏且包含持仓表格。'])
+  })
 })

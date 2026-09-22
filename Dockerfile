@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106 AS build
+FROM node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697 AS build
 
 ARG TARGETPLATFORM
 ENV COREPACK_HOME=/opt/corepack
@@ -8,6 +8,7 @@ WORKDIR /src
 
 RUN test "$TARGETPLATFORM" = "linux/amd64" \
     && apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable \
@@ -20,11 +21,13 @@ RUN pnpm run build:lib && pnpm run build:web
 # Run the final pnpm command non-interactively before production deploy changes the shared modules state.
 RUN CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 RUN node --import tsx/esm scripts/build-investment-container-app.ts --output /opt/dsh
+RUN install -d -m 0700 -o 10001 -g 10001 /opt/runtime-root/var/lib/dsh
 
-FROM node:24.8.0-bookworm-slim@sha256:81a8fcfa2aa85bc07d22d9ddff227d0a52cfc3b08e571a21b16efc9153842106 AS runtime
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d AS runtime
 
 ARG VCS_REF=unknown
 ENV DSH_HOME=/var/lib/dsh \
+    HOME=/var/lib/dsh \
     NODE_ENV=production \
     PORT=3080 \
     TIMEZONE=Asia/Shanghai \
@@ -32,19 +35,11 @@ ENV DSH_HOME=/var/lib/dsh \
 LABEL org.opencontainers.image.source="https://github.com/PABIPRG/pa-investment-research" \
       org.opencontainers.image.revision="$VCS_REF"
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libgomp1 tzdata \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 dsh \
-    && useradd --uid 10001 --gid dsh --home-dir /var/lib/dsh --no-create-home --shell /usr/sbin/nologin dsh \
-    && mkdir -p /opt/container \
-    && install -d -m 0700 -o dsh -g dsh /var/lib/dsh
-
-COPY --from=build --chown=root:root /opt/dsh /opt/dsh
-COPY --from=build --chown=root:root /opt/investment-python /opt/investment-python
-COPY --chown=root:root containers/ /opt/container/
-RUN chmod 0555 /opt/container/*.mjs
+COPY --from=build --chown=0:0 /opt/dsh /opt/dsh
+COPY --from=build --chown=0:0 /opt/investment-python /opt/investment-python
+COPY --from=build --chown=10001:10001 /opt/runtime-root/var/lib/dsh /var/lib/dsh
+COPY --chown=0:0 containers/ /opt/container/
 
 EXPOSE 3080
-USER dsh
-ENTRYPOINT ["/opt/container/investment-entrypoint.mjs"]
+USER 10001:10001
+ENTRYPOINT ["/nodejs/bin/node", "/opt/container/investment-entrypoint.mjs"]
