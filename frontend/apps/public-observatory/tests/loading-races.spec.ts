@@ -23,6 +23,40 @@ const state = (activities: PublicActivities, accountLoading = true): Observatory
 })
 const button = (text: string) => [...container.querySelectorAll('button')].find(item => item.textContent === text)!
 
+it('uses accessible filter menus and clears both active filters together', async () => {
+  expect(container.querySelector('select')).toBeNull()
+  const select = (label: string) => container.querySelector<HTMLButtonElement>(`[role="combobox"][aria-label="${label}"]`)!
+  await act(async () => { select('记录类型').click() })
+  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.textContent === '操作')!.click() })
+  expect(loadObservatorySlice).toHaveBeenLastCalledWith(expect.any(String), { category: 'operation', status: 'all' }, expect.any(AbortSignal), expect.any(Function))
+  await act(async () => { select('记录状态').click() })
+  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.textContent === '失败 / 已回滚')!.click() })
+  expect(loadObservatorySlice).toHaveBeenLastCalledWith(expect.any(String), { category: 'operation', status: 'failed' }, expect.any(AbortSignal), expect.any(Function))
+  await act(async () => { button('清除筛选').click() })
+  expect(loadObservatorySlice).toHaveBeenLastCalledWith(expect.any(String), { category: 'all', status: 'all' }, expect.any(AbortSignal), expect.any(Function))
+  expect(button('清除筛选')).toBeUndefined()
+})
+
+it('shows pending feedback and blocks duplicate operation retries', async () => {
+  const failed = { ...state(page('', null), false), activities: null, activitiesError: true }
+  await act(async () => { requests[0]!(failed, 'activities'); requests[0]!(failed, 'account') })
+  await act(async () => { button('重试记录').click() })
+  expect(button('正在重试…').disabled).toBe(true)
+  await act(async () => { button('正在重试…').click() })
+  expect(requests).toHaveLength(2)
+  await act(async () => { requests[1]!(state(page('重试成功的记录', null), false), 'activities') })
+  expect(container.textContent).toContain('重试成功的记录')
+  expect(container.textContent).not.toContain('操作记录暂时无法读取')
+})
+
+it('does not present a failed account request as proof of a missing snapshot', async () => {
+  const failed = { ...state(page('独立记录', null), false), accountUnavailable: null, accountError: '账户数据加载失败，请重试。' }
+  await act(async () => { requests[0]!(failed, 'activities'); requests[0]!(failed, 'account') })
+  expect(container.textContent).toContain('暂时无法确认快照状态')
+  expect(container.textContent).not.toContain('尚无可公开的完整账户快照')
+  expect(container.textContent).toContain('独立记录')
+})
+
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('matchMedia', () => ({ matches: false }))
