@@ -5,14 +5,16 @@ import { searchSecurities, type SecuritySearchItem } from './security-search.ts'
 import css from './SecuritySearchField.module.css'
 
 /** 复用菜单浮层；由所在 Modal 协调 Esc，先收起搜索再关闭子窗口。 */
-export function SecuritySearchField({ requestData, disabled, onSelect, open, onOpenChange }: {
+export function SecuritySearchField({ requestData, disabled, onSelect, open, onOpenChange, validationError }: {
   requestData: (request: InvestmentDataRequest) => Promise<unknown>
   disabled: boolean
   onSelect: (security: SecuritySearchItem | undefined) => void
   open: boolean
   onOpenChange: (open: boolean) => void
+  validationError?: string | undefined
 }) {
   const id = useId()
+  const validationErrorId = useId()
   const root = useRef<HTMLDivElement>(null)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(false)
@@ -57,6 +59,7 @@ export function SecuritySearchField({ requestData, disabled, onSelect, open, onO
       onSelect={() => {}} onClose={() => { onOpenChange(false) }} anchor={
     <Input id={id} className={css.input ?? ''} icon={<IconSearchOutline16 />} type="search" role="combobox"
       value={query} disabled={disabled} placeholder="搜索名称或代码，如 科士达" autoComplete="off"
+      aria-invalid={Boolean(validationError)} aria-describedby={validationError ? validationErrorId : undefined}
       aria-expanded={showResults} aria-autocomplete="list" aria-haspopup="listbox"
       aria-controls={showResults && !loading && !error && items.length > 0 ? `${id}-results` : undefined}
       aria-activedescendant={showResults && items[activeIndex] ? `${id}-${items[activeIndex]!.code}` : undefined}
@@ -92,5 +95,6 @@ export function SecuritySearchField({ requestData, disabled, onSelect, open, onO
           </Button>)}
         </div>}
     </div>} />
+    {validationError && <small id={validationErrorId} role="alert" className={css.validationError}>{validationError}</small>}
   </div>
 }

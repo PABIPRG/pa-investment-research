@@ -414,6 +414,7 @@ function RegionMeta({ state, settled }: { state: ResourceState; settled: string 
 
 interface ResearchWorkbenchPageProps {
   readonly holdingsEntry?: { readonly flow: 'view' | 'sync' } | undefined
+  readonly holdingsRevision?: number
   readonly requestData: RequestData
   readonly brokerSync?: boolean
   readonly holdingsProviders?: readonly string[]
@@ -426,7 +427,7 @@ interface ResearchWorkbenchPageProps {
 
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
-  requestData, holdingsEntry, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
+  requestData, holdingsEntry, holdingsRevision = 0, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
   navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
   const { hidden: fundsHidden } = useFundsPrivacy()
@@ -440,6 +441,7 @@ export function ResearchWorkbenchPage({
   const performance = useWorkbenchResource(requestData)
   const alive = useRef(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
+  const observedHoldingsRevision = useRef(holdingsRevision)
   const [eventView, setEventView] = useState<EventView>('all')
   const [eventOffset, setEventOffset] = useState(0)
   const [eventFeeds, setEventFeeds] = useState<Partial<Record<EventView, EventFeed>>>({})
@@ -658,6 +660,12 @@ export function ResearchWorkbenchPage({
     setEventOffset(0)
     setRefreshVersion(value => value + 1)
   }, [])
+
+  useEffect(() => {
+    if (observedHoldingsRevision.current === holdingsRevision) return
+    observedHoldingsRevision.current = holdingsRevision
+    refreshDashboard()
+  }, [holdingsRevision, refreshDashboard])
 
   const saveHoldings = useCallback(async (
     next: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource,

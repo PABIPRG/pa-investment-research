@@ -12,6 +12,7 @@
 }
 
 .trigger span { color: var(--dsw-alias-label-secondary); font-size: .8571rem; }
+.iconOnly { justify-content: center; padding: 0; }
 .trigger:focus-visible, .navigation button:focus-visible, .grid button:focus-visible, .monthGrid button:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary);
   outline-offset: 2px;

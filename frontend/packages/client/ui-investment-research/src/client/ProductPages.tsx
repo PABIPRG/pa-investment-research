@@ -10,6 +10,7 @@ import { asRecord, money, number, productErrorText, records, text } from './data
 import { DetailDialog } from './DetailDialogs.tsx'
 import { formatEvolutionTimestamp } from './evolution-types.ts'
 import { useSecurityNames } from './security-names.ts'
+import { validSecurityName } from './security-name-cache.ts'
 import { StrategyEvolutionDiagnostics } from './StrategyEvolutionDiagnostics.tsx'
 import {
   strategyDirectionLabel, strategyEvolutionLabel, strategyKindLabel, strategyTargetLabel, strategyTickers,
@@ -546,14 +547,19 @@ interface StrategyHypothesisPreview {
 }
 
 function HypothesisPreviewDialog({
-  preview, busy, status, onClose, onConfirm,
+  preview, requestData, busy, status, onClose, onConfirm,
 }: {
   preview: StrategyHypothesisPreview
+  requestData: InvestmentRequestData
   busy: boolean
   status: string
   onClose: () => void
   onConfirm: () => void
 }) {
+  const tickers = preview.hypotheses.flatMap(strategyTickers)
+  const knownNames = Object.fromEntries(tickers.filter(ticker => validSecurityName(ticker.code, ticker.name))
+    .map(ticker => [ticker.code, ticker.name]))
+  const securityNames = useSecurityNames(requestData, tickers.map(ticker => ticker.code), knownNames)
   const eventSummary = preview.eventCount === undefined
     ? '后端未返回本次读取的事件数量'
     : `本次读取 ${preview.eventCount} 条事件`
@@ -576,7 +582,10 @@ function HypothesisPreviewDialog({
         <Empty>{preview.note || '本轮没有返回可预览的策略假设，未写入策略池。'}</Empty>
       ) : preview.hypotheses.map((hypothesis, index) => {
         const rule = strategyRule(hypothesis)
-        const symbols = strings(hypothesis.symbols)
+        const symbols = strategyTickers(hypothesis).map((ticker) => {
+          const name = (validSecurityName(ticker.code, ticker.name) ? ticker.name : securityNames[ticker.code]) || ''
+          return `${name === '' || name === ticker.code ? '名称待补充' : name} · ${ticker.code}`
+        })
         const holdingWindow = number(hypothesis.holding_window_days)?.toFixed(0)
         return (
           <section key={`${text(hypothesis.kind, 'unknown')}-${index}`} className={css.detailSection}>
@@ -1496,6 +1505,7 @@ export function StrategyResearchPage({
       {hypothesisPreview !== undefined && (
         <HypothesisPreviewDialog
           preview={hypothesisPreview}
+          requestData={requestData}
           busy={busyAction === 'hypothesize-commit'}
           status={hypothesisStatus}
           onClose={() => {

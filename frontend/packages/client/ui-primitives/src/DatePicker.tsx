@@ -22,13 +22,14 @@ export interface DatePickerProps {
   value: string
   onChange: (value: string) => void
   label?: string
+  iconOnly?: boolean
   min?: string
   max?: string
   disabled?: boolean
 }
 
 /** Token-styled calendar picker that does not depend on the browser's native date input UI. */
-export function DatePicker({ value, onChange, label = '选择日期', min, max, disabled }: DatePickerProps) {
+export function DatePicker({ value, onChange, label = '选择日期', iconOnly = false, min, max, disabled }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState(() => {
     const date = parseDate(value)
@@ -43,7 +44,7 @@ export function DatePicker({ value, onChange, label = '选择日期', min, max, 
     <>
       <button
         type="button"
-        className={css.trigger}
+        className={`${css.trigger} ${iconOnly ? css.iconOnly : ''}`}
         disabled={disabled}
         aria-label={`${label}，当前 ${displayDate(value)}`}
         onClick={() => {
@@ -52,7 +53,9 @@ export function DatePicker({ value, onChange, label = '选择日期', min, max, 
           setOpen(true)
         }}
       >
-        <span>{label}</span><strong>{displayDate(value)}</strong>
+        {iconOnly
+          ? <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4M17 3v4M3 10h18" /></svg>
+          : <><span>{label}</span><strong>{displayDate(value)}</strong></>}
       </button>
       <Modal open={open} onClose={() => { setOpen(false) }} title={label} closeLabel={`关闭${label}`}>
         <div className={css.navigation}>

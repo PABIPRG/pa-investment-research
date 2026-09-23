@@ -5,16 +5,23 @@ import { WorkbenchOverviewDialog } from '../src/client/WorkbenchOverviewDialog.t
 
 afterEach(cleanup)
 
-function renderHoldings(initialHoldingsFlow: 'view' | 'sync' = 'view', missing = false, onSaveHoldings = vi.fn().mockResolvedValue(undefined)) {
+function renderHoldings(initialHoldingsFlow: 'view' | 'sync' = 'view', missing = false, onSaveHoldings = vi.fn().mockResolvedValue(undefined), costPrice = 30) {
   const onClose = vi.fn()
   const requestData = vi.fn(async () => ({ provider: 'mac_ths', available: !missing, blocking_reason: missing ? 'client_missing' : '', entries: [] }))
   render(<WorkbenchOverviewDialog kind="holdings" initialHoldingsFlow={initialHoldingsFlow}
-    positions={[{ code: '002518', name: '科士达', quantity: 100, costPrice: 30, currentPrice: 32 }]}
+    positions={[{ code: '002518', name: '科士达', quantity: 100, costPrice, currentPrice: 32 }]}
     risk={{}} alerts={[]} riskAsOf={undefined} alertsAsOf={undefined} alertsDegraded={undefined} alertsDegradedReason={undefined}
     holdingsState={{ loaded: true, busy: false, error: '' }} riskState={{ loaded: true, busy: false, error: '' }} alertsState={{ loaded: true, busy: false, error: '' }}
     onOpenAlert={vi.fn()} onSaveHoldings={onSaveHoldings} onSyncHoldings={vi.fn()} requestData={requestData} onClose={onClose} />)
   return { onClose }
 }
+
+it('shows a saved unit cost to the thousandth without changing total cost precision', () => {
+  renderHoldings('view', false, vi.fn().mockResolvedValue(undefined), 36.712)
+  const row = screen.getByRole('rowheader', { name: /科士达/ }).closest('tr')!
+  expect(within(row).getByText('¥36.712')).toBeTruthy()
+  expect(within(row).getByText('¥3671.20')).toBeTruthy()
+})
 
 it.each([
   ['记录买入', '记录买入'], ['卖出', '记录卖出'], ['全部成交记录', '成交记录'],

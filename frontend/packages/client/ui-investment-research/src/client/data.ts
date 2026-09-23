@@ -29,6 +29,13 @@ export function money(value: unknown): string {
   return resolved === undefined ? '—' : `¥${resolved.toFixed(2)}`
 }
 
+const UNIT_COST_FORMAT = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 3 })
+
+export function unitCost(value: unknown): string {
+  const resolved = number(value)
+  return resolved === undefined ? '—' : `¥${UNIT_COST_FORMAT.format(resolved)}`
+}
+
 /** 大额缩写：¥xx.xx 亿 / ¥xx.x 万 / ¥1,234（整数取整）。 */
 export function compactMoney(value: number): string {
   if (value >= 100_000_000) return `¥${(value / 100_000_000).toFixed(2)} 亿`

@@ -417,6 +417,46 @@ describe('ui-investment-research apply', () => {
     expect(prepareAssistant).toHaveBeenCalledWith({ kind: 'stock', code: '600519', name: '贵州茅台' })
   })
 
+  it('refreshes the retained dashboard after adding a holding from stock detail', async () => {
+    let snapshot: InvestmentUiSnapshot = { ...UI_SNAPSHOT, route: 'dashboard' }
+    let holdings = [{ ticker: '002518', quantity: 100, cost_price: 36.712 }]
+    const requestData = vi.fn(async (request: { operation: string; input?: { holdings?: typeof holdings } }) => {
+      if (request.operation === 'trading-core.holdings') return { items: holdings }
+      if (request.operation === 'trading-core.holdings-save') {
+        holdings = request.input?.holdings ?? holdings
+        return { items: holdings }
+      }
+      if (request.operation === 'market-watch.security-detail') return {
+        code: '600410', name: '华胜天成', quote: { price: 12.5 }, technical: {}, news: [],
+      }
+      if (request.operation === 'market-watch.quotes-batch') return { items: [] }
+      if (request.operation === 'market-watch.watchlist') return { items: [] }
+      if (request.operation === 'trading-core.watchlist') return { tickers: [] }
+      return { items: [] }
+    })
+    const props = {
+      useInvestmentUi: (selector: (value: InvestmentUiSnapshot) => unknown) => selector(snapshot),
+      requestData, navigate: vi.fn(), setHistory: vi.fn(), startSession: vi.fn(), openSession: vi.fn(),
+      searchSessions: vi.fn(), renameSession: vi.fn(), archiveSession: vi.fn(), prepareAssistant: vi.fn(),
+    }
+    const view = render(createElement(InvestmentShell, props as never))
+    await waitFor(() => expect(view.getByRole('button', { name: /持仓资产/ }).textContent).toMatch(/持仓数量\s*1/))
+
+    snapshot = { ...snapshot, route: 'stock-detail' as const, selectedStockCode: '600410', stockDetailReturnRoute: 'dashboard' }
+    view.rerender(createElement(InvestmentShell, props as never))
+    const add = await view.findByRole('button', { name: '加入持仓' })
+    await waitFor(() => expect((add as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(add)
+    fireEvent.click(view.getByRole('button', { name: '确认加入持仓' }))
+    await waitFor(() => expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.holdings-save')).toBe(true))
+
+    snapshot = { ...snapshot, route: 'dashboard' as const }
+    view.rerender(createElement(InvestmentShell, props as never))
+    await waitFor(() => expect(view.getByRole('button', { name: /持仓资产/ }).textContent).toMatch(/持仓数量\s*2/))
+    fireEvent.click(view.getByRole('button', { name: /持仓资产/ }))
+    expect(within(view.getByRole('dialog', { name: '持仓明细' })).getByRole('rowheader', { name: /600410/ })).toBeTruthy()
+  })
+
   it('presents six first-level business entries and keeps shadow validation inside strategy research', () => {
     const navigate = vi.fn()
     const view = render(InvestmentSidebar({

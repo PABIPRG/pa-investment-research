@@ -2,11 +2,34 @@
 .form { display: grid; gap: 24px; margin: 0; }
 .fields { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 20px 16px; }
 .fields label { display: grid; min-width: 0; align-content: start; gap: 8px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
-.fields > label { grid-column: span 2; }
+.numericField { grid-column: span 2; display: grid; min-width: 0; align-content: start; gap: 8px; }
 .fields > .time, .security { grid-column: span 3; min-width: 0; }
+.time { display: grid; align-content: start; gap: 8px; }
+.timeControls { display: flex; align-items: center; min-width: 0; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-base); }
+.timeControls:focus-within { border-color: var(--dsw-alias-state-business-primary); outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.timeControls:has(input:disabled) { background: var(--dsw-alias-bg-layer-2); }
+.timeControls > button { flex: 0 0 40px; width: 40px; height: 38px; border: 0; border-left: 1px solid var(--dsw-alias-border-l1); border-radius: 0 7px 7px 0; background: transparent; }
+.timeControls > button:focus-visible { outline: none; }
 .fieldControl.fieldControl { display: flex; min-width: 0; width: 100%; height: 40px; box-sizing: border-box; padding: 0 12px; border-radius: 8px; background: var(--dsw-alias-bg-base); }
 .fieldControl input { min-width: 0; width: 100%; font-size: 1rem; line-height: 1.5; }
 .fieldControl:has(input:disabled) { background: var(--dsw-alias-bg-layer-2); }
+.timeControls .fieldControl.fieldControl { flex: 1; height: 38px; border: 0; border-radius: 7px 0 0 7px; background: transparent; }
+.timeControls .fieldControl.fieldControl:focus-within { border: 0; outline: none; }
+.fieldError { color: var(--dsw-alias-state-error-primary); font-size: 0.7857rem; line-height: 1.5; }
+.timeControls:has(input[aria-invalid='true']), .numericField .fieldControl.fieldControl:has(input[aria-invalid='true']) { border-color: var(--dsw-alias-state-error-primary); }
+.timeControls:has(input[aria-invalid='true']):focus-within, .numericField .fieldControl.fieldControl:has(input[aria-invalid='true']):focus-within { outline-color: var(--dsw-alias-state-error-primary); }
+.impact { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 0; border: 0; }
+.impact legend { margin-bottom: 8px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+.impactOptions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.impactOptions label { display: flex; align-items: flex-start; gap: 8px; padding: 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; cursor: pointer; }
+.impactOptions label:has(input:checked) { border-color: var(--dsw-alias-state-business-primary); }
+.impactOptions input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--dsw-alias-state-business-primary); }
+.impactOptions span { display: grid; gap: 4px; }
+.impactOptions strong { color: var(--dsw-alias-label-primary); font-size: 0.8571rem; line-height: 1.5; }
+.impactOptions small { color: var(--dsw-alias-label-tertiary); font-size: 0.7857rem; line-height: 1.5; }
+.impact:disabled .impactOptions label { cursor: default; }
+.impact[aria-invalid='true'] legend { color: var(--dsw-alias-state-error-primary); }
+.impact > .fieldError { display: block; margin-top: 8px; }
 .formActions { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-top: 16px; border-top: 1px solid var(--dsw-alias-border-l1); }
 .formActions p, .footnote { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; line-height: 1.6; }
 .formActions > button { flex-shrink: 0; }
@@ -22,17 +45,21 @@
 .direction { font-weight: 600; }
 .preview { display: grid; gap: 16px; padding: 20px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
 .preview h4 { margin: 0; font-size: 1rem; line-height: 1.5; }
+.impactWarning, .impactNote { margin: 0; font-size: 0.8571rem; line-height: 1.6; }
+.impactWarning { color: var(--dsw-alias-state-warn-label); }
+.impactNote { color: var(--dsw-alias-label-secondary); }
 .preview dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
 .preview dt { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
 .preview dd { margin: 6px 0 0; font-size: 1.1429rem; line-height: 1.5; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .panel { gap: 20px; }
   .fields { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-  .fields > label, .fields > .time, .security { grid-column: auto; }
+  .fields > .numericField, .fields > .time, .security { grid-column: auto; }
   .formActions { align-items: stretch; flex-direction: column; gap: 12px; }
   .formActions > button { width: 100%; }
   .preview { padding: 16px; }
   .preview dl { grid-template-columns: minmax(0, 1fr); }
+  .impactOptions { grid-template-columns: minmax(0, 1fr); }
 }
 .historyWrap { min-width: 0; overflow-x: auto; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }
 .historyTable { width: 100%; min-width: 700px; border-collapse: collapse; font-size: 0.8571rem; line-height: 1.5; }

@@ -16,7 +16,7 @@ describe('investment data broker', () => {
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response('{}', { headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
     const acquire = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:8000', release: vi.fn() }))
-    const input = { action: 'preview', request_id: 'trade-001', ticker: '002518', side: 'buy', quantity: 100, price: 10, fees: 5, traded_at: '2026-09-17T09:00:00+08:00' }
+    const input = { action: 'preview', request_id: 'trade-001', ticker: '002518', side: 'buy', quantity: 100, price: 10, fees: 5, traded_at: '2026-09-17T09:00:00+08:00', affects_holdings: false }
     await requestInvestmentData({ operation: 'trading-core.holdings-trade', input }, acquire)
     await requestInvestmentData({ operation: 'trading-core.holdings-trades' }, acquire)
     expect(fetchMock.mock.calls[0]?.[0]).toBe('http://127.0.0.1:8000/holdings/trades')

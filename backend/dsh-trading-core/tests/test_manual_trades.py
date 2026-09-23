@@ -46,7 +46,7 @@ class ManualTradesTests(unittest.TestCase):
         req = self.request()
         p = apply_trade(self.store, req)
         self.save(req)
-        for values, message in [({"quantity": 101, "side": "sell"}, "超过"), ({"traded_at": self.at - timedelta(seconds=1)}, "早于"), ({"traded_at": datetime.now(timezone.utc) + timedelta(days=1)}, "晚于")]:
+        for values, message in [({"quantity": 101, "side": "sell"}, "超过"), ({"traded_at": self.at - timedelta(seconds=1)}, "确认"), ({"traded_at": datetime.now(timezone.utc) + timedelta(days=1)}, "晚于")]:
             with self.assertRaisesRegex(ValueError, message):
                 apply_trade(self.store, self.request(request_id="trade-bad", **values))
         with self.assertRaisesRegex(ValueError, "发生变化"):
@@ -67,8 +67,48 @@ class ManualTradesTests(unittest.TestCase):
         at = datetime.now(timezone.utc) - timedelta(seconds=1)
         record_holdings_snapshot(self.store, [{"ticker": "002518", "quantity": 200, "cost_price": 12}], "broker_real", at)
         self.assertEqual(len(history(self.store)["entries"]), 1)
-        with self.assertRaisesRegex(ValueError, "早于"):
+        with self.assertRaisesRegex(ValueError, "确认"):
             apply_trade(self.store, self.request(request_id="trade-002"))
+
+    def test_older_trade_can_be_recorded_without_changing_current_holdings_or_snapshots(self):
+        from adapter.portfolio_performance import record_holdings_snapshot
+        self.save(self.request())
+        record_holdings_snapshot(self.store, [{"ticker": "002518", "quantity": 200, "cost_price": 12}],
+                                 "broker_real", datetime.now(timezone.utc) - timedelta(seconds=1))
+        before = self.store.all("holdings")
+        req = self.request(request_id="trade-history", side="sell", quantity=500,
+                           traded_at=self.at - timedelta(days=1), affects_holdings=False)
+        preview = apply_trade(self.store, req)
+        self.assertTrue(preview["backdated"])
+        self.assertEqual(preview["entry"]["before_quantity"], 200)
+        self.assertEqual(preview["entry"]["after_quantity"], 200)
+        self.assertEqual(self.store.all("holdings"), before)
+        commit = req.model_copy(update={"action": "commit", "version": preview["version"]})
+        saved = apply_trade(self.store, commit)
+        self.assertTrue(saved["saved"])
+        self.assertEqual(saved["holdings"], before["default"])
+        after = self.store.all("holdings")
+        self.assertEqual(after["snapshots"], before["snapshots"])
+        self.assertEqual(after["default"], before["default"])
+        self.assertFalse(after["manual_trades"][-1]["affects_holdings"])
+        apply_trade(self.store, commit)
+        self.assertEqual(len(self.store.get("holdings", "manual_trades")), 2)
+
+    def test_explicit_older_trade_can_adjust_current_holdings_without_rewriting_snapshots(self):
+        from adapter.portfolio_performance import record_holdings_snapshot
+        record_holdings_snapshot(self.store, [{"ticker": "002518", "quantity": 200, "cost_price": 12}],
+                                 "broker_real", datetime.now(timezone.utc) - timedelta(seconds=1))
+        before = self.store.get("holdings", "snapshots")
+        req = self.request(request_id="trade-adjust", traded_at=self.at - timedelta(days=1),
+                           affects_holdings=True)
+        preview = apply_trade(self.store, req)
+        self.assertTrue(preview["backdated"])
+        self.assertEqual(preview["entry"]["after_quantity"], 300)
+        saved = apply_trade(self.store, req.model_copy(update={"action": "commit", "version": preview["version"]}))
+        self.assertEqual(saved["holdings"][0]["quantity"], 300)
+        snapshots = self.store.get("holdings", "snapshots")
+        self.assertEqual(snapshots[:-1], before)
+        self.assertEqual(snapshots[-1]["source"], "manual")
 
     def test_concurrent_commits_only_apply_one_preview(self):
         from concurrent.futures import ThreadPoolExecutor

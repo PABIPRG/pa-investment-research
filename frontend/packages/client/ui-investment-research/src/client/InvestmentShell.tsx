@@ -935,6 +935,7 @@ function InvestmentShellContent({
   const isAnalysisRoute = snapshot.route === 'analysis' || snapshot.route === 'assistant'
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
   const [dashboardView, setDashboardView] = useState<'workbench' | 'preferences'>('workbench')
+  const [holdingsRevision, setHoldingsRevision] = useState(0)
   const [preferencesVisited, setPreferencesVisited] = useState(false)
   const assistantMode = snapshot.assistantMode
   const assistantSurfaceIntentRef = useRef<AssistantSurfaceIntent>({ generation: 0, mode: assistantMode })
@@ -1500,6 +1501,7 @@ function InvestmentShellContent({
               <ResearchWorkbenchPage
                 requestData={requestData}
                 holdingsEntry={snapshot.holdingsEntry}
+                holdingsRevision={holdingsRevision}
                 brokerSync={hostDescription === undefined ? true : deployment?.brokerSync ?? false}
                 holdingsProviders={hostDescription === undefined
                   ? ['manual', 'easytrader', 'mac_ths', 'qmt']
@@ -1551,6 +1553,7 @@ function InvestmentShellContent({
             requestData={requestData}
             code={snapshot.selectedStockCode}
             backDestination={stockDetailReturnRoute}
+            onHoldingSaved={() => { setHoldingsRevision(value => value + 1) }}
             onBack={() => {
               if (stockDetailReturnRoute === 'opportunity' && !suppressResearchOnStockDetailReturnRef.current) {
                 setModuleDraft('watchQuery', snapshot.selectedStockCode)
@@ -2235,13 +2238,14 @@ const STOCK_RETURN_LABELS: Readonly<Record<NonNullable<InvestmentUiSnapshot['sto
 })
 
 function StockDetailPage({
-  requestData, code, backDestination, onBack, onAnalyze,
+  requestData, code, backDestination, onBack, onAnalyze, onHoldingSaved,
 }: {
   requestData: RequestData
   code: string
   backDestination: NonNullable<InvestmentUiSnapshot['stockDetailReturnRoute']>
   onBack: () => void
   onAnalyze: (intent: AssistantIntent) => void
+  onHoldingSaved: () => void
 }) {
   const [nonce, setNonce] = useState(0)
   const [ownershipNonce, setOwnershipNonce] = useState(0)
@@ -2350,6 +2354,7 @@ function StockDetailPage({
       setHoldingOpen(false)
       setActionNotice(`已将 ${name} 加入持仓，组合风险会按最新持仓重新计算。`)
       setOwnershipNonce(value => value + 1)
+      onHoldingSaved()
     } catch (reason) {
       setHoldingError(productErrorText(reason))
     } finally {

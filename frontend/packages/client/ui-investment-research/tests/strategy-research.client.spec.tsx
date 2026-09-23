@@ -111,7 +111,7 @@ describe('策略研究产品事实与确认流程', () => {
       fireEvent.mouseEnter(button)
       const tooltip = within(helpDialog).getByRole('tooltip')
       expect(tooltip.textContent).toBe(help)
-      expect(tooltip.style.position).toBe('absolute')
+      expect(tooltip.classList.contains(css.lifecycleTooltip)).toBe(true)
       expect(button.getAttribute('aria-describedby')).toBe(tooltip.id)
       fireEvent.mouseLeave(button)
       expect(within(helpDialog).queryByRole('tooltip')).toBeNull()
@@ -530,6 +530,28 @@ describe('策略研究产品事实与确认流程', () => {
       { limit: 20, dry_run: true },
       { limit: 20, dry_run: false },
     ])
+  })
+
+  it('候选假设预览优先显示证券名称，并在查不到名称时说明待补充', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') return { items: [] }
+      if (request.operation === 'trading-core.strategies-hypothesize') return {
+        n_events: 2,
+        hypotheses: [{ symbols: ['600410', '002131'], tickers: [{ code: '600410', name: '600410' }], kind: 'ma_cross', direction: '利好' }],
+      }
+      if (request.operation === 'market-watch.security-search') {
+        return request.input?.query === '600410'
+          ? { items: [{ code: '600410', name: '华胜天成' }] }
+          : { items: [] }
+      }
+      throw new Error(`unexpected operation ${request.operation}`)
+    })
+
+    renderStrategyPage(requestData)
+    fireEvent.click(await screen.findByRole('button', { name: '从事件新建策略' }))
+    const dialog = await screen.findByRole('dialog', { name: '候选假设预览' })
+    expect(await within(dialog).findByText(/华胜天成 · 600410/u)).toBeTruthy()
+    expect(dialog.textContent).toContain('名称待补充 · 002131')
   })
 
   it('验证分类只依据显式验证与回测证据，不以 lifecycle 状态兜底', async () => {
