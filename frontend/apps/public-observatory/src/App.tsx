@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, DatePicker, Modal, MonthPicker } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, DatePicker, HelpPopover, Modal, MonthPicker, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import brandIcon from '../../../official-site/app-icon.png'
 import {
   loadActivityDetail,
@@ -64,6 +64,8 @@ function localTime(value: string): string {
 }
 
 const categoryLabels = { research: '研究', operation: '操作', system: '系统' } as const
+const categoryOptions = [{ value: 'all', label: '全部' }, { value: 'research', label: '研究' }, { value: 'operation', label: '操作' }, { value: 'system', label: '系统' }]
+const statusOptions = [{ value: 'all', label: '全部' }, { value: 'completed', label: '完成' }, { value: 'failed', label: '失败 / 已回滚' }]
 
 function Skeleton() {
   return <div className={css.skeleton} aria-label="正在加载公开数据"><i /><i /><i /></div>
@@ -86,7 +88,6 @@ export function App() {
   const loadGeneration = useRef(0)
   const firstPagePending = useRef(true)
   const [state, setState] = useState<LoadState>({ loading: true, data: null, query, error: null })
-  const [formulaOpen, setFormulaOpen] = useState(false)
   const [holdingsOpen, setHoldingsOpen] = useState(false)
   const [activitiesOpen, setActivitiesOpen] = useState(false)
   const [activityDetail, setActivityDetail] = useState<PublicActivityDetail | null>(null)
@@ -261,14 +262,15 @@ export function App() {
 
   const operationsPanel = (
     <section className={css.panel} aria-label="操作与运行过程">
-      <div className={css.heading}><div><h2>操作与运行过程</h2><p>截至 {selectedDate} · 独立于资金快照</p></div><button type="button" disabled={!slice?.activities?.items.length} onClick={() => { setActivitiesOpen(true) }}>展开记录</button></div>
-      <div className={css.filters}>
-        <label>类型<select value={filters.category} onChange={event => { const category = event.currentTarget.value; setFilters(current => ({ ...current, category })) }}><option value="all">全部</option><option value="research">研究</option><option value="operation">操作</option><option value="system">系统</option></select></label>
-        <label>状态<select value={filters.status} onChange={event => { const status = event.currentTarget.value; setFilters(current => ({ ...current, status })) }}><option value="all">全部</option><option value="completed">完成</option><option value="failed">失败 / 已回滚</option></select></label>
+      <div className={css.heading}><div><h2>操作与运行过程</h2><p>截至 {selectedDate} · 独立于资金快照</p></div><Button variant="ghost" disabled={!slice?.activities?.items.length} onClick={() => { setActivitiesOpen(true) }}>展开记录</Button></div>
+      <div className={css.filters} role="group" aria-label="操作记录筛选">
+        <label className={css.filterField}>类型<Select aria-label="记录类型" value={filters.category} options={categoryOptions} onValueChange={(category) => { setFilters(current => ({ ...current, category })) }} /></label>
+        <label className={css.filterField}>状态<Select aria-label="记录状态" value={filters.status} options={statusOptions} onValueChange={(status) => { setFilters(current => ({ ...current, status })) }} /></label>
+        {(filters.category !== 'all' || filters.status !== 'all') && <Button variant="ghost" onClick={() => { setFilters({ category: 'all', status: 'all' }) }}>清除筛选</Button>}
       </div>
       {(slice === null ? state.loading : slice.activitiesLoading) && <p role="status">正在读取操作记录…</p>}
       {detailError && <p role="status">{detailError}</p>}
-      {slice?.activitiesError && <div className={css.partial} role="status">操作记录暂时无法读取，账户数据不受影响。<button type="button" onClick={() => { setRefreshVersion(value => value + 1) }}>重试记录</button></div>}
+      {slice?.activitiesError && <div className={css.partial} role="status"><span>操作记录暂时无法读取，账户数据独立加载。</span><Button variant="outline" disabled={slice.activitiesLoading} onClick={() => { setRefreshVersion(value => value + 1) }}>{slice.activitiesLoading ? '正在重试…' : '重试记录'}</Button></div>}
       <div className={css.activityList}>
         {slice?.activities?.items.length === 0 && <div className={css.empty}>{filters.category === 'all' && filters.status === 'all' ? '截至所选日期暂无已公开记录，不代表期间没有发生操作。' : '当前筛选条件下暂无公开记录。'}</div>}
         {slice?.activities?.items.map(item => (
@@ -289,24 +291,24 @@ export function App() {
           <img src={brandIcon} alt="" /><span><strong>投研智能体</strong><small>PUBLIC OBSERVATORY</small></span>
         </a>
         <div className={css.headerActions}>
-          <button type="button" className={css.themeButton} onClick={() => { setDark(value => !value) }}>
+          <Button variant="outline" onClick={() => { setDark(value => !value) }}>
             {dark ? '浅色' : '深色'}
-          </button>
+          </Button>
         </div>
       </header>
 
       <section className={css.timebar} aria-label="全局时间切片">
         <div className={css.timeControls}>
-          <Button size="sm" variant="toolbar" disabled={minDate === undefined} onClick={() => { if (minDate) selectDate(minDate) }}>第一天</Button>
-          <Button size="sm" variant="toolbar" onClick={() => { selectDate(offsetDate(selectedDate, -1)) }} aria-label="前一日">←</Button>
+          <Button variant="outline" disabled={minDate === undefined} onClick={() => { if (minDate) selectDate(minDate) }}>第一天</Button>
+          <Button variant="outline" onClick={() => { selectDate(offsetDate(selectedDate, -1)) }} aria-label="前一日">←</Button>
           <DatePicker value={selectedDate} {...minDate === undefined ? {} : { min: minDate }} max={today} onChange={selectDate} />
-          <Button size="sm" variant="toolbar" disabled={selectedDate >= today} onClick={() => { selectDate(offsetDate(selectedDate, 1)) }} aria-label="后一日">→</Button>
-          <Button size="sm" variant="toolbar" onClick={() => { selectDate(today) }}>当日</Button>
-          <Button size="sm" variant="toolbar" disabled={(data?.equity.points.length ?? 0) === 0} onClick={togglePlayback}>{playing ? '暂停' : '播放'}</Button>
+          <Button variant="outline" disabled={selectedDate >= today} onClick={() => { selectDate(offsetDate(selectedDate, 1)) }} aria-label="后一日">→</Button>
+          <Button variant="outline" onClick={() => { selectDate(today) }}>当日</Button>
+          <Button variant="outline" disabled={(data?.equity.points.length ?? 0) === 0} onClick={togglePlayback}>{playing ? '暂停' : '播放'}</Button>
         </div>
         <div className={css.refreshControls}>
           <label><input type="checkbox" checked={autoRefresh} disabled={selectedDate !== today} onChange={event => { setAutoRefresh(event.currentTarget.checked) }} />{selectedDate === today ? '每 15 秒自动刷新' : '历史日期 · 自动刷新暂停'}</label>
-          <Button size="sm" variant="outline" disabled={state.loading || selectedDate !== today} onClick={() => { setRefreshVersion(value => value + 1) }}>刷新数据</Button>
+          <Button variant="outline" disabled={state.loading || selectedDate !== today} onClick={() => { setRefreshVersion(value => value + 1) }}>刷新数据</Button>
         </div>
       </section>
 
@@ -322,7 +324,7 @@ export function App() {
         )}
         {slice?.accountLoading && <section className={css.messageCard} role="status">正在读取账户金额，操作记录单独加载。</section>}
         {slice !== null && !slice.accountLoading && data === null && (
-          <section className={css.messageCard} aria-label="账户金额暂不可用"><strong>账户金额暂不可用</strong><p>{slice.accountError ?? slice.accountUnavailable?.message}</p><div className={css.missingMetrics}><span>总权益 <b>—</b></span><span>初始资金 <b>—</b></span><span>现金 <b>—</b></span><span>累计盈亏 <b>—</b></span></div><span>缺少完整账户快照，不计算收益；下方操作记录独立展示。</span>{slice.accountError && <Button variant="outline" onClick={() => { setRefreshVersion(value => value + 1) }}>重试账户数据</Button>}</section>
+          <section className={css.messageCard} aria-label="账户金额暂不可用"><strong>账户金额暂不可用</strong><p>{slice.accountError ?? slice.accountUnavailable?.message}</p><div className={css.missingMetrics}><span>总权益 <b>—</b></span><span>初始资金 <b>—</b></span><span>现金 <b>—</b></span><span>累计盈亏 <b>—</b></span></div><span>{slice.accountError ? '账户请求失败，暂时无法确认快照状态；下方操作记录独立加载。' : '尚无可公开的完整账户快照，不计算收益；下方操作记录独立展示。'}</span>{slice.accountError && <Button variant="outline" onClick={() => { setRefreshVersion(value => value + 1) }}>重试账户数据</Button>}</section>
         )}
         {data === null && operationsPanel}
 
@@ -335,7 +337,7 @@ export function App() {
                 <span>截至 {overview.date.replaceAll('-', '.')} · 累计{pnl > 0 ? '盈利' : pnl < 0 ? '亏损' : '持平'}</span>
                 <strong className={pnl > 0 ? css.positive : pnl < 0 ? css.negative : undefined}>{money(overview.summary.cumulative_profit_loss)}</strong>
                 <p>{percent(overview.summary.cumulative_return)}</p>
-                <button type="button" onClick={() => { setFormulaOpen(true) }}>查看计算口径</button>
+                <div className={css.formulaHelp}><span>计算口径</span><HelpPopover label="查看计算口径"><p>盈亏 = 当前总权益 − 初始资金；收益率 = 盈亏 ÷ 初始资金。</p><p>总权益包含现金和持仓市值。页面只展示权威账户快照，不用仅持仓表现、影子账户或演示数据补齐缺口。</p></HelpPopover></div>
               </div>
               <div className={css.metricGrid}>
                 <div><span>总权益</span><strong>{money(overview.summary.total_equity)}</strong><small>现金 + 持仓市值</small></div>
@@ -359,7 +361,7 @@ export function App() {
 
             <div className={css.columns}>
               <section className={css.panel}>
-                <div className={css.heading}><div><h2>持仓与现金</h2><p>{data.holdings.items.length} 个持仓</p></div><button type="button" onClick={() => { setHoldingsOpen(true) }}>展开明细</button></div>
+                <div className={css.heading}><div><h2>持仓与现金</h2><p>{data.holdings.items.length} 个持仓</p></div><Button variant="ghost" onClick={() => { setHoldingsOpen(true) }}>展开明细</Button></div>
                 <div className={css.holdingList}>
                   {data.holdings.items.length === 0 ? <div className={css.empty}>暂无持仓，账户权益全部为现金。</div> : data.holdings.items.slice(0, 5).map(item => (
                     <div className={css.holdingRow} key={item.ticker}>
@@ -384,9 +386,6 @@ export function App() {
         <footer>公开内容仅用于项目过程验证，不构成投资建议。缺失值不按零处理。</footer>
       </main>
 
-      <Modal open={formulaOpen} onClose={() => { setFormulaOpen(false) }} title="盈亏计算口径" closeLabel="关闭计算口径">
-        <div className={css.modalCopy}><p>盈亏 = 当前总权益 − 初始资金；收益率 = 盈亏 ÷ 初始资金。</p><p>总权益包含现金和持仓市值。页面只展示权威账户快照，不用仅持仓表现、影子账户或演示数据补齐缺口。</p></div>
-      </Modal>
       <Modal open={holdingsOpen} onClose={() => { setHoldingsOpen(false) }} title="持仓明细" closeLabel="关闭持仓明细" className={css.wideModal}>
         <div className={css.tableWrap}><table><caption>{selectedDate} 的全部公开持仓</caption><thead><tr><th>证券</th><th>数量</th><th>成本价</th><th>估值价</th><th>市值</th><th>盈亏</th></tr></thead><tbody>{data?.holdings.items.map(item => <tr key={item.ticker}><td><strong>{item.name || item.ticker}</strong><small>{item.ticker}</small></td><td>{integer.format(Number(item.quantity))}</td><td>{money(item.cost_price)}</td><td>{money(item.market_price)}</td><td>{money(item.market_value)}</td><td className={Number(item.profit_loss) >= 0 ? css.positive : css.negative}>{money(item.profit_loss)}<small>{percent(item.return_rate)}</small></td></tr>)}</tbody></table></div>
       </Modal>

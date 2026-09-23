@@ -177,6 +177,10 @@ describe('investment container delivery contract', () => {
       DSH_DEPLOYMENT_SURFACE: 'cloud-web',
       DSH_WEB_AUTH: 'required',
       DSH_WEB_INSECURE_COOKIES: '0',
+      DSH_PUBLIC_OBSERVATORY_ORIGIN: '${DSH_PUBLIC_OBSERVATORY_ORIGIN:-}',
+      DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE: '${DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE:-}',
+      DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS: '${DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS:-[]}',
+      DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN: '${DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN:-}',
     }))
     expect(service.volumes).toContain('dsh-data:/var/lib/dsh')
     expect(service.secrets).toContain('web-admin-password-hash')
