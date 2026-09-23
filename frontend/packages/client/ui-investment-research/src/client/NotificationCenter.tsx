@@ -515,7 +515,7 @@ export function NotificationCenter({ requestData, requestNotificationChannels, n
               </div>
               <section className={css.channelSetup} aria-label="外部渠道配置说明">
                 <h3>如何获取配置？</h3>
-                <p>测试仅发送固定测试文案，不包含持仓或账户信息。配置保存在本机凭据文件中，受文件权限保护，尚未使用系统钥匙串加密；不会写入环境变量或业务数据备份。</p>
+                <p>测试仅发送固定测试文案，不包含持仓或账户信息。配置保存在当前实例的凭据文件中，受文件权限保护，未额外加密；不会写入环境变量或业务数据备份。</p>
                 <section className={css.channelRow} aria-label="Server 酱配置步骤"><h4>Server 酱</h4><ol className={css.setupGuide}>
                   <li>打开 <a href="https://sct.ftqq.com/" target="_blank" rel="noopener noreferrer">Server 酱 Turbo</a>，登录后复制 SendKey；在其「通道配置」中绑定接收账号。</li>
                   <li>在上方「Server 酱」中粘贴完整 SendKey，保存后发送测试。支持 SCT 开头的 Turbo 密钥，暂不支持 sctp 开头的 Server 酱 3 密钥。</li>
@@ -529,7 +529,7 @@ export function NotificationCenter({ requestData, requestNotificationChannels, n
                   <li>从邮箱官方帮助获取 SMTP 服务器、STARTTLS 端口和登录账号。填写授权码、该账号获准使用的发件人邮箱及目标收件邮箱。</li>
                   <li>当前支持 STARTTLS（常见端口 587），不支持 465 隐式 TLS。保存并测试后，检查收件箱和垃圾邮件。</li>
                 </ol></section>
-                <p>保存配置即可在运行时生效，无需编辑配置文件或重启。正式通知可能包含证券名称、风险条件或持仓同步摘要，请仅配置可信接收端。应用后台需要持续运行；完全退出应用后，本机不会继续发送。</p>
+                <p>保存配置即可在运行时生效，无需编辑配置文件或重启。正式通知可能包含证券名称、风险条件或持仓同步摘要，请仅配置可信接收端。当前实例的后台需要持续运行；后台停止后不会继续发送。</p>
                 <p>浏览器推送另需服务端 VAPID 配置和浏览器授权；macOS 系统通知由桌面客户端投递。投递状态与失败记录可在通知详情查看。</p>
               </section>
             </section>

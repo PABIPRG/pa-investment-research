@@ -378,24 +378,23 @@ export class InvestmentPythonRuntime extends Service {
   private async syncNotificationChannels(): Promise<void> {
     const lease = await this.manager.acquire('trading-core')
     try {
-      if (lease.ownership !== 'owned') throw new NotificationSettingsError('渠道配置需要由本应用管理的本机后台。')
+      if (lease.ownership !== 'owned') throw new NotificationSettingsError('渠道配置需要由当前实例管理的后台。')
       await this.notificationSettings.sync(lease.baseUrl)
     } finally { await lease.release() }
   }
 
-  /** Local-only configuration seam; never routed through browser-safe request-data. */
+  /** Dedicated administrator configuration seam; never routed through browser-safe request-data. */
   @Remote('notification-channels')
   async notificationChannels(request: NotificationChannelRequest): Promise<NotificationChannelResult> {
     try {
-      if (this.deployment().surface === 'cloud-web') throw new NotificationSettingsError('请在本机应用中配置通知渠道。')
       const lease = await this.manager.acquire('trading-core')
       try {
-        if (lease.ownership !== 'owned') throw new NotificationSettingsError('渠道配置需要由本应用管理的本机后台。')
+        if (lease.ownership !== 'owned') throw new NotificationSettingsError('渠道配置需要由当前实例管理的后台。')
         return await this.notificationSettings.execute(lease.baseUrl, request)
       } finally { await lease.release() }
     } catch (error) {
       // No cause/raw backend exception: dynamic credentials are not part of the startup log redactor.
-      throw new TypertRemoteFailure({ code: 'remote-rejected', details: {}, message: error instanceof NotificationSettingsError ? error.message : '通知渠道暂不可用，请检查本机后台后重试。' })
+      throw new TypertRemoteFailure({ code: 'remote-rejected', details: {}, message: error instanceof NotificationSettingsError ? error.message : '通知渠道暂不可用，请检查当前实例后台后重试。' })
     }
   }
 

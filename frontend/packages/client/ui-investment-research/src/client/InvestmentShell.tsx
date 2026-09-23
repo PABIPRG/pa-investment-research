@@ -542,6 +542,7 @@ function GlobalStockSearch({
               aria-selected={activeIndex === index}
               className={activeIndex === index ? css.searchResultActive : undefined}
               onMouseEnter={() => { setActiveIndex(index) }}
+              onMouseDown={(event) => { event.preventDefault() }}
               onClick={() => { select(item) }}
             >
               <span><strong>{item.name}</strong><small>{item.market}</small></span>

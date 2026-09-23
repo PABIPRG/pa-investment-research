@@ -215,7 +215,6 @@ describe('connection node half', () => {
       'host.pickDirectory', 'host.openPath',
       'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
       'credentials.describe', 'credentials.set', 'credentials.unset',
-      'investmentPythonRuntime/notification-channels',
       'llm.discoverModels',
       // A composition names the plugins a session runs: reading one is
       // reconnaissance, and copy/remove/openDocument manage the roster and
@@ -471,7 +470,7 @@ describe('connection node half', () => {
     await fiber.dispose()
   })
 
-  it('keeps notification credential POSTs loopback-only even on a trusted Remote interceptor', async () => {
+  it('keeps notification credential POSTs local when Web authentication is disabled', async () => {
     const ctx = new Context()
     const routes: WebRoute[] = []
     ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
@@ -492,6 +491,44 @@ describe('connection node half', () => {
     expect(handler).toHaveBeenCalledOnce()
     expect(accepted.state.headers).toMatchObject({ 'cache-control': 'no-store' })
     await ctx.fiber.dispose()
+  })
+
+  it('allows notification configuration only through an authenticated trusted HTTPS administrator session', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const directory = mkdtempSync(join(tmpdir(), 'cloud-notification-auth-'))
+    const passwordHashFile = join(directory, 'password.hash')
+    writeFileSync(passwordHashFile, hashPassword('notification-admin-test-password'), { mode: 0o600 })
+    const trust = { trustedHosts: ['notifications.example'], trustedProxyAddresses: ['127.0.0.1'] }
+    const auth = new WebAuthService(ctx, { mode: 'required', username: 'admin', passwordHashFile, secureCookies: true, ...trust })
+    ctx.provide('apiProxy', {} as unknown as ApiProxy)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, trust)
+    await fiber.await()
+    try {
+      const connection = ctx.get('connection') as HostConnectionHandle
+      const handler = vi.fn<ConnectionRpcHandler>(async () => ({ ok: true, value: { channels: [] } }))
+      const method = 'investmentPythonRuntime/notification-channels'
+      connection.rpc.intercept('/api', endpoint => endpoint === method, handler, { authority: 'trusted-host' })
+      const route = routes.find(candidate => candidate.path === API_PATH)!
+      const headers = { host: 'notifications.example', origin: 'https://notifications.example', 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.20' }
+      const body: ClientRequest = { type: 'client-request', rpcId: RpcId('cloud-notification-config'), method, payload: { args: { request: { action: 'describe' } } } }
+      const send = async (extra: Record<string, string>) => {
+        const response = fakeResponse()
+        await route.handler(fakePost({ ...headers, ...extra }, `${API_PATH}/${method}`, body), response.response)
+        return response.state
+      }
+      expect((await send({})).status).toBe(401)
+      const login = await auth.login('admin', 'notification-admin-test-password', fakeRequest(headers))
+      if (!login.ok || !login.token || !login.cookieName || !login.session) throw new Error('login failed')
+      const cookie = `${login.cookieName}=${login.token}`
+      expect((await send({ cookie })).status).toBe(403)
+      const proof = { cookie, 'x-dsh-csrf': login.session.csrfToken }
+      expect((await send(proof)).status).toBe(200)
+      expect(handler).toHaveBeenCalledOnce()
+      expect((await send({ ...proof, host: 'evil.example' })).status).toBe(403)
+      expect((await send({ ...proof, 'x-forwarded-proto': 'http' })).status).toBe(403)
+    } finally { await fiber.dispose() }
   })
 
   it('applies the configured trust fence and JSON envelope checks to generic channels', async () => {

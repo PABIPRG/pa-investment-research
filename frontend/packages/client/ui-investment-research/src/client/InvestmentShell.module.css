@@ -77,9 +77,10 @@
 }
 
 .globalSearch:hover { background: var(--investment-interactive-hover); }
-.globalSearch:focus-within { border-color: var(--investment-primary); outline: 2px solid var(--investment-primary); outline-offset: 2px; background: var(--dsw-alias-bg-base); }
+.globalSearch:focus-within { outline: 2px solid var(--investment-primary); outline-offset: 1px; background: var(--dsw-alias-bg-base); }
 .searchIcon { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--dsw-alias-label-tertiary); stroke-width: 1.6; stroke-linecap: round; }
 .globalSearch input { flex: 1; min-width: 0; border: 0; outline: 0; padding: 0 8px; background: transparent; color: inherit; font-size: 0.8571rem; }
+.globalSearch input:focus-visible { outline: none; }
 .searchResults { position: absolute; top: calc(100% + 7px); right: 0; left: 0; z-index: 40; overflow: hidden; padding: 5px; border: 1px solid var(--investment-line); border-radius: 10px; background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); }
 .searchResults button { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 42px; padding: 7px 9px; border: 0; border-radius: 7px; color: inherit; background: transparent; text-align: left; cursor: pointer; transition: background 140ms ease, box-shadow 140ms ease, color 140ms ease, transform 140ms ease; }
 .searchResults button:hover:not(:disabled) { background: var(--investment-interactive-hover); }
@@ -107,6 +108,7 @@
 .researchContextTrigger > em[data-tone='danger'] { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-interactive-bg-hover-danger); }
 .researchContextTrigger > em[data-tone='muted'] { color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-2); }
 .researchContextPopover { position: fixed; top: 0; right: auto; bottom: auto; left: 0; z-index: 1100; display: flex; box-sizing: border-box; width: min(420px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: min(560px, calc(100dvh - 24px)); overflow: hidden; flex-direction: column; padding: 10px; border: 1px solid var(--investment-line); border-radius: var(--dsw-alias-radius-overlay); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); }
+.researchContextPopover[data-positioned='false'] { visibility: hidden; }
 .researchContextMenuRoot > [role='menu'] { min-width: 260px; box-sizing: border-box; padding: 10px; border: 1px solid var(--investment-line); border-radius: var(--dsw-alias-radius-overlay); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv3); }
 .researchContextMenuRoot > [role='menu'] button { min-height: 42px; border-radius: 9px; }
 .researchContextPopoverHead { flex: none; padding: 3px 4px 10px; border-bottom: 1px solid var(--investment-line-soft); }
@@ -124,7 +126,7 @@
 .researchStrategyGroup:last-child { border-bottom: 0; }
 .researchStrategyGroup > h3 { margin: 0; padding: 6px 8px 5px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); font-weight: 600; }
 .researchStrategyItem { margin: 2px 0; border: 1px solid transparent; border-radius: 11px; transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease; }
-.researchStrategyItem[data-expanded='true'] { border-color: var(--investment-line); background: var(--dsw-alias-bg-base); box-shadow: 0 5px 16px rgb(0 0 0 / 5%); }
+.researchStrategyItem[data-expanded='true'] { border-color: var(--investment-line); background: var(--dsw-alias-bg-base); box-shadow: var(--dsw-shadow-lv1); }
 .researchStrategyItem[data-selected='true'] { border-color: var(--investment-primary); }
 .researchStrategyRow { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 48px; padding: 8px 9px; border: 0; border-radius: 10px; background: transparent; text-align: left; transition: background 140ms ease, color 140ms ease; }
 .researchStrategyRow:hover:not(:disabled) { background: var(--investment-interactive-hover); }
@@ -1181,7 +1183,7 @@
 .lifecycleStrip > i { flex: none; align-self: center; color: var(--dsw-alias-label-caption); font-size: 1rem; font-style: normal; }
 .lifecycleStrip > [data-state='active'] { color: var(--dsw-alias-state-business-primary); border-color: var(--investment-primary); background: var(--dsw-alias-state-business-tertiary); }
 .lifecycleStrip > [data-state='active'] > b { background: var(--investment-primary); }
-.lifecycleTooltip { top: calc(100% - 5px); left: 14px; z-index: 20; width: fit-content; max-width: min(calc(100% - 28px), 560px); padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv2); font-size: var(--investment-font-caption); line-height: 1.5; pointer-events: none; }
+.lifecycleTooltip { position: absolute; top: calc(100% - 5px); left: 14px; z-index: 20; width: fit-content; max-width: min(calc(100% - 28px), 560px); padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 7px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-overlay); box-shadow: var(--dsw-shadow-lv2); font-size: var(--investment-font-caption); line-height: 1.5; pointer-events: none; }
 .lifecyclePanel + .contextHint, .lifecyclePanel + .importNotice, .contextHint + .importNotice { margin-top: 12px; }
 
 .dataList {
@@ -1838,7 +1840,7 @@
 .industryGraphBreadcrumbs button:hover { color: var(--investment-primary); background: var(--investment-interactive-hover); }
 .industryGraphBreadcrumbs button[aria-current='page'] { color: var(--investment-primary); font-weight: 700; }
 .industryGraphBreadcrumbs button:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 0; }
-.industryGraphViewport { --industry-upstream: #7c3aed; --industry-upstream-fill: color-mix(in srgb, var(--industry-upstream) 15%, var(--dsw-alias-bg-base)); --industry-downstream: #c66700; --industry-downstream-fill: color-mix(in srgb, var(--industry-downstream) 16%, var(--dsw-alias-bg-base)); --industry-related: var(--dsw-alias-label-caption); --industry-related-fill: color-mix(in srgb, var(--industry-related) 9%, var(--dsw-alias-bg-base)); position: relative; flex: 1; min-height: 0; overflow: hidden; overscroll-behavior: contain; background-color: var(--dsw-alias-bg-layer-1); background-image: radial-gradient(circle, var(--dsw-alias-border-l1) 1px, transparent 1px); background-size: 22px 22px; touch-action: none; user-select: none; }
+.industryGraphViewport { --industry-upstream: var(--dsw-alias-industry-upstream); --industry-upstream-fill: color-mix(in srgb, var(--industry-upstream) 15%, var(--dsw-alias-bg-base)); --industry-downstream: var(--dsw-alias-industry-downstream); --industry-downstream-fill: color-mix(in srgb, var(--industry-downstream) 16%, var(--dsw-alias-bg-base)); --industry-related: var(--dsw-alias-label-caption); --industry-related-fill: color-mix(in srgb, var(--industry-related) 9%, var(--dsw-alias-bg-base)); position: relative; flex: 1; min-height: 0; overflow: hidden; overscroll-behavior: contain; background-color: var(--dsw-alias-bg-layer-1); background-image: radial-gradient(circle, var(--dsw-alias-border-l1) 1px, transparent 1px); background-size: 22px 22px; touch-action: none; user-select: none; }
 .industryGraphViewport > svg { opacity: 1; transform: scale(1); transition: opacity 180ms ease, transform 180ms ease; }
 .industryGraphViewport[data-refreshing] > svg { opacity: .58; transform: scale(.995); }
 .industryGraphViewportCompact { flex: none; height: 470px; margin-top: 14px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; }

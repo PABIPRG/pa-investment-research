@@ -6,7 +6,7 @@
 
 ## 云端模型管理授权
 
-`modelAdmin.*` 通过既有 Host、会话、CSRF 和 HTTPS 代理校验后，允许已认证管理员调用；未启用认证时仍限制到有效 loopback。通用 `settings.*`、`credentials.*`、`llm.discoverModels` 及本机专属接口保持原限制。
+`modelAdmin.*` 与 `investmentPythonRuntime/notification-channels` 通过既有 Host、会话、CSRF 和 HTTPS 代理校验后，允许已认证管理员调用；未启用认证时仍限制到有效 loopback。通用 `settings.*`、`credentials.*`、`llm.discoverModels` 及本机专属接口保持原限制。
 
 
 ## /api 浏览器信任栅栏

@@ -35,6 +35,8 @@
 
 就绪状态会报告 backend 归属、安全凭据事实、能力等级、工具数和重启要求。本地部署还会收到诊断日志路径；云端 Web 会从 Remote 响应中省略该路径。Key 更新后，活动 owned backend 会标记为 `restart-required`；应用完成 quiescent restart（静默收敛重启）前，新的 LLM 依赖工具调用会在 preflight 阶段失败。非 LLM 操作继续按能力声明保持可用；健康且声明 `llm: none` 的 `industry-chain` 能力无需读取模型凭据，并报告 `industry-full`。
 
+通知渠道使用独立的管理员 Remote，而非浏览器安全的 `request-data`。本机 Web 可配置自管 trading backend 的渠道；云端 Web 则通过 WebAuth 管理员会话和可信 HTTPS 代理配置。配置保存在当前实例的凭据存储中。此操作对 `attached` 和 `external` backend 仍不可用。
+
 ## 项目发现与初始化
 
 源码启动会从本安装包向上查找 `backend/dsh-trading-core`、`backend/market-watch` 与 `backend/industry-chain`。使用 `pnpm run investment:python:init` 按固定顺序初始化三个环境，再用 `pnpm run investment:python:verify` 执行只读检查。industry-chain 的初始化和验证都不会下载种子数据；首次下载仍是独立的用户确认产品操作。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。

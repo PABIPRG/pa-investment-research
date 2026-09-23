@@ -1324,7 +1324,7 @@ export function StrategyResearchPage({
               ><b>4</b><strong>进化诊断</strong><small>查看最新判定与闭环历史</small></button>
             </nav>
             {lifecycleHelpStage !== undefined && (
-              <div className={css.lifecycleTooltip} id="strategy-lifecycle-tooltip" role="tooltip" style={{ position: 'absolute' }}>
+              <div className={css.lifecycleTooltip} id="strategy-lifecycle-tooltip" role="tooltip">
                 {LIFECYCLE_HELP[lifecycleHelpStage]}
               </div>
             )}

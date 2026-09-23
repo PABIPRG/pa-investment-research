@@ -20,7 +20,7 @@
 - 呈现规则写在 CSS 中。React 内联样式可以传递组件局部自定义属性值，但不得编码主题分支。
 - 添加过渡动画或仅悬停可见的控件时，保留清晰可见的键盘焦点和减少动态效果行为。
 
-`pnpm run verify-client-theme-styles` 对列入严格根目录的客户端包强制执行这些主题规则：它扫描每个根目录下的全部 CSS Modules 和 TypeScript 呈现源码，拒绝 React 内联样式、颜色字面量、静态色板 token、功能包自有主题选择器以及不存在的 `--dsw-*` 变量引用。严格包的呈现规则必须写入 CSS Modules，不使用上文的一般性自定义属性例外。一个包只有在清除现有违规后才能进入严格集合，因此检查不保留可能掩盖回归的基线例外。
+`pnpm run verify-client-theme-styles` 对列入严格根目录的客户端包强制执行这些主题规则：它扫描每个根目录下的全部 CSS Modules 和 TypeScript 呈现源码，拒绝颜色字面量、静态色板 token、功能包自有主题选择器以及不存在的 `--dsw-*` 变量引用。严格包的固定呈现规则必须写入 CSS Modules；仅容许 JSX 对象字面量传递运行时计算的布局几何值（`left`、`top`、`width`、`maxWidth`、`maxHeight` 及已登记的 `--investment-right-surface-width`），不容许颜色、阴影、固定定位或任意样式对象。检查不保留可能掩盖回归的基线例外。
 
 ## 变更系统
 

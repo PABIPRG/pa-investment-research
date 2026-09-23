@@ -1,6 +1,7 @@
 /** Enforce semantic theme-token use in client packages that have completed strict migration. */
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { extname, join, relative, resolve } from 'node:path'
+import ts from 'typescript'
 
 const root = resolve(import.meta.dirname, '..')
 const strictRoots = [
@@ -10,7 +11,6 @@ const strictRoots = [
 const colorFunction = /#[\da-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color)\s*\(/giu
 const themeBranch = /data-ds-dark-theme|prefers-color-scheme\s*:\s*(?:dark|light)/giu
 const staticToken = /--dsw-static-[a-z\d-]+/giu
-const inlineStyle = /\bstyle\s*=/gu
 const tokenReference = /var\((--dsw-[a-z\d-]+)/giu
 const tokenDefinition = /(--dsw-[a-z\d-]+)\s*:/giu
 const colorProperties = new Set([
@@ -19,6 +19,9 @@ const colorProperties = new Set([
 ])
 const borderColorProperty = /^border(?:-(?:block|inline|top|right|bottom|left)(?:-(?:start|end))?)?(?:-color)?$/u
 const neutralColorValue = /^(?:0|none|inherit|initial|revert|revert-layer|transparent|currentcolor)$/iu
+const runtimeGeometryProperties = new Set([
+  'left', 'top', 'width', 'maxWidth', 'maxHeight', '--investment-right-surface-width',
+])
 
 /** One source location rejected by the strict feature-theme policy. */
 export interface ThemeStyleViolation {
@@ -114,13 +117,44 @@ function themeTokens(): Set<string> {
   return tokens
 }
 
+function isRuntimeGeometryStyle(expression: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression)) {
+    return isRuntimeGeometryStyle(expression.expression)
+  }
+  if (ts.isConditionalExpression(expression)) {
+    return isRuntimeGeometryStyle(expression.whenTrue) && isRuntimeGeometryStyle(expression.whenFalse)
+  }
+  if (ts.isIdentifier(expression) && expression.text === 'undefined') return true
+  if (!ts.isObjectLiteralExpression(expression) || expression.properties.length === 0) return false
+  return expression.properties.every((property) => {
+    if (!ts.isPropertyAssignment(property)) return false
+    const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
+      ? property.name.text : undefined
+    return name !== undefined && runtimeGeometryProperties.has(name)
+  }) && expression.properties.some((property) => ts.isPropertyAssignment(property)
+    && !ts.isStringLiteral(property.initializer) && !ts.isNumericLiteral(property.initializer))
+}
+
 /** Inspect React/TypeScript source for presentation that bypasses the feature stylesheet. */
 export function inspectPresentationSource(source: string, file: string): ThemeStyleViolation[] {
   const violations: ThemeStyleViolation[] = []
-  pushMatches(
-    violations, file, source, inlineStyle, 'inline-style',
-    () => 'inline style bypasses theme validation; move presentation to a CSS Module',
-  )
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const inspectNode = (node: ts.Node): void => {
+    if (ts.isJsxAttribute(node) && ts.isIdentifier(node.name) && node.name.text === 'style') {
+      const expression = node.initializer && ts.isJsxExpression(node.initializer)
+        ? node.initializer.expression : undefined
+      if (expression === undefined || !isRuntimeGeometryStyle(expression)) {
+        violations.push({
+          file,
+          line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1,
+          rule: 'inline-style',
+          message: 'inline presentation must move to a CSS Module; only computed layout geometry is allowed',
+        })
+      }
+    }
+    ts.forEachChild(node, inspectNode)
+  }
+  inspectNode(ast)
   pushMatches(
     violations, file, source, colorFunction, 'literal-color',
     value => `inline literal color ${value} must move to a CSS Module and use a semantic --dsw-* token`,
