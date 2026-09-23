@@ -46,6 +46,24 @@ describe('client theme style policy', () => {
     expect(violations.map(item => item.rule)).toEqual(['inline-style'])
   })
 
+  it('allows only computed layout geometry in React styles', () => {
+    expect(inspectPresentationSource(`
+      export function Panel({ width, x }: { width: number; x: number }) {
+        return <div style={{ width: \`\${width}%\`, left: x }} />
+      }
+    `, 'Panel.tsx')).toEqual([])
+    expect(inspectPresentationSource(`
+      export function Panel() {
+        return <div style={{ position: 'absolute' }} />
+      }
+    `, 'Panel.tsx').map(item => item.rule)).toEqual(['inline-style'])
+    expect(inspectPresentationSource(`
+      export function Panel({ style }: { style: object }) {
+        return <div style={style} />
+      }
+    `, 'Panel.tsx').map(item => item.rule)).toEqual(['inline-style'])
+  })
+
   it('keeps every migrated package compliant', () => {
     expect(verifyStrictThemePackages()).toEqual([])
   })

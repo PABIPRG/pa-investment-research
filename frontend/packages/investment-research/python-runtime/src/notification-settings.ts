@@ -76,7 +76,7 @@ export class NotificationSettings {
       }
       return snapshot
     } catch {
-      throw new NotificationSettingsError('已保存的渠道配置无法读取，请检查本机凭据存储。')
+      throw new NotificationSettingsError('已保存的渠道配置无法读取，请检查当前实例的凭据存储。')
     }
   }
 
@@ -116,11 +116,11 @@ export class NotificationSettings {
           () => ({ snapshot: {} as Snapshot, configurationInvalid: true }),
         )
       const info = await this.credentials.describe(NOTIFICATION_CHANNEL_CREDENTIAL)
-      if (configurationInvalid && request.action !== 'describe') throw new NotificationSettingsError('本机渠道配置无法读取，请先在设置中重置渠道配置。')
+      if (configurationInvalid && request.action !== 'describe') throw new NotificationSettingsError('当前实例的渠道配置无法读取，请先在设置中重置渠道配置。')
       if (request.action === 'reset') {
         if (!info.writable) throw new NotificationSettingsError('此配置由只读凭据来源管理，无法在当前应用修改。')
         try { await this.credentials.set(NOTIFICATION_CHANNEL_CREDENTIAL, JSON.stringify({ version: 1, channels: {} })) }
-        catch { throw new NotificationSettingsError('渠道配置未重置，请检查本机存储权限后重试。') }
+        catch { throw new NotificationSettingsError('渠道配置未重置，请检查当前实例的存储权限后重试。') }
       }
       if (request.action !== 'describe' && request.action !== 'reset') {
         if (!CHANNELS.includes(request.channel)) throw new NotificationSettingsError('不支持的通知渠道。')
@@ -139,7 +139,7 @@ export class NotificationSettings {
           }
           await this.call(baseUrl, 'validate', snapshot)
           try { await this.credentials.set(NOTIFICATION_CHANNEL_CREDENTIAL, JSON.stringify({ version: 1, channels: snapshot })) }
-          catch { throw new NotificationSettingsError('渠道配置未保存，请检查本机存储权限后重试。') }
+          catch { throw new NotificationSettingsError('渠道配置未保存，请检查当前实例的存储权限后重试。') }
         }
       }
       let applied = true

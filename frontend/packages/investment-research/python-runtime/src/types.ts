@@ -1,7 +1,7 @@
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials/types'
 
 export type NotificationExternalChannel = 'serverchan' | 'wecom' | 'email'
-/** Secrets are accepted only by the loopback-only dedicated Remote. Never returned. */
+/** Secrets use a dedicated Remote authorized for local callers or authenticated Web administrators. Never returned. */
 export type NotificationChannelRequest =
   | { action: 'describe' }
   | { action: 'reset' }

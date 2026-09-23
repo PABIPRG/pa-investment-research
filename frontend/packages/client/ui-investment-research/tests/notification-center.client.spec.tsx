@@ -158,7 +158,7 @@ describe('NotificationCenter', () => {
     expect(screen.getByText(/勾选渠道不代表已配置或发送成功/)).toBeTruthy()
     expect(screen.getByText('如何获取配置？')).toBeTruthy()
     expect(screen.queryByText(/backend.env/)).toBeNull()
-    expect(screen.getByText(/此运行环境尚未提供本机渠道配置/)).toBeTruthy()
+    expect(screen.getByText(/当前实例暂未提供渠道配置/)).toBeTruthy()
     const settingsTable = screen.getByRole('table', { name: '通知渠道设置' })
     const setup = screen.getByRole('region', { name: '外部渠道配置说明' })
     expect(settingsTable.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

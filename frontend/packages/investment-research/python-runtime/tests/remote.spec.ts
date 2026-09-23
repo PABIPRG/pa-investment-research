@@ -63,9 +63,16 @@ afterEach(async () => {
 })
 
 describe('InvestmentPythonRuntime Remote', () => {
-  it('refuses notification configuration on cloud or unowned backends before reading credentials', async () => {
+  it('allows notification configuration on a cloud-owned backend and refuses attached backends', async () => {
     const cloud = cloudRuntime()
-    await expect(cloud.notificationChannels({ action: 'describe' })).rejects.toThrow()
+    const cloudManager = Reflect.get(cloud, 'manager') as { acquire: (...args: unknown[]) => Promise<unknown> }
+    const cloudRelease = vi.fn(async () => {})
+    vi.spyOn(cloudManager, 'acquire').mockResolvedValue({ baseUrl: 'http://127.0.0.1:8183', ownership: 'owned', release: cloudRelease })
+    const settings = Reflect.get(cloud, 'notificationSettings') as { execute: (...args: unknown[]) => Promise<unknown> }
+    const execute = vi.spyOn(settings, 'execute').mockResolvedValue({ channels: [], writable: true, applied: true, deliveryEnabled: true })
+    await expect(cloud.notificationChannels({ action: 'describe' })).resolves.toMatchObject({ writable: true, applied: true })
+    expect(execute).toHaveBeenCalledWith('http://127.0.0.1:8183', { action: 'describe' })
+    expect(cloudRelease).toHaveBeenCalledOnce()
     const runtime = runtimeWith()
     const manager = Reflect.get(runtime, 'manager') as { acquire: (...args: unknown[]) => Promise<unknown> }
     const release = vi.fn(async () => {})

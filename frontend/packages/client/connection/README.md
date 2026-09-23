@@ -6,7 +6,7 @@ Wire consumer layer: the client plugin's apply mounts `ctx.connection` (shared a
 
 ## Cloud model administration authorization
 
-`modelAdmin.*` allows authenticated administrators after the existing Host, session, CSRF, and HTTPS proxy checks. With authentication disabled, it remains limited to effective loopback. General `settings.*`, `credentials.*`, `llm.discoverModels`, and local-only methods retain their existing restrictions.
+`modelAdmin.*` and `investmentPythonRuntime/notification-channels` allow authenticated administrators after the existing Host, session, CSRF, and HTTPS proxy checks. With authentication disabled, both remain limited to effective loopback. General `settings.*`, `credentials.*`, `llm.discoverModels`, and local-only methods retain their existing restrictions.
 
 ## /api browser-trust fence
 

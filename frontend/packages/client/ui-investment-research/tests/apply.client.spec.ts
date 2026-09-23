@@ -264,6 +264,9 @@ describe('ui-investment-research apply', () => {
     expect(requestData).toHaveBeenCalledWith({
       operation: 'market-watch.security-search', input: { query: '茅台', limit: 8 },
     })
+    // Safari can blur the input before dispatching click when a mouse presses a button.
+    if (fireEvent.mouseDown(option)) fireEvent.blur(input, { relatedTarget: null })
+    expect(option.isConnected).toBe(true)
     fireEvent.click(option)
     expect(navigate).toHaveBeenCalledWith('stock-detail', { stockCode: '600519' })
   })

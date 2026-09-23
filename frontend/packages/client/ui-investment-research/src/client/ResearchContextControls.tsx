@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -32,8 +31,12 @@ const POPOVER_MARGIN = 12
 const POPOVER_GAP = 8
 const POPOVER_MAX_HEIGHT = 560
 const POPOVER_MAX_WIDTH = 420
-const POPOVER_MEASURE_STYLE: CSSProperties = {
-  position: 'fixed', left: 0, top: 0, maxHeight: POPOVER_MAX_HEIGHT, visibility: 'hidden',
+interface PopoverGeometry {
+  left: number
+  top: number
+  width: number
+  maxWidth: number
+  maxHeight: number
 }
 
 function securityOptions(value: unknown): ResearchChatInstrument[] {
@@ -104,7 +107,7 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
   const [searchNonce, setSearchNonce] = useState(0)
   const [activeIndex, setActiveIndex] = useState(0)
   const [retryInstrument, setRetryInstrument] = useState<ResearchChatInstrument | null>()
-  const [popoverStyle, setPopoverStyle] = useState<CSSProperties>(POPOVER_MEASURE_STYLE)
+  const [popoverGeometry, setPopoverGeometry] = useState<PopoverGeometry>()
   const searchGeneration = useRef(0)
   const controlsRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -204,12 +207,12 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
       : anchorRect.bottom + POPOVER_GAP
     const top = Math.min(Math.max(preferredTop, minTop), maxTop)
 
-    setPopoverStyle({ position: 'fixed', left, top, width, maxWidth: availableWidth, maxHeight, visibility: 'visible' })
+    setPopoverGeometry({ left, top, width, maxWidth: availableWidth, maxHeight })
   }, [open])
 
   useLayoutEffect(() => {
     if (!open) {
-      setPopoverStyle(POPOVER_MEASURE_STYLE)
+      setPopoverGeometry(undefined)
       return
     }
     placePopover()
@@ -291,7 +294,14 @@ function MyResearchComposerContextControls(props: InvestmentComposerContextProps
             id={instrumentDialogId}
             ref={popoverRef}
             className={css.researchContextPopover}
-            style={popoverStyle}
+            data-positioned={popoverGeometry !== undefined}
+            style={popoverGeometry === undefined ? undefined : {
+              left: popoverGeometry.left,
+              top: popoverGeometry.top,
+              width: popoverGeometry.width,
+              maxWidth: popoverGeometry.maxWidth,
+              maxHeight: popoverGeometry.maxHeight,
+            }}
             role="dialog"
             aria-label="选择投资标的"
             onClick={(event) => { event.stopPropagation() }}

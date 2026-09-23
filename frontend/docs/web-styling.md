@@ -20,7 +20,7 @@ Global style sheets belong in `ui-theme/src/styles/`. Component styles live besi
 - Put presentation in CSS. Inline React styles may pass component-local custom-property values but must not encode theme branches.
 - Preserve keyboard focus visibility and reduced-motion behavior when adding transitions or hover-only controls.
 
-`pnpm run verify-client-theme-styles` enforces these color-scheme rules for client packages listed as strict roots: it scans every CSS Module and TypeScript presentation source under each root, rejects inline React styles, literal colors, static-palette tokens, feature-owned theme selectors, and references to undefined `--dsw-*` variables. Strict packages keep presentation in CSS Modules instead of using the general custom-property exception above. A package enters the strict set only after its existing violations are removed, so the check carries no baseline exceptions that could hide regressions.
+`pnpm run verify-client-theme-styles` enforces these color-scheme rules for client packages listed as strict roots: it scans every CSS Module and TypeScript presentation source under each root and rejects literal colors, static-palette tokens, feature-owned theme selectors, and references to undefined `--dsw-*` variables. Strict packages keep fixed presentation in CSS Modules; a JSX object literal may carry only computed layout geometry (`left`, `top`, `width`, `maxWidth`, `maxHeight`, and the registered `--investment-right-surface-width`). Colors, shadows, fixed positioning, and arbitrary style objects remain prohibited. The check carries no baseline exceptions that could hide regressions.
 
 ## Changing the system
 

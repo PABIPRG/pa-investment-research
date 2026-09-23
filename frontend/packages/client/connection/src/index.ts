@@ -96,7 +96,6 @@ export const Config: z<ConnectionConfig> = z.object({
  * keys, or key state — and an authenticated remote model picker legitimately needs it.
  */
 const PRIVILEGED_METHODS = new Set([
-  'investmentPythonRuntime/notification-channels',
   // A preset composition names the plugins a session runs, so reading one is
   // reconnaissance; copy and remove rearrange what the deployment offers, and
   // openDocument drives the host desktop — all more than the roster beside
@@ -127,6 +126,11 @@ const PRIVILEGED_METHODS = new Set([
   'credentials.unset',
   'llm.discoverModels',
 ])
+
+// Web auth represents one instance administrator. This credential-bearing
+// Remote may cross a trusted HTTPS proxy only when that authority is enabled;
+// the shared route still verifies session and CSRF before dispatch.
+const NOTIFICATION_CHANNEL_METHOD = 'investmentPythonRuntime/notification-channels'
 
 /**
  * Mounts the API gateway under the browser transport prefix. Every request on
@@ -183,7 +187,7 @@ export function apply(ctx: Context, config?: ConnectionConfig): void {
       const method = pathname.startsWith(`${API_PATH}/`)
         ? pathname.slice(API_PATH.length + 1)
         : undefined
-      if (method?.startsWith('modelAdmin.') && !auth?.enabled
+      if ((method?.startsWith('modelAdmin.') || method === NOTIFICATION_CHANNEL_METHOD) && !auth?.enabled
         && !isLoopbackRequestPeer(req, trustedProxyAddresses)) {
         res.writeHead(403)
         res.end('forbidden')

@@ -69,6 +69,8 @@ body {
   --dsw-static-neutral-bluish-875: rgb(35, 35, 36);
   --dsw-static-neutral-bluish-900: rgb(27, 27, 28);
   --dsw-static-neutral-bluish-950: rgb(21, 21, 23);
+  --dsw-static-orange-600: rgb(198, 103, 0);
+  --dsw-static-purple-600: rgb(124, 58, 237);
   --dsw-static-red-100: rgb(254, 226, 226);
   --dsw-static-red-400: rgb(242, 90, 90);
   --dsw-static-red-500: rgb(239, 68, 68);
@@ -145,6 +147,8 @@ body[data-ds-dark-theme] {
   --dsw-static-neutral-bluish-875: rgb(35, 35, 36);
   --dsw-static-neutral-bluish-900: rgb(27, 27, 28);
   --dsw-static-neutral-bluish-950: rgb(21, 21, 23);
+  --dsw-static-orange-600: rgb(198, 103, 0);
+  --dsw-static-purple-600: rgb(124, 58, 237);
   --dsw-static-red-100: rgb(254, 226, 226);
   --dsw-static-red-400: rgb(242, 90, 90);
   --dsw-static-red-500: rgb(239, 68, 68);
@@ -203,6 +207,8 @@ body {
   --dsw-alias-interactive-bg-hover-danger: rgba(236, 19, 19, 0.05);
   --dsw-alias-interactive-bg-hover-solid: var(--dsw-static-neutral-bluish-75);
   --dsw-alias-interactive-bg-hover: rgba(38, 49, 72, 0.06);
+  --dsw-alias-industry-downstream: var(--dsw-static-orange-600);
+  --dsw-alias-industry-upstream: var(--dsw-static-purple-600);
   --dsw-alias-label-caption: var(--dsw-static-neutral-bluish-400);
   --dsw-alias-label-dimmed: var(--dsw-static-neutral-bluish-200);
   --dsw-alias-label-primary-bluish: var(--dsw-static-blue-900);
@@ -295,6 +301,8 @@ body[data-ds-dark-theme] {
   --dsw-alias-interactive-bg-hover-danger: rgba(242, 90, 90, 0.15);
   --dsw-alias-interactive-bg-hover-solid: var(--dsw-static-neutral-bluish-800);
   --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.08);
+  --dsw-alias-industry-downstream: var(--dsw-static-orange-600);
+  --dsw-alias-industry-upstream: var(--dsw-static-purple-600);
   --dsw-alias-label-caption: var(--dsw-static-neutral-bluish-600);
   --dsw-alias-label-dimmed: var(--dsw-static-neutral-bluish-750);
   --dsw-alias-label-primary-bluish: var(--dsw-static-neutral-bluish-50);

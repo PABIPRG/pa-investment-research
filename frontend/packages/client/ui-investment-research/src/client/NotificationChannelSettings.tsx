@@ -124,11 +124,11 @@ export function NotificationChannelSettings({ request, requestData, onStatus }: 
 
   return <section className={css.root} aria-label="外部渠道配置">
     <div className={css.heading}><h3>接收渠道</h3><Button variant="outline" disabled={busy || !request} onClick={() => { void refresh() }}>刷新状态</Button></div>
-    {!request && <p role="status">此运行环境尚未提供本机渠道配置，请在更新后的桌面应用或本机 Web 中打开。</p>}
+    {!request && <p role="status">当前实例暂未提供渠道配置，请联系实例管理员更新应用。</p>}
     {request && !status && !error && <p role="status">正在读取渠道状态…</p>}
-    {status?.configurationInvalid && <div className={css.confirm} role="alert"><p>本机渠道配置无法读取，其他投研功能不受影响。请重置后重新填写；后台同步未确认时，旧投递配置可能仍在生效。</p>
+    {status?.configurationInvalid && <div className={css.confirm} role="alert"><p>当前实例的渠道配置无法读取，其他投研功能不受影响。请重置后重新填写；后台同步未确认时，旧投递配置可能仍在生效。</p>
       {!resetting ? <Button disabled={!status.writable || busy} onClick={() => { setResetting(true) }}>重置渠道配置</Button> : <>
-        <p>确认清空三个外部渠道的本机凭据？通知记录和类型偏好会保留。</p>
+        <p>确认清空当前实例三个外部渠道的凭据？通知记录和类型偏好会保留。</p>
         <div className={css.actions}><Button disabled={busy} onClick={() => {
           if (!request) return
           setBusy(true); setError('')
@@ -165,7 +165,7 @@ export function NotificationChannelSettings({ request, requestData, onStatus }: 
           <p>密钥不回显。保存或停用会取消旧配置的待发任务；已开始发送的消息无法撤回。</p>
           <div className={css.actions}><Button type="submit" variant="primary" disabled={busy}>{busy ? '保存中…' : '保存配置'}</Button><Button disabled={busy} onClick={() => { setEditing(undefined); setFields({}); setRemoving(undefined); setError('') }}>取消</Button>
             {current?.configured && <Button disabled={busy} onClick={() => { setRemoving(channel) }}>移除配置</Button>}</div>
-          {removing === channel && <div className={css.confirm} role="alert"><p>确认移除 {title} 的本机配置？此操作会停止后续投递。</p><Button disabled={busy} onClick={() => { void commit(current, channel, 'remove') }}>确认移除</Button><Button onClick={() => { setRemoving(undefined) }}>保留配置</Button></div>}
+          {removing === channel && <div className={css.confirm} role="alert"><p>确认移除当前实例的 {title} 配置？此操作会停止后续投递。</p><Button disabled={busy} onClick={() => { void commit(current, channel, 'remove') }}>确认移除</Button><Button onClick={() => { setRemoving(undefined) }}>保留配置</Button></div>}
         </form>}
         {thisTest && <div className={css.test} role="status">
           <p>{pending ? '测试已入队，等待后台发送；尚未确认成功。' : thisTest.state === 'sent' ? '渠道服务已接受测试，请到接收端核对。' : thisTest.state === 'dead_letter' ? '测试未确认成功，请检查凭据、服务权限和接收端；不会自动重试，消息也可能已经送达。' : '测试已取消或受规则限制，未确认发送。'}</p>
