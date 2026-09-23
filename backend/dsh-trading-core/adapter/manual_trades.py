@@ -22,6 +22,7 @@ class ManualTradeRequest(BaseModel):
     price: Decimal = Field(gt=0, le=Decimal("1e12"))
     fees: Decimal = Field(default=Decimal(0), ge=0, le=Decimal("1e15"))
     traded_at: datetime
+    affects_holdings: bool = True
     version: str | None = None
 
 
@@ -43,7 +44,8 @@ def apply_trade(store: JsonStore, req: ManualTradeRequest):
         entries = document.get("manual_trades", []) or []
         previous = next((e for e in entries if e["request_id"] == req.request_id), None)
         if previous:
-            if previous["request"] != payload:
+            previous_request = {**previous["request"], "affects_holdings": previous["request"].get("affects_holdings", True)}
+            if previous_request != payload:
                 raise ValueError("该保存编号已经用于另一笔成交，请重新录入。")
             result = {"saved": True, "entry": previous, "holdings": document.get("default", [])}
             return document
@@ -58,27 +60,33 @@ def apply_trade(store: JsonStore, req: ManualTradeRequest):
         positions = _positions(document.get("default", []))
         current = next((p for p in positions if p["ticker"] == req.ticker), None)
         last_state = None
+        backdated = False
         for snap in document.get("snapshots", []):
             state = next((p for p in snap["positions"] if p["ticker"] == req.ticker), None)
             related_trade = next((e for e in entries if e["request_id"] == snap.get("manual_trade_id")), None)
             cutoff = related_trade["traded_at"] if related_trade else snap["effective_at"]
             if state != last_state and at < datetime.fromisoformat(cutoff):
-                raise ValueError("成交时间早于该标的最近持仓变更，无法直接追加。请核对时间或通过编辑校正持仓。")
+                backdated = True
             last_state = state
+        if backdated and req.affects_holdings and "affects_holdings" not in req.model_fields_set:
+            raise ValueError("这笔成交发生在最近一次持仓更新之前。请确认它是否已计入当前持仓，再选择只补成交记录或更新当前持仓。")
         qty = Decimal(str(current["quantity"])) if current else Decimal(0)
         cost = Decimal(str(current["cost_price"])) if current else Decimal(0)
-        if req.side == "sell" and req.quantity > qty:
+        if req.affects_holdings and req.side == "sell" and req.quantity > qty:
             raise ValueError("卖出数量不能超过当前持仓数量。")
-        after_qty = qty + req.quantity if req.side == "buy" else qty - req.quantity
-        after_cost = (qty * cost + req.quantity * req.price + req.fees) / after_qty if req.side == "buy" else cost
-        remaining = [p for p in positions if p["ticker"] != req.ticker]
-        if after_qty:
-            remaining.append({**(current or {}), "ticker": req.ticker, "quantity": float(after_qty), "cost_price": float(after_cost), "position_time": at.isoformat(), "time_source": "user_modified"})
-        remaining = _positions(remaining)
+        after_qty = (qty + req.quantity if req.side == "buy" else qty - req.quantity) if req.affects_holdings else qty
+        after_cost = (qty * cost + req.quantity * req.price + req.fees) / after_qty if req.affects_holdings and req.side == "buy" else cost
+        remaining = [p for p in positions if p["ticker"] != req.ticker] if req.affects_holdings else list(positions)
+        if req.affects_holdings:
+            if after_qty:
+                remaining.append({**(current or {}), "ticker": req.ticker, "quantity": float(after_qty), "cost_price": float(after_cost), "position_time": at.isoformat(), "time_source": "user_modified"})
+            remaining = _positions(remaining)
         entry = {**payload, "quantity": float(req.quantity), "price": float(req.price), "fees": float(req.fees), "traded_at": at.isoformat(), "source": "manual", "before_quantity": float(qty), "after_quantity": float(after_qty), "after_cost_price": float(after_cost) if after_qty else None, "request": payload}
-        result = {"saved": req.action == "commit", "version": version, "entry": entry, "holdings": remaining}
+        result = {"saved": req.action == "commit", "version": version, "entry": entry, "holdings": remaining, "backdated": backdated}
         if req.action != "commit":
             return document
+        if not req.affects_holdings:
+            return {**document, "manual_trades": [*entries, entry]}
         snapshots = list(document.get("snapshots", []))
         if not snapshots and positions:
             snapshots.append(_snapshot(positions, "legacy_seed", at.isoformat(), None))

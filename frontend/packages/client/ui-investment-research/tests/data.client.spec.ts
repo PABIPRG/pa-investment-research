@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { productErrorText } from '../src/client/data.ts'
+import { productErrorText, unitCost } from '../src/client/data.ts'
+
+it('shows unit cost to three decimals when needed and groups large values', () => {
+  expect(unitCost(36.712)).toBe('¥36.712')
+  expect(unitCost(36.7)).toBe('¥36.70')
+  expect(unitCost(36712)).toBe('¥36,712.00')
+  expect(unitCost(undefined)).toBe('—')
+})
 
 describe('产品错误文案', () => {
   it('保留可行动的业务错误并提取安全的后端 detail', () => {

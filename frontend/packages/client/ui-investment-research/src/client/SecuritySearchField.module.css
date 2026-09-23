@@ -4,6 +4,9 @@
 .input input { min-width: 0; width: 100%; font-size: 1rem; line-height: 1.5; }
 .input:focus-within { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 .input input:focus-visible { outline: none; }
+.input.input:has(input[aria-invalid='true']) { border-color: var(--dsw-alias-state-error-primary); }
+.input.input:has(input[aria-invalid='true']):focus-within { outline-color: var(--dsw-alias-state-error-primary); }
+.validationError { color: var(--dsw-alias-state-error-primary); font-size: 0.7857rem; line-height: 1.5; }
 .anchor.anchor { display: block; min-width: 0; width: 100%; }
 .dropdown.dropdown { min-width: 0; width: 100%; max-width: none; box-sizing: border-box; border-radius: 8px; }
 .results { min-width: 0; }

@@ -201,6 +201,23 @@ class HoldingsMutationHistoryTests(unittest.TestCase):
         self.assertEqual(set(changes), {"default", "snapshots", "manual_trades"})
         self.assertEqual(len(changes["manual_trades"]["added"]), 1)
 
+    def test_history_only_trade_is_audited_without_a_position_or_snapshot_change(self):
+        from adapter.manual_trades import ManualTradeRequest, apply_trade
+        self.store.set("holdings", "default", [self.position(100)])
+        before = len(self.records())
+        request = ManualTradeRequest(request_id="history-only-001", ticker="600519", side="buy",
+                                     quantity=3, price=10, fees=1, affects_holdings=False,
+                                     traded_at=datetime.now(timezone.utc) - timedelta(days=2))
+        preview = apply_trade(self.store, request)
+        commit = request.model_copy(update={"action": "commit", "version": preview["version"]})
+        apply_trade(self.store, commit)
+        apply_trade(self.store, commit)
+        self.assertEqual(len(self.records()), before + 1)
+        changes = next(row["changes"] for row in self.records() if "manual_trades" in row["changes"])
+        self.assertEqual(set(changes), {"manual_trades"})
+        self.assertFalse(changes["manual_trades"]["added"][0]["affects_holdings"])
+        self.assertEqual(self.store.get("holdings", "default"), [self.position(100)])
+
     def test_corrupt_pending_is_preserved_and_stops_all_mutations(self):
         from adapter import holdings_mutation_history as audit
         path = audit.pending_path(self.store)

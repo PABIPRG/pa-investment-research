@@ -7,7 +7,7 @@ import type { TradeSelection } from './ManualTradePanel.tsx'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
-import { asRecord, compactMoney, money, number, productErrorText, records, text } from './data.ts'
+import { asRecord, compactMoney, money, number, productErrorText, records, text, unitCost } from './data.ts'
 import { DetailDialog, riskSource, riskSuggestions } from './DetailDialogs.tsx'
 import { holdingsWorkbookToDelimitedText, parseHoldingsImport } from './holdings-import.ts'
 import { useRequestResource } from './InvestmentShell.tsx'
@@ -153,7 +153,7 @@ function PositionTable({
                   : privateFunds(quantity(item.quantity), fundsHidden)}</td>
                 <td><span className={css.workbenchMobileLabel}>成本价</span>{editing && editDraft
                   ? <Input className={css.holdingInlineInput ?? ''} aria-label="成本价" type="number" min="0" step="any" disabled={saving} value={editDraft.costPrice} onChange={event => { onChangeDraft?.({ ...editDraft, costPrice: event.target.value }) }} />
-                  : privateFunds(amount(item.costPrice), fundsHidden)}</td>
+                  : privateFunds(unitCost(item.costPrice), fundsHidden)}</td>
                 <td><span className={css.workbenchMobileLabel}>成本金额</span>{privateFunds(amount(positionAmount(item, price)), fundsHidden)}</td>
                 <td><span className={css.workbenchMobileLabel}>现价 / 市值</span><span>{amount(item.currentPrice)}<br />{privateFunds(amount(positionAmount(item, item.currentPrice)), fundsHidden)}</span></td>
                 <td data-tone={tone(priceReturn)}><span className={css.workbenchMobileLabel}>较成本</span>{signedPercent(priceReturn)}</td>
@@ -908,7 +908,7 @@ function HoldingsEditor({
         onRecordBuy={() => { setTradeSelection({ ...tradeSelection, side: 'buy' }) }}
         onClose={() => { setTradeSelection(undefined) }}
         onBusy={(value) => { setSaving(value); onSavingChange(value) }}
-        onSaved={(items, warning) => { setSavedSnapshot(items); setTradeSelection(undefined); setNotice(warning || '成交已保存，研究持仓已更新。'); onHoldingsChanged?.() }} />}
+        onSaved={(items, message) => { setSavedSnapshot(items); setTradeSelection(undefined); setNotice(message || '成交已保存，研究持仓已更新。'); onHoldingsChanged?.() }} />}
     </>
   )
 }

@@ -549,7 +549,7 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
   'trading-core.holdings-trade': {
     backendId: 'trading-core', method: 'POST', path: () => '/holdings/trades',
     body: (input) => {
-      knownKeys(input, ['action', 'request_id', 'ticker', 'side', 'quantity', 'price', 'fees', 'traded_at', 'version'])
+      knownKeys(input, ['action', 'request_id', 'ticker', 'side', 'quantity', 'price', 'fees', 'traded_at', 'affects_holdings', 'version'])
       return { ...input }
     },
   },
