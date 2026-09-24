@@ -107,11 +107,13 @@ describe('策略研究产品事实与确认流程', () => {
       [within(lifecycle).getByRole('button', { name: /3.*影子验证/u }), '首次回测任务完成后自动进入；验证结果不作为人工生效开关。'],
       [within(lifecycle).getByRole('button', { name: /4.*进化诊断/u }), '影子验证积累证据后查看判定；进入前需先选择策略。'],
     ] as const
+    const tooltipClass = css.lifecycleTooltip
+    if (!tooltipClass) throw new Error('生命周期提示样式缺失')
     for (const [button, help] of lifecycleHelp) {
       fireEvent.mouseEnter(button)
       const tooltip = within(helpDialog).getByRole('tooltip')
       expect(tooltip.textContent).toBe(help)
-      expect(tooltip.classList.contains(css.lifecycleTooltip)).toBe(true)
+      expect(tooltip.classList.contains(tooltipClass)).toBe(true)
       expect(button.getAttribute('aria-describedby')).toBe(tooltip.id)
       fireEvent.mouseLeave(button)
       expect(within(helpDialog).queryByRole('tooltip')).toBeNull()
