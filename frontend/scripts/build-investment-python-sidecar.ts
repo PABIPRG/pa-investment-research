@@ -9,7 +9,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Readable } from 'node:stream'
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import { execFile, spawn } from 'node:child_process'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
+import { Agent, fetch as undiciFetch } from 'undici'
 
 import { backendPathAllowed, prunePythonDependencyTests, scanPackagedBackends } from './investment-backend-package-policy.ts'
 import {
@@ -23,7 +25,7 @@ const BACKENDS = ['dsh-trading-core', 'market-watch', 'industry-chain'] as const
 const HASH_PATTERN = /^[0-9a-f]{64}$/u
 const RETRYABLE_DOWNLOAD_CODES = new Set([
   'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ENETDOWN', 'ENETUNREACH', 'EPIPE', 'ETIMEDOUT',
-  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET',
+  'UND_ERR_BODY_TIMEOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_SOCKET',
 ])
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
 
@@ -64,8 +66,9 @@ export interface BuildInvestmentSidecarDependencies {
 }
 
 export interface DownloadFileOptions {
-  readonly fetchImplementation?: (url: string) => Promise<Response>
+  readonly fetchImplementation?: (url: string, signal: AbortSignal) => Promise<Response>
   readonly maxAttempts?: number
+  readonly overallTimeoutMs?: number
   readonly wait?: (delay: number) => Promise<void>
 }
 
@@ -228,41 +231,60 @@ export async function downloadFileWithRetry(
   destination: string,
   options: DownloadFileOptions = {},
 ): Promise<void> {
-  const fetchImplementation = options.fetchImplementation ?? fetch
-  const maxAttempts = options.maxAttempts ?? 3
-  const wait = options.wait ?? (async (delay) => {
-    await new Promise<void>((resolvePromise) => { setTimeout(resolvePromise, delay) })
-  })
+  const maxAttempts = options.maxAttempts ?? 5
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1) throw new TypeError('download maxAttempts must be a positive integer')
+  const overallTimeoutMs = options.overallTimeoutMs ?? 8 * 60_000
+  if (!Number.isInteger(overallTimeoutMs) || overallTimeoutMs < 1) {
+    throw new TypeError('download overallTimeoutMs must be a positive integer')
+  }
+  const deadline = AbortSignal.timeout(overallTimeoutMs)
+  const dispatcher = options.fetchImplementation === undefined
+    ? new Agent({ connect: { timeout: 30_000 }, headersTimeout: 60_000, bodyTimeout: 120_000 })
+    : undefined
+  const fetchImplementation = options.fetchImplementation
+    ?? ((address: string, signal: AbortSignal) => undiciFetch(address, { dispatcher: dispatcher!, signal }))
+  const wait = options.wait ?? (async (delay) => {
+    await sleep(delay, undefined, { signal: deadline })
+  })
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    await rm(destination, { force: true })
-    try {
-      const response = await fetchImplementation(url)
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => {})
-        throw new DownloadHttpError(response.status)
-      }
-      if (response.body === null) throw new Error('download response has no body')
-      await pipeline(
-        Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>),
-        createWriteStream(destination, { flags: 'wx' }),
-      )
-      return
-    } catch (error) {
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       await rm(destination, { force: true })
-      const retryable = retryableDownloadError(error)
-      if (!retryable || attempt >= maxAttempts) {
-        throw new Error(
-          `download failed after ${attempt} attempt${attempt === 1 ? '' : 's'}: ${sanitizedUrl(url)}: ${errorDiagnostic(error)}`,
+      try {
+        const response = await fetchImplementation(url, deadline)
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => {})
+          throw new DownloadHttpError(response.status)
+        }
+        if (response.body === null) throw new Error('download response has no body')
+        await pipeline(
+          Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>),
+          createWriteStream(destination, { flags: 'wx' }),
         )
+        return
+      } catch (error) {
+        await rm(destination, { force: true })
+        if (deadline.aborted) throw new Error(`download exceeded ${overallTimeoutMs}ms deadline: ${sanitizedUrl(url)}`)
+        const retryable = retryableDownloadError(error)
+        if (!retryable || attempt >= maxAttempts) {
+          throw new Error(
+            `download failed after ${attempt} attempt${attempt === 1 ? '' : 's'}: ${sanitizedUrl(url)}: ${errorDiagnostic(error)}`,
+          )
+        }
+        const delay = Math.min(2_000 * 2 ** (attempt - 1), 16_000)
+        console.warn(
+          `Python sidecar download retry ${attempt}/${maxAttempts - 1} in ${delay}ms: ${errorDiagnostic(error)}`,
+        )
+        try {
+          await wait(delay)
+        } catch (waitError) {
+          if (deadline.aborted) throw new Error(`download exceeded ${overallTimeoutMs}ms deadline: ${sanitizedUrl(url)}`)
+          throw waitError
+        }
       }
-      const delay = 250 * attempt
-      console.warn(
-        `Python sidecar download retry ${attempt}/${maxAttempts - 1} in ${delay}ms: ${errorDiagnostic(error)}`,
-      )
-      await wait(delay)
     }
+  } finally {
+    await dispatcher?.close()
   }
 }
 

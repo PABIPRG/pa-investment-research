@@ -138,11 +138,19 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       # Cache downloads only; packages are assembled and verified on every run.
-      - name: Cache packaging downloads
+      - name: Cache verified Python archive
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ runner.temp }}/investment-downloads
-          key: investment-downloads-v1-${{ matrix.target }}-${{ hashFiles('frontend/config/investment-python-runtime-lock.json', 'frontend/pnpm-lock.yaml') }}
+          path: ${{ runner.temp }}/investment-downloads/python
+          key: investment-python-runtime-v1-${{ matrix.target }}-${{ hashFiles('frontend/config/investment-python-runtime-lock.json') }}
+
+      - name: Cache pip and Electron downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ${{ runner.temp }}/investment-downloads/pip
+            ${{ runner.temp }}/investment-downloads/electron
+          key: investment-package-downloads-v1-${{ matrix.target }}-${{ hashFiles('frontend/config/investment-python-runtime-lock.json', 'frontend/pnpm-lock.yaml') }}
 
       - name: Verify native target
         shell: bash
