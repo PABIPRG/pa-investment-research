@@ -74,7 +74,7 @@ id pa-deployer
 
 在公仓 Actions 选择 `Investment production deployment`，分支 master，输入成功发布的 `Investment container image` **run ID**，先选 `mode=connectivity`。候选 job 使用短期 `GITHUB_TOKEN` 读取私有包，验证构建属于公仓 master、已成功、源码在主干历史、发布清单属于同一次 attempt、registry config ID 与测试镜像一致，以及 Production 的保护规则。然后等待人工审批。
 
-批准 connectivity 只做 Tailscale OIDC、SSH 身份、受限 sudo 和服务器已安装 `deploy.py` 的 SHA-256 检查，不调用部署入口，不停服，不备份。PR 合并后须由管理员按第 3 节在服务器重新安装审阅过的部署器；合并本身不会更新 root 拥有的脚本。哈希不一致时先完成安装，不能直接重试 deploy。记录成功 run 链接；若 admin 的 `ssh aly` 提示人工登录确认，这是人工维护身份的要求，不等于 CI OIDC 未配置。
+批准 connectivity 只做 Tailscale OIDC、SSH 身份、受限 sudo 和服务器已安装 `deploy.py` 的 SHA-256 检查，不调用部署入口，不停服，不备份。PR 合并后须由管理员更新服务器 root 拥有的审阅版 `deploy.py`；合并本身不会更新已安装脚本。`aly` 的默认 `/usr/bin/python3` 仍是 3.6，现有受限入口已适配 `/usr/bin/python3.11`；不要原样重跑第 3 节的通用 `install.sh` 覆盖该入口。更新时先确认没有活动部署及 `active.json`，核对来源和 SHA-256，保留现有 Python 3.11 wrapper 与 sudoers，仅原子替换 `deploy.py` 并复核 owner/mode 与目标摘要。哈希不一致时先完成安装，不能直接重试 deploy。记录成功 run 链接；若 admin 的 `ssh aly` 提示人工登录确认，这是人工维护身份的要求，不等于 CI OIDC 未配置。
 
 connectivity 成功且停机窗口获准后，再用**同一个候选 run ID** 手动运行 `mode=deploy` 并审批。审批人应核对候选 SHA/digest、变更风险和备份条件。若旧构建的发布清单已过期或被删除，应重新构建，不手填未经验证的 digest 绕过检查。
 
