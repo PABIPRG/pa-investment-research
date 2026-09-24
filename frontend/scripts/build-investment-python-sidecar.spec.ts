@@ -313,7 +313,17 @@ describe('investment Python sidecar builder', () => {
     )
 
     expect(fetchImplementation).toHaveBeenCalledTimes(2)
-    expect(delays).toEqual([250])
+    expect(delays).toEqual([2_000])
+    expect(await readFile(destination, 'utf8')).toBe('fixture archive')
+  })
+
+  it('streams a file through the default Undici downloader', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'investment real downloader '))
+    roots.push(root)
+    const destination = join(root, 'python.tar.gz')
+
+    await downloadFileWithRetry('data:text/plain,fixture%20archive', destination, { maxAttempts: 1 })
+
     expect(await readFile(destination, 'utf8')).toBe('fixture archive')
   })
 
@@ -358,10 +368,54 @@ describe('investment Python sidecar builder', () => {
     ).catch((error: unknown) => error)
 
     expect(fetchImplementation).toHaveBeenCalledTimes(3)
-    expect(delays).toEqual([250, 500])
+    expect(delays).toEqual([2_000, 4_000])
     expect(String(failure)).toContain('TypeError: fetch failed')
     expect(String(failure)).toContain('UND_ERR_CONNECT_TIMEOUT')
     expect(String(failure)).not.toMatch(/token|private/u)
+  })
+
+  it('gives cold CI downloads five bounded attempts before reporting a connection timeout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'investment cold download '))
+    roots.push(root)
+    const destination = join(root, 'python.tar.gz')
+    const delays: number[] = []
+    const transient = Object.assign(new TypeError('fetch failed'), {
+      cause: Object.assign(new Error('connection timed out'), { code: 'UND_ERR_CONNECT_TIMEOUT' }),
+    })
+    const fetchImplementation = vi.fn(async () => { throw transient })
+
+    const failure = await downloadFileWithRetry(
+      'https://example.invalid/python.tar.gz',
+      destination,
+      { fetchImplementation, wait: async (delay) => { delays.push(delay) } },
+    ).catch((error: unknown) => error)
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(5)
+    expect(delays).toEqual([2_000, 4_000, 8_000, 16_000])
+    expect(String(failure)).toContain('download failed after 5 attempts')
+  })
+
+  it('stops a stalled download at the overall deadline without starting another attempt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'investment stalled download '))
+    roots.push(root)
+    const fetchImplementation = vi.fn(async (_url: string, signal: AbortSignal) => {
+      return await new Promise<Response>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason)
+          return
+        }
+        signal.addEventListener('abort', () => { reject(signal.reason) }, { once: true })
+      })
+    })
+
+    const failure = await downloadFileWithRetry(
+      'https://example.invalid/python.tar.gz',
+      join(root, 'python.tar.gz'),
+      { fetchImplementation, overallTimeoutMs: 20, wait: async () => {} },
+    ).catch((error: unknown) => error)
+
+    expect(fetchImplementation).toHaveBeenCalledOnce()
+    expect(String(failure)).toContain('download exceeded 20ms deadline')
   })
 
   it('emits the Linux platform identity for the container target', async () => {

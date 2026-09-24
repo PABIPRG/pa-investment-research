@@ -52,6 +52,8 @@ pnpm run make:electron
 
 `package:electron` 构建自包含的生产部署及当前平台原生 Python sidecar，并在 `apps/electron/out/` 下生成未压缩应用。sidecar 会复制到 `Resources/investment-python`，构建缓存与 staging 目录不会进入产物。`make:electron` 还会运行 Electron Forge 中配置的 maker，在 `apps/electron/out/make/` 下为当前平台与架构生成 ZIP。可对最终资源目录运行 `node scripts/smoke-investment-python-sidecar.ts --root <Resources/investment-python>`。该 ZIP 未签名；正式签名／公证仍是发布门禁，`Investment packaged sidecar` workflow 则执行 arm64／x64／Windows 原生产物 smoke 与 macOS ad-hoc 签名验证。
 
+sidecar 构建器在缓存或解压前校验锁定 Python 压缩包的 SHA-256。冷缓存下载遇到暂时性网络错误时最多尝试 5 次，连接超时为 30 秒，采用有上限的退避等待，下载总时限为 8 分钟；永久性 HTTP 错误和哈希不符立即失败。CI 按运行时锁文件单独缓存 Python 压缩包，与 pip、Electron 下载缓存分离，前端依赖更新不会使 Python 压缩包缓存失效。
+
 ## 运行时结构
 
 - main 进程解析唯一的 `--profile <name>` 参数（缺省为 `web`），把该 profile 传给 `runProfile`，然后且只再应用 `electron.patch.yml`。对于 `investment-research`，profile 会先按 base → web-app → investment-runtime → investment-stock-analysis → investment-market-watch → investment-industry-chain 组合；Electron patch 随后禁用 Web server、静态 Web runtime、Web Connection provider、自适应浏览器目录选择器与 client HMR，再挂载原生目录选择器组合和 Electron Connection provider。
