@@ -66,25 +66,58 @@ jobs:
             *) route=unknown ;;
           esac
 
+          {
+            printf '## aly Tailnet 传输诊断\n\n'
+            printf -- '- Ping 路由：`%s`\n' "$route"
+          } >> "$GITHUB_STEP_SUMMARY"
+
           timeout 15 tailscale ssh "$target" 'test "$(id -un)" = pa-deployer'
 
-          start_ns="$(date +%s%N)"
-          if ! received="$(head -c "$bytes" /dev/urandom | timeout 120 tailscale ssh "$target" 'wc -c')"; then
-            echo 'Tailnet transfer failed or exceeded 120 seconds.' >&2
+          small_count="$(printf 'probe' | timeout 15 tailscale ssh "$target" 'wc -c')"
+          if [[ "${small_count//[[:space:]]/}" != 5 ]]; then
+            echo 'Tailnet SSH did not deliver the small stdin probe.' >&2
             exit 1
           fi
+          printf '%s\n' '- 标准输入小样本：通过（5 字节）' >> "$GITHUB_STEP_SUMMARY"
+
+          transfer_log="$(mktemp "$RUNNER_TEMP/aly-tailnet-transfer.XXXXXXXX")"
+          trap 'rm -f "$transfer_log"' EXIT
+          start_ns="$(date +%s%N)"
+          if received="$(head -c "$bytes" /dev/urandom 2>/dev/null | timeout 120 tailscale ssh "$target" 'LC_ALL=C dd bs=65536 status=progress | wc -c' 2>"$transfer_log")"; then
+            transfer_status=0
+          else
+            transfer_status=$?
+          fi
           end_ns="$(date +%s%N)"
+
+          if (( transfer_status != 0 )); then
+            progress_bytes="$(tr '\r' '\n' < "$transfer_log" | sed -nE 's/^([0-9]+) bytes.*/\1/p' | tail -n 1)"
+            {
+              if (( transfer_status == 124 )); then
+                printf '%s\n' '- 32 MiB 传输：120 秒超时'
+              else
+                printf '%s\n' '- 32 MiB 传输：连接或命令失败'
+              fi
+              if [[ -n "$progress_bytes" ]]; then
+                printf -- '- 远端最后报告已读取：`%s` 字节\n' "$progress_bytes"
+              else
+                printf '%s\n' '- 远端未返回可解析的读取进度'
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "Tailnet transfer failed (exit $transfer_status); see the sanitized job summary for route and remote progress." >&2
+            exit 1
+          fi
           received="${received//[[:space:]]/}"
           if [[ "$received" != "$bytes" ]]; then
+            printf -- '- 32 MiB 传输：字节数不符（远端读取 `%s` 字节）\n' "$received" >> "$GITHUB_STEP_SUMMARY"
             echo 'Tailnet transfer byte count differs from the 32 MiB sent.' >&2
             exit 1
           fi
 
-          awk -v elapsed_ns="$((end_ns - start_ns))" -v route="$route" -v bytes="$bytes" '
+          awk -v elapsed_ns="$((end_ns - start_ns))" -v bytes="$bytes" '
             BEGIN {
               seconds = elapsed_ns / 1000000000
-              printf "## aly Tailnet 传输诊断\n\n"
-              printf "- 路由：`%s`\n- 字节数：`%d`（32 MiB）\n", route, bytes
+              printf "- 远端读取：`%d` 字节（32 MiB）\n", bytes
               printf "- 耗时：`%.2f` 秒\n- 吞吐：`%.2f` MiB/s\n", seconds, 32 / seconds
               printf "\n仅向 aly 的标准输入发送随机数据，由 `wc -c` 读取；没有写入服务器文件或执行部署。\n"
             }
