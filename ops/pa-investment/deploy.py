@@ -30,10 +30,26 @@ REGISTRY_RUNTIME_DIR = Path("/run/pa-investment-deploy")
 ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
 MAX_REQUEST_BYTES = 4096
 HEALTHCHECK_COMMAND = ["/nodejs/bin/node", "/opt/container/investment-healthcheck.mjs"]
+PULL_ATTEMPTS = 2
+PULL_TIMEOUT_SECONDS = 900
+PULL_RETRY_DELAY_SECONDS = 15
 
 
 class DeployError(RuntimeError):
     """A failed precondition or deployment step requiring operator attention."""
+
+
+class CommandFailure(DeployError):
+    """A command failed; only allowlisted metadata is safe to persist."""
+
+    def __init__(self, message, kind, returncode=None):
+        super().__init__(message)
+        self.kind = kind
+        self.returncode = returncode
+
+
+class PullFailure(DeployError):
+    """All bounded image-pull attempts failed before the service was stopped."""
 
 
 def require(condition, message):
@@ -155,10 +171,28 @@ def transact(image, state, driver):
             if isinstance(error, DeployError):
                 status["reason"] = str(error)
             phase("recovery-required")
+            diagnostics_available = False
             try:
                 driver.diagnose(record)
+                diagnostics_available = True
             except Exception:
                 print("diagnostics unavailable; recovery marker retained", file=sys.stderr)
+            if status["failed_phase"] == "preparing" and isinstance(error, PullFailure) and diagnostics_available:
+                try:
+                    evidence = driver.verify_unchanged_after_failed_pull()
+                    write_json(record / "prepare-failure-disposition.json", {
+                        "at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "reason": status["reason"], "evidence": evidence,
+                    })
+                    phase("prepare-failed-safe")
+                    active.unlink()
+                    directory = os.open(state, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                except Exception:
+                    print("old service could not be reverified; recovery marker retained", file=sys.stderr)
             raise
 
 
@@ -175,12 +209,16 @@ class DockerDriver:
         try:
             result = subprocess.run(args, env=environment or ENVIRONMENT, cwd="/", capture_output=True,
                                     text=True, input=input_text, timeout=timeout, check=True)
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        except subprocess.TimeoutExpired as error:
             # stderr may contain interpolated application secrets; retain no raw output.
-            raise DeployError("command failed: " + args[0] + " " + args[1]) from error
+            raise CommandFailure("command timed out after " + str(timeout) + "s: " + args[0] + " " + args[1],
+                                 "timeout") from error
+        except subprocess.CalledProcessError as error:
+            raise CommandFailure("command exit " + str(error.returncode) + ": " + args[0] + " " + args[1],
+                                 "exit", error.returncode) from error
         return result.stdout.strip()
 
-    def pull_private_image(self, image):
+    def pull_private_image(self, image, record):
         token = self.registry_token
         self.registry_token = None
         require(token is not None, "registry credential already consumed")
@@ -189,7 +227,29 @@ class DockerDriver:
             environment = {**ENVIRONMENT, "DOCKER_CONFIG": directory}
             self.run(["docker", "login", "ghcr.io", "--username", self.registry_username,
                       "--password-stdin"], input_text=token + "\n", environment=environment)
-            self.run(["docker", "pull", image], timeout=900, environment=environment)
+            attempts = []
+            for attempt in range(1, PULL_ATTEMPTS + 1):
+                started = time.monotonic()
+                try:
+                    self.run(["docker", "pull", image], timeout=PULL_TIMEOUT_SECONDS,
+                             environment=environment)
+                except CommandFailure as error:
+                    event = {"attempt": attempt, "result": getattr(error, "kind", "error"),
+                             "elapsed_seconds": round(time.monotonic() - started, 2)}
+                    if error.returncode is not None:
+                        event["exit_code"] = error.returncode
+                    attempts.append(event)
+                    write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
+                    if attempt == PULL_ATTEMPTS:
+                        raise PullFailure("docker pull failed after " + str(attempt) +
+                                          " attempts; last result: " + str(error)) from error
+                    print(json.dumps({"phase": "pull-retry", **event}), flush=True)
+                    time.sleep(PULL_RETRY_DELAY_SECONDS)
+                else:
+                    attempts.append({"attempt": attempt, "result": "success",
+                                     "elapsed_seconds": round(time.monotonic() - started, 2)})
+                    write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
+                    return
 
     def inspect(self, reference, kind="container"):
         values = json.loads(self.run(["docker", kind, "inspect", reference]))
@@ -217,6 +277,7 @@ class DockerDriver:
         self.before = (DEPLOY_DIR / ".env").read_text()
         self.after = replace_image(self.before, image)
         config = json.loads(self.run(self.compose + ["config", "--format", "json"]))
+        self.initial_config = config
         service = config["services"]["investment"]
         healthcheck = service.get("healthcheck") or {}
         require(not healthcheck.get("disable")
@@ -247,8 +308,9 @@ class DockerDriver:
         checked_path(self.volume_path.parent, {0})
         require(not self.volume_path.is_symlink() and self.volume_path.is_dir(), "invalid data root")
         size = int(self.run(["du", "-sb", str(self.volume_path)]).split()[0])
-        require(shutil.disk_usage(record).free > size * 2 + 1024 ** 3, "insufficient backup space")
-        self.pull_private_image(image)
+        self.backup_required_bytes = size * 2 + 1024 ** 3
+        require(shutil.disk_usage(record).free > self.backup_required_bytes, "insufficient backup space")
+        self.pull_private_image(image, record)
         candidate = self.inspect(image, "image")
         require(candidate.get("Os") == "linux" and candidate.get("Architecture") == "amd64",
                 "candidate must be linux/amd64")
@@ -259,11 +321,35 @@ class DockerDriver:
                 "candidate source label differs")
         revision = labels.get("org.opencontainers.image.revision", "")
         require(re.fullmatch(r"[0-9a-f]{40}", revision), "candidate revision missing")
-        require(shutil.disk_usage(record).free > size * 2 + 1024 ** 3,
+        require(shutil.disk_usage(record).free > self.backup_required_bytes,
                 "insufficient backup space after image pull")
         self.new_id = candidate["Id"]
         return {"old_image": self.old["Config"]["Image"], "old_image_id": self.old["Image"],
                 "new_image_id": self.new_id, "revision": revision, "volume": VOLUME}
+
+    def verify_unchanged_after_failed_pull(self):
+        require(all(hasattr(self, name) for name in ("old", "before", "initial_config", "backup_required_bytes")),
+                "old service was not captured before image pull")
+        require((DEPLOY_DIR / ".env").read_text() == self.before,
+                "configuration changed during image pull")
+        require(json.loads(self.run(self.compose + ["config", "--format", "json"])) == self.initial_config,
+                "Compose configuration changed during image pull")
+        current = self.container()
+        require(current["Id"] == self.old["Id"] and current["Image"] == self.old["Image"]
+                and current["Config"]["Image"] == self.old["Config"]["Image"],
+                "old container identity changed during image pull")
+        require(current["State"].get("Running")
+                and current["State"].get("Health", {}).get("Status") == "healthy",
+                "old service is not running and healthy after image pull")
+        require(self.volume_users() == [self.old["Id"]],
+                "production volume writers changed during image pull")
+        require(shutil.disk_usage(self.record_root).free > self.backup_required_bytes,
+                "insufficient backup space after failed image pull")
+        response = self.run(["curl", "--fail", "--silent", "--show-error", "--proto", "=https",
+                             "--max-time", "30", HEALTH_URL])
+        require(json.loads(response).get("status") == "ok", "HTTPS healthz did not return ok")
+        return {"container_id": current["Id"], "old_image": current["Config"]["Image"],
+                "old_image_id": current["Image"], "health": "healthy", "public_health": "ok"}
 
     def stop(self):
         self.run(self.compose + ["stop", "--timeout", "30", "investment"])
@@ -363,7 +449,8 @@ if __name__ == "__main__":
         main()
     except (DeployError, OSError, ValueError, KeyError) as error:
         # Avoid serializing exception payloads from parsed configuration or commands.
-        print("Deployment failed (" + type(error).__name__ + "). Inspect /var/lib/pa-investment-deploy/active.json.",
+        print("Deployment failed (" + type(error).__name__ +
+              "). Inspect the deployment record and /var/lib/pa-investment-deploy/active.json if present.",
               file=sys.stderr)
         if isinstance(error, DeployError):
             print(str(error), file=sys.stderr)

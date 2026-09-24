@@ -74,7 +74,7 @@ id pa-deployer
 
 在公仓 Actions 选择 `Investment production deployment`，分支 master，输入成功发布的 `Investment container image` **run ID**，先选 `mode=connectivity`。候选 job 使用短期 `GITHUB_TOKEN` 读取私有包，验证构建属于公仓 master、已成功、源码在主干历史、发布清单属于同一次 attempt、registry config ID 与测试镜像一致，以及 Production 的保护规则。然后等待人工审批。
 
-批准 connectivity 只做 Tailscale OIDC、SSH 身份和受限 sudo 检查，不调用部署入口，不停服，不备份。记录成功 run 链接；若 admin 的 `ssh aly` 提示人工登录确认，这是人工维护身份的要求，不等于 CI OIDC 未配置。
+批准 connectivity 只做 Tailscale OIDC、SSH 身份、受限 sudo 和服务器已安装 `deploy.py` 的 SHA-256 检查，不调用部署入口，不停服，不备份。PR 合并后须由管理员更新服务器 root 拥有的审阅版 `deploy.py`；合并本身不会更新已安装脚本。`aly` 的默认 `/usr/bin/python3` 仍是 3.6，现有受限入口已适配 `/usr/bin/python3.11`；不要原样重跑第 3 节的通用 `install.sh` 覆盖该入口。更新时先确认没有活动部署及 `active.json`，核对来源和 SHA-256，保留现有 Python 3.11 wrapper 与 sudoers，仅原子替换 `deploy.py` 并复核 owner/mode 与目标摘要。哈希不一致时先完成安装，不能直接重试 deploy。记录成功 run 链接；若 admin 的 `ssh aly` 提示人工登录确认，这是人工维护身份的要求，不等于 CI OIDC 未配置。
 
 connectivity 成功且停机窗口获准后，再用**同一个候选 run ID** 手动运行 `mode=deploy` 并审批。审批人应核对候选 SHA/digest、变更风险和备份条件。若旧构建的发布清单已过期或被删除，应重新构建，不手填未经验证的 digest 绕过检查。
 
@@ -84,10 +84,11 @@ connectivity 成功且停机窗口获准后，再用**同一个候选 run ID** �
 
 ```text
 preparing → stopping → backing-up → switching → starting → verifying → complete
-       任一失败/中断 → recovery-required（保留标记，阻止后续自动部署）
+       拉取失败且旧服务复核通过 → prepare-failed-safe（保留记录，清除活动标记）
+       其他失败/中断或复核失败 → recovery-required（保留标记，阻止后续自动部署）
 ```
 
-先验证旧容器健康、唯一卷写入者、Compose/镜像一致、卷位置/权限、候选架构及源码标签；停机前拉取镜像。旧容器必须在 30 秒宽限期内正常退出且卷无运行容器写入，才离线归档**整个**卷（含隐藏文件、SQLite/WAL、会话、附件和后端状态），保留 owner、ACL 和 xattr；复制 Compose、`.env` 和密码哈希。验证归档可读并记录所有文件 SHA-256 后，才原子更新 `.env` 中唯一一条 `DSH_IMAGE`，保持其他内容与权限。
+先验证旧容器健康、唯一卷写入者、Compose/镜像一致、卷位置/权限、候选架构及源码标签；停机前按精确 digest 最多拉取两次，每次上限 900 秒，两次之间等待 15 秒。拉取结果仅记录安全的尝试次数、耗时、超时或退出码，不记录原始 stderr 或凭据。旧容器必须在 30 秒宽限期内正常退出且卷无运行容器写入，才离线归档**整个**卷（含隐藏文件、SQLite/WAL、会话、附件和后端状态），保留 owner、ACL 和 xattr；复制 Compose、`.env` 和密码哈希。验证归档可读并记录所有文件 SHA-256 后，才原子更新 `.env` 中唯一一条 `DSH_IMAGE`，保持其他内容与权限。
 
 然后仅重建 investment，不启动依赖、不构建、不重新拉取。新容器必须匹配候选 config ID 和 digest，满足单实例、聚合健康检查和外部 HTTPS `/healthz`，才能清除活动标记。聚合检查覆盖三个后端就绪，但不证明真实业务操作正确。
 
@@ -97,7 +98,7 @@ preparing → stopping → backing-up → switching → starting → verifying �
 
 ## 失败与人工恢复
 
-失败不会自动回退镜像或恢复数据，也不会自动删除租约锁。`active.json` 和记录目录保留失败阶段、旧镜像/ID、新镜像/ID、源码 revision、配置快照及校验清单（备份成功后才存在）。诊断只把精简状态输出到记录文件；可能含业务数据的容器日志仅存服务器私有目录，不上传 Actions。
+失败不会自动回退镜像或恢复数据，也不会自动删除租约锁。`active.json`（若需人工恢复）和记录目录保留失败阶段、旧镜像/ID、新镜像/ID、源码 revision、配置快照及校验清单（备份成功后才存在）。仅当两次镜像拉取失败，且重新核实旧容器 ID/镜像/健康、唯一卷写入者、备份空间、Compose、`.env` 与外部 `/healthz` 均未异常，才保存 `prepare-failure-disposition.json` 并清除 `active.json`；工作流仍以失败结束。核验或诊断失败时继续闭锁。诊断只把精简状态输出到记录文件；可能含业务数据的容器日志仅存服务器私有目录，不上传 Actions。
 
 管理员先确认部署进程已结束、没有运行中的工作流和其他操作者，再检查：
 
@@ -108,7 +109,8 @@ sudo docker compose --project-directory /home/admin/pa-investment-deploy \
   -f /home/admin/pa-investment-deploy/compose.yaml -p pa-investment-research ps -a
 ```
 
-- `preparing` 失败：通常尚未停机；仍需核对当前健康和实际配置，修正权限、空间或拉取问题后再解除标记。
+- `prepare-failed-safe`：记录中已包含旧服务复核证据，活动标记已清除；修正拉取问题后才能再次发起受审批部署，不能把本次工作流视为上线成功。
+- `preparing` 失败且仍有 `active.json`：通常尚未停机；仍需核对当前健康和实际配置，修正权限、空间或拉取问题后再解除标记。
 - `stopping` / `backing-up` 失败：可能已停服，备份可能不完整，不把它当作恢复点。确认未切换镜像和配置后，由管理员决定恢复旧服务。
 - `switching` / `starting` / `verifying` 失败或进程断连：核对真实容器、当前 `.env` 和记录，不仅凭阶段名推断新版本是否写过数据。若无法证明没有写入或迁移，采用匹配旧镜像的整卷恢复，而非仅改回镜像。
 

@@ -130,6 +130,46 @@ class TransactionTests(unittest.TestCase):
                     deploy.transact(IMAGE, root, blocked)
                 self.assertEqual(blocked.calls, [])
 
+    def test_verified_pull_failure_is_archived_without_blocking_next_deploy(self):
+        class FailedPull(FakeDriver):
+            def prepare(self, image, record):
+                self.calls.append("prepare")
+                raise deploy.PullFailure("docker pull failed after 2 attempts")
+
+            def verify_unchanged_after_failed_pull(self):
+                self.calls.append("verify-unchanged")
+                return {"old_image": "old", "container_id": "old-id", "health": "healthy",
+                        "public_health": "ok"}
+
+        driver = FailedPull()
+        with self.assertRaises(deploy.PullFailure):
+            self.run_transaction(driver)
+        self.assertEqual(driver.calls, ["prepare", "diagnose", "verify-unchanged"])
+        self.assertFalse((self.root / "active.json").exists())
+        record = next(path for path in self.root.iterdir() if path.is_dir())
+        self.assertEqual(deploy.read_json(record / "status.json")["phase"], "prepare-failed-safe")
+        self.assertEqual(deploy.read_json(record / "prepare-failure-disposition.json")["evidence"]["health"],
+                         "healthy")
+        self.run_transaction(FakeDriver())
+
+    def test_pull_failure_keeps_marker_if_reverification_or_diagnostics_fail(self):
+        class UnverifiedPull(FakeDriver):
+            def prepare(self, image, record):
+                raise deploy.PullFailure("docker pull failed after 2 attempts")
+
+            def verify_unchanged_after_failed_pull(self):
+                raise deploy.DeployError("old service changed")
+
+        for diagnostic_failure in (False, True):
+            with self.subTest(diagnostic_failure=diagnostic_failure), tempfile.TemporaryDirectory() as directory:
+                driver = UnverifiedPull()
+                if diagnostic_failure:
+                    driver.diagnose = lambda record: (_ for _ in ()).throw(OSError("diagnostics unavailable"))
+                with self.assertRaises(deploy.PullFailure):
+                    deploy.transact(IMAGE, Path(directory), driver)
+                self.assertEqual(deploy.read_json(Path(directory) / "active.json")["phase"],
+                                 "recovery-required")
+
     def test_overlapping_invocation_is_rejected(self):
         import fcntl
         with (self.root / "deploy.lock").open("w") as lock:
@@ -254,10 +294,12 @@ class DriverTests(unittest.TestCase):
 
     def test_registry_login_failure_does_not_stop_service(self):
         docker_config = None
+        login_attempts = 0
 
         def reject_login(args, **kwargs):
-            nonlocal docker_config
+            nonlocal docker_config, login_attempts
             if args[:2] == ["docker", "login"]:
+                login_attempts += 1
                 docker_config = kwargs["environment"]["DOCKER_CONFIG"]
                 raise deploy.DeployError("command failed: docker login")
             return self.fake_run(args, **kwargs)
@@ -265,6 +307,7 @@ class DriverTests(unittest.TestCase):
         self.driver.run = reject_login
         with self.assertRaisesRegex(deploy.DeployError, "docker login"):
             self.driver.prepare(IMAGE, self.root)
+        self.assertEqual(login_attempts, 1)
         self.assertIsNone(self.driver.registry_token)
         self.assertIsNotNone(docker_config)
         self.assertFalse(Path(docker_config).exists())
@@ -272,21 +315,78 @@ class DriverTests(unittest.TestCase):
 
     def test_registry_pull_failure_removes_credentials_before_stop(self):
         docker_config = None
+        pull_attempts = 0
 
         def reject_pull(args, **kwargs):
-            nonlocal docker_config
+            nonlocal docker_config, pull_attempts
             if args[:2] == ["docker", "pull"]:
+                pull_attempts += 1
                 docker_config = kwargs["environment"]["DOCKER_CONFIG"]
-                raise deploy.DeployError("command failed: docker pull")
+                raise deploy.CommandFailure("command exit 1: docker pull", "exit", 1)
             return self.fake_run(args, **kwargs)
 
         self.driver.run = reject_pull
-        with self.assertRaisesRegex(deploy.DeployError, "docker pull"):
-            self.driver.prepare(IMAGE, self.root)
+        with patch.object(deploy.time, "sleep") as pause:
+            with self.assertRaisesRegex(deploy.PullFailure, "2 attempts"):
+                self.driver.prepare(IMAGE, self.root)
+        self.assertEqual(pull_attempts, 2)
+        pause.assert_called_once()
+        attempts = deploy.read_json(self.root / "image-pull.json")["attempts"]
+        self.assertEqual([item["result"] for item in attempts], ["exit", "exit"])
+        self.assertNotIn(REGISTRY_TOKEN, (self.root / "image-pull.json").read_text())
         self.assertIsNone(self.driver.registry_token)
         self.assertIsNotNone(docker_config)
         self.assertFalse(Path(docker_config).exists())
         self.assertTrue(self.running)
+
+    def test_registry_pull_retries_once_and_succeeds_before_stop(self):
+        attempts = 0
+
+        def interrupted_once(args, **kwargs):
+            nonlocal attempts
+            if args[:2] == ["docker", "pull"]:
+                attempts += 1
+                if attempts == 1:
+                    self.fake_run(args, **kwargs)
+                    raise deploy.CommandFailure("command timed out: docker pull", "timeout")
+            return self.fake_run(args, **kwargs)
+
+        self.driver.run = interrupted_once
+        with patch.object(deploy.time, "sleep") as pause:
+            self.driver.prepare(IMAGE, self.root)
+        self.assertEqual(attempts, 2)
+        pause.assert_called_once()
+        self.assertEqual([item["result"] for item in deploy.read_json(self.root / "image-pull.json")["attempts"]],
+                         ["timeout", "success"])
+        self.assertTrue(self.running)
+        self.assertFalse(list(self.registry_runtime_dir.iterdir()))
+
+    def test_failed_pull_reverification_requires_identical_healthy_old_service(self):
+        self.driver.prepare(IMAGE, self.root)
+        evidence = self.driver.verify_unchanged_after_failed_pull()
+        self.assertEqual(evidence["health"], "healthy")
+        (self.config_dir / ".env").write_text("DSH_IMAGE=changed\n")
+        with self.assertRaises(deploy.DeployError):
+            self.driver.verify_unchanged_after_failed_pull()
+        (self.config_dir / ".env").write_text("DSH_IMAGE=old\nSECRET=canary-private-value\n")
+        self.current_id = "sha256:" + "d" * 64
+        with self.assertRaisesRegex(deploy.DeployError, "identity changed"):
+            self.driver.verify_unchanged_after_failed_pull()
+        self.current_id = "sha256:" + "b" * 64
+        self.health = "unhealthy"
+        with self.assertRaisesRegex(deploy.DeployError, "not running and healthy"):
+            self.driver.verify_unchanged_after_failed_pull()
+        self.health = "healthy"
+        with patch.object(self.driver, "volume_users", return_value=["another-writer"]):
+            with self.assertRaisesRegex(deploy.DeployError, "writers changed"):
+                self.driver.verify_unchanged_after_failed_pull()
+        with patch.object(deploy.shutil, "disk_usage", return_value=type("Disk", (), {"free": 0})()):
+            with self.assertRaisesRegex(deploy.DeployError, "backup space"):
+                self.driver.verify_unchanged_after_failed_pull()
+        self.config["services"]["investment"]["image"] = "other"
+        with self.assertRaisesRegex(deploy.DeployError, "Compose configuration changed"):
+            self.driver.verify_unchanged_after_failed_pull()
+
 
     def test_prepare_accepts_user_declared_by_dockerfile(self):
         dockerfile = Path(__file__).resolve().parents[2] / "Dockerfile"
@@ -421,6 +521,21 @@ class DriverTests(unittest.TestCase):
         self.assertTrue((restored / ".dsh-instance.json").exists())
         with sqlite3.connect(restored / "sessions.sqlite") as connection:
             self.assertEqual(connection.execute("SELECT message FROM history").fetchall(), [("saved",)])
+
+
+class CommandFailureTests(unittest.TestCase):
+    def test_timeout_and_nonzero_exit_have_safe_distinct_reasons(self):
+        driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+        command = ["docker", "pull", IMAGE]
+        failures = [
+            (subprocess.TimeoutExpired(command, 900, stderr=REGISTRY_TOKEN), "timed out"),
+            (subprocess.CalledProcessError(17, command, stderr=REGISTRY_TOKEN), "exit 17"),
+        ]
+        for failure, expected in failures:
+            with self.subTest(expected=expected), patch.object(deploy.subprocess, "run", side_effect=failure):
+                with self.assertRaisesRegex(deploy.DeployError, expected) as caught:
+                    driver.run(command, timeout=900)
+                self.assertNotIn(REGISTRY_TOKEN, str(caught.exception))
 
 
 class FileSafetyTests(unittest.TestCase):

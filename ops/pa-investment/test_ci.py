@@ -99,6 +99,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('printf \'%s\\n\' "$REGISTRY_TOKEN"', workflow)
         self.assertNotIn("GHCR_PAT", workflow)
 
+    def test_installed_deployer_is_checked_before_token_delivery(self):
+        workflow = (ROOT / ".github/workflows/investment-deploy.yml").read_text()
+        self.assertIn("sha256sum ops/pa-investment/deploy.py", workflow)
+        self.assertIn("sha256sum /usr/local/libexec/pa-investment/deploy.py", workflow)
+        self.assertLess(workflow.index("Check installed deployer matches reviewed source"),
+                        workflow.index("Deploy the approved immutable image"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,10 +34,14 @@ jobs:
     outputs:
       image: ${{ steps.preflight.outputs.image }}
       sha: ${{ steps.preflight.outputs.sha }}
+      deployer_sha256: ${{ steps.deployer.outputs.sha256 }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Hash reviewed deployment entry
+        id: deployer
+        run: printf 'sha256=%s\n' "$(sha256sum ops/pa-investment/deploy.py | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -55,7 +59,7 @@ jobs:
     name: '${{ inputs.mode }} — ${{ needs.candidate.outputs.sha }}'
     needs: candidate
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     environment:
       name: Production
       url: https://pair-demo.xiexin.dev
@@ -89,6 +93,17 @@ jobs:
           timeout 60 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
             'test "$(id -un)" = pa-deployer && sudo -n -l /usr/local/sbin/pa-investment-deploy && ! sudo -n -l /usr/bin/docker'
 
+      - name: Check installed deployer matches reviewed source
+        env:
+          EXPECTED_SHA256: ${{ needs.candidate.outputs.deployer_sha256 }}
+        run: |
+          actual="$(timeout 60 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
+            'sha256sum /usr/local/libexec/pa-investment/deploy.py' | cut -d ' ' -f1)"
+          test -n "$EXPECTED_SHA256" && test "$actual" = "$EXPECTED_SHA256" || {
+            echo 'Installed deployer differs from reviewed source; reinstall it before deployment.' >&2
+            exit 1
+          }
+
       - name: Deploy the approved immutable image
         if: inputs.mode == 'deploy'
         env:
@@ -114,5 +129,5 @@ jobs:
           {
             printf '## aly 部署工作流\n\n'
             printf -- '- 模式：`%s`\n- 状态：`%s`\n- SHA：`%s`\n- 镜像：`%s`\n' "$MODE" "$RESULT" "$SHA" "$IMAGE"
-            printf '\n服务器保留完整备份和阶段记录。失败后检查 active.json，不自动回退镜像或数据。\n'
+            printf '\n服务器保留完整备份和阶段记录。失败后检查记录目录与 active.json（如存在）；不自动回退镜像或数据。\n'
           } >> "$GITHUB_STEP_SUMMARY"
