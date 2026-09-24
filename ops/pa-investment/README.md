@@ -70,7 +70,7 @@ id pa-deployer
 
 ### 4. 先连通验证，再批准部署
 
-若 GHCR 拉取在 aly 上反复出现 `unexpected EOF` 或超时，可先在公仓 master 的 Actions 手动运行 `Investment aly Tailnet transfer probe`，经 Production 审批后测量 GitHub runner 到 aly 的连接类型及 32 MiB 随机数据传输速度。该诊断只用现有 OIDC 身份连接 `pa-deployer`，数据经标准输入交给远端 `wc -c`，不会写入服务器文件、调用 Docker 或部署入口。它与正式部署共用并发锁；结果记录在工作流摘要中，摘要不输出 Tailnet 地址。诊断成功仅说明这条传输路径可用，不能代替镜像完整性校验或授权部署。
+若 GHCR 拉取在 aly 上反复出现 `unexpected EOF` 或超时，可先在公仓 master 的 Actions 手动运行 `Investment aly Tailnet transfer probe`，经 Production 审批后测量 GitHub runner 到 aly 的连接类型及 32 MiB 随机数据传输速度。该诊断只用现有 OIDC 身份连接 `pa-deployer`，数据经标准输入交给远端 `wc -c`，不会写入服务器文件、调用 Docker 或部署入口。它与正式部署共用并发锁；工作流摘要先记录 Ping 路由和小样本结果，传输超时也会记录远端最后报告的已读取字节数，摘要不输出 Tailnet 地址。Ping 路由只是传输前的观测，不保证传输全程使用同一路径。诊断成功仅说明这条传输路径可用，不能代替镜像完整性校验或授权部署。
 
 服务器安装和权限检查通过后，设置 Production 的 `INVESTMENT_DEPLOY_GUARDS_READY=true`。
 
