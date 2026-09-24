@@ -1,0 +1,91 @@
+name: Investment aly Tailnet transfer probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: investment-production-aly
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Measure runner to aly Tailnet transfer
+    if: github.repository == 'PABIPRG/pa-investment-research' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: Production
+      url: https://pair-demo.xiexin.dev
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Require completed server installation and OIDC inputs
+        env:
+          READY: ${{ vars.INVESTMENT_DEPLOY_GUARDS_READY }}
+          CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+        run: |
+          test "$READY" = true || { echo 'Production/server setup has not been confirmed.' >&2; exit 1; }
+          test -n "$CLIENT_ID" && test -n "$AUDIENCE"
+
+      - name: Join Tailnet with the existing federated identity
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci-deployer
+          hostname: pa-probe-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Measure route and bounded transfer without server writes
+        run: |
+          set -euo pipefail
+          host=aliyun-vps.felis-pollux.ts.net
+          target=pa-deployer@"$host"
+          bytes=33554432
+
+          if ! ping_output="$(timeout 30 tailscale ping --c=5 --until-direct=false "$host" 2>&1)"; then
+            echo 'Tailnet route probe failed.' >&2
+            exit 1
+          fi
+          last_pong="$(printf '%s\n' "$ping_output" | grep '^pong ' | tail -n 1 || true)"
+          if [[ -z "$last_pong" ]]; then
+            echo 'Tailnet route probe returned no pong.' >&2
+            exit 1
+          fi
+          case "$last_pong" in
+            *'via DERP('*|*'via derp('*) route=DERP ;;
+            *'via peer-relay('*) route=peer-relay ;;
+            *'via '[0-9]*|*'via ['*) route=direct ;;
+            *) route=unknown ;;
+          esac
+
+          timeout 15 tailscale ssh "$target" 'test "$(id -un)" = pa-deployer'
+
+          start_ns="$(date +%s%N)"
+          if ! received="$(head -c "$bytes" /dev/urandom | timeout 120 tailscale ssh "$target" 'wc -c')"; then
+            echo 'Tailnet transfer failed or exceeded 120 seconds.' >&2
+            exit 1
+          fi
+          end_ns="$(date +%s%N)"
+          received="${received//[[:space:]]/}"
+          if [[ "$received" != "$bytes" ]]; then
+            echo 'Tailnet transfer byte count differs from the 32 MiB sent.' >&2
+            exit 1
+          fi
+
+          awk -v elapsed_ns="$((end_ns - start_ns))" -v route="$route" -v bytes="$bytes" '
+            BEGIN {
+              seconds = elapsed_ns / 1000000000
+              printf "## aly Tailnet 传输诊断\n\n"
+              printf "- 路由：`%s`\n- 字节数：`%d`（32 MiB）\n", route, bytes
+              printf "- 耗时：`%.2f` 秒\n- 吞吐：`%.2f` MiB/s\n", seconds, 32 / seconds
+              printf "\n仅向 aly 的标准输入发送随机数据，由 `wc -c` 读取；没有写入服务器文件或执行部署。\n"
+            }
+          ' >> "$GITHUB_STEP_SUMMARY"
