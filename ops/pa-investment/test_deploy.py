@@ -185,6 +185,43 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue((self.root / "active.json").exists())
 
 
+class ProgressCommandTests(unittest.TestCase):
+    def test_long_command_reports_wait_without_exposing_child_output(self):
+        output = io.StringIO()
+        driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+        with contextlib.redirect_stdout(output):
+            result = driver.run([sys.executable, "-c",
+                                 "import time; print('canary-private-value', flush=True); time.sleep(0.15)"],
+                                timeout=1, progress_interval=0.03,
+                                progress_event={"phase": "pull-heartbeat", "attempt": 1})
+        self.assertEqual(result, "")
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertTrue(events)
+        self.assertTrue(all(event["phase"] == "pull-heartbeat" and event["attempt"] == 1
+                            and event["elapsed_seconds"] >= 0 and event["timeout_seconds"] == 1
+                            for event in events))
+        self.assertNotIn("canary-private-value", output.getvalue())
+
+    def test_long_command_timeout_still_stops_child(self):
+        driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+        original_popen = subprocess.Popen
+        children = []
+
+        def spawn(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        with patch.object(deploy.subprocess, "Popen", side_effect=spawn), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(deploy.CommandFailure, "timed out") as caught:
+                driver.run([sys.executable, "-c", "import time; time.sleep(2)"],
+                           timeout=0.09, progress_interval=0.03,
+                           progress_event={"phase": "pull-heartbeat", "attempt": 1})
+        self.assertEqual(caught.exception.kind, "timeout")
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll())
+
+
 class DriverTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -236,7 +273,7 @@ class DriverTests(unittest.TestCase):
                        "volumes": {"dsh-data": {"name": deploy.VOLUME}}}
         self.driver.run = self.fake_run
 
-    def fake_run(self, args, timeout=120, input_text=None, environment=None):
+    def fake_run(self, args, timeout=120, input_text=None, environment=None, **kwargs):
         self.calls.append(args)
         self.run_metadata.append((args, input_text, environment))
         if args[:3] == ["docker", "compose", "--project-directory"]:
@@ -322,17 +359,24 @@ class DriverTests(unittest.TestCase):
             if args[:2] == ["docker", "pull"]:
                 pull_attempts += 1
                 docker_config = kwargs["environment"]["DOCKER_CONFIG"]
+                running = deploy.read_json(self.root / "image-pull.json")["attempts"][-1]
+                self.assertEqual((running["attempt"], running["result"]), (pull_attempts, "running"))
                 raise deploy.CommandFailure("command exit 1: docker pull", "exit", 1)
             return self.fake_run(args, **kwargs)
 
         self.driver.run = reject_pull
-        with patch.object(deploy.time, "sleep") as pause:
+        output = io.StringIO()
+        with patch.object(deploy.time, "sleep") as pause, contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(deploy.PullFailure, "2 attempts"):
                 self.driver.prepare(IMAGE, self.root)
         self.assertEqual(pull_attempts, 2)
         pause.assert_called_once()
         attempts = deploy.read_json(self.root / "image-pull.json")["attempts"]
         self.assertEqual([item["result"] for item in attempts], ["exit", "exit"])
+        self.assertTrue(all(item["started_at_utc"] and item["finished_at_utc"] for item in attempts))
+        self.assertEqual([json.loads(line)["phase"] for line in output.getvalue().splitlines()],
+                         ["pull-start", "pull-result", "pull-retry", "pull-start", "pull-result"])
+        self.assertNotIn(REGISTRY_TOKEN, output.getvalue())
         self.assertNotIn(REGISTRY_TOKEN, (self.root / "image-pull.json").read_text())
         self.assertIsNone(self.driver.registry_token)
         self.assertIsNotNone(docker_config)

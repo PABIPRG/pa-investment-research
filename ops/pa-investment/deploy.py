@@ -33,6 +33,7 @@ HEALTHCHECK_COMMAND = ["/nodejs/bin/node", "/opt/container/investment-healthchec
 PULL_ATTEMPTS = 2
 PULL_TIMEOUT_SECONDS = 900
 PULL_RETRY_DELAY_SECONDS = 15
+PULL_PROGRESS_INTERVAL_SECONDS = 60
 
 
 class DeployError(RuntimeError):
@@ -205,7 +206,38 @@ class DockerDriver:
                         "--env-file", str(DEPLOY_DIR / ".env"), "-f", str(DEPLOY_DIR / "compose.yaml"),
                         "-p", "pa-investment-research"]
 
-    def run(self, args, timeout=120, input_text=None, environment=None):
+    def run(self, args, timeout=120, input_text=None, environment=None,
+            progress_interval=None, progress_event=None):
+        if progress_interval is not None:
+            require(input_text is None and progress_interval > 0 and progress_event is not None,
+                    "invalid command progress configuration")
+            # Docker may print registry URLs or other unreviewed content. Only emit our own
+            # fixed metadata while it runs; the exit code remains available on failure.
+            process = subprocess.Popen(args, env=environment or ENVIRONMENT, cwd="/",
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+            started = time.monotonic()
+            try:
+                while True:
+                    remaining = timeout - (time.monotonic() - started)
+                    if remaining <= 0:
+                        raise CommandFailure("command timed out after " + str(timeout) + "s: " +
+                                             args[0] + " " + args[1], "timeout")
+                    try:
+                        returncode = process.wait(timeout=min(progress_interval, remaining))
+                    except subprocess.TimeoutExpired:
+                        print(json.dumps({**progress_event,
+                                          "elapsed_seconds": round(time.monotonic() - started, 2),
+                                          "timeout_seconds": timeout}), flush=True)
+                        continue
+                    if returncode:
+                        raise CommandFailure("command exit " + str(returncode) + ": " +
+                                             args[0] + " " + args[1], "exit", returncode)
+                    return ""
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
         try:
             result = subprocess.run(args, env=environment or ENVIRONMENT, cwd="/", capture_output=True,
                                     text=True, input=input_text, timeout=timeout, check=True)
@@ -230,25 +262,41 @@ class DockerDriver:
             attempts = []
             for attempt in range(1, PULL_ATTEMPTS + 1):
                 started = time.monotonic()
+                started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                print(json.dumps({"phase": "pull-start", "attempt": attempt,
+                                  "timeout_seconds": PULL_TIMEOUT_SECONDS,
+                                  "at_utc": started_at}), flush=True)
+                attempts.append({"attempt": attempt, "result": "running",
+                                 "started_at_utc": started_at})
+                write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
                 try:
                     self.run(["docker", "pull", image], timeout=PULL_TIMEOUT_SECONDS,
-                             environment=environment)
+                             environment=environment,
+                             progress_interval=PULL_PROGRESS_INTERVAL_SECONDS,
+                             progress_event={"phase": "pull-heartbeat", "attempt": attempt})
                 except CommandFailure as error:
                     event = {"attempt": attempt, "result": getattr(error, "kind", "error"),
-                             "elapsed_seconds": round(time.monotonic() - started, 2)}
+                             "elapsed_seconds": round(time.monotonic() - started, 2),
+                             "started_at_utc": started_at,
+                             "finished_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
                     if error.returncode is not None:
                         event["exit_code"] = error.returncode
-                    attempts.append(event)
+                    attempts[-1] = event
                     write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
+                    print(json.dumps({"phase": "pull-result", **event}), flush=True)
                     if attempt == PULL_ATTEMPTS:
                         raise PullFailure("docker pull failed after " + str(attempt) +
                                           " attempts; last result: " + str(error)) from error
                     print(json.dumps({"phase": "pull-retry", **event}), flush=True)
                     time.sleep(PULL_RETRY_DELAY_SECONDS)
                 else:
-                    attempts.append({"attempt": attempt, "result": "success",
-                                     "elapsed_seconds": round(time.monotonic() - started, 2)})
+                    event = {"attempt": attempt, "result": "success",
+                             "elapsed_seconds": round(time.monotonic() - started, 2),
+                             "started_at_utc": started_at,
+                             "finished_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+                    attempts[-1] = event
                     write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
+                    print(json.dumps({"phase": "pull-result", **event}), flush=True)
                     return
 
     def inspect(self, reference, kind="container"):
