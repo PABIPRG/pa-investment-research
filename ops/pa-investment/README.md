@@ -90,7 +90,7 @@ preparing → stopping → backing-up → switching → starting → verifying �
        其他失败/中断或复核失败 → recovery-required（保留标记，阻止后续自动部署）
 ```
 
-先验证旧容器健康、唯一卷写入者、Compose/镜像一致、卷位置/权限、候选架构及源码标签；停机前按精确 digest 最多拉取两次，每次上限 900 秒，两次之间等待 15 秒。拉取结果仅记录安全的尝试次数、耗时、超时或退出码，不记录原始 stderr 或凭据。旧容器必须在 30 秒宽限期内正常退出且卷无运行容器写入，才离线归档**整个**卷（含隐藏文件、SQLite/WAL、会话、附件和后端状态），保留 owner、ACL 和 xattr；复制 Compose、`.env` 和密码哈希。验证归档可读并记录所有文件 SHA-256 后，才原子更新 `.env` 中唯一一条 `DSH_IMAGE`，保持其他内容与权限。
+先验证旧容器健康、唯一卷写入者、Compose/镜像一致、卷位置/权限、候选架构及源码标签；停机前按精确 digest 最多拉取两次，每次上限 900 秒，两次之间等待 15 秒。Actions 中的 `pull-start` 标明尝试次数和超时上限；拉取期间每 60 秒输出 `pull-heartbeat`（已等待时间，不代表实际下载进度）；`pull-result` 记录成功、超时或退出码和耗时。root 私有的 `image-pull.json` 在尝试开始时写入 `running`，结束时补齐 UTC 起止时间和结果，方便区分拉取中断与正常失败。日志不记录 Docker 原始输出、镜像层 URL 或凭据。旧容器必须在 30 秒宽限期内正常退出且卷无运行容器写入，才离线归档**整个**卷（含隐藏文件、SQLite/WAL、会话、附件和后端状态），保留 owner、ACL 和 xattr；复制 Compose、`.env` 和密码哈希。验证归档可读并记录所有文件 SHA-256 后，才原子更新 `.env` 中唯一一条 `DSH_IMAGE`，保持其他内容与权限。
 
 然后仅重建 investment，不启动依赖、不构建、不重新拉取。新容器必须匹配候选 config ID 和 digest，满足单实例、聚合健康检查和外部 HTTPS `/healthz`，才能清除活动标记。聚合检查覆盖三个后端就绪，但不证明真实业务操作正确。
 
