@@ -132,6 +132,8 @@ def transact(image, state, driver):
             raise DeployError("another deployment is active") from error
         active = state / "active.json"
         require(not active.exists(), "previous deployment requires recovery; inspect " + str(active))
+        require(not (state / "deployer-update-pending.json").exists(),
+                "unfinished deployer update; run the fixed updater to recover before deploying")
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         record = driver.record_root if hasattr(driver, "record_root") else state
         record = record / (stamp + "-" + uuid.uuid4().hex[:12])

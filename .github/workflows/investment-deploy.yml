@@ -1,16 +1,16 @@
-name: Investment production deployment
+name: 云服务升级
 
 on:
   workflow_dispatch:
     inputs:
       build_run_id:
-        description: '成功发布 GHCR 镜像的 Investment container image run ID'
+        description: '「镜像构建与发布」成功运行的 ID'
         required: true
         type: string
       mode:
-        description: '先使用 connectivity 验证 OIDC 和 SSH；deploy 会停服备份并更新'
+        description: 'deploy 自动同步部署脚本后备份并升级；connectivity 仅诊断，不更新'
         required: true
-        default: connectivity
+        default: deploy
         type: choice
         options: [connectivity, deploy]
 
@@ -42,6 +42,11 @@ jobs:
       - name: Hash reviewed deployment entry
         id: deployer
         run: printf 'sha256=%s\n' "$(sha256sum ops/pa-investment/deploy.py | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Test the deployment and updater contracts without server access
+        run: |
+          python3 -B -m unittest discover -s ops/pa-investment -p 'test_deploy.py'
+          python3 -B -m unittest discover -s ops/pa-investment -p 'test_update_deployer.py'
+          python3 -B -m unittest discover -s ops/pa-investment -p 'test_ci.py'
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -53,6 +58,7 @@ jobs:
         env:
           BUILD_RUN_ID: ${{ inputs.build_run_id }}
           GH_TOKEN: ${{ github.token }}
+          DEPLOY_MODE: ${{ inputs.mode }}
         run: python3 -B ops/pa-investment/ci.py preflight
 
   deploy:
@@ -93,6 +99,25 @@ jobs:
           timeout 60 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
             'test "$(id -un)" = pa-deployer && sudo -n -l /usr/local/sbin/pa-investment-deploy && ! sudo -n -l /usr/bin/docker'
 
+      - name: Require the one-time updater installation
+        if: inputs.mode == 'deploy'
+        run: |
+          timeout 60 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
+            'test -x /usr/local/sbin/pa-investment-update-deployer && sudo -n -l /usr/local/sbin/pa-investment-update-deployer' || {
+              echo '请先由管理员执行一次 install_deployer_updater.py 安装固定更新入口；安装后日常 deploy 会自动同步部署脚本。' >&2
+              exit 1
+            }
+
+      - name: Synchronize the reviewed deployer
+        if: inputs.mode == 'deploy'
+        env:
+          DEPLOYER_REVISION: ${{ github.sha }}
+          EXPECTED_SHA256: ${{ needs.candidate.outputs.deployer_sha256 }}
+        run: |
+          printf '%s\n%s\n' "$DEPLOYER_REVISION" "$EXPECTED_SHA256" \
+            | timeout 180 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
+                'sudo -n /usr/local/sbin/pa-investment-update-deployer'
+
       - name: Check installed deployer matches reviewed source
         env:
           EXPECTED_SHA256: ${{ needs.candidate.outputs.deployer_sha256 }}
@@ -100,7 +125,8 @@ jobs:
           actual="$(timeout 60 tailscale ssh pa-deployer@aliyun-vps.felis-pollux.ts.net \
             'sha256sum /usr/local/libexec/pa-investment/deploy.py' | cut -d ' ' -f1)"
           test -n "$EXPECTED_SHA256" && test "$actual" = "$EXPECTED_SHA256" || {
-            echo 'Installed deployer differs from reviewed source; reinstall it before deployment.' >&2
+            echo "Deployer verification failed: expected=$EXPECTED_SHA256 actual=$actual" >&2
+            echo 'deploy 模式应由固定更新入口完成同步；connectivity 只检查，不执行更新。请检查前序更新结果。' >&2
             exit 1
           }
 
@@ -124,10 +150,14 @@ jobs:
           IMAGE: ${{ needs.candidate.outputs.image }}
           SHA: ${{ needs.candidate.outputs.sha }}
           MODE: ${{ inputs.mode }}
+          DEPLOYER_REVISION: ${{ github.sha }}
+          DEPLOYER_SHA256: ${{ needs.candidate.outputs.deployer_sha256 }}
           RESULT: ${{ job.status }}
         run: |
           {
             printf '## aly 部署工作流\n\n'
             printf -- '- 模式：`%s`\n- 状态：`%s`\n- SHA：`%s`\n- 镜像：`%s`\n' "$MODE" "$RESULT" "$SHA" "$IMAGE"
+            printf -- '- 部署器源码：`%s`\n- 部署器 SHA-256：`%s`\n' "$DEPLOYER_REVISION" "$DEPLOYER_SHA256"
+            printf '\n部署器更新记录位于 /var/lib/pa-investment-deploy/deployer-updates；更新失败时应用部署步骤不会执行。\n'
             printf '\n服务器保留完整备份和阶段记录。失败后检查记录目录与 active.json（如存在）；不自动回退镜像或数据。\n'
           } >> "$GITHUB_STEP_SUMMARY"

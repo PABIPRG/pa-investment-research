@@ -1,11 +1,11 @@
-name: Investment packaged sidecar
+name: 桌面版打包验证
 
 on:
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: Investment packaged sidecar-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

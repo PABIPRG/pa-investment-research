@@ -106,6 +106,19 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(workflow.index("Check installed deployer matches reviewed source"),
                         workflow.index("Deploy the approved immutable image"))
 
+    def test_deploy_synchronizes_reviewed_source_before_hash_check_and_token_delivery(self):
+        workflow = (ROOT / ".github/workflows/investment-deploy.yml").read_text()
+        start = workflow.index("Synchronize the reviewed deployer")
+        end = workflow.index("Check installed deployer matches reviewed source")
+        update = workflow[start:end]
+        self.assertIn("if: inputs.mode == 'deploy'", update)
+        self.assertIn("DEPLOYER_REVISION: ${{ github.sha }}", update)
+        self.assertIn("EXPECTED_SHA256: ${{ needs.candidate.outputs.deployer_sha256 }}", update)
+        self.assertIn("sudo -n /usr/local/sbin/pa-investment-update-deployer", update)
+        self.assertNotIn("REGISTRY_TOKEN", update)
+        self.assertNotIn("sudo sh", update)
+        self.assertIn("default: deploy", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

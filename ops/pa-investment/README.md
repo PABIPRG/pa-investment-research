@@ -21,11 +21,13 @@
 
 `pa-deployer` 不得加入 `docker`、`sudo`、`wheel` 等管理组，不得拥有其他通用 sudo 规则，也不得写入 Compose、环境文件、部署脚本或其父目录。admin 是现有受信管理员。入口清空调用者环境，Python 使用隔离模式；sudoers 不允许传参数、设置环境变量、直接调用 Docker 或 root shell。它允许更新这个应用，不是任意主机管理入口。具有镜像包写权限或修改主干工作流权限的主体仍属于供应链信任边界，必须按仓库评审规则管理。
 
+一次性安装固定更新器后，`pa-deployer` 额外获得无参数调用 `/usr/local/sbin/pa-investment-update-deployer` 的权限。该入口只接受源码提交 SHA 与预期 SHA-256，由服务器独立读取固定公仓主干中的 `ops/pa-investment/deploy.py`；不能上传任意脚本、指定 URL/路径、更新自身或修改 sudoers。主干部署脚本的评审属于 **root 代码发布的信任边界**。更新器和授权规则本身仍由管理员维护。
+
 ## 首次启用：分阶段执行
 
 ### 1. 仓库评审与 Linux CI
 
-先按仓库规则提交跨仓 PR，运行 `Investment container image`。PR 只构建、测试和导出归档，不获取生产 OIDC，也不发布 GHCR。通过评审后合并到公仓 master；公仓 master 的 push 或手动构建才会触发 publish job。
+先按仓库规则提交跨仓 PR，运行 `镜像构建与发布`。PR 只构建、测试和导出归档，不获取生产 OIDC，也不发布 GHCR。通过评审后合并到公仓 master；公仓 master 的 push 或手动构建才会触发 publish job。
 
 publish job 载入 **同次 smoke 测试通过的归档**，核对归档 SHA-256、镜像 config ID 和源码 revision 后直接推送，不重新构建。标签包含完整源码 SHA、run ID 和 attempt；发布清单保存 registry digest，生产仅使用该 digest。没有 `latest`，没有每次合并自动部署。
 
@@ -68,17 +70,42 @@ id pa-deployer
 
 还应审查一次完整备份的预估时长、当前卷数据量和恢复路径，确认短暂停机窗口。备份在同一主机只用于升级恢复，**不替代异机灾备**；按 PAB-18 将备份安全复制到独立故障域并做恢复演练。自动保留清理暂未实现，管理员监控磁盘，不运行无差别 prune 或删除历史卷。
 
-### 4. 先连通验证，再批准部署
+### 4. 一次性安装部署器自动更新入口
 
-若 GHCR 拉取在 aly 上反复出现 `unexpected EOF` 或超时，可先在公仓 master 的 Actions 手动运行 `Investment aly Tailnet transfer probe`，经 Production 审批后测量 GitHub runner 到 aly 的连接类型及 32 MiB 随机数据传输速度。该诊断只用现有 OIDC 身份连接 `pa-deployer`，数据经标准输入交给远端 `wc -c`，不会写入服务器文件、调用 Docker 或部署入口。它与正式部署共用并发锁；工作流摘要先记录 Ping 路由和小样本结果，传输超时也会记录远端最后报告的已读取字节数，摘要不输出 Tailnet 地址。Ping 路由只是传输前的观测，不保证传输全程使用同一路径。诊断成功仅说明这条传输路径可用，不能代替镜像完整性校验或授权部署。
+日常操作保持两个 Action：先构建镜像，再运行升级。服务器只需一次安装固定更新器；后续 `deploy.py` 改动由升级 Action 自动同步。`aly` 的既有部署入口使用 `/usr/bin/python3.11`，默认 `/usr/bin/python3` 仍为 3.6，因此**不要为本次迁移重跑通用 install.sh**。
+
+在这项修复合并并获服务器安装授权后，将同一个完整已合并提交中的以下文件放到 admin 控制的审阅目录：`deploy.py`、`update_deployer.py`、`install_deployer_updater.py`、`pa-investment-update-deployer`、`pa-investment-update-deployer.sudoers`。服务器无需安装 Git，也无需保存 GitHub token。
+
+在 **aly 的该目录**执行（`reviewed_revision` 填入上述完整提交 SHA）：
+
+```sh
+reviewed_revision='<完整的已合并提交 SHA>'
+sudo /usr/bin/python3.11 -I -B ./install_deployer_updater.py "$reviewed_revision"
+sudo -l -U pa-deployer
+sudo sha256sum /usr/local/libexec/pa-investment/deploy.py
+```
+
+安装器在同一部署锁内检查 `active.json` 和未完成更新，先验证 GitHub 上的部署器来源，备份旧脚本、版本记录及将要安装的文件，再安装固定入口，最后启用独立 sudoers 并运行 `visudo`。现有 Python 3.11 部署 wrapper、原 sudoers、Compose 和环境文件保持原样；不会停止容器或调用应用部署。普通安装失败会尝试恢复旧文件；输出的 `backup` 路径下保留 `files.json`、原文件和结果记录。中断后先检查该记录再重跑同一安装命令。
+
+更新器要求服务器能够通过 HTTPS 访问 `api.github.com`，用系统 CA 验证证书，拒绝重定向，不读取调用者代理或 Python 环境变量。公开读取受 GitHub API 限流影响；网络或限流失败会明确终止本次升级，应用部署尚未开始，恢复后重跑升级 Action。**本地测试不证明 aly 的实际出站连通性**，一次性安装时才验证这一条件。
+
+安装后完整 sudo 列表应只包含原应用部署入口与新增更新入口，均无参数；通用 Docker、root shell、额外参数与直接文件写入仍被拒绝。保持 Production 保护和现有 OIDC 配置。
+
+### 5. 日常构建与升级
+
+若 GHCR 拉取在 aly 上反复出现 `unexpected EOF` 或超时，可先在公仓 master 的 Actions 手动运行 `云服务器网络测速`，经 Production 审批后测量 GitHub runner 到 aly 的连接类型及 32 MiB 随机数据传输速度。该诊断只用现有 OIDC 身份连接 `pa-deployer`，数据经标准输入交给远端 `wc -c`，不会写入服务器文件、调用 Docker 或部署入口。它与正式部署共用并发锁；工作流摘要先记录 Ping 路由和小样本结果，传输超时也会记录远端最后报告的已读取字节数，摘要不输出 Tailnet 地址。Ping 路由只是传输前的观测，不保证传输全程使用同一路径。诊断成功仅说明这条传输路径可用，不能代替镜像完整性校验或授权部署。
 
 服务器安装和权限检查通过后，设置 Production 的 `INVESTMENT_DEPLOY_GUARDS_READY=true`。
 
-在公仓 Actions 选择 `Investment production deployment`，分支 master，输入成功发布的 `Investment container image` **run ID**，先选 `mode=connectivity`。候选 job 使用短期 `GITHUB_TOKEN` 读取私有包，验证构建属于公仓 master、已成功、源码在主干历史、发布清单属于同一次 attempt、registry config ID 与测试镜像一致，以及 Production 的保护规则。然后等待人工审批。
+在公仓 Actions 选择 `云服务升级`，分支 master，输入成功发布的 `镜像构建与发布` **run ID**，使用默认的 `mode=deploy`。候选 job 先运行部署与更新器的聚焦测试，使用短期 `GITHUB_TOKEN` 验证镜像来源、同次构建 attempt、不可变身份和 Production 保护规则。摘要分别展示镜像版本与本次工作流固定的部署器版本，然后等待人工审批。
 
-批准 connectivity 只做 Tailscale OIDC、SSH 身份、受限 sudo 和服务器已安装 `deploy.py` 的 SHA-256 检查，不调用部署入口，不停服，不备份。PR 合并后须由管理员更新服务器 root 拥有的审阅版 `deploy.py`；合并本身不会更新已安装脚本。`aly` 的默认 `/usr/bin/python3` 仍是 3.6，现有受限入口已适配 `/usr/bin/python3.11`；不要原样重跑第 3 节的通用 `install.sh` 覆盖该入口。更新时先确认没有活动部署及 `active.json`，核对来源和 SHA-256，保留现有 Python 3.11 wrapper 与 sudoers，仅原子替换 `deploy.py` 并复核 owner/mode 与目标摘要。哈希不一致时先完成安装，不能直接重试 deploy。记录成功 run 链接；若 admin 的 `ssh aly` 提示人工登录确认，这是人工维护身份的要求，不等于 CI OIDC 未配置。
+批准 deploy 后先核对连接和受限入口，再自动调用固定更新器。更新器验证源码位于主干历史且不早于上次实际安装的部署器，核对 Git blob、SHA-256 和 Python 语法，在部署锁内备份并原子安装；版本相同时不重复写入。随后 Action 重新核对服务器脚本 SHA-256，全部通过后才发送 registry token 并进入原应用部署流程。更新器源码提交取自本次部署工作流，独立于镜像源码；因此选择历史镜像不会强制降级部署器。更新失败时应用部署步骤被跳过。
 
-connectivity 成功且停机窗口获准后，再用**同一个候选 run ID** 手动运行 `mode=deploy` 并审批。审批人应核对候选 SHA/digest、变更风险和备份条件。若旧构建的发布清单已过期或被删除，应重新构建，不手填未经验证的 digest 绕过检查。
+`mode=connectivity` 保留为可选诊断：只做 OIDC、SSH、原受限 sudo 与已安装脚本摘要检查，不更新脚本、不部署、不停服，也不是 deploy 的必需前置运行。旧脚本与本次源码不同会报告摘要差异；正常 deploy 会先自动同步。审批人仍须核对停机窗口、候选 SHA/digest、部署器版本及备份条件。旧构建清单过期或被删除时重新构建；旧部署工作流请求安装比服务器更老的部署器时，从当前 master 发起新的升级运行，保持所需镜像 run ID。
+
+部署器更新记录位于 `/var/lib/pa-investment-deploy/deployer-updates/<记录ID>/`，包含 `deploy.py.before`、`request.json`、`result.json`。`deployer-release.json` 是最后实际安装的来源记录；`deployer-update-pending.json` 是未完成脚本更新的恢复日志，**不同于应用升级的 active.json**。普通更新失败会尝试恢复旧脚本和版本记录；进程被强制终止时，下一次固定更新器在锁内先恢复，再重新验证请求。恢复前核对备份摘要和现有脚本身份；来源不明的改动会闭锁交管理员处理。不要手动删除日志或将不匹配脚本加入白名单。应用部署发现该日志时拒绝启动。
+
+若需停用自动更新，协调无运行升级后由管理员停用独立 `/etc/sudoers.d/pa-investment-update-deployer` 规则并运行 `visudo -c`；保留 updater 文件、部署器版本记录与备份以供审计。此后新版升级 Action 会在入口检查处停止。恢复安装前的文件需按安装备份 `files.json` 精确恢复，并复核 owner、mode、摘要和 sudo 配置；这属于另行获准的管理员操作，不涉及应用数据回退。
 
 ## 部署过程与完成标准
 
@@ -132,13 +159,15 @@ sudo docker compose --project-directory /home/admin/pa-investment-deploy \
 python3 -B -m unittest discover -s ops/pa-investment -p 'test_*.py'
 sh -n ops/pa-investment/install.sh
 sh -n ops/pa-investment/pa-investment-deploy
+sh -n ops/pa-investment/pa-investment-update-deployer
+visudo -cf ops/pa-investment/pa-investment-update-deployer.sudoers
 actionlint -shellcheck= -pyflakes= .github/workflows/investment-container.yml .github/workflows/investment-deploy.yml .github/workflows/investment-ci.yml
 git diff --check
 ```
 
 测试使用临时目录与模拟 Docker，不访问生产、不构建镜像。Linux CI 额外运行真实 GNU tar 归档/恢复测试；Mac 跳过该用例。真实服务器上的文件权限、sudoers、Docker、OIDC、停机时长与业务数据恢复仍需环境验证。
 
-接口依据：[GitHub Environment 保护](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)、[部署分支规则 API](https://docs.github.com/en/rest/deployments/branch-policies)、[Docker registry manifest 检查](https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/)、[GHCR 认证](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+接口依据：[GitHub Environment 保护](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)、[部署分支规则 API](https://docs.github.com/en/rest/deployments/branch-policies)、[提交祖先比较](https://docs.github.com/en/rest/commits/commits#compare-two-commits)、[固定提交的文件读取](https://docs.github.com/en/rest/repos/contents#get-repository-content)、[Docker registry manifest 检查](https://docs.docker.com/reference/cli/docker/buildx/imagetools/inspect/)、[GHCR 认证](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 
 ## 镜像发布前安全门禁（PAB-29）
 

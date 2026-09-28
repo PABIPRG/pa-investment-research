@@ -93,6 +93,14 @@ class FakeDriver:
 
 
 class TransactionTests(unittest.TestCase):
+    def test_pending_deployer_update_blocks_application_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / "deployer-update-pending.json").write_text("{}")
+            with self.assertRaisesRegex(deploy.DeployError, "deployer update"):
+                deploy.transact(IMAGE, state, object())
+            self.assertFalse((state / "active.json").exists())
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

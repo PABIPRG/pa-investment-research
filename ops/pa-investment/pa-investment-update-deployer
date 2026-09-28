@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fixed, argument-free entry; never inherit caller-controlled Python or TLS settings.
+test "$#" -eq 0 || exit 64
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 \
+  /usr/bin/python3.11 -I -B /usr/local/libexec/pa-investment/update_deployer.py
