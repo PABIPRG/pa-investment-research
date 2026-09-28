@@ -47,6 +47,15 @@ function signedPercentage(value: unknown): string {
   return `${normalized > 0 ? '+' : ''}${normalized.toFixed(2)}%`
 }
 
+function scheduledRunLabel(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::\d{2})?(Z|[+-]\d{2}:\d{2})?$/.exec(value)
+  if (!match) return formatEvolutionTimestamp(value, fallback)
+  const offset = match[6]
+  const zone = !offset ? '服务本地时间' : offset === 'Z' ? 'UTC' : `UTC${offset[0]}${Number(offset.slice(1, 3))}${offset.slice(3) === ':00' ? '' : offset.slice(3)}`
+  return `${match[1]}年${Number(match[2])}月${Number(match[3])}日 ${match[4]}:${match[5]}（${zone}）`
+}
+
 function performanceTone(value: unknown): 'positive' | 'negative' | undefined {
   const resolved = number(value)
   if (resolved === undefined || resolved === 0) return undefined
@@ -301,7 +310,7 @@ export function EvolutionDashboard({
           <div className={css.sectionHeading}><strong>闭环运行状态</strong><span>{closedLoopEnabled ? `每日 ${closedLoopTime}` : '未启用'}</span></div>
           <dl className={css.evolutionRuntimeMeta}>
             <div><dt>最近自动运行</dt><dd title={formatEvolutionTimestamp(statusRecord.recent_run_at, '尚无运行记录')}>{relativeRunTime(statusRecord.recent_run_at)}</dd></div>
-            <div><dt>下次计划运行<InfoHint label="自动运行说明" explanation="此处仅展示自动运行状态，本页面没有启用或关闭入口。自动运行由服务端配置决定：开启时按计划评估策略并执行符合条件的调整；关闭时不安排自动调整，已有记录仍可查看。策略的影子验证另由服务端配置控制，不受此状态直接决定。" /></dt><dd>{closedLoopEnabled ? formatEvolutionTimestamp(statusRecord.next_scheduled_run_at, `每日 ${closedLoopTime}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
+            <div><dt>下次计划运行<InfoHint label="自动运行说明" explanation="此处仅展示自动运行状态，本页面没有启用或关闭入口。自动运行由服务端配置决定：开启时按计划评估策略并执行符合条件的调整；关闭时不安排自动调整，已有记录仍可查看。策略的影子验证另由服务端配置控制，不受此状态直接决定。" /></dt><dd>{closedLoopEnabled ? scheduledRunLabel(statusRecord.next_scheduled_run_at, `每日 ${closedLoopTime}（服务本地时间）`) : '自动闭环未启用'}</dd></div>
             <div><dt>上次自动应用</dt><dd>{formatEvolutionTimestamp(statusRecord.last_applied_at, '尚未应用').replace('（服务本地时间）', '')}</dd></div>
             <div><dt>策略验证记录<InfoHint label="策略验证记录说明" explanation={`${readinessLabel(statusRecord)}。统计的是影子账户有有效净值记录的日期数，属于纸面交易验证记录，不是编造的行情，也不代表已经真实成交。天数达标仅表示可以评估，不代表策略表现达标。`} /></dt><dd>{number(statusRecord.days_of_data) === undefined ? '—' : `${Number(statusRecord.days_of_data).toFixed(0)} 天`}</dd></div>
           </dl>
