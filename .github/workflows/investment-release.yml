@@ -1,4 +1,4 @@
-name: Release investment desktop
+name: 桌面版发布
 
 on:
   workflow_dispatch:

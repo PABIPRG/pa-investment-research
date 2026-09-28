@@ -1,11 +1,11 @@
-name: Investment CI
+name: 代码检查与运行验证
 
 on:
   pull_request:
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: Investment CI-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:

@@ -1,6 +1,7 @@
 """Validate deployment provenance before obtaining production network identity."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -85,7 +86,14 @@ def preflight():
         summary.write("## 待批准的生产候选\n\n")
         summary.write("- 镜像：`" + image + "`\n- SHA：`" + run["head_sha"] + "`\n")
         summary.write("- 构建：https://github.com/" + REPO + "/actions/runs/" + run_id + "\n")
-        summary.write("- 目标：aly / investment；批准后停服、整卷备份、更新并检查健康。\n")
+        if os.environ.get("DEPLOY_MODE") == "connectivity":
+            summary.write("- 目标：aly / investment；仅核对连接、权限和已安装脚本，不更新或停服。\n")
+        else:
+            summary.write("- 目标：aly / investment；批准后自动同步经核验的部署脚本，再停服、整卷备份、升级与检查健康。\n")
+        revision = os.environ.get("GITHUB_SHA", "")
+        if re.fullmatch(r"[0-9a-f]{40}", revision):
+            digest = hashlib.sha256(Path(__file__).with_name("deploy.py").read_bytes()).hexdigest()
+            summary.write("- 部署器源码提交：`" + revision + "`\n- 部署器 SHA-256：`" + digest + "`\n")
 
 
 def publication():

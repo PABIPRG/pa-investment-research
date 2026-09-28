@@ -1,4 +1,4 @@
-name: Investment aly Tailnet transfer probe
+name: 云服务器网络测速
 
 on:
   workflow_dispatch:

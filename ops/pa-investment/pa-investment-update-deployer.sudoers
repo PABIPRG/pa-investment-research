@@ -1,0 +1,2 @@
+# Separate from the application deployment rule. No caller arguments or environment.
+pa-deployer ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/pa-investment-update-deployer ""
