@@ -141,7 +141,7 @@ describe('自进化全局只读看板', () => {
     expect(summary.textContent).toContain('已淘汰4')
     expect(summary.textContent).not.toContain('变异')
     expect(screen.getByTitle('2026-09-04 00:25:53 UTC+08:00')).toBeTruthy()
-    expect(screen.getByText('2026-09-04 15:35:00 UTC+08:00')).toBeTruthy()
+    expect(screen.getByText('2026年9月4日 15:35（UTC+8）')).toBeTruthy()
     expect(screen.getByText('9 天')).toBeTruthy()
     expect(screen.queryByText('9 / 5 日')).toBeNull()
     expect(screen.getByRole('region', { name: '历史进化动作' })).toBeTruthy()

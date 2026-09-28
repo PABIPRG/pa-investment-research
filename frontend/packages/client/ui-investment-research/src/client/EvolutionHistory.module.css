@@ -16,8 +16,8 @@
 .badge { align-self: start; display: inline-block; width: fit-content; padding: 2px 6px; border-radius: 4px; font-size: .8571rem; line-height: 1.5; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); }
 .badge[data-tone='promote'] { color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-label-primary)); background: var(--dsw-alias-state-success-tertiary); }
 .badge[data-tone='mutate'] { color: var(--dsw-alias-brand-primary); }
-.badge[data-tone='demote'] { color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); }
-.badge[data-tone='retire'] { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-state-error-secondary); }
+.badge[data-tone='demote'] { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-state-warn-tertiary); }
+.badge[data-tone='retire'] { color: var(--dsw-alias-state-error-label); background: var(--dsw-alias-state-error-tertiary); }
 .history button:focus-visible, .timeline:focus-visible, .drawer button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
 .notice { margin: 12px 0; padding: 12px; border-radius: 8px; background: var(--dsw-alias-bg-layer-2); }
 .notice small { display: block; color: var(--dsw-alias-label-secondary); margin-top: 4px; }
@@ -45,8 +45,8 @@
 .stateBadge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 4px; font-weight: 500; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
 .stateBadge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .stateBadge[data-tone='success'] { color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-label-primary)); background: var(--dsw-alias-state-success-tertiary); }
-.stateBadge[data-tone='warning'] { color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); }
-.stateBadge[data-tone='error'] { color: var(--dsw-alias-state-error-primary); background: var(--dsw-alias-state-error-secondary); }
+.stateBadge[data-tone='warning'] { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-state-warn-tertiary); }
+.stateBadge[data-tone='error'] { color: var(--dsw-alias-state-error-label); background: var(--dsw-alias-state-error-tertiary); }
 .ruleKind { margin-left: 8px; color: var(--dsw-alias-label-secondary); font-size: .8571rem; font-weight: 400; }
 .drawer .caption { font-size: .8571rem; }
 
