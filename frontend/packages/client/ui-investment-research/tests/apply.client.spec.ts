@@ -346,6 +346,7 @@ describe('ui-investment-research apply', () => {
 
   it('loads an independent stock detail page and hands the resolved security to the assistant', async () => {
     const prepareAssistant = vi.fn()
+    const navigate = vi.fn()
     const requestData = vi.fn(async (request: { operation: string }) => {
       if (request.operation === 'trading-core.holdings') return { items: [] }
       if (request.operation === 'market-watch.watchlist') return { items: [] }
@@ -372,7 +373,7 @@ describe('ui-investment-research apply', () => {
     const view = render(createElement(InvestmentShell, {
       useInvestmentUi: useUi({ route: 'stock-detail', selectedStockCode: '600519' }),
       requestData,
-      navigate: vi.fn(),
+      navigate,
       setHistory: vi.fn(),
       startSession: vi.fn(),
       openSession: vi.fn(),
@@ -401,6 +402,8 @@ describe('ui-investment-research apply', () => {
         operation: 'trading-core.watchlist-save', input: { tickers: ['600519'] },
       })
     })
+    fireEvent.click(await view.findByRole('button', { name: '去研究工作台查看自选股' }))
+    expect(navigate).toHaveBeenCalledWith('dashboard')
 
     await waitFor(() => { expect((view.getByRole('button', { name: '加入持仓' }) as HTMLButtonElement).disabled).toBe(false) })
     fireEvent.click(view.getByRole('button', { name: '加入持仓' }))
@@ -470,6 +473,11 @@ describe('ui-investment-research apply', () => {
       '研究工作台', '智能分析', '实时盯盘', '策略研究', '自进化', '我的投研', '产业链',
     ])
     expect(routes[5]?.getAttribute('aria-current')).toBe('page')
+    expect(within(routes[5]!).getByText('AI')).toBeTruthy()
+    const compact = render(InvestmentSidebar({
+      wide: false, useInvestmentUi: useUi({ route: 'portfolio' }), navigate,
+    } as never))
+    expect(compact.getByRole('button', { name: '我的投研，AI 提问' }).textContent).toContain('AI')
     expect(view.queryByText('工作区')).toBeNull()
     fireEvent.click(routes[3]!)
     expect(navigate).toHaveBeenCalledWith('framework')

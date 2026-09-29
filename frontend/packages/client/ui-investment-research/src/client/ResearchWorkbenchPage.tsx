@@ -415,6 +415,7 @@ function RegionMeta({ state, settled }: { state: ResourceState; settled: string 
 interface ResearchWorkbenchPageProps {
   readonly holdingsEntry?: { readonly flow: 'view' | 'sync' } | undefined
   readonly holdingsRevision?: number
+  readonly watchlistRevision?: number
   readonly requestData: RequestData
   readonly brokerSync?: boolean
   readonly holdingsProviders?: readonly string[]
@@ -427,11 +428,13 @@ interface ResearchWorkbenchPageProps {
 
 /** Default product landing page: one real-data overview, not another chat surface. */
 export function ResearchWorkbenchPage({
-  requestData, holdingsEntry, holdingsRevision = 0, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
+  requestData, holdingsEntry, holdingsRevision = 0, watchlistRevision = 0, brokerSync = true, holdingsProviders = ['manual', 'easytrader', 'mac_ths', 'qmt'],
   navigate, onAnalyze, onOpenPreferences, onOpenReports, trackTelemetry,
 }: ResearchWorkbenchPageProps) {
   const { hidden: fundsHidden } = useFundsPrivacy()
   const holdings = useWorkbenchResource(requestData)
+  const watchlist = useWorkbenchResource(requestData)
+  const coreWatchlist = useWorkbenchResource(requestData)
   const risk = useWorkbenchResource(requestData)
   const alerts = useWorkbenchResource(requestData)
   const kyc = useWorkbenchResource(requestData)
@@ -441,7 +444,11 @@ export function ResearchWorkbenchPage({
   const performance = useWorkbenchResource(requestData)
   const alive = useRef(true)
   const [refreshVersion, setRefreshVersion] = useState(0)
+  const [removingWatchCode, setRemovingWatchCode] = useState('')
+  const [watchlistNotice, setWatchlistNotice] = useState('')
   const observedHoldingsRevision = useRef(holdingsRevision)
+  const observedWatchlistRevision = useRef(watchlistRevision)
+  const watchlistSectionRef = useRef<HTMLElement>(null)
   const [eventView, setEventView] = useState<EventView>('all')
   const [eventOffset, setEventOffset] = useState(0)
   const [eventFeeds, setEventFeeds] = useState<Partial<Record<EventView, EventFeed>>>({})
@@ -483,11 +490,13 @@ export function ResearchWorkbenchPage({
   useEffect(() => {
     const options = refreshVersion === 0 ? undefined : { trailing: true }
     holdings.run({ operation: 'trading-core.holdings' }, options)
+    watchlist.run({ operation: 'market-watch.watchlist' }, options)
+    coreWatchlist.run({ operation: 'trading-core.watchlist' }, options)
     risk.run({ operation: 'trading-core.risk-portfolio' }, options)
     alerts.run({ operation: 'trading-core.risk-alerts' }, options)
     kyc.run({ operation: 'trading-core.kyc-profile' }, options)
     matches.run({ operation: 'trading-core.personalized-matches' }, options)
-  }, [alerts.run, holdings.run, kyc.run, matches.run, refreshVersion, risk.run])
+  }, [alerts.run, coreWatchlist.run, holdings.run, kyc.run, matches.run, refreshVersion, risk.run, watchlist.run])
 
   useEffect(() => {
     cards.run({
@@ -500,6 +509,8 @@ export function ResearchWorkbenchPage({
   }, [cards.run, eventOffset, eventView, refreshVersion])
 
   const positions = records(asRecord(holdings.state.value).items)
+  const watchlistItems = records(asRecord(watchlist.state.value).items)
+  const coreTickers = asRecord(coreWatchlist.state.value).tickers
   useQuotePolling(quotes, holdings.state.value, refreshVersion)
 
   const quoteItems = records(asRecord(quotes.state.value).items)
@@ -550,6 +561,11 @@ export function ResearchWorkbenchPage({
     .filter((code): code is string => code !== undefined))
   const securityNames = useSecurityNames(requestData, [
     ...missingHoldingCodes,
+    ...watchlistItems.filter(item => {
+      const code = text(item.code, '')
+      const name = text(item.name, '').trim()
+      return code !== '' && (name === '' || name === code)
+    }).map(item => text(item.code, '')),
     ...reasonCodes.filter(code => !knownCardCodes.has(code)),
     ...strategyItems.flatMap(strategySymbols),
   ], { ...Object.fromEntries(positions.map(item => [text(item.ticker, ''), text(item.name, '')])), ...quoteSecurityNames })
@@ -578,7 +594,7 @@ export function ResearchWorkbenchPage({
   const actionableAlerts = alertItems.filter(item => (
     text(item.source, '') !== 'profile' && text(item.severity, '低') !== '低'
   ))
-  const allBusy = [holdings, risk, alerts, kyc, cards, matches].some(resource => resource.busy)
+  const allBusy = [holdings, watchlist, coreWatchlist, risk, alerts, kyc, cards, matches].some(resource => resource.busy)
 
   const selectedPerformanceRange = useMemo(
     () => performancePeriod === 'custom' ? appliedCustom : performanceRange(performancePeriod),
@@ -666,6 +682,45 @@ export function ResearchWorkbenchPage({
     observedHoldingsRevision.current = holdingsRevision
     refreshDashboard()
   }, [holdingsRevision, refreshDashboard])
+  useEffect(() => {
+    if (watchlistRevision === 0) return
+    if (observedWatchlistRevision.current !== watchlistRevision) {
+      observedWatchlistRevision.current = watchlistRevision
+      setWatchlistNotice('')
+      watchlist.run({ operation: 'market-watch.watchlist' }, { trailing: true })
+      coreWatchlist.run({ operation: 'trading-core.watchlist' }, { trailing: true })
+    }
+    const section = watchlistSectionRef.current
+    section?.scrollIntoView?.({ block: 'start' })
+    section?.focus()
+  }, [coreWatchlist.run, watchlistRevision, watchlist.run])
+
+  const removeWatchlist = async (code: string): Promise<void> => {
+    if (removingWatchCode !== '') return
+    setRemovingWatchCode(code)
+    setWatchlistNotice('')
+    const tasks = [requestData({ operation: 'market-watch.watch-remove', input: { code } })]
+    if (coreWatchlist.state.loaded && Array.isArray(coreTickers)) {
+      tasks.push(requestData({
+        operation: 'trading-core.watchlist-save',
+        input: { tickers: coreTickers.filter((ticker): ticker is string => typeof ticker === 'string' && ticker !== code) },
+      }))
+    }
+    const results = await Promise.allSettled(tasks)
+    if (!alive.current) return
+    const marketRemoved = results[0]?.status === 'fulfilled'
+    const coreRemoved = tasks.length === 2 && results[1]?.status === 'fulfilled'
+    setWatchlistNotice(marketRemoved && coreRemoved
+      ? `已将 ${code} 移出自选，两个研究模块已同步。`
+      : marketRemoved
+        ? `${code} 已从盯盘自选移出；个性化研究同步未完成，请刷新后核对。`
+        : coreRemoved
+          ? `${code} 已从个性化研究移出，但盯盘自选移出失败；请重试。`
+          : `移出自选失败：${productErrorText((results[0] as PromiseRejectedResult).reason)}`)
+    setRemovingWatchCode('')
+    watchlist.run({ operation: 'market-watch.watchlist' }, { trailing: true })
+    coreWatchlist.run({ operation: 'trading-core.watchlist' }, { trailing: true })
+  }
 
   const saveHoldings = useCallback(async (
     next: readonly WorkbenchHoldingInput[], source: WorkbenchHoldingSaveSource,
@@ -773,6 +828,46 @@ export function ResearchWorkbenchPage({
           <small data-tone={currentProfit === undefined || currentProfit === 0 ? undefined : currentProfit > 0 ? 'positive' : 'negative'}>盈亏 {privateFunds(holdings.state.loaded && quotes.state.loaded ? signedCompactMoney(currentProfit) : '—', fundsHidden)} · 成本收益率 {holdings.state.loaded && quotes.state.loaded ? signedReturn(currentCostReturn) : '—'}</small>
         </button>
         <button type="button" className={css.dashboardRiskCard} aria-haspopup="dialog" onClick={(event) => { event.currentTarget.focus(); setSelectedOverview('risk-profile') }}><span className={css.dashboardPortfolioHeading}>风险画像</span><strong>{risk.state.loaded ? text(riskValue.profile_label, '待完善') : '—'}</strong><small>{risk.state.loaded ? `等权 HHI ${number(riskSummary.hhi)?.toFixed(3) ?? '—'} · 查看详情 →` : '按组合风险预算校准'}</small></button>
+      </section>
+
+      <section ref={watchlistSectionRef} tabIndex={-1} className={`${css.dashboardPanel} ${css.dashboardWatchlistPanel}`}
+        aria-labelledby="dashboard-watchlist-title" aria-busy={watchlist.busy}>
+        <div className={css.dashboardPanelHead}>
+          <div><h2 id="dashboard-watchlist-title">自选股</h2><p>加入的个股在研究工作台集中查看</p></div>
+          <RegionMeta state={watchlist.state} settled={`${watchlistItems.length} 项`} />
+        </div>
+        {watchlistNotice !== '' && <p className={css.dashboardWatchlistNotice} role="status">{watchlistNotice}</p>}
+        {watchlist.state.error !== '' && (
+          <RegionError title={watchlist.state.loaded ? '自选股更新失败' : '自选股暂不可用'}
+            message={watchlist.state.error} retained={watchlist.state.loaded}
+            retry={() => { watchlist.run({ operation: 'market-watch.watchlist' }) }} />
+        )}
+        {!watchlist.state.loaded && watchlist.state.error === '' && <RegionSkeleton rows={2} />}
+        {watchlist.state.loaded && watchlistItems.length === 0 && (
+          <div className={css.dashboardEmpty}>还没有自选股。打开个股详情后点击“加入自选”，这里会显示关注的股票。</div>
+        )}
+        {watchlist.state.loaded && watchlistItems.length > 0 && (
+          <div className={css.dashboardWatchlistList}>
+            {watchlistItems.map((item, index) => {
+              const code = text(item.code, '')
+              const rawName = text(item.name, '').trim()
+              const name = rawName !== '' && rawName !== code ? rawName : resolvedSecurityNames[code] || '证券名称待补充'
+              return <div key={`${code}-${index}`} className={css.dashboardWatchlistItem}>
+                <button type="button" className={css.dashboardWatchlistOpen} disabled={!/^\d{6}$/u.test(code)}
+                  aria-label={`查看${name} · ${code}个股详情`}
+                  onClick={() => { navigate('stock-detail', { stockCode: code }) }}>
+                  <strong>{name}</strong><small>{code}</small>
+                </button>
+                <button type="button" className={css.dashboardWatchlistRemove}
+                  disabled={removingWatchCode !== '' || !/^\d{6}$/u.test(code)}
+                  aria-label={`移出自选股 · ${name} ${code}`}
+                  onClick={() => { void removeWatchlist(code) }}>
+                  {removingWatchCode === code ? '移出中…' : '移出'}
+                </button>
+              </div>
+            })}
+          </div>
+        )}
       </section>
 
       <div className={css.dashboardGrid}>

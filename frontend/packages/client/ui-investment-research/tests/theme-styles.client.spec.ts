@@ -169,7 +169,9 @@ describe('投研工作台主题样式', () => {
     expect(styles).toMatch(/\.primaryRouteSurface :is\(\.marketOverview, \.cardList, \.marketNewsPanel\)\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);/s)
     expect(styles).toMatch(/\.primaryRouteSurface :is\(\.industrySearchPanel, \.industryChainPanel, \.industryImpactPanel\)\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);/s)
     expect(styles).toMatch(/\.primaryRouteSurface \.embeddedShadow\s*\{[^}]*border-color:\s*var\(--dsw-alias-border-l2\);[^}]*border-radius:\s*12px;[^}]*box-shadow:\s*none;/s)
-    expect(styles).toMatch(/\.primaryRouteSurface \.shadowRunSummary\s*\{[^}]*border:\s*0;/s)
+    expect(styles).toMatch(/\.shadowRunSummary\s*\{[^}]*border-bottom:\s*1px solid var\(--dsw-alias-border-l1\);/s)
+    expect(styles).toMatch(/\.shadowEvidenceCard\s*\{[^}]*overflow:\s*hidden;[^}]*\}/s)
+    expect(styles).not.toMatch(/\.shadowEvidenceCard\s*\{[^}]*border:/s)
     expect(styles).toMatch(/\.shadowScopeBar \+ \.importNotice\s*\{[^}]*margin-top:\s*12px;/s)
   })
 

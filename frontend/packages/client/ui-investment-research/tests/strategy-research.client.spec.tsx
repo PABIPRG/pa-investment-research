@@ -26,6 +26,58 @@ function renderStrategyPage(
 }
 
 describe('策略研究产品事实与确认流程', () => {
+  it('已加载全部策略时仍按名称或代码查询后端，并防抖合并连续输入', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation === 'trading-core.strategies') {
+        const items = [
+          { id: 'matched', name: '华胜天成动量策略', tickers: [{ code: '600410', name: '华胜天成' }], symbols: ['600410'], hypothesis: '动量假设甲', status: 'active' },
+          { id: 'matched-second', name: '华胜天成反转策略', symbols: ['600410'], hypothesis: '反转假设乙', status: 'active' },
+          { id: 'other', name: '贵州茅台均线策略', symbols: ['600519'], hypothesis: '均线假设丙', status: 'active' },
+        ]
+        if (request.input?.q === '600410') return { count: 2, items: items.slice(0, 2) }
+        if (request.input?.q === '茅台') return { count: 1, items: items.slice(2) }
+        return { count: 3, items }
+      }
+      return { items: [] }
+    })
+    renderStrategyPage(requestData)
+    expect(await screen.findByText('均线假设丙')).toBeTruthy()
+    fireEvent.change(screen.getByRole('searchbox', { name: '证券名称或代码' }), { target: { value: '6' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: '证券名称或代码' }), { target: { value: '60' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: '证券名称或代码' }), { target: { value: '600410' } })
+    expect(await screen.findByText('动量假设甲')).toBeTruthy()
+    expect(await screen.findByText('反转假设乙')).toBeTruthy()
+    expect(screen.queryByText('均线假设丙')).toBeNull()
+    expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.strategies', input: { q: '600410', limit: 200, offset: 0 } })
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'trading-core.strategies' && (request.input?.q === '6' || request.input?.q === '60'))).toBe(false)
+    fireEvent.change(screen.getByRole('searchbox', { name: '证券名称或代码' }), { target: { value: '茅台' } })
+    expect(await screen.findByText('均线假设丙')).toBeTruthy()
+    expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.strategies', input: { q: '茅台', limit: 200, offset: 0 } })
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'market-watch.security-search' && request.input?.query === '茅台')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '清除筛选' }))
+    expect(await screen.findByText('均线假设丙')).toBeTruthy()
+  })
+
+  it('匹配结果跨页时继续请求后端分页', async () => {
+    const requestData = vi.fn(async (request: { operation: string; input?: Record<string, unknown> }) => {
+      if (request.operation !== 'trading-core.strategies') return { items: [] }
+      if (request.input?.q === '华胜') {
+        return request.input.offset === 0
+          ? { count: 2, items: [{ id: 'match-one', name: '华胜天成动量策略', symbols: ['600410'], hypothesis: '假设甲' }] }
+          : { count: 2, items: [{ id: 'match-two', name: '华胜天成反转策略', symbols: ['600410'], hypothesis: '假设乙' }] }
+      }
+      return { count: 201, items: [{ id: 'other', name: '其他策略', symbols: ['600519'], hypothesis: '其他假设' }] }
+    })
+    renderStrategyPage(requestData)
+    await screen.findByText('其他假设')
+    fireEvent.change(screen.getByRole('searchbox', { name: '证券名称或代码' }), { target: { value: '华胜' } })
+    expect(await screen.findByText('假设甲')).toBeTruthy()
+    expect(await screen.findByText('假设乙')).toBeTruthy()
+    expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.strategies', input: { q: '华胜', limit: 200, offset: 0 } })
+    expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.strategies', input: { q: '华胜', limit: 200, offset: 1 } })
+    expect(requestData.mock.calls.some(([request]) => request.operation === 'market-watch.security-search' && request.input?.query === '华胜')).toBe(false)
+  })
+
   it('首次加载时不把未知策略计数显示为零', async () => {
     let resolveStrategies!: (value: unknown) => void
     const strategyFlight = new Promise<unknown>((resolve) => { resolveStrategies = resolve })

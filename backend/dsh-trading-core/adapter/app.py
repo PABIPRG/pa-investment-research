@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import os
+import re
 import socket
 import secrets
 from contextlib import asynccontextmanager
@@ -1211,22 +1212,57 @@ def create_app(
         return {"task_id": task_id}
 
     @app.get("/strategies", response_model=dict)
-    async def strategies_list(limit: int = 50):
-        """策略池列表（created_at 倒序）。"""
+    async def strategies_list(
+        limit: int = 50,
+        offset: int = Query(default=0, ge=0),
+        symbol: Optional[str] = Query(default=None, pattern=r"^\d{6}$"),
+        q: Optional[str] = Query(default=None, max_length=80),
+    ):
+        """按已保存的证券代码或名称筛选策略池，再按 created_at 倒序分页。"""
         from . import backtest_tasks as bt
         from .strategies import project_strategy_verification
 
         store = JsonStore()
         rows = []
+        search = (q or "").strip().casefold()
         for item in (store.all("strategies") or {}).values():
-            sid = str(item.get("id") or "") if isinstance(item, dict) else ""
+            if not isinstance(item, dict):
+                continue
+            if symbol is not None:
+                codes = item.get("symbols") or []
+                tickers = item.get("tickers") or []
+                matched = (
+                    isinstance(codes, list)
+                    and any(str(code).strip() == symbol for code in codes)
+                ) or (
+                    isinstance(tickers, list)
+                    and any(
+                        isinstance(ticker, dict)
+                        and str(ticker.get("code") or "").strip() == symbol
+                        for ticker in tickers
+                    )
+                ) or bool(re.search(rf"(?<!\d){symbol}(?!\d)", str(item.get("name") or "")))
+                if not matched:
+                    continue
+            if search:
+                tickers = item.get("tickers") or []
+                values = [item.get("name"), *(item.get("symbols") or [])]
+                if isinstance(tickers, list):
+                    values.extend(
+                        value
+                        for ticker in tickers if isinstance(ticker, dict)
+                        for value in (ticker.get("code"), ticker.get("name"))
+                    )
+                if not any(search in str(value or "").casefold() for value in values):
+                    continue
+            sid = str(item.get("id") or "")
             tasks = bt.list_tasks(store, strategy_id=sid, limit=1) if sid else []
             rows.append(project_strategy_verification(
                 item,
                 task_status=str(tasks[0].get("status") or "") if tasks else None,
             ))
         rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
-        return {"count": len(rows), "items": rows[: max(1, min(limit, 200))]}
+        return {"count": len(rows), "items": rows[offset: offset + max(1, min(limit, 200))]}
 
     # ---- 聊天式我的投研会话上下文 --------------------------------------
 

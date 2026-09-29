@@ -208,7 +208,7 @@ const ROUTES: readonly { id: NavigationRoute; label: string; note?: string }[] =
   { id: 'opportunity', label: '实时盯盘', note: '实时' },
   { id: 'framework', label: '策略研究', note: '策略' },
   { id: 'tasks', label: '自进化', note: '闭环' },
-  { id: 'portfolio', label: '我的投研', note: '组合' },
+  { id: 'portfolio', label: '我的投研', note: 'AI' },
   { id: 'knowledge', label: '产业链', note: '图谱' },
 ]
 
@@ -422,13 +422,15 @@ export function InvestmentSidebar({
             type="button"
             className={activeRoute === item.id ? css.navActive : undefined}
             aria-current={activeRoute === item.id ? 'page' : undefined}
-            aria-label={item.label}
-            title={wide ? undefined : item.label}
+            aria-label={item.id === 'portfolio' && !wide ? '我的投研，AI 提问' : item.label}
+            title={wide ? undefined : item.id === 'portfolio' ? '我的投研 · AI 提问' : item.label}
             onClick={() => {
               navigate(item.id)
             }}
           >
-            <span className={css.navIcon}><NavGlyph route={item.id} /></span>
+            <span className={css.navIcon}><NavGlyph route={item.id} />
+              {!wide && item.id === 'portfolio' && <span className={css.navCompactAi} aria-hidden="true">AI</span>}
+            </span>
             {wide && <span className={css.navLabel}>{item.label}</span>}
             {wide && item.note !== undefined && <span className={css.navNote}>{item.note}</span>}
           </button>
@@ -936,6 +938,7 @@ function InvestmentShellContent({
   const [analysisVisited, setAnalysisVisited] = useState(isAnalysisRoute)
   const [dashboardView, setDashboardView] = useState<'workbench' | 'preferences'>('workbench')
   const [holdingsRevision, setHoldingsRevision] = useState(0)
+  const [watchlistRevision, setWatchlistRevision] = useState(0)
   const [preferencesVisited, setPreferencesVisited] = useState(false)
   const assistantMode = snapshot.assistantMode
   const assistantSurfaceIntentRef = useRef<AssistantSurfaceIntent>({ generation: 0, mode: assistantMode })
@@ -1502,6 +1505,7 @@ function InvestmentShellContent({
                 requestData={requestData}
                 holdingsEntry={snapshot.holdingsEntry}
                 holdingsRevision={holdingsRevision}
+                watchlistRevision={watchlistRevision}
                 brokerSync={hostDescription === undefined ? true : deployment?.brokerSync ?? false}
                 holdingsProviders={hostDescription === undefined
                   ? ['manual', 'easytrader', 'mac_ths', 'qmt']
@@ -1554,6 +1558,11 @@ function InvestmentShellContent({
             code={snapshot.selectedStockCode}
             backDestination={stockDetailReturnRoute}
             onHoldingSaved={() => { setHoldingsRevision(value => value + 1) }}
+            onOpenWatchlist={() => {
+              setWatchlistRevision(value => value + 1)
+              setDashboardView('workbench')
+              navigate('dashboard')
+            }}
             onBack={() => {
               if (stockDetailReturnRoute === 'opportunity' && !suppressResearchOnStockDetailReturnRef.current) {
                 setModuleDraft('watchQuery', snapshot.selectedStockCode)
@@ -2238,7 +2247,7 @@ const STOCK_RETURN_LABELS: Readonly<Record<NonNullable<InvestmentUiSnapshot['sto
 })
 
 function StockDetailPage({
-  requestData, code, backDestination, onBack, onAnalyze, onHoldingSaved,
+  requestData, code, backDestination, onBack, onAnalyze, onHoldingSaved, onOpenWatchlist,
 }: {
   requestData: RequestData
   code: string
@@ -2246,6 +2255,7 @@ function StockDetailPage({
   onBack: () => void
   onAnalyze: (intent: AssistantIntent) => void
   onHoldingSaved: () => void
+  onOpenWatchlist: () => void
 }) {
   const [nonce, setNonce] = useState(0)
   const [ownershipNonce, setOwnershipNonce] = useState(0)
@@ -2258,11 +2268,14 @@ function StockDetailPage({
   const [ownershipReady, setOwnershipReady] = useState(false)
   const [actionBusy, setActionBusy] = useState('')
   const [actionNotice, setActionNotice] = useState('')
+  const [watchlistJustAdded, setWatchlistJustAdded] = useState(false)
   const [holdingOpen, setHoldingOpen] = useState(false)
   const [holdingError, setHoldingError] = useState('')
 
   useEffect(() => {
     const normalized = code.trim()
+    setActionNotice('')
+    setWatchlistJustAdded(false)
     if (normalized === '') {
       setError('缺少股票代码，请重新搜索。'); setLoading(false)
       return
@@ -2318,7 +2331,7 @@ function StockDetailPage({
 
   const addWatchlist = async (): Promise<void> => {
     if (actionBusy !== '' || inWatchlist) return
-    setActionBusy('watchlist'); setActionNotice('')
+    setActionBusy('watchlist'); setActionNotice(''); setWatchlistJustAdded(false)
     const tasks = [requestData({ operation: 'market-watch.watch-add', input: { code: resolvedCode, name } })]
     if (coreWatchlist !== undefined) {
       tasks.push(requestData({
@@ -2327,6 +2340,7 @@ function StockDetailPage({
     }
     const results = await Promise.allSettled(tasks)
     const succeeded = results.filter(result => result.status === 'fulfilled').length
+    setWatchlistJustAdded(results[0]?.status === 'fulfilled')
     setActionNotice(tasks.length === 2 && succeeded === 2
       ? `已将 ${name} 加入自选，实时盯盘与个性化研究已同步。`
       : succeeded > 0
@@ -2352,6 +2366,7 @@ function StockDetailPage({
         input: { holdings: [...normalized, { ticker: resolvedCode, quantity, cost_price: costPrice }] },
       })
       setHoldingOpen(false)
+      setWatchlistJustAdded(false)
       setActionNotice(`已将 ${name} 加入持仓，组合风险会按最新持仓重新计算。`)
       setOwnershipNonce(value => value + 1)
       onHoldingSaved()
@@ -2377,9 +2392,9 @@ function StockDetailPage({
           <Button variant="outline"
             type="button"
             className={css.secondaryButton}
-            disabled={!ownershipReady || actionBusy !== '' || inWatchlist}
-            onClick={() => { void addWatchlist() }}
-          >{actionBusy === 'watchlist' ? '正在加入…' : inWatchlist ? '已在自选' : '加入自选'}</Button>
+            disabled={!ownershipReady || actionBusy !== ''}
+            onClick={() => { if (inWatchlist) onOpenWatchlist(); else void addWatchlist() }}
+          >{actionBusy === 'watchlist' ? '正在加入…' : inWatchlist ? '查看自选股' : '加入自选'}</Button>
         )}
         {!loading && error === '' && (
           <Button variant="outline"
@@ -2399,7 +2414,10 @@ function StockDetailPage({
           >带入智能分析</Button>
         )}
       </PageHeader>
-      {actionNotice !== '' && <div className={css.importNotice} role="status">{actionNotice}</div>}
+      {actionNotice !== '' && <div className={css.importNotice} role="status">
+        {actionNotice}
+        {watchlistJustAdded && <button type="button" className={css.watchlistNoticeLink} onClick={onOpenWatchlist}>去研究工作台查看自选股</button>}
+      </div>}
       {error !== '' && <ErrorCard title="个股详情暂不可用" message={error} retry={() => { setNonce(value => value + 1) }} />}
       {loading && <StockDetailLoading code={code} />}
       {!loading && error === '' && (

@@ -318,10 +318,13 @@
 .investmentNav button:disabled { color: var(--dsw-alias-label-dimmed); cursor: not-allowed; opacity: .72; }
 .investmentNav button:disabled:hover { background: transparent; }
 .investmentNav .navActive { color: var(--investment-primary); background: var(--investment-selected-surface); font-weight: 700; }
-.navIcon { display: inline-flex; width: 24px; justify-content: center; font-size: 1.1429rem; }
+.navIcon { position: relative; display: inline-flex; width: 24px; justify-content: center; font-size: 1.1429rem; }
+.navCompactAi { position: absolute; top: -5px; right: 0; padding: 0 2px; border-radius: 3px; color: var(--investment-primary); background: var(--investment-interactive-hover); font-size: 0.5714rem; font-weight: 800; line-height: 1.2; }
 .navGlyph { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
 .navLabel { flex: 1; margin-left: 5px; }
 .navNote { padding: 2px 6px; border-radius: 99px; color: var(--investment-primary); background: var(--investment-interactive-hover); font-size: 0.8571rem; }
+.watchlistNoticeLink { margin-inline-start: 10px; padding: 0; border: 0; color: var(--investment-primary); background: transparent; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.watchlistNoticeLink:focus-visible { outline: 2px solid var(--investment-primary); outline-offset: 3px; }
 
 .workbench { position: absolute; top: 56px; right: 0; bottom: 0; left: var(--dsh-sidebar-width, 260px); z-index: 2; overflow: hidden; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: var(--investment-font-base); line-height: 1.5; pointer-events: auto; animation: investment-page-enter 180ms ease-out; }
 .workbench[hidden] { display: none; }
@@ -457,6 +460,19 @@
 .dashboardOverviewPanel > .dashboardAttentionViewport { flex: 1; min-height: 0; }
 .dashboardOverviewPanel .dashboardAttentionList { height: 100%; max-height: none; }
 .dashboardPanel:focus { outline: 2px solid var(--investment-primary); outline-offset: 2px; }
+.dashboardWatchlistPanel { scroll-margin-top: 16px; }
+.dashboardWatchlistList { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 8px; }
+.dashboardWatchlistNotice { margin: 0 0 12px; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-secondary); }
+.dashboardWatchlistItem { display: flex; align-items: center; min-width: 0; min-height: 52px; border-radius: var(--dsw-alias-radius-control); background: var(--dsw-alias-bg-layer-1); }
+.dashboardWatchlistItem:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dashboardWatchlistList button { min-width: 0; min-height: 40px; border: 0; color: var(--dsw-alias-label-primary); background: transparent; font: inherit; cursor: pointer; }
+.dashboardWatchlistOpen { display: grid; flex: 1; align-content: center; gap: 2px; padding: 8px 12px; text-align: left; }
+.dashboardWatchlistList .dashboardWatchlistRemove { flex: none; align-self: stretch; padding: 8px 12px; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-caption); }
+.dashboardWatchlistList .dashboardWatchlistRemove:hover:not(:disabled) { color: var(--investment-primary); }
+.dashboardWatchlistList button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.dashboardWatchlistList button:disabled { color: var(--dsw-alias-label-dimmed); cursor: default; }
+.dashboardWatchlistList strong { overflow: hidden; font-size: 0.9286rem; text-overflow: ellipsis; white-space: nowrap; }
+.dashboardWatchlistList small { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; font-variant-numeric: tabular-nums; }
 .dashboardPanelHead { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .dashboardPanelHead > div { min-width: 0; }
 .dashboardPanelHead h2, .dashboardPanelHead p { margin: 0; }
@@ -1998,6 +2014,17 @@
 .analysisPipeline em { flex: none; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; font-style: normal; }
 
 /* Combined strategy pool / shadow-verification workbench. */
+.strategySecurityFilter { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.strategyQueryField { display: grid; width: min(100%, 340px); min-width: 0; gap: 8px; }
+.strategyQueryHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 2px 12px; flex-wrap: wrap; }
+.strategyQueryHeading > label, .strategyQueryHeading > span { color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
+.strategyQueryHeading > span { margin-inline-start: auto; text-align: end; }
+.strategyQueryInput.strategyQueryInput { display: flex; min-width: 0; width: 100%; height: 40px; box-sizing: border-box; padding: 0 12px; border-radius: 8px; background: var(--dsw-alias-bg-base); }
+.strategyQueryInput input { min-width: 0; width: 100%; font-size: 1rem; line-height: 1.5; }
+.strategyQueryInput:focus-within { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.strategyQueryInput input:focus-visible { outline: none; }
+.strategySecurityFilter > button { min-height: 40px; }
+.strategyListScope { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; }
 .strategyViewTabs, .strategyFilters { margin-block: 0; }
 .strategyFilters button span { margin-left: 4px; color: var(--dsw-alias-label-tertiary); font-size: 0.8571rem; }
 .strategyCard { scroll-margin-top: 16px; }
@@ -2053,14 +2080,14 @@
 .embeddedShadowHeader h2 { font-size: 1.1429rem; }
 .embeddedShadowHeader p { margin-top: 5px; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; }
 .embeddedShadowHeader > div:last-child { display: flex; flex: none; gap: 8px; }
-.shadowScopeBar { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-width: 0; padding: 12px 14px; border: 1px solid var(--investment-selected-surface); border-radius: 10px; background: var(--investment-interactive-hover); }
+.shadowScopeBar { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-width: 0; padding: 12px 14px; border-radius: 9px; background: var(--dsw-alias-bg-layer-1); }
 .shadowScopeBar > div { min-width: 0; }
 .shadowScopeBar span, .shadowScopeBar strong, .shadowScopeBar small { display: block; }
 .shadowScopeBar > div > span { color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); }
 .shadowScopeBar strong { margin-top: 3px; font-size: 1rem; }
 .shadowScopeBar small { margin-top: 3px; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-caption); }
 .shadowScopeActions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; }
-.shadowScopeActions > span { flex: none; padding: 5px 8px; border-radius: 99px; color: var(--investment-primary); background: var(--dsw-alias-bg-base); font-size: var(--investment-font-caption); font-weight: 650; }
+.shadowScopeActions > span { flex: none; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-caption); }
 .shadowScopeBar + .importNotice { margin-top: 12px; }
 
 .evolutionDashboard { display: grid; gap: 20px; background: var(--dsw-alias-bg-layer-1); }
@@ -2115,15 +2142,15 @@
 .evolutionDashboard .strategyEntry .dataRow > div > small { margin-top: 5px; color: var(--dsw-alias-label-secondary); line-height: 1.45; }
 .evolutionDashboard .strategyDetail { padding: 14px 14px 0; border: 0; border-radius: 0; background: transparent; }
 .evolutionDashboard .evolutionFacts { margin: 0 0 14px; }
-.shadowRunSummary { min-width: 0; margin-top: 14px; padding: 14px; border: 1px solid var(--dsw-alias-border-l1); border-radius: 11px; background: var(--dsw-alias-bg-layer-1); }
-.primaryRouteSurface .shadowRunSummary { border: 0; }
-.shadowRunSummary .reportMeta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.shadowRunSummary .reportMeta > div { min-width: 0; padding: 9px 10px; border-radius: 8px; background: var(--dsw-alias-bg-base); }
+.shadowRunSummary { min-width: 0; margin-top: 16px; padding: 16px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.shadowRunSummary .reportMeta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 20px; margin-top: 14px; }
+.shadowRunSummary .reportMeta > div { min-width: 0; }
 .shadowRunSummary > p { margin: 10px 0 0; color: var(--dsw-alias-label-secondary); font-size: var(--investment-font-secondary); line-height: 1.5; }
-.shadowEvidenceGrid { display: grid; grid-template-columns: minmax(300px, 1.25fr) minmax(240px, .75fr); gap: 14px; min-width: 0; margin-top: 14px; }
-.shadowEvidenceCard { min-width: 0; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1); border-radius: 11px; background: var(--dsw-alias-bg-layer-1); }
-.shadowEvidenceCard > .sectionHeading { padding: 12px 13px; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+.shadowEvidenceGrid { display: grid; grid-template-columns: minmax(300px, 1.25fr) minmax(240px, .75fr); gap: 20px; min-width: 0; margin-top: 16px; }
+.shadowEvidenceCard { min-width: 0; overflow: hidden; }
+.shadowEvidenceCard > .sectionHeading { padding: 0 0 12px; }
 .shadowEvidenceCard > .sectionHeading small { display: block; margin-top: 3px; color: var(--dsw-alias-label-tertiary); font-size: var(--investment-font-caption); font-weight: 400; }
+.embeddedShadow > .detailSection { margin-top: 16px; padding: 16px 0 0; border: 0; border-top: 1px solid var(--dsw-alias-border-l1); border-radius: 0; background: transparent; }
 .shadowPositionRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; min-height: 58px; box-sizing: border-box; padding: 10px 12px; border: 0; border-bottom: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); font: inherit; text-align: left; cursor: pointer; }
 .shadowPositionRow:last-child { border-bottom: 0; }
 .shadowPositionRow:hover { background: var(--dsw-alias-interactive-bg-hover); }
