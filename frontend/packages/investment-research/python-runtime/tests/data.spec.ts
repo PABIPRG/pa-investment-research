@@ -595,15 +595,19 @@ describe('investment data broker', () => {
     const acquire = async () => ({ baseUrl: 'http://127.0.0.1:8000', release })
 
     await requestInvestmentData({ operation: 'trading-core.strategies', input: { status: 'active', limit: 20 } }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.strategies', input: { symbol: '600410', limit: 50, offset: 50 } }, acquire)
+    await requestInvestmentData({ operation: 'trading-core.strategies', input: { q: '华胜天成', limit: 200, offset: 200 } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.shadow-equity', input: { strategy_id: 's1', limit: 30 } }, acquire)
     await requestInvestmentData({ operation: 'trading-core.risk-profile' }, acquire)
     await requestInvestmentData({ operation: 'trading-core.evolution-attribution' }, acquire)
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://127.0.0.1:8000/strategies?status=active&limit=20', { method: 'GET' })
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:8000/shadow/equity?strategy_id=s1&limit=30', { method: 'GET' })
-    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://127.0.0.1:8000/risk_profile', { method: 'GET' })
-    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://127.0.0.1:8000/evolution/attribution', { method: 'GET' })
-    expect(release).toHaveBeenCalledTimes(4)
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://127.0.0.1:8000/strategies?symbol=600410&limit=50&offset=50', { method: 'GET' })
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://127.0.0.1:8000/strategies?q=%E5%8D%8E%E8%83%9C%E5%A4%A9%E6%88%90&limit=200&offset=200', { method: 'GET' })
+    expect(fetchMock).toHaveBeenNthCalledWith(4, 'http://127.0.0.1:8000/shadow/equity?strategy_id=s1&limit=30', { method: 'GET' })
+    expect(fetchMock).toHaveBeenNthCalledWith(5, 'http://127.0.0.1:8000/risk_profile', { method: 'GET' })
+    expect(fetchMock).toHaveBeenNthCalledWith(6, 'http://127.0.0.1:8000/evolution/attribution', { method: 'GET' })
+    expect(release).toHaveBeenCalledTimes(6)
   })
 
   it('maps research chat context reads and saves to fixed local routes', async () => {

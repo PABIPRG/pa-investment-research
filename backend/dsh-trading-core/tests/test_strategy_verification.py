@@ -32,6 +32,64 @@ from adapter.task_report_render import render_strategy_report
 
 
 class StrategyVerificationTests(unittest.TestCase):
+    def test_strategy_list_filters_symbol_before_pagination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = JsonStore(Path(temporary))
+            for index in range(55):
+                store.set("strategies", f"unrelated-{index}", {
+                    "id": f"unrelated-{index}",
+                    "name": "其他策略",
+                    "symbols": ["002008"],
+                    "created_at": f"2026-09-28 10:{index:02d}:00",
+                })
+            store.set("strategies", "matched-new", {
+                "id": "matched-new", "symbols": ["600410"],
+                "created_at": "2026-09-28 11:00:00",
+            })
+            store.set("strategies", "matched-legacy", {
+                "id": "matched-legacy", "name": "利好·momentum·600410",
+                "created_at": "2026-09-28 09:00:00",
+            })
+            with patch("adapter.app.JsonStore", return_value=store):
+                with TestClient(create_app(report_store=ReportStore(store))) as client:
+                    first = client.get("/strategies", params={"symbol": "600410", "limit": 1})
+                    second = client.get("/strategies", params={"symbol": "600410", "limit": 1, "offset": 1})
+                    invalid = client.get("/strategies", params={"symbol": "60041"})
+
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["count"], 2)
+            self.assertEqual([item["id"] for item in first.json()["items"]], ["matched-new"])
+            self.assertEqual(second.json()["count"], 2)
+            self.assertEqual([item["id"] for item in second.json()["items"]], ["matched-legacy"])
+            self.assertEqual(invalid.status_code, 422)
+
+    def test_strategy_list_searches_name_and_code_before_pagination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = JsonStore(Path(temporary))
+            store.set("strategies", "older-match", {
+                "id": "older-match", "name": "均线策略",
+                "tickers": [{"code": "600519", "name": "贵州茅台"}],
+                "created_at": "2026-09-28 09:00:00",
+            })
+            store.set("strategies", "newer-match", {
+                "id": "newer-match", "name": "贵州茅台动量策略",
+                "symbols": ["600519"], "created_at": "2026-09-28 11:00:00",
+            })
+            store.set("strategies", "unrelated", {
+                "id": "unrelated", "name": "五粮液策略",
+                "symbols": ["000858"], "created_at": "2026-09-28 12:00:00",
+            })
+            with patch("adapter.app.JsonStore", return_value=store):
+                with TestClient(create_app(report_store=ReportStore(store))) as client:
+                    first = client.get("/strategies", params={"q": "茅台", "limit": 1})
+                    second = client.get("/strategies", params={"q": "600519", "limit": 1, "offset": 1})
+
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["count"], 2)
+            self.assertEqual([item["id"] for item in first.json()["items"]], ["newer-match"])
+            self.assertEqual(second.json()["count"], 2)
+            self.assertEqual([item["id"] for item in second.json()["items"]], ["older-match"])
+
     def test_strategy_projection_keeps_five_semantics_independent(self):
         projected = project_strategy_verification({
             "id": "variant-1",

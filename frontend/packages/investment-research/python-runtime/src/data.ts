@@ -1016,10 +1016,21 @@ const SPECS: Partial<Record<InvestmentDataOperation, RequestSpec>> = {
     backendId: 'trading-core',
     method: 'GET',
     path: (input) => {
-      knownKeys(input, ['status', 'limit'])
+      knownKeys(input, ['status', 'symbol', 'q', 'limit', 'offset'])
+      const symbol = optionalString(input, 'symbol')
+      if (symbol !== undefined && !/^\d{6}$/.test(symbol)) {
+        throw new TypeError('investment data: symbol must be exactly six digits')
+      }
+      const search = optionalString(input, 'q')?.trim()
+      if (search !== undefined && search.length > 80) {
+        throw new TypeError('investment data: q must be at most 80 characters')
+      }
       return query('/strategies', {
         status: optionalString(input, 'status'),
+        symbol,
+        q: search === '' ? undefined : search,
         limit: integer(input, 'limit', 100, 1, 500),
+        offset: input.offset === undefined ? undefined : integer(input, 'offset', 0, 0, 100_000),
       })
     },
   },

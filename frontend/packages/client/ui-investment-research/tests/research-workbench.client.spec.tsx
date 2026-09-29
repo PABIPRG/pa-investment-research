@@ -172,6 +172,30 @@ function deferred<T>() {
 }
 
 describe('研究工作台', () => {
+  it('集中展示自选股并可进入个股详情', async () => {
+    let watchlistItems = [{ code: '600410', name: '华胜天成' }]
+    const requestData = vi.fn(async (request: InvestmentDataRequest) => {
+      if (request.operation === 'market-watch.watchlist') return { items: watchlistItems }
+      if (request.operation === 'trading-core.watchlist') return { tickers: ['600410'] }
+      if (request.operation === 'market-watch.watch-remove') {
+        watchlistItems = []
+        return { ok: true }
+      }
+      if (request.operation === 'trading-core.watchlist-save') return { tickers: [] }
+      return completeResponse(request.operation)
+    })
+    const view = renderWorkbench(requestData)
+    const section = await view.findByRole('region', { name: '自选股' })
+    expect(within(section).getByText('华胜天成')).toBeTruthy()
+    fireEvent.click(within(section).getByRole('button', { name: '查看华胜天成 · 600410个股详情' }))
+    expect(view.navigate).toHaveBeenCalledWith('stock-detail', { stockCode: '600410' })
+    fireEvent.click(within(section).getByRole('button', { name: '移出自选股 · 华胜天成 600410' }))
+    expect(await within(section).findByText(/已将 600410 移出自选/u)).toBeTruthy()
+    await waitFor(() => expect(within(section).queryByRole('button', { name: '查看华胜天成 · 600410个股详情' })).toBeNull())
+    expect(requestData).toHaveBeenCalledWith({ operation: 'market-watch.watch-remove', input: { code: '600410' } })
+    expect(requestData).toHaveBeenCalledWith({ operation: 'trading-core.watchlist-save', input: { tickers: [] } })
+  })
+
   it.each([true, false])('通知直达同步入口并遵守环境能力（brokerSync=%s）', async (brokerSync) => {
     const requestData = vi.fn(async (request: InvestmentDataRequest) => request.operation === 'trading-core.holdings-source'
       ? { provider: 'mac_ths', platform: 'darwin', available: true }
@@ -254,13 +278,15 @@ describe('研究工作台', () => {
     expect(view.onOpenPreferences).toHaveBeenCalledOnce()
   })
 
-  it('并行读取七类真实数据，并展示真实 cards、KYC 与 match_reasons DTO', async () => {
+  it('并行读取九类真实数据，并展示自选、cards、KYC 与 match_reasons DTO', async () => {
     const view = renderWorkbench()
 
     expect(view.getByRole('heading', { name: '研究工作台' })).toBeTruthy()
-    await waitFor(() => { expect(view.requestData).toHaveBeenCalledTimes(7) })
+    await waitFor(() => { expect(view.requestData).toHaveBeenCalledTimes(9) })
     expect(view.requestData.mock.calls.map(([request]) => request.operation)).toEqual(expect.arrayContaining([
       'trading-core.holdings',
+      'market-watch.watchlist',
+      'trading-core.watchlist',
       'trading-core.risk-portfolio',
       'trading-core.risk-alerts',
       'trading-core.kyc-profile',
@@ -557,7 +583,7 @@ describe('研究工作台', () => {
     })
     const view = renderWorkbench(requestData)
     await view.findByRole('heading', { name: 'KYC 风险画像' })
-    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(7) })
+    await waitFor(() => { expect(requestData).toHaveBeenCalledTimes(9) })
 
     fireEvent.click(view.getByRole('button', { name: '刷新数据' }))
     await waitFor(() => {

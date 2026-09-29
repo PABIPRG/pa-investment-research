@@ -4,7 +4,7 @@ import type {
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { InvestmentDataRequest } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
-import { Button, MarkdownText, Select } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconSearchOutline16, Input, MarkdownText, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { AssistantIntent } from './assistant-intent.ts'
 import { asRecord, money, number, productErrorText, records, text } from './data.ts'
 import { DetailDialog } from './DetailDialogs.tsx'
@@ -995,6 +995,12 @@ export function StrategyResearchPage({
   const [evolutionEducationOpen, setEvolutionEducationOpen] = useState(false)
   const [suppressEvolutionEducation, setSuppressEvolutionEducation] = useState(false)
   const [filter, setFilter] = useState<StrategyFilter>('all')
+  const searchId = useId()
+  const [strategyQuery, setStrategyQuery] = useState('')
+  const [searchVersion, setSearchVersion] = useState(0)
+  const [searchState, setSearchState] = useState<DataState & { query: string }>({ phase: 'loading', value: undefined, error: '', query: '' })
+  const searchGeneration = useRef(0)
+  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
   const [lifecycleHelpOpen, setLifecycleHelpOpen] = useState(false)
   const [detailItem, setDetailItem] = useState<Record<string, unknown>>()
   const [backtestItem, setBacktestItem] = useState<Record<string, unknown>>()
@@ -1017,9 +1023,43 @@ export function StrategyResearchPage({
     return () => { current = false }
   }, [initialStage, selectedStrategyId, requestData])
   const load = useCallback(() => {
-    strategies.run({ operation: 'trading-core.strategies', input: { limit: 50 } })
+    strategies.run({ operation: 'trading-core.strategies', input: { limit: 200 } })
+    setSearchVersion(value => value + 1)
   }, [strategies.run])
   useEffect(load, [load])
+  const query = strategyQuery.trim()
+  const baseItems = records(asRecord(strategies.state.value).items)
+  useEffect(() => {
+    if (query === '') return
+    const current = ++searchGeneration.current
+    setSearchState({ phase: 'loading', value: undefined, error: '', query })
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const all: Record<string, unknown>[] = []
+          let total = 0
+          do {
+            const response = asRecord(await requestData({
+              operation: 'trading-core.strategies', input: { q: query, limit: 200, offset: all.length },
+            }))
+            if (current !== searchGeneration.current) return
+            const page = records(response.items)
+            total = number(response.count) ?? page.length
+            all.push(...page)
+            if (page.length === 0) break
+          } while (all.length < total)
+          if (current === searchGeneration.current) {
+            setSearchState({ phase: 'success', value: { items: all, count: total }, error: '', query })
+          }
+        } catch (reason) {
+          if (current === searchGeneration.current) {
+            setSearchState({ phase: 'error', value: undefined, error: productErrorText(reason), query })
+          }
+        }
+      })()
+    }, 180)
+    return () => { searchGeneration.current += 1; window.clearTimeout(timer) }
+  }, [requestData, query, searchVersion])
   const backtestId = text(backtestItem?.id, '')
   const refreshBacktestTasks = useCallback((): void => {
     if (backtestId === '') return
@@ -1052,14 +1092,16 @@ export function StrategyResearchPage({
     if (backtestId !== '') refreshBacktestTasks()
   }, [backtestId, refreshBacktestTasks])
   const backtestTaskList = records(asRecord(backtestTasks.state.value).tasks)
-  const items = records(asRecord(strategies.state.value).items)
+  const visibleStrategiesState: DataState = query === '' ? strategies.state
+    : searchState.query === query ? searchState : { phase: 'loading', value: undefined, error: '' }
+  const items = records(asRecord(visibleStrategiesState.value).items)
+  const totalStrategies = number(asRecord(visibleStrategiesState.value).count)
   const detailId = text(detailItem?.id, '')
   const currentDetailItem = items.find(item => text(item.id, '') === detailId) ?? detailItem
   const currentBacktestItem = items.find(item => text(item.id, '') === backtestId) ?? backtestItem
-  const unresolvedSymbolKey = [...new Set(items.flatMap(item => (
+  const unresolvedSymbolKey = [...new Set([...baseItems, ...items].flatMap(item => (
     strategyTickers(item).filter(ticker => ticker.name === '').map(ticker => ticker.code)
   )))].sort().join('|')
-  const [securityNames, setSecurityNames] = useState<Record<string, string>>({})
   useEffect(() => {
     const codes = unresolvedSymbolKey === '' ? [] : unresolvedSymbolKey.split('|')
     if (codes.length === 0) return
@@ -1098,7 +1140,7 @@ export function StrategyResearchPage({
     counts[category] += 1
     return counts
   }, { verified: 0, unverified: 0, failed: 0, archived: 0 })
-  const strategyCountsPending = strategies.state.phase === 'loading' && strategies.state.value === undefined
+  const strategyCountsPending = visibleStrategiesState.phase === 'loading'
   const selectedItem = items.find(item => text(item.id, '') === selectedStrategyId)
   const currentLifecycleStage = selectedItem === undefined
     ? undefined
@@ -1348,6 +1390,26 @@ export function StrategyResearchPage({
             <Button variant="outline" type="button" className={css.secondaryButton} onClick={() => { onOpenReports() }}>查看本次投研报告</Button>
           </div>
         )}
+        <div className={css.strategySecurityFilter} aria-label="按个股筛选策略">
+          <div className={css.strategyQueryField}>
+            <div className={css.strategyQueryHeading}>
+              <label htmlFor={searchId}>证券名称或代码</label>
+              {query !== '' && <span role="status">{visibleStrategiesState.phase === 'success'
+                ? `从策略池检索到 ${totalStrategies ?? items.length} 条策略`
+                : visibleStrategiesState.phase === 'error' ? '策略池检索失败' : '正在搜索策略池…'}</span>}
+            </div>
+            <Input id={searchId} className={css.strategyQueryInput} type="search" icon={<IconSearchOutline16 />}
+              value={strategyQuery} maxLength={80} placeholder="筛选策略中的证券，如 600519 或 茅台"
+              onChange={event => { setStrategyQuery(event.target.value); setFilter('all') }} />
+          </div>
+          <Button variant="outline" type="button" className={css.secondaryButton}
+            disabled={strategyQuery === '' && filter === 'all'}
+            onClick={() => {
+              setStrategyQuery('')
+              setFilter('all')
+            }}
+          >清除筛选</Button>
+        </div>
         <div className={`${css.segmented} ${css.strategyFilters}`} role="group" aria-label="策略验证分类">
           {(['all', 'verified', 'unverified', 'failed', 'archived'] as const).map((category) => {
             const count = category === 'all' ? items.length : categoryCounts[category]
@@ -1358,13 +1420,16 @@ export function StrategyResearchPage({
             )
           })}
         </div>
-        {strategies.state.phase === 'loading' && strategies.state.value === undefined && <BusyRows />}
-        {strategies.state.phase === 'error' && <DataError message={strategies.state.error} retry={load} />}
-        {strategies.state.phase !== 'error' && items.length === 0 && strategies.state.phase === 'success' && (
-          <Empty>策略池尚无真实候选。先从事件生成假设，生成过程可能需要几十秒。</Empty>
+        {query === '' && totalStrategies !== undefined && totalStrategies > items.length
+          && <p className={css.strategyListScope}>当前显示最新 {items.length} 条；输入证券名称或代码可检索完整策略池。</p>}
+        {visibleStrategiesState.phase === 'loading' && visibleStrategiesState.value === undefined && <BusyRows />}
+        {visibleStrategiesState.phase === 'loading' && visibleStrategiesState.value !== undefined && <div className={css.strategyListScope} role="status">正在更新策略列表…</div>}
+        {visibleStrategiesState.phase === 'error' && <DataError message={visibleStrategiesState.error} retry={query !== '' ? () => { setSearchVersion(value => value + 1) } : load} />}
+        {visibleStrategiesState.phase !== 'error' && items.length === 0 && visibleStrategiesState.phase === 'success' && (
+          <Empty>{query === '' ? '策略池尚无真实候选。先从事件生成假设，生成过程可能需要几十秒。' : `没有找到与「${query}」匹配的策略，可清除筛选查看全部策略。`}</Empty>
         )}
-        {strategies.state.phase === 'success' && items.length > 0 && filteredItems.length === 0 && (
-          <Empty>当前分类暂无策略，可以切换分类查看完整策略池。</Empty>
+        {visibleStrategiesState.phase === 'success' && items.length > 0 && filteredItems.length === 0 && (
+          <Empty>当前验证分类暂无匹配策略，可切换分类或清除筛选。</Empty>
         )}
         <section className={css.moduleGrid} aria-label="策略候选池">
           {filteredItems.map((item, index) => {
