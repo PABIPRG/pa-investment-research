@@ -52,6 +52,14 @@ def fixture(root, layers=None, history=None):
     return path, image_id, revision, diff_ids
 
 
+def vulnerability_exception(version='2.41-12+deb13u4'):
+    return {'kind': 'trivy-vulnerability', 'id': 'CVE-2026-97399',
+            'sourceClass': 'os-pkgs', 'sourceType': 'debian', 'package': 'libc6',
+            'installedVersion': version, 'severity': 'UNKNOWN', 'platform': 'linux/amd64',
+            'count': 1, 'reason': 'unaffected-platform', 'advisory': gate.CVE_97399_ADVISORY,
+            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z'}
+
+
 class ArchiveTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -206,8 +214,8 @@ class ReportTests(unittest.TestCase):
             'package': 'example==1.0.0', 'reason': 'public-runtime-constant',
             'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
         }
-        value = {'schemaVersion': 2, 'blockingSeverities': ['UNKNOWN', 'HIGH', 'CRITICAL'],
-                 'exceptions': [base], 'scanners': {
+        value = {'schemaVersion': 3, 'blockingSeverities': ['UNKNOWN', 'HIGH', 'CRITICAL'],
+                 'exceptions': [base], 'vulnerabilityExceptions': [], 'scanners': {
                      'gitleaks': {'version': '8.30.1', 'url': 'https://example.invalid/gitleaks', 'sha256': '2' * 64},
                      'trivy': {'version': '0.74.0', 'url': 'https://example.invalid/trivy', 'sha256': '3' * 64},
                  }}
@@ -216,6 +224,74 @@ class ReportTests(unittest.TestCase):
                            [{**base, 'pathSha256': '*'}], [{**base, 'unexpected': True}]):
             with self.subTest(exceptions=exceptions), self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
                 gate.validate_policy({**value, 'exceptions': exceptions})
+
+    def test_vulnerability_policy_rejects_broad_or_expired_exceptions(self):
+        value = json.loads(gate.POLICY_PATH.read_text())
+        exact = vulnerability_exception()
+        self.assertEqual(gate.validate_policy({**value, 'vulnerabilityExceptions': [exact]})[
+            'vulnerabilityExceptions'], [exact])
+        for exception in ({**exact, 'package': '*'}, {**exact, 'installedVersion': '*'},
+                          {**exact, 'platform': 'linux/ppc64le'}, {**exact, 'count': 2},
+                          {**exact, 'severity': 'HIGH'}, {**exact, 'advisory': 'https://example.invalid'},
+                          {**exact, 'expiresAt': '2020-01-01T00:00:00Z'}):
+            with self.subTest(exception=exception), self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+                gate.validate_policy({**value, 'vulnerabilityExceptions': [exception]})
+        with self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+            gate.validate_policy({**value, 'vulnerabilityExceptions': [exact, exact]})
+
+    def test_vulnerability_exception_requires_exact_inventory_and_preserves_other_findings(self):
+        exact = vulnerability_exception()
+        finding = {'VulnerabilityID': exact['id'], 'PkgName': exact['package'],
+                   'InstalledVersion': exact['installedVersion'], 'Severity': exact['severity']}
+        report = {'Results': [{'Class': 'os-pkgs', 'Type': 'debian',
+                              'Packages': [{'Name': 'libc6', 'Version': exact['installedVersion']}],
+                              'Vulnerabilities': [finding,
+                                  {'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]}]}
+        with patch.object(gate, 'require_amd64_unaffected_advisory') as check:
+            filtered, applied = gate.apply_vulnerability_exceptions(report, [exact], 'linux/amd64')
+        self.assertEqual(applied, 1)
+        self.assertEqual(filtered['Results'][0]['Vulnerabilities'],
+                         [{'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}])
+        self.assertEqual(len(report['Results'][0]['Vulnerabilities']), 2)
+        check.assert_called_once_with(gate.CVE_97399_ADVISORY)
+        with self.assertRaisesRegex(gate.GateError, '^unexpected-platform$'):
+            gate.apply_vulnerability_exceptions(report, [exact], 'linux/ppc64le')
+        for change in ({'PkgName': 'libc-bin'}, {'InstalledVersion': '2.45'},
+                       {'Severity': 'HIGH'}, {'VulnerabilityID': 'CVE-2099-1234'}):
+            altered = {**report, 'Results': [{**report['Results'][0],
+                'Vulnerabilities': [{**finding, **change}]}]}
+            with self.subTest(change=change), self.assertRaisesRegex(
+                    gate.GateError, '^unused-vulnerability-exception$'):
+                gate.apply_vulnerability_exceptions(altered, [exact], 'linux/amd64')
+        with self.assertRaisesRegex(gate.GateError, '^unused-vulnerability-exception$'):
+            gate.apply_vulnerability_exceptions({**report, 'Results': [{**report['Results'][0],
+                'Packages': [{'Name': 'libc6', 'Version': '2.45'}]}]}, [exact], 'linux/amd64')
+        with self.assertRaisesRegex(gate.GateError, '^unused-vulnerability-exception$'):
+            gate.apply_vulnerability_exceptions({**report, 'Results': [{**report['Results'][0],
+                'Vulnerabilities': []}]}, [exact], 'linux/amd64')
+        with patch.object(gate, 'require_amd64_unaffected_advisory'):
+            filtered, applied = gate.apply_vulnerability_exceptions({**report, 'Results': [{**report['Results'][0],
+                'Vulnerabilities': [finding, finding]}]}, [exact], 'linux/amd64')
+        self.assertEqual(applied, 1)
+        self.assertEqual(filtered['Results'][0]['Vulnerabilities'], [finding])
+
+    def test_official_advisory_change_or_unavailability_blocks_exception(self):
+        advisory = {'cveMetadata': {'cveId': 'CVE-2026-97399', 'state': 'PUBLISHED'},
+                    'containers': {'cna': {'affected': [{
+                        'vendor': 'The GNU C Library', 'product': 'glibc', 'platforms': ['Power8'],
+                        'versions': [{'status': 'affected', 'version': '2.24',
+                                      'lessThan': '2.45', 'versionType': 'custom'}],
+                        'defaultStatus': 'unaffected'}]}}}
+        with patch.object(gate.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(advisory).encode())):
+            gate.require_amd64_unaffected_advisory(gate.CVE_97399_ADVISORY)
+        advisory['containers']['cna']['affected'][0]['platforms'] = ['Power8', 'amd64']
+        with patch.object(gate.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(advisory).encode())):
+            with self.assertRaisesRegex(gate.GateError, '^unverified-vulnerability-exception$'):
+                gate.require_amd64_unaffected_advisory(gate.CVE_97399_ADVISORY)
+        with patch.object(gate.urllib.request, 'urlopen', side_effect=OSError('SECRET_CANARY')):
+            with self.assertRaisesRegex(gate.GateError, '^unverified-vulnerability-exception$') as failure:
+                gate.require_amd64_unaffected_advisory(gate.CVE_97399_ADVISORY)
+            self.assertNotIn('CANARY', str(failure.exception))
 
     def test_vulnerability_diagnostics_only_echo_recognized_public_identifiers(self):
         report = {'Results': [{'Vulnerabilities': [
@@ -228,25 +304,6 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(values[0], {'id': 'CVE-2099-1234', 'findings': 2})
         self.assertEqual(values[1]['id'], 'sha256:' + hashlib.sha256(b'SECRET_ID_CANARY').hexdigest())
         self.assertNotIn('CANARY', json.dumps(values))
-
-    def test_cve_package_diagnostics_only_expose_valid_target_package(self):
-        report = {'Results': [
-            {'Class': 'os-pkgs', 'Type': 'debian', 'Vulnerabilities': [
-                {'VulnerabilityID': 'CVE-2026-97399', 'PkgName': 'libc6',
-                 'InstalledVersion': '2.41-12+deb13u4', 'Secret': 'SECRET_CANARY'},
-                {'VulnerabilityID': 'CVE-2099-1234', 'PkgName': 'SECRET_CANARY',
-                 'InstalledVersion': '0'},
-            ]},
-            {'Class': 'lang-pkgs', 'Type': 'node-pkg', 'Vulnerabilities': [
-                {'VulnerabilityID': 'CVE-2026-97399', 'PkgName': 'SECRET_CANARY',
-                 'InstalledVersion': '0'},
-            ]},
-        ]}
-        self.assertEqual(gate.cve_97399_package_diagnostics(report),
-                         [{'name': 'libc6', 'version': '2.41-12+deb13u4'}])
-        report['Results'][0]['Vulnerabilities'][0]['PkgName'] = 'SECRET/CANARY'
-        with self.assertRaisesRegex(gate.GateError, '^invalid-vulnerability-report$'):
-            gate.cve_97399_package_diagnostics(report)
 
     def test_no_report_and_malformed_reports_block(self):
         for report in [None, {}, {'Results': []}]:
@@ -312,6 +369,7 @@ class OrchestrationTests(unittest.TestCase):
         self.policy_path = self.root / 'policy.json'
         policy_value = json.loads(gate.POLICY_PATH.read_text())
         policy_value['exceptions'] = []
+        policy_value['vulnerabilityExceptions'] = []
         self.policy_path.write_text(json.dumps(policy_value))
         policy_patch = patch.object(gate, 'POLICY_PATH', self.policy_path)
         policy_patch.start()
@@ -344,9 +402,16 @@ class OrchestrationTests(unittest.TestCase):
                                  'DiffIDs': self.layers, 'OS': {'Family': 'debian'}},
                     'Results': [{'Class': 'lang-pkgs', 'Type': kind, 'Packages': [{'Name': 'example'}]}
                                 for kind in ('node-pkg', 'python-pkg')] +
-                               [{'Class': 'os-pkgs', 'Type': 'debian', 'Packages': [{'Name': 'example'}],
-                                 'Vulnerabilities': [{'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]
-                                 if self.mode in ('unfixed', 'secret-and-unfixed') else []}]}))
+                               [{'Class': 'os-pkgs', 'Type': 'debian',
+                                 'Packages': [{'Name': 'example'},
+                                              {'Name': 'libc6', 'Version': '2.41-12+deb13u4'}],
+                                 'Vulnerabilities': (
+                                     ([{'VulnerabilityID': 'CVE-2026-97399', 'Severity': 'UNKNOWN',
+                                        'PkgName': 'libc6', 'InstalledVersion': '2.41-12+deb13u4'}]
+                                      if self.mode in ('cve', 'cve-and-unfixed') else [])
+                                     + ([{'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]
+                                        if self.mode in ('unfixed', 'secret-and-unfixed',
+                                                         'cve-and-unfixed') else []))}]}))
             cache = Path(command[command.index('--cache-dir') + 1]) / 'db'
             cache.mkdir(parents=True)
             (cache / 'metadata.json').write_text(json.dumps({'UpdatedAt': datetime.now(timezone.utc).isoformat()}))
@@ -413,6 +478,36 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result['secretFindings'], 0)
         gate.verify_summary(self.summary, self.archive, self.image, self.revision)
         self.assertNotIn('CANARY', self.output.getvalue())
+
+    def test_exact_cve_exception_is_audited_and_other_high_still_blocks(self):
+        self.mode = 'cve'
+        policy_value = json.loads(self.policy_path.read_text())
+        policy_value['vulnerabilityExceptions'] = [vulnerability_exception()]
+        self.policy_path.write_text(json.dumps(policy_value))
+        with patch.object(gate, 'require_amd64_unaffected_advisory') as advisory:
+            result = self.invoke()
+            gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+        self.assertEqual(advisory.call_count, 2)
+        advisory.assert_called_with(gate.CVE_97399_ADVISORY)
+        self.assertEqual(result['vulnerabilities']['UNKNOWN'], 1)
+        self.assertEqual(result['remainingVulnerabilities']['UNKNOWN'], 0)
+        self.assertEqual(result['vulnerabilityExceptionsApplied'], 1)
+        self.assertEqual(json.loads(self.output.getvalue())['blockingVulnerabilityIds'], [])
+        forged = json.loads(self.summary.read_text())
+        forged['vulnerabilityExceptionsApplied'] = 0
+        self.summary.write_text(json.dumps(forged))
+        with self.assertRaisesRegex(gate.GateError, '^security-summary-not-passed$'):
+            gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+        self.mode = 'cve-and-unfixed'
+        self.output = io.StringIO()
+        with patch.object(gate, 'require_amd64_unaffected_advisory'):
+            with self.assertRaisesRegex(gate.GateError, '^security-findings-block-publication$'):
+                self.invoke()
+        blocked = json.loads(self.output.getvalue())
+        self.assertEqual(blocked['blockingVulnerabilityIds'],
+                         [{'id': 'CVE-2099-1234', 'findings': 1}])
+        self.assertEqual(blocked['remainingVulnerabilities']['HIGH'], 1)
+        self.assertFalse(blocked['passed'])
 
     def test_success_is_bound_to_archive_and_publish_rejects_changed_archive(self):
         self.assertTrue(self.invoke()['passed'])

@@ -26,6 +26,11 @@ SECRET_EXCEPTION_KEYS = frozenset(('kind', 'rule', 'sourceClass', 'pathSha256', 
 SECRET_EXCEPTION_REASONS = frozenset(('generated-code-expression', 'public-runtime-constant'))
 SECRET_SOURCE_CLASSES = frozenset(('application', 'image-metadata', 'layer-metadata', 'node-dependency',
                                    'other', 'python-dependency'))
+VULNERABILITY_EXCEPTION_KEYS = frozenset(('kind', 'id', 'sourceClass', 'sourceType', 'package',
+                                          'installedVersion', 'severity', 'platform', 'count',
+                                          'reason', 'advisory', 'reviewedBy', 'expiresAt'))
+CVE_97399_ADVISORY = ('https://raw.githubusercontent.com/CVEProject/cvelistV5/main/'
+                      'cves/2026/97xxx/CVE-2026-97399.json')
 SEVERITIES = ('UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL')
 SENSITIVE_PATH = re.compile(
     r'(^|/)(?:\.env(?:\.[^/]*)?|\.git|\.ssh|\.aws|\.netrc|\.pypirc|credentials\.json|'
@@ -62,8 +67,8 @@ def exception_key(exception):
 
 def validate_policy(value):
     require(isinstance(value, dict) and set(value) == {
-        'schemaVersion', 'blockingSeverities', 'exceptions', 'scanners'
-    } and value.get('schemaVersion') == 2, 'unapproved-policy')
+        'schemaVersion', 'blockingSeverities', 'exceptions', 'vulnerabilityExceptions', 'scanners'
+    } and value.get('schemaVersion') == 3, 'unapproved-policy')
     require(value.get('blockingSeverities') == ['UNKNOWN', 'HIGH', 'CRITICAL'], 'unapproved-policy')
     exceptions = value.get('exceptions')
     require(isinstance(exceptions, list) and len(exceptions) <= MAX_DIAGNOSTIC_SAMPLES, 'unapproved-policy')
@@ -89,6 +94,31 @@ def validate_policy(value):
                 'unapproved-policy')
         keys.append(exception_key(exception))
     require(len(keys) == len(set(keys)), 'unapproved-policy')
+    vulnerability_exceptions = value.get('vulnerabilityExceptions')
+    require(isinstance(vulnerability_exceptions, list) and len(vulnerability_exceptions) <= 1,
+            'unapproved-policy')
+    for exception in vulnerability_exceptions:
+        require(isinstance(exception, dict) and set(exception) == VULNERABILITY_EXCEPTION_KEYS
+                and exception.get('kind') == 'trivy-vulnerability'
+                and exception.get('id') == 'CVE-2026-97399'
+                and exception.get('sourceClass') == 'os-pkgs'
+                and exception.get('sourceType') == 'debian'
+                and exception.get('package') == 'libc6'
+                and isinstance(exception.get('installedVersion'), str)
+                and re.fullmatch(r'[0-9A-Za-z.+~:_-]{1,128}', exception['installedVersion']) is not None
+                and exception.get('severity') == 'UNKNOWN'
+                and exception.get('platform') == 'linux/amd64'
+                and type(exception.get('count')) is int and exception['count'] == 1
+                and exception.get('reason') == 'unaffected-platform'
+                and exception.get('advisory') == CVE_97399_ADVISORY
+                and isinstance(exception.get('reviewedBy'), str) and 0 < len(exception['reviewedBy']) <= 256
+                and isinstance(exception.get('expiresAt'), str), 'unapproved-policy')
+        try:
+            expires = datetime.fromisoformat(exception['expiresAt'].replace('Z', '+00:00'))
+        except ValueError:
+            raise GateError('unapproved-policy') from None
+        require(expires.utcoffset() == timedelta(0) and datetime.now(timezone.utc) < expires,
+                'unapproved-policy')
     scanners = value.get('scanners')
     require(isinstance(scanners, dict) and set(scanners) == {'gitleaks', 'trivy'}, 'unapproved-policy')
     for specification in scanners.values():
@@ -295,7 +325,8 @@ def prepare_archive(archive_path, work, image_id, revision):
                     files += 1
         if compressed:
             layer.unlink()
-    return {'scan_root': scan_root, 'diff_ids': diff_ids, 'layers': len(layer_names),
+    return {'scan_root': scan_root, 'platform': config['os'] + '/' + config['architecture'],
+            'diff_ids': diff_ids, 'layers': len(layer_names),
             'files': files, 'sensitive_paths': sensitive_paths, 'locations': locations,
             'sensitive_reasons': sensitive_reasons, 'sensitive_samples': sensitive_samples}
 
@@ -351,6 +382,57 @@ def vulnerability_counts(report, image_id, diff_ids):
     return counts
 
 
+def require_amd64_unaffected_advisory(url):
+    """A changed or unavailable official CVE record cannot justify this exception."""
+    try:
+        request = urllib.request.Request(url, headers={'User-Agent': 'pa-investment-image-security'})
+        with urllib.request.urlopen(request, timeout=20) as source:
+            body = source.read(128 * 1024 + 1)
+        require(len(body) <= 128 * 1024, 'unverified-vulnerability-exception')
+        advisory = json.loads(body)
+        require(advisory['cveMetadata']['cveId'] == 'CVE-2026-97399'
+                and advisory['cveMetadata']['state'] == 'PUBLISHED'
+                and advisory['containers']['cna']['affected'] == [{
+                    'vendor': 'The GNU C Library', 'product': 'glibc',
+                    'platforms': ['Power8'],
+                    'versions': [{'status': 'affected', 'version': '2.24',
+                                  'lessThan': '2.45', 'versionType': 'custom'}],
+                    'defaultStatus': 'unaffected',
+                }], 'unverified-vulnerability-exception')
+    except (OSError, ValueError, UnicodeError, KeyError, TypeError, AttributeError, IndexError):
+        raise GateError('unverified-vulnerability-exception') from None
+
+
+def apply_vulnerability_exceptions(report, exceptions, platform):
+    """Drop one exact finding only after report identity and official platform review."""
+    if not exceptions:
+        return report, 0
+    exception = exceptions[0]
+    require(platform == exception['platform'], 'unexpected-platform')
+    applied, results = 0, []
+    for result in report['Results']:
+        retained = []
+        for finding in result.get('Vulnerabilities', []):
+            exact = (result.get('Class') == exception['sourceClass']
+                     and result.get('Type') == exception['sourceType']
+                     and finding.get('VulnerabilityID') == exception['id']
+                     and finding.get('PkgName') == exception['package']
+                     and finding.get('InstalledVersion') == exception['installedVersion']
+                     and finding.get('Severity') == exception['severity']
+                     and any(isinstance(package, dict)
+                             and package.get('Name') == exception['package']
+                             and package.get('Version') == exception['installedVersion']
+                             for package in result.get('Packages', [])))
+            if exact and applied < exception['count']:
+                applied += 1
+            else:
+                retained.append(finding)
+        results.append({**result, 'Vulnerabilities': retained})
+    require(applied == exception['count'], 'unused-vulnerability-exception')
+    require_amd64_unaffected_advisory(exception['advisory'])
+    return {**report, 'Results': results}, applied
+
+
 def install_scanners(destination):
     require(not destination.exists(), 'tools-directory-already-exists')
     destination.mkdir(parents=True, mode=0o700)
@@ -383,24 +465,6 @@ def blocking_vulnerability_ids(report, severities):
                 identifier = 'sha256:' + hashlib.sha256(identifier.encode()).hexdigest()
             counts[identifier] += 1
     return [{'id': identifier, 'findings': count} for identifier, count in sorted(counts.items())]
-
-
-def cve_97399_package_diagnostics(report):
-    """Expose only the OS package identity needed to review this one advisory."""
-    packages = []
-    for result in report['Results']:
-        if result.get('Class') != 'os-pkgs' or result.get('Type') != 'debian':
-            continue
-        for finding in result.get('Vulnerabilities', []):
-            if finding.get('VulnerabilityID') != 'CVE-2026-97399':
-                continue
-            name, version = finding.get('PkgName'), finding.get('InstalledVersion')
-            require(isinstance(name, str) and isinstance(version, str)
-                    and re.fullmatch(r'[A-Za-z0-9.+~:_-]{1,128}', name) is not None
-                    and re.fullmatch(r'[A-Za-z0-9.+~:_-]{1,128}', version) is not None,
-                    'invalid-vulnerability-report')
-            packages.append({'name': name, 'version': version})
-    return packages[:MAX_DIAGNOSTIC_SAMPLES]
 
 
 def scan(archive, image_id, revision, tools, work_parent, summary):
@@ -453,26 +517,32 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
         data = read_json(report)
         require(data.get('Trivy', {}).get('Version') == rules['scanners']['trivy']['version'], 'scanner-version-mismatch')
         counts = vulnerability_counts(data, image_id, evidence['diff_ids'])
+        remaining_report, vulnerability_exceptions_applied = apply_vulnerability_exceptions(
+            data, rules['vulnerabilityExceptions'], evidence['platform'])
+        remaining_counts = vulnerability_counts(remaining_report, image_id, evidence['diff_ids'])
         database = read_json(cache / 'db' / 'metadata.json')
         updated = datetime.fromisoformat(database['UpdatedAt'].replace('Z', '+00:00'))
         require(timedelta(0) <= datetime.now(timezone.utc) - updated <= timedelta(hours=72), 'stale-vulnerability-database')
         require(digest(archive) == archive_hash, 'archive-changed-during-scan')
-        blocked = secrets_count + evidence['sensitive_paths'] + sum(counts[s] for s in rules['blockingSeverities'])
+        blocked = (secrets_count + evidence['sensitive_paths']
+                   + sum(remaining_counts[s] for s in rules['blockingSeverities']))
         result = {'schemaVersion': 1, 'passed': blocked == 0, 'archiveSha256': archive_hash, 'imageId': image_id,
-                  'revision': revision, 'diffIds': evidence['diff_ids'], 'layers': evidence['layers'],
+                  'revision': revision, 'platform': evidence['platform'],
+                  'diffIds': evidence['diff_ids'], 'layers': evidence['layers'],
                   'files': evidence['files'], 'secretFindings': secrets_count,
                   'secretFindingsDetected': secrets_detected,
                   'secretExceptionsApplied': secret_exceptions_applied,
                   'sensitivePaths': evidence['sensitive_paths'], 'vulnerabilities': counts,
+                  'remainingVulnerabilities': remaining_counts,
+                  'vulnerabilityExceptionsApplied': vulnerability_exceptions_applied,
                   'scanners': {name: spec['version'] for name, spec in rules['scanners'].items()},
                   'databaseUpdatedAt': updated.isoformat(), 'policySha256': digest(POLICY_PATH),
                   'scannedAt': datetime.now(timezone.utc).isoformat()}
         summary.write_text(json.dumps(result, indent=2) + '\n')
-        identifiers = blocking_vulnerability_ids(data, rules['blockingSeverities'])
+        identifiers = blocking_vulnerability_ids(remaining_report, rules['blockingSeverities'])
         print(json.dumps({'kind': 'image-security-result', **result,
                           'vulnerabilityScan': 'completed',
                           'blockingVulnerabilityIds': identifiers[:MAX_DIAGNOSTIC_SAMPLES],
-                          'cve97399Packages': cve_97399_package_diagnostics(data),
                           'blockingVulnerabilityIdsOmitted': max(0, len(identifiers) - MAX_DIAGNOSTIC_SAMPLES)},
                          sort_keys=True), flush=True)
         require(blocked == 0, 'security-findings-block-publication')
@@ -484,16 +554,24 @@ def verify_summary(summary, archive, image_id, revision):
     rules = policy()
     require(data.get('schemaVersion') == 1 and data.get('passed') is True
             and data.get('archiveSha256') == digest(archive) and data.get('imageId') == image_id
-            and data.get('revision') == revision and data.get('policySha256') == digest(POLICY_PATH),
+            and data.get('revision') == revision and data.get('platform') == 'linux/amd64'
+            and data.get('policySha256') == digest(POLICY_PATH),
             'security-summary-identity-mismatch')
     expected_exceptions = sum(exception['count'] for exception in rules['exceptions'])
+    expected_vulnerability_exceptions = sum(exception['count'] for exception in rules['vulnerabilityExceptions'])
     require(data.get('secretFindings') == 0
             and data.get('secretFindingsDetected') == expected_exceptions
             and data.get('secretExceptionsApplied') == expected_exceptions
             and data.get('sensitivePaths') == 0
-            and all(data.get('vulnerabilities', {}).get(s) == 0 for s in rules['blockingSeverities'])
+            and data.get('vulnerabilityExceptionsApplied') == expected_vulnerability_exceptions
+            and all(data.get('remainingVulnerabilities', {}).get(s) == 0
+                    for s in rules['blockingSeverities'])
+            and data.get('vulnerabilities', {}).get('UNKNOWN') == expected_vulnerability_exceptions
+            and all(data.get('vulnerabilities', {}).get(s) == 0 for s in ('HIGH', 'CRITICAL'))
             and data.get('scanners') == {name: spec['version'] for name, spec in rules['scanners'].items()},
             'security-summary-not-passed')
+    if expected_vulnerability_exceptions:
+        require_amd64_unaffected_advisory(rules['vulnerabilityExceptions'][0]['advisory'])
     scanned = datetime.fromisoformat(data['scannedAt'])
     require(timedelta(0) <= datetime.now(timezone.utc) - scanned <= timedelta(hours=24), 'security-summary-expired')
 
