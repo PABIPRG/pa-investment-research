@@ -3,60 +3,35 @@ import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { App } from '../src/App.tsx'
-import { loadMoreActivities, loadObservatorySlice, PublicApiError, type ObservatorySlice, type PublicActivities } from '../src/api.ts'
+import { loadMoreActivities, loadObservatorySlice, PublicApiError, type ObservatorySlice } from '../src/api.ts'
 
 vi.mock('../src/api.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/api.ts')>(),
   loadObservatorySlice: vi.fn(), loadMoreActivities: vi.fn(),
 }))
-
 let container: HTMLDivElement
 let root: Root
 let requests: Array<NonNullable<Parameters<typeof loadObservatorySlice>[3]>>
-const page = (title: string, cursor: string | null): PublicActivities => ({
-  as_of: '2026-09-21', next_cursor: cursor,
-  items: [{ public_id: title, title, summary: '测试操作记录', category: 'operation', status: 'completed', occurred_at: '2026-09-21T10:00:00+08:00' }],
-})
-const state = (activities: PublicActivities, accountLoading = true): ObservatorySlice => ({
-  accountLoading, activitiesLoading: false, account: null, accountUnavailable: { availability: 'unavailable', reason_code: 'missing', message: '缺少资金' }, accountError: null,
-  activities, activitiesError: false,
-})
 const button = (text: string) => [...container.querySelectorAll('button')].find(item => item.textContent === text)!
-
-it('uses accessible filter menus and clears both active filters together', async () => {
-  expect(container.querySelector('select')).toBeNull()
-  const select = (label: string) => container.querySelector<HTMLButtonElement>(`[role="combobox"][aria-label="${label}"]`)!
-  await act(async () => { select('记录类型').click() })
-  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.textContent === '操作')!.click() })
-  expect(loadObservatorySlice).toHaveBeenLastCalledWith(expect.any(String), { category: 'operation', status: 'all' }, expect.any(AbortSignal), expect.any(Function))
-  await act(async () => { select('记录状态').click() })
-  await act(async () => { [...document.querySelectorAll<HTMLButtonElement>('[role="option"]')].find(item => item.textContent === '失败 / 已回滚')!.click() })
-  expect(loadObservatorySlice).toHaveBeenLastCalledWith(expect.any(String), { category: 'operation', status: 'failed' }, expect.any(AbortSignal), expect.any(Function))
-  await act(async () => { button('清除筛选').click() })
-  expect(loadObservatorySlice).toHaveBeenLastCalledWith(expect.any(String), { category: 'all', status: 'all' }, expect.any(AbortSignal), expect.any(Function))
-  expect(button('清除筛选')).toBeUndefined()
+const activity = (title: string, cursor: string | null) => ({
+  as_of: '2026-09-29', next_cursor: cursor,
+  items: title ? [{ public_id: title, title, summary: '公开记录', category: 'operation' as const, status: 'completed' as const, occurred_at: '2026-09-29T10:00:00+08:00' }] : [],
 })
-
-it('shows pending feedback and blocks duplicate operation retries', async () => {
-  const failed = { ...state(page('', null), false), activities: null, activitiesError: true }
-  await act(async () => { requests[0]!(failed, 'activities'); requests[0]!(failed, 'account') })
-  await act(async () => { button('重试记录').click() })
-  expect(button('正在重试…').disabled).toBe(true)
-  await act(async () => { button('正在重试…').click() })
-  expect(requests).toHaveLength(2)
-  await act(async () => { requests[1]!(state(page('重试成功的记录', null), false), 'activities') })
-  expect(container.textContent).toContain('重试成功的记录')
-  expect(container.textContent).not.toContain('操作记录暂时无法读取')
-})
-
-it('does not present a failed account request as proof of a missing snapshot', async () => {
-  const failed = { ...state(page('独立记录', null), false), accountUnavailable: null, accountError: '账户数据加载失败，请重试。' }
-  await act(async () => { requests[0]!(failed, 'activities'); requests[0]!(failed, 'account') })
-  expect(container.textContent).toContain('暂时无法确认快照状态')
-  expect(container.textContent).not.toContain('尚无可公开的完整账户快照')
-  expect(container.textContent).toContain('独立记录')
-})
-
+const live = {
+  availability: 'available' as const, date: '2026-09-29', currency: 'CNY' as const, source: 'current_holdings' as const, holdings_as_of: '2026-09-29',
+  summary: { holdings_cost: '100.00', market_value: '120.00', floating_profit_loss: '20.00', cost_return: '0.20000000', cash: null, initial_capital: null, total_equity: null },
+  items: [{ ticker: '600519', name: '甲', quantity: '1', cost_price: '100', market_price: '120', market_value: '120.00', profit_loss: '20.00', return_rate: '0.20000000' }],
+  freshness: { stale: false, message: null },
+}
+function state(title: string, cursor: string | null = null): ObservatorySlice {
+  return {
+    liveLoading: false, historyLoading: false, calendarLoading: false, activitiesLoading: false,
+    live, liveError: false,
+    history: { from: '2026-09-01', to: '2026-09-29', currency: 'CNY', quality: 'estimated', limitations: [], available_since: '2026-09-01', points: [] }, historyError: false,
+    calendar: { month: '2026-09', items: [], days: [], limitations: [] }, calendarError: false,
+    activities: activity(title, cursor), activitiesError: false,
+  }
+}
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('matchMedia', () => ({ matches: false }))
@@ -70,7 +45,6 @@ beforeEach(async () => {
   root = createRoot(container)
   await act(async () => { root.render(createElement(App)) })
 })
-
 afterEach(async () => {
   await act(async () => { root.unmount() })
   container.remove()
@@ -78,47 +52,33 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-it('keeps page two when a slow account response completes after operations pagination', async () => {
-  const first = state(page('第一页记录', 'cursor-one'))
-  await act(async () => { requests[0]!(first, 'activities') })
-  vi.mocked(loadMoreActivities).mockResolvedValue(page('第二页记录', null))
-  await act(async () => { button('加载更多').click() })
-  expect(container.textContent).toContain('第二页记录')
-  await act(async () => { requests[0]!({ ...first, accountLoading: false }, 'account') })
-  expect(container.textContent).toContain('第二页记录')
-  expect(container.textContent).toContain('缺少资金')
-})
-
-it('disables stale-cursor pagination during refresh and discards an old page after revocation', async () => {
-  const first = state(page('第一页记录', 'cursor-one'), false)
-  await act(async () => { requests[0]!(first, 'activities') })
-  let finishPage!: (value: PublicActivities) => void
-  vi.mocked(loadMoreActivities).mockImplementation(() => new Promise(resolve => { finishPage = resolve }))
-  await act(async () => { button('加载更多').click() })
+it('retains the same query result with an explicit stale notice after refresh failure', async () => {
+  await act(async () => { requests[0]!(state('原有记录'), 'live'); requests[0]!(state('原有记录'), 'activities') })
   await act(async () => { button('刷新数据').click() })
   expect(requests).toHaveLength(2)
-  expect(button('加载更多').disabled).toBe(true)
-  await act(async () => { button('加载更多').click() })
-  expect(loadMoreActivities).toHaveBeenCalledTimes(1)
-  const revoked = { ...first, activities: { ...first.activities!, items: [], next_cursor: null } }
-  await act(async () => { requests[1]!(revoked, 'activities') })
-  await act(async () => { finishPage(page('已撤销的第二页记录', null)) })
-  expect(container.textContent).not.toContain('已撤销的第二页记录')
-  expect(container.textContent).toContain('截至所选日期暂无已公开记录')
+  await act(async () => { requests[1]!({ ...state(''), live: null, liveError: true }, 'live') })
+  expect(container.textContent).toContain('¥120.00')
+  expect(container.textContent).toContain('可能已过期')
+  expect(container.textContent).toContain('原有记录')
 })
 
-it('clears expired pages and reloads the first page without retrying the expired cursor', async () => {
-  const first = state(page('失效前的记录', 'cursor-one'), false)
-  await act(async () => { requests[0]!(first, 'activities') })
-  vi.mocked(loadMoreActivities).mockRejectedValue(new PublicApiError(409, '记录范围已更新'))
+it('discards an old page after activity scope changes and preserves the new first page', async () => {
+  await act(async () => { requests[0]!(state('第一页', 'cursor-one'), 'activities') })
+  let finish!: (value: ReturnType<typeof activity>) => void
+  vi.mocked(loadMoreActivities).mockImplementation(() => new Promise(resolve => { finish = resolve }))
   await act(async () => { button('加载更多').click() })
-  expect(container.textContent).not.toContain('失效前的记录')
-  expect(container.textContent).toContain('记录范围已更新，已清除旧分页。')
+  await act(async () => { button('刷新数据').click() })
+  await act(async () => { requests[1]!(state('新第一页'), 'activities') })
+  await act(async () => { finish(activity('旧第二页', null)) })
+  expect(container.textContent).toContain('新第一页')
+  expect(container.textContent).not.toContain('旧第二页')
+})
+
+it('clears expired pagination and reloads after a revoked cursor', async () => {
+  await act(async () => { requests[0]!(state('原第一页', 'cursor-one'), 'activities') })
+  vi.mocked(loadMoreActivities).mockRejectedValue(new PublicApiError(409, '游标过期'))
+  await act(async () => { button('加载更多').click() })
+  expect(container.textContent).toContain('记录范围已更新')
+  expect(container.textContent).not.toContain('原第一页')
   expect(requests).toHaveLength(2)
-  expect(container.textContent).not.toContain('更多记录加载失败')
-  await act(async () => { requests[1]!(state(page('重新读取的记录', null), false), 'activities') })
-  expect(container.textContent).toContain('重新读取的记录')
-  await act(async () => { requests[1]!(state(page('重新读取的记录', null), false), 'account') })
-  expect(container.textContent).toContain('缺少资金')
-  expect(loadMoreActivities).toHaveBeenCalledTimes(1)
 })

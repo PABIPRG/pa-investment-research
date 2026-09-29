@@ -213,6 +213,8 @@ export class InvestmentPythonRuntime extends Service {
           DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN: process.env.DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN ?? '',
           DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS: process.env.DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS ?? '[]',
           DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE: process.env.DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE ?? '',
+          DSH_PUBLIC_OBSERVATORY_RESEARCH_SINCE: process.env.DSH_PUBLIC_OBSERVATORY_RESEARCH_SINCE ?? '',
+          ...(process.env.MW_URL ? { MW_URL: process.env.MW_URL } : {}),
         },
         'market-watch': {
           DSH_DATA_TRANSFER_TOKEN: dataTransferToken,

@@ -29,7 +29,7 @@
 
 ## 凭据与就绪状态
 
-`getRunningBackend(id, signal?)` 为公开消费者提供不持有生命周期的读取：要求已有业务 lease 持有活动健康后端，不启动或保活进程，关闭或移除注册的竞态会使调用失败。owner 可以在方法返回后停止后端，消费者必须处理读取不可用。managed trading-core 环境显式接收 Host 环境中的 `DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS`、`DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE` 与 `DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN`；发布与私有写入规则见[公开网关](../../host/public-observatory/README.md)。
+`getRunningBackend(id, signal?)` 为公开消费者提供不持有生命周期的读取：要求已有业务 lease 持有活动健康后端，不启动或保活进程，关闭或移除注册的竞态会使调用失败。owner 可以在方法返回后停止后端，消费者必须处理读取不可用。managed trading-core 环境显式接收 Host 环境中的 `DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS`、`DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE`、`DSH_PUBLIC_OBSERVATORY_RESEARCH_SINCE` 与 `DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN`；配置了 `MW_URL` 时也转发到当前报价读取。发布与私有写入规则见[公开网关](../../host/public-observatory/README.md)。
 
 投研 profile 复用 Models 设置页作为 `DEEPSEEK_API_KEY` 的唯一产品输入。只有在启动 `owned` managed child 时，凭据 provider 才会解析该引用；Runtime 也只会把它转发给显式允许该引用的 backend 定义。凭据值不会复制进 backend `.env`、Runtime state、日志、就绪快照或 Client Remote 数据。`attached` 与 `external` endpoint 不接收本机凭据，其凭据由该服务的 operator 负责。
 

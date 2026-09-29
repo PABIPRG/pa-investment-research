@@ -3,7 +3,7 @@ import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, DataZoomComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import type { EquityPoint } from './api.ts'
+import type { HistoryPoint } from './api.ts'
 import css from './App.module.css'
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer])
@@ -12,7 +12,7 @@ const money = new Intl.NumberFormat('zh-CN', {
   style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
 
-export function EquityChart({ points, dark }: { points: EquityPoint[]; dark: boolean }) {
+export function EquityChart({ points, dark }: { points: HistoryPoint[]; dark: boolean }) {
   const root = useRef<HTMLDivElement>(null)
   const chart = useRef<echarts.ECharts | null>(null)
   const [activeIndex, setActiveIndex] = useState(Math.max(0, points.length - 1))
@@ -31,7 +31,7 @@ export function EquityChart({ points, dark }: { points: EquityPoint[]; dark: boo
         formatter: (raw: unknown) => {
           const row = (Array.isArray(raw) ? raw[0] : raw) as { dataIndex?: number } | undefined
           const point = points[row?.dataIndex ?? 0]
-          return point === undefined ? '' : `${point.date}<br/><strong>${money.format(Number(point.total_equity))}</strong>`
+          return point === undefined ? '' : `${point.date}<br/><strong>${point.value === null ? '—' : money.format(Number(point.value))}</strong>`
         },
       },
       xAxis: {
@@ -49,7 +49,7 @@ export function EquityChart({ points, dark }: { points: EquityPoint[]; dark: boo
       dataZoom: points.length > 20 ? [{ type: 'inside' }, { type: 'slider', height: 16 }] : [],
       series: [{
         type: 'line',
-        data: points.map(point => Number(point.total_equity)),
+        data: points.map(point => point.value === null ? null : Number(point.value)),
         symbol: 'circle',
         symbolSize: points.length > 32 ? 4 : 7,
         showSymbol: points.length <= 32,
@@ -63,7 +63,7 @@ export function EquityChart({ points, dark }: { points: EquityPoint[]; dark: boo
     return () => { resize.disconnect(); instance.dispose(); chart.current = null }
   }, [dark, points])
 
-  if (points.length === 0) return <div className={css.empty}>所选区间暂无权益快照。</div>
+  if (points.length === 0) return <div className={css.empty}>所选区间暂无持仓历史估值。</div>
   const active = points[Math.min(activeIndex, points.length - 1)]
   return (
     <>
@@ -72,7 +72,7 @@ export function EquityChart({ points, dark }: { points: EquityPoint[]; dark: boo
         className={css.chart}
         role="img"
         tabIndex={0}
-        aria-label="权益轨迹折线图。使用左右方向键逐点查看。"
+        aria-label="持仓历史估值折线图。使用左右方向键逐点查看。"
         onKeyDown={(event) => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
@@ -82,7 +82,7 @@ export function EquityChart({ points, dark }: { points: EquityPoint[]; dark: boo
         }}
       />
       <p className={css.srOnly} aria-live="polite">
-        {active === undefined ? '' : `${active.date}，总权益 ${money.format(Number(active.total_equity))}`}
+        {active === undefined ? '' : `${active.date}，持仓估值 ${active.value === null ? '缺失' : money.format(Number(active.value))}`}
       </p>
     </>
   )

@@ -186,6 +186,7 @@ describe.skipIf(python === undefined)('managed fake Python runner', () => {
       DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS: '[]',
       DSH_PUBLIC_OBSERVATORY_WRITE_TOKEN: '',
       DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE: '2026-09-21T00:00:00+08:00',
+      DSH_PUBLIC_OBSERVATORY_RESEARCH_SINCE: '',
     })
     expect(byModule.get('market_watch.app:app')?.env).toEqual({
       FAKE_ENV_MARKER: 'market-visible',

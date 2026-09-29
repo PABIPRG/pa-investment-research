@@ -480,7 +480,7 @@ def create_app(
         notification_repository=notification_service.repository,
         on_committed=lambda store: position_risk.reconcile(store, risk_rule_port),
     )
-    register_public_observatory_routes(app)
+    register_public_observatory_routes(app, price_loader=portfolio_price_cache.load)
 
     def publish_holdings_notification(result: dict, source_name: str) -> None:
         """持仓事实提交后发布；通知失败不得回滚已经完成的持仓事务。"""
