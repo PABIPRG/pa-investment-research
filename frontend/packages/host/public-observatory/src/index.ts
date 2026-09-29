@@ -109,6 +109,17 @@ function validDate(value: string): boolean {
 function backendTarget(requestUrl: URL): string | undefined {
   const path = requestUrl.pathname
   const params = requestUrl.searchParams
+  if (path === `${PUBLIC_OBSERVATORY_PREFIX}/live`) {
+    return exactKeys(params, ['date']) && validDate(params.get('date') ?? '')
+      ? `/public/performance/v1/live?${params.toString()}` : undefined
+  }
+  if (path === `${PUBLIC_OBSERVATORY_PREFIX}/history`) {
+    const from = params.get('from') ?? ''
+    const to = params.get('to') ?? ''
+    return exactKeys(params, ['from', 'to'])
+      && validDate(from) && validDate(to) && from <= to && Date.parse(to) - Date.parse(from) < 366 * 86_400_000
+      ? `/public/performance/v1/history?${params.toString()}` : undefined
+  }
   if (path === `${PUBLIC_OBSERVATORY_PREFIX}/overview`) {
     return exactKeys(params, ['date']) && validDate(params.get('date') ?? '')
       ? `/public/performance/v1/overview?${params.toString()}` : undefined
@@ -153,7 +164,9 @@ function backendTarget(requestUrl: URL): string | undefined {
 }
 
 function isKnownPath(path: string): boolean {
-  return path === `${PUBLIC_OBSERVATORY_PREFIX}/overview`
+  return path === `${PUBLIC_OBSERVATORY_PREFIX}/live`
+    || path === `${PUBLIC_OBSERVATORY_PREFIX}/history`
+    || path === `${PUBLIC_OBSERVATORY_PREFIX}/overview`
     || path === `${PUBLIC_OBSERVATORY_PREFIX}/calendar`
     || path === `${PUBLIC_OBSERVATORY_PREFIX}/equity`
     || path === `${PUBLIC_OBSERVATORY_PREFIX}/holdings`

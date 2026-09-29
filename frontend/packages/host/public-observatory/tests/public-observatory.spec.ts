@@ -54,6 +54,9 @@ describe('handlePublicObservatoryRequest', () => {
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/activities?as_of=2026-09-18&limit=1&limit=99999'), facts(), 422],
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-09-18&date=2026-09-17'), facts(), 422],
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-02-30'), facts(), 422],
+      [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/live?date=2026-09-18&private=1'), facts(), 422],
+      [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/history?from=2026-09-20&to=2026-09-18'), facts(), 422],
+      [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/live?date=2026-09-18', { method: 'POST' }), facts('POST'), 405],
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/equity?from=2020-01-01&to=2026-09-20'), facts(), 422],
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-09-18', { method: 'POST' }), facts('POST'), 405],
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-09-18'), facts('GET', 'https://evil.example'), 403],
@@ -65,6 +68,22 @@ describe('handlePublicObservatoryRequest', () => {
       expect(response.status).toBe(status)
     }
     expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it('routes live holdings and historical performance only to fixed internal reads', async () => {
+    const paths: string[] = []
+    for (const path of ['/live?date=2026-09-18', '/history?from=2026-09-01&to=2026-09-18']) {
+      const response = await handlePublicObservatoryRequest(
+        new Request(`https://pair-api.xiexin.dev/api/public/performance/v1${path}`, { headers: { origin: baseConfig.allowedOrigins[0]! } }),
+        facts(), baseConfig, async () => ({ baseUrl: 'http://127.0.0.1:4321' }),
+        async input => { paths.push(String(input)); return new Response('{}', { headers: { 'content-type': 'application/json' } }) },
+      )
+      expect(response.status).toBe(200)
+    }
+    expect(paths).toEqual([
+      'http://127.0.0.1:4321/public/performance/v1/live?date=2026-09-18',
+      'http://127.0.0.1:4321/public/performance/v1/history?from=2026-09-01&to=2026-09-18',
+    ])
   })
 
   it('serves an exact preflight without touching the backend', async () => {

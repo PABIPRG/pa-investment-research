@@ -5,7 +5,7 @@
   backdrop-filter: blur(18px); position: sticky; top: 0; z-index: 20;
 }
 .brand { color: inherit; text-decoration: none; display: flex; align-items: center; gap: 11px; }
-.brand img { width: 36px; height: 36px; border-radius: 11px; box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-brand-primary) 24%, transparent); }
+.brand img { width: 36px; height: 36px; border-radius: 11px; }
 .brand span { display: grid; gap: 1px; }
 .brand strong { font-size: 1.0714rem; letter-spacing: .02em; }
 .brand small { font-size: .6429rem; letter-spacing: .16em; color: var(--dsw-alias-label-tertiary); }
@@ -29,14 +29,14 @@
 }
 .pnlBlock { padding: clamp(24px, 4vw, 42px); border-right: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-1); }
 .pnlBlock > span { color: var(--dsw-alias-label-secondary); font-size: .9286rem; }
-.pnlBlock > strong { display: block; margin: 16px 0 4px; font-family: inherit; font-size: clamp(2rem, 4.4vw, 3.4286rem); line-height: 1.2; font-weight: 600; font-variant-numeric: lining-nums tabular-nums; letter-spacing: normal; }
+.pnlBlock > strong { display: block; margin: 16px 0 4px; font-family: inherit; font-size: clamp(1.7143rem, 3.2vw, 3.4286rem); line-height: 1.2; font-weight: 600; font-variant-numeric: lining-nums tabular-nums; letter-spacing: normal; overflow-wrap: anywhere; }
 .pnlBlock > p { margin: 0 0 24px; font-size: 1.2857rem; font-weight: 650; }
 .formulaHelp { display: flex; align-items: center; gap: 4px; color: var(--dsw-alias-label-secondary); font-size: .8571rem; line-height: 1.5; }
 .heading > button { flex: none; }
 .metricGrid { padding: 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: var(--dsw-alias-bg-layer-1); }
 .metricGrid > div { padding: 19px 22px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); display: flex; flex-direction: column; gap: 5px; }
 .metricGrid span { color: var(--dsw-alias-label-secondary); font-size: .8571rem; }
-.metricGrid strong { font-size: clamp(1.2857rem, 2.4vw, 1.9286rem); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.metricGrid strong { font-size: clamp(1.2857rem, 2.4vw, 1.9286rem); letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metricGrid small { color: var(--dsw-alias-label-tertiary); font-size: .7857rem; }
 .statusline { min-height: 40px; padding: 0 4px; display: flex; align-items: center; gap: 18px; color: var(--dsw-alias-label-tertiary); font-size: .7857rem; }
 .statusline strong { color: var(--dsw-alias-state-success-primary); }
@@ -79,7 +79,7 @@
 .calendarGrid button small { font-size: .7143rem; line-height: 1.4; color: var(--dsw-alias-label-secondary); }
 .calendarGrid > button[data-selected='true'] { border-color: var(--dsw-alias-brand-primary); box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary); }
 .calendarGrid button span { color: var(--dsw-alias-label-secondary); font-size: .7857rem; }
-.calendarGrid button strong { font-size: .8571rem; font-variant-numeric: tabular-nums; }
+.calendarGrid button strong { max-width: 100%; overflow-wrap: anywhere; font-size: .8571rem; font-variant-numeric: tabular-nums; }
 .calendarGrid button strong span { color: inherit; font: inherit; }
 .calendarAmountCompact { display: none; }
 .calendarStatus { color: var(--dsw-alias-label-tertiary); font-size: .7857rem; text-align: right; }

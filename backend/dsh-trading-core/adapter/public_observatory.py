@@ -9,9 +9,10 @@ import json
 import os
 import re
 from calendar import monthrange
-from datetime import date, datetime, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP, localcontext
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -22,6 +23,7 @@ from starlette.responses import JSONResponse
 from .store import JsonStore
 from .public_holdings_operations import _timestamp
 from . import holdings_operation_index as operation_index
+from .portfolio_performance import portfolio_performance
 
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -32,10 +34,272 @@ SNAPSHOT_ID_LENGTH = 32
 MAX_PUBLISHED_SNAPSHOTS = 366
 MAX_WRITE_BYTES = 512 * 1024
 MAX_PUBLIC_DOCUMENT_BYTES = 8 * 1024 * 1024
+MAX_PUBLIC_POSITIONS = 1000
+
+
+class _HoldingsView:
+    """一次有界读取的不可变持仓文档视图，供现有历史计算复用。"""
+
+    def __init__(self, store: JsonStore):
+        self.document = store.read_bounded_snapshot("holdings", max_bytes=MAX_PUBLIC_DOCUMENT_BYTES)
+
+    def get(self, collection: str, key: str, default: Any = None) -> Any:
+        if collection != "holdings":
+            raise ValueError("公开读取只能访问持仓文档")
+        return self.document.get(key, default)
+
+
+def _public_positions(raw: object) -> list[dict[str, Any]]:
+    if not isinstance(raw, list) or len(raw) > MAX_PUBLIC_POSITIONS:
+        raise ValueError("持仓列表无效或超限")
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("持仓记录无效")
+        ticker = item.get("ticker")
+        if not isinstance(ticker, str) or re.fullmatch(r"\d{6}", ticker) is None or ticker in seen:
+            raise ValueError("证券代码无效或重复")
+        seen.add(ticker)
+        try:
+            quantity = Decimal(str(item["quantity"]))
+            cost_price = Decimal(str(item["cost_price"]))
+        except (KeyError, ValueError, ArithmeticError) as exc:
+            raise ValueError("持仓数值无效") from exc
+        if not quantity.is_finite() or not cost_price.is_finite() or quantity <= 0 or cost_price <= 0 or quantity >= Decimal("1e16") or cost_price >= Decimal("1e16"):
+            raise ValueError("持仓数值超限")
+        result.append({"ticker": ticker, "quantity": quantity, "cost_price": cost_price})
+    return sorted(result, key=lambda row: row["ticker"])
+
+
+def _quote_prices(codes: list[str]) -> dict[str, dict]:
+    """通过既有 market-watch 批量行情服务获取当前报价；失败时保留持仓事实。"""
+    import requests
+    from .config import settings
+
+    result: dict[str, dict] = {}
+    requested = set(codes)
+
+    def batch(batch_codes: list[str]) -> list[dict]:
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            response = session.post(
+                f"{settings.mw_url.rstrip('/')}/quotes/batch",
+                json={"codes": batch_codes}, timeout=2,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = payload.get("items", []) if isinstance(payload, dict) else []
+            return rows if isinstance(rows, list) else []
+        except (requests.RequestException, ValueError, TypeError):
+            return []
+        finally:
+            session.close()
+
+    batches = [codes[offset:offset + 100] for offset in range(0, len(codes), 100)]
+    if not batches:
+        return result
+    with ThreadPoolExecutor(max_workers=min(8, len(batches))) as executor:
+        for future in as_completed([executor.submit(batch, part) for part in batches]):
+            for row in future.result():
+                if isinstance(row, dict) and row.get("code") in requested:
+                    result[row["code"]] = row
+    return result
+
+
+def public_live(
+    store: JsonStore, requested: str, *, today: date | None = None,
+    quote_loader: Callable[[list[str]], dict[str, dict]] = _quote_prices,
+    price_loader: Callable[[str, str, str], list[dict]] | None = None,
+) -> dict:
+    """指定日持仓直读；今日用批量报价，历史只沿用此前已记录持仓。"""
+    target = _parse_date(requested)
+    current_day = today or datetime.now(SHANGHAI).date()
+    if target > current_day:
+        raise ValueError("日期不能晚于今天")
+    view = _HoldingsView(store)
+    if target == current_day:
+        raw = view.get("holdings", "default", []) or []
+        source = "current_holdings"
+        holdings_as_of = requested
+    else:
+        snapshots = [item for item in view.get("holdings", "snapshots", []) or []
+                     if isinstance(item, dict) and str(item.get("effective_at", ""))[:10] <= requested
+                     and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(item.get("effective_at", ""))[:10])]
+        if not snapshots:
+            return {"availability": "unavailable", "reason_code": "no-historical-holdings", "message": "所选日期没有持仓记录。"}
+        snapshot = max(enumerate(snapshots), key=lambda entry: (str(entry[1].get("effective_at", "")), entry[0]))[1]
+        raw = snapshot.get("positions", [])
+        source = "recorded_holdings"
+        holdings_as_of = str(snapshot["effective_at"])[:10]
+    positions = _public_positions(raw)
+    codes = [row["ticker"] for row in positions]
+    prices: dict[str, dict] = {}
+    if target == current_day:
+        try:
+            prices = quote_loader(codes) if codes else {}
+        except Exception:
+            prices = {}
+    elif price_loader is not None:
+        def historical_quote(code: str) -> tuple[str, dict | None]:
+            try:
+                rows = price_loader(code, requested, requested)
+                matched = next((row for row in rows if str(row.get("date", ""))[:10] == requested), None)
+                return code, {"price": matched.get("close")} if matched is not None else None
+            except Exception:
+                return code, None
+
+        if codes:
+            with ThreadPoolExecutor(max_workers=min(8, len(codes))) as executor:
+                for code, quote in executor.map(historical_quote, codes):
+                    if quote is not None:
+                        prices[code] = quote
+    items: list[dict] = []
+    total_cost = Decimal(0)
+    total_value = Decimal(0)
+    complete = True
+    for position in positions:
+        ticker = position["ticker"]
+        quantity = position["quantity"]
+        cost = position["cost_price"]
+        position_cost = _money(quantity * cost)
+        total_cost += position_cost
+        quote = prices.get(ticker, {})
+        try:
+            price = Decimal(str(quote.get("price")))
+            if not price.is_finite() or price <= 0 or price >= Decimal("1e16"):
+                raise ValueError("无效报价")
+        except (ValueError, TypeError, ArithmeticError):
+            price = None
+            complete = False
+        value = _money(quantity * price) if price is not None else None
+        if value is not None:
+            total_value += value
+        profit = value - position_cost if value is not None else None
+        name = quote.get("name")
+        items.append({
+            "ticker": ticker,
+            "name": name.strip()[:80] if isinstance(name, str) else "",
+            "quantity": _decimal_text(quantity),
+            "cost_price": _decimal_text(cost),
+            "market_price": _decimal_text(price) if price is not None else None,
+            "market_value": _money_text(value) if value is not None else None,
+            "profit_loss": _money_text(profit) if profit is not None else None,
+            "return_rate": _rate_text(_ratio(profit, quantity * cost)) if profit is not None else None,
+        })
+    cost_total = _money(total_cost)
+    market_total = _money(total_value) if complete else None
+    floating = market_total - cost_total if market_total is not None else None
+    return {
+        "availability": "available", "date": requested, "currency": "CNY", "source": source,
+        "holdings_as_of": holdings_as_of,
+        "summary": {
+            "holdings_cost": _money_text(cost_total),
+            "market_value": _money_text(market_total) if market_total is not None else None,
+            "floating_profit_loss": _money_text(floating) if floating is not None else None,
+            "cost_return": _rate_text(_ratio(floating, cost_total)) if floating is not None and cost_total > 0 else None,
+            "cash": None, "initial_capital": None, "total_equity": None,
+        },
+        "items": items,
+        "freshness": {"stale": not complete, "message": "部分持仓缺少报价，汇总市值与浮盈暂不可计算。" if not complete else None},
+    }
+
+
+def public_history(store: JsonStore, from_date: str, to_date: str,
+                   price_loader: Callable[[str, str, str], list[dict]]) -> dict:
+    """公开历史复用资金流估算，不执行旧数据迁移写入。"""
+    start = _parse_date(from_date, "开始日期")
+    end = _parse_date(to_date, "结束日期")
+    if start > end or (end - start).days >= 366 or end > datetime.now(SHANGHAI).date():
+        raise ValueError("历史日期范围无效")
+    view = _HoldingsView(store)
+    known_dates = [str(item.get("effective_at", ""))[:10] for item in view.get("holdings", "snapshots", []) or []
+                   if isinstance(item, dict) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(item.get("effective_at", ""))[:10])]
+    if known_dates and min(known_dates) > to_date:
+        return {"from": from_date, "to": to_date, "currency": "CNY", "quality": "unavailable",
+                "limitations": ["所选区间早于首份持仓记录。"], "available_since": min(known_dates), "points": []}
+    result = portfolio_performance(view, start, end, price_loader)
+    return {
+        "from": from_date, "to": to_date, "currency": "CNY",
+        "quality": result["quality"], "limitations": result["limitations"],
+        "available_since": result["available_since"],
+        "points": [{
+            "date": row["date"],
+            "value": _money_text(Decimal(str(row["value"]))) if row["value"] is not None else None,
+            "profit_loss": _money_text(Decimal(str(row["profit_loss"]))) if row["profit_loss"] is not None else None,
+        } for row in result["series"]],
+    }
 
 
 class PublicSnapshotNotFound(LookupError):
     """请求的公开账户快照不存在。"""
+
+
+class PublicLiveHolding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ticker: str
+    name: str
+    quantity: str
+    cost_price: str
+    market_price: str | None
+    market_value: str | None
+    profit_loss: str | None
+    return_rate: str | None
+
+
+class PublicLiveSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    holdings_cost: str
+    market_value: str | None
+    floating_profit_loss: str | None
+    cost_return: str | None
+    cash: None
+    initial_capital: None
+    total_equity: None
+
+
+class PublicLiveFreshness(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stale: bool
+    message: str | None
+
+
+class PublicLiveAvailable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    availability: Literal["available"]
+    date: str
+    currency: Literal["CNY"]
+    source: Literal["current_holdings", "recorded_holdings"]
+    holdings_as_of: str
+    summary: PublicLiveSummary
+    items: list[PublicLiveHolding]
+    freshness: PublicLiveFreshness
+
+
+class PublicLiveUnavailable(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    availability: Literal["unavailable"]
+    reason_code: str
+    message: str
+
+
+class PublicHistoryPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    date: str
+    value: str | None
+    profit_loss: str | None
+
+
+class PublicHistoryResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_date: str = Field(alias="from")
+    to_date: str = Field(alias="to")
+    currency: Literal["CNY"]
+    quality: Literal["unavailable", "partial", "estimated"]
+    limitations: list[str]
+    available_since: str | None
+    points: list[PublicHistoryPoint]
 
 
 def _money(value: Decimal) -> Decimal:
@@ -493,6 +757,44 @@ def _system_activities(store: JsonStore) -> list[dict]:
     return rows
 
 
+RESEARCH_TITLES = {
+    "stock": "个股研究报告", "holdings": "持仓研究报告", "brief": "市场简报",
+    "backtest": "回测研究报告", "strategy": "策略研究报告", "shadow": "影子验证报告",
+}
+
+
+def _research_activities(store: JsonStore) -> list[dict]:
+    """只投影报告时间与固定类型摘要，不读取原始参数和正文。"""
+    configured = os.environ.get("DSH_PUBLIC_OBSERVATORY_RESEARCH_SINCE", "").strip()
+    if not configured:
+        return []
+    since = operation_index.micros(_timestamp(configured))
+    document = store.read_bounded_snapshot("reports", max_bytes=MAX_PUBLIC_DOCUMENT_BYTES)
+    if len(document) > 2000:
+        raise ValueError("研究活动数量超限")
+    rows = []
+    for identity, report in document.items():
+        if not isinstance(identity, str) or re.fullmatch(r"[a-f0-9]{32}", identity) is None or not isinstance(report, dict):
+            continue
+        kind = report.get("task_type")
+        if not isinstance(kind, str) or kind not in RESEARCH_TITLES:
+            continue
+        try:
+            occurred = _timestamp(report.get("created_at"))
+        except RuntimeError:
+            continue
+        if operation_index.micros(occurred) < since:
+            continue
+        rows.append({
+            "public_id": _public_id("research", identity), "category": "research",
+            "status": "completed", "occurred_at": occurred.isoformat(timespec="microseconds"),
+            "title": RESEARCH_TITLES[kind],
+            "summary": "研究报告已生成；这里只展示活动摘要，不公开报告正文。",
+            "related_snapshot_id": None,
+        })
+    return rows
+
+
 def _activity_order(row: dict) -> tuple[int, str]:
     return operation_index.micros(_timestamp(row["occurred_at"])), row["public_id"]
 
@@ -517,20 +819,21 @@ def public_activities(
     configured = os.environ.get("DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE", "").strip()
     since = operation_index.micros(_timestamp(configured)) if configured else None
     systems = _system_activities(store)
-    if since is None and not systems:
+    research = _research_activities(store)
+    if since is None and not systems and not research:
         if cursor is not None:
             raise operation_index.CursorExpired()
         return {"as_of": as_of, "items": [], "next_cursor": None}
     # 使用本地自然日边界，统一按 UTC 微秒排序，避免字符串精度／时区差异。
     cutoff_us = operation_index.micros(datetime.combine(cutoff, time.min, SHANGHAI)) + 86400 * 1_000_000
     context = hashlib.blake2s(json.dumps([
-        as_of, category, status, since, sorted(row["public_id"] for row in systems),
+        as_of, category, status, since, sorted(row["public_id"] for row in [*systems, *research]),
     ], separators=(",", ":")).encode(), digest_size=16).digest()
     with operation_index.reader(store) as projection:
         highwater, anchor = projection.open_cursor(cursor, context) if cursor is not None else (projection.highwater, None)
         rows = projection.page(since, cutoff_us, status, highwater, anchor, limit + 1) if since is not None and category in {"all", "operation"} else []
-        rows += sorted((row for row in systems
-                        if category in {"all", "system"} and status in {"all", "completed"}
+        rows += sorted((row for row in [*systems, *research]
+                        if category in {"all", row["category"]} and status in {"all", "completed"}
                         and _activity_order(row)[0] < cutoff_us
                         and (anchor is None or _activity_order(row) < anchor)), key=_activity_order, reverse=True)[:limit + 1]
         rows.sort(key=_activity_order, reverse=True)
@@ -546,7 +849,7 @@ def public_activity_detail(store: JsonStore, public_id: str) -> dict:
     """按服务端生成的 ID 返回一条经批准的活动详情。"""
     if len(public_id) != 24 or any(char not in "0123456789abcdef" for char in public_id):
         raise ValueError("public_id 无效")
-    item = next((row for row in _system_activities(store) if row["public_id"] == public_id), None)
+    item = next((row for row in [*_system_activities(store), *_research_activities(store)] if row["public_id"] == public_id), None)
     configured = os.environ.get("DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE", "").strip()
     if item is None and configured:
         since = operation_index.micros(_timestamp(configured))
@@ -561,10 +864,31 @@ def register_public_observatory_routes(
     app: FastAPI,
     *,
     store_factory: Callable[[], JsonStore] | None = None,
+    price_loader: Callable[[str, str, str], list[dict]] | None = None,
+    quote_loader: Callable[[list[str]], dict[str, dict]] = _quote_prices,
 ) -> None:
     """注册内部账户快照写入与固定公开读取路由。"""
     write_store = store_factory or JsonStore
     read_store = store_factory or (lambda: JsonStore(create=False))
+
+    @app.get("/public/performance/v1/live", response_model=PublicLiveAvailable | PublicLiveUnavailable)
+    def public_performance_live(requested_date: str = Query(alias="date", pattern=r"^\d{4}-\d{2}-\d{2}$")):
+        try:
+            return public_live(read_store(), requested_date, price_loader=price_loader, quote_loader=quote_loader)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/public/performance/v1/history", response_model=PublicHistoryResponse)
+    def public_performance_history(
+        from_date: str = Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        to_date: str = Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    ):
+        if price_loader is None:
+            raise HTTPException(status_code=503, detail="历史行情暂不可用")
+        try:
+            return public_history(read_store(), from_date, to_date, price_loader)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.middleware("http")
     async def public_read_headers(request: Request, call_next):

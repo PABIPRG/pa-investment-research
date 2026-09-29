@@ -1,5 +1,7 @@
 # Agent Note：免登录公开观察室与只读账户投影
 
+> 2026-09-29 已确认现有数据直读，完整账户快照不再是公开页面展示前提；新口径见 [后续 Agent Note](2026-09-29-observatory-live-data.md)。以下内容保留为当时实现与验证记录。
+
 Status: implemented
 
 关联 [PAB-30](https://linear.app/pabiprg/issue/PAB-30/建立免登录公开观察室与只读投研投影)。生产目标域名为 `pair-observe.xiexin.dev`；本次没有创建 Vercel Project、写入生产环境变量、绑定域名或部署。

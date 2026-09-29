@@ -1,91 +1,86 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadObservatorySlice, type ObservatorySlice } from '../src/api.ts'
+import { loadCalendar, loadObservatorySlice } from '../src/api.ts'
 
-afterEach(() => {
-  vi.unstubAllEnvs()
-  vi.unstubAllGlobals()
-})
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
-describe('public observatory API client', () => {
-  it('loads operations even when account funds are unavailable without fabricating valuations', async () => {
+const live = {
+  availability: 'available', date: '2026-09-29', currency: 'CNY', source: 'current_holdings', holdings_as_of: '2026-09-29',
+  summary: { holdings_cost: '230.00', market_value: null, floating_profit_loss: null, cost_return: null, cash: null, initial_capital: null, total_equity: null },
+  items: [{ ticker: '600519', name: '', quantity: '2', cost_price: '100', market_price: null, market_value: null, profit_loss: null, return_rate: null }],
+  freshness: { stale: true, message: '部分报价缺失' },
+}
+const history = { from: '2026-07-02', to: '2026-09-29', currency: 'CNY', quality: 'estimated', limitations: [], available_since: '2026-09-20', points: [] }
+const activities = { as_of: '2026-09-29', items: [{ public_id: 'a'.repeat(24), title: '持仓资料更新', category: 'operation', status: 'completed', occurred_at: '2026-09-29T10:00:00+08:00', summary: '资料变化，非成交' }], next_cursor: null }
+
+function response(input: string | URL | Request): Response {
+  const url = new URL(String(input))
+  if (url.pathname.endsWith('/live')) return new Response(JSON.stringify(live))
+  if (url.pathname.endsWith('/history')) return new Response(JSON.stringify(history))
+  if (url.pathname.endsWith('/calendar')) return new Response(JSON.stringify({ days: [] }))
+  return new Response(JSON.stringify(activities))
+}
+
+describe('public observatory independent data reads', () => {
+  it('shows current holdings without any full account snapshot and keeps missing quotes null', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
-    const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(String(input).includes('/activities?') ? { as_of: '2026-09-18', items: [{ title: '完成 · 持仓数据导入' }], next_cursor: null } : {
-      availability: 'unavailable',
-      reason_code: 'account-snapshot-unconfigured',
-      message: '尚未配置可公开的权威账户权益快照。',
-    })))
+    const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => response(input))
     vi.stubGlobal('fetch', fetchMock)
-
-    const result = await loadObservatorySlice(
-      '2026-09-18', { category: 'all', status: 'all' }, new AbortController().signal,
-    )
-    expect(result.account).toBeNull()
-    expect(result.accountUnavailable?.availability).toBe('unavailable')
-    expect(result.activities?.items[0]?.title).toBe('完成 · 持仓数据导入')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const result = await loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, new AbortController().signal)
+    expect(result.live?.availability).toBe('available')
+    if (result.live?.availability !== 'available') throw new Error('live data missing')
+    expect(result.live.summary.market_value).toBeNull()
+    expect(result.live.items[0]?.ticker).toBe('600519')
+    expect(result.history?.quality).toBe('estimated')
+    expect(result.activities?.items).toHaveLength(1)
+    expect(fetchMock.mock.calls.every(call => call[0] instanceof URL)).toBe(true)
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store' })
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-      'https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-09-18',
-    )
   })
 
-  it.each(['http://evil.example', 'file://localhost/data', 'ftp://127.0.0.1'])('rejects unsafe API base %s before fetch', async (base) => {
-    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', base)
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    await expect(loadObservatorySlice('2026-09-18', { category: 'all', status: 'all' }, new AbortController().signal)).rejects.toThrow('HTTPS')
-    expect(fetchMock).not.toHaveBeenCalled()
+  it('isolates history, calendar and activities failures from current holdings', async () => {
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => String(input).includes('/live?')
+      ? response(input) : new Response('{}', { status: 503 })))
+    const result = await loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, new AbortController().signal)
+    expect(result.live?.availability).toBe('available')
+    expect(result.historyError).toBe(true)
+    expect(result.calendarError).toBe(true)
+    expect(result.activitiesError).toBe(true)
   })
 
-  it('does not show a mixed account revision but keeps independently loaded operations', async () => {
+  it('only publishes estimated daily returns for confirmed trading days', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname
-      const value = path.endsWith('/overview') ? {
-        availability: 'available', snapshot_id: 'a'.repeat(32), data_revision: 2, date: '2026-09-18', currency: 'CNY',
-        summary: { initial_capital: '100.00', cash: '50.00', market_value: '50.00', total_equity: '100.00', cumulative_profit_loss: '0.00', cumulative_return: '0.00000000' },
-        freshness: { recorded_at: '2026-09-18T15:00:00+08:00', price_as_of: '2026-09-18T15:00:00+08:00', stale: false, stale_reason: null },
-      } : path.endsWith('/holdings') ? {
-        snapshot_id: 'b'.repeat(32), data_revision: 1, date: '2026-09-18', currency: 'CNY', items: [],
-      } : path.endsWith('/equity') ? {
-        from: '2026-06-21', to: '2026-09-18', currency: 'CNY', latest_revision: 2, points: [],
-      } : path.endsWith('/calendar') ? {
-        month: '2026-09', currency: 'CNY', items: [],
-      } : { as_of: '2026-09-18', items: [], next_cursor: null }
-      return new Response(JSON.stringify(value))
+      if (path.endsWith('/calendar')) return new Response(JSON.stringify({ days: [
+        { date: '2026-09-25', trading_status: 'trading' },
+        { date: '2026-09-26', trading_status: 'closed' },
+        { date: '2026-09-28', trading_status: 'unknown' },
+      ] }))
+      return new Response(JSON.stringify({ points: [
+        { date: '2026-09-24', profit_loss: '10.00' },
+        { date: '2026-09-25', profit_loss: '12.00' },
+        { date: '2026-09-26', profit_loss: '12.00' },
+        { date: '2026-09-28', profit_loss: '15.00' },
+      ], limitations: [] }))
     }))
-    const result = await loadObservatorySlice(
-      '2026-09-18', { category: 'all', status: 'all' }, new AbortController().signal,
-    )
-    expect(result.account).toBeNull()
-    expect(result.accountError).toContain('数据版本发生变化')
-    expect(result.activities).not.toBeNull()
+    const calendar = await loadCalendar('2026-09')
+    expect(calendar.items).toEqual([{ date: '2026-09-25', daily_profit_loss: '2.00' }])
   })
 
-  it('isolates an operations failure and propagates cancellation', async () => {
+  it.each(['http://evil.example', 'file://localhost/data', 'ftp://127.0.0.1'])('rejects unsafe API base %s before fetch', async base => {
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', base)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, new AbortController().signal)).rejects.toThrow('HTTPS')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('propagates cancellation and suppresses stale progress', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => String(input).includes('/activities?')
-      ? new Response('{}', { status: 503 })
-      : new Response(JSON.stringify({ availability: 'unavailable', message: '缺少资金', reason_code: 'missing' }))))
-    const result = await loadObservatorySlice('2026-09-18', { category: 'all', status: 'all' }, new AbortController().signal)
-    expect(result.accountUnavailable?.message).toBe('缺少资金')
-    expect(result.activitiesError).toBe(true)
     vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('aborted', 'AbortError') }))
-    await expect(loadObservatorySlice('2026-09-18', { category: 'all', status: 'all' }, new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' })
-  })
-
-  it('publishes operations while an account request is still pending', async () => {
-    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
-    let finishAccount!: (response: Response) => void
-    const account = new Promise<Response>(resolve => { finishAccount = resolve })
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => String(input).includes('/activities?')
-      ? new Response(JSON.stringify({ as_of: '2026-09-18', items: [{ title: '已回滚 · 持仓数据重置' }], next_cursor: null })) : account))
-    const progress: ObservatorySlice[] = []
-    const loading = loadObservatorySlice('2026-09-18', { category: 'all', status: 'all' }, new AbortController().signal, slice => progress.push(slice))
-    await vi.waitFor(() => expect(progress[0]?.activities?.items).toHaveLength(1))
-    expect(progress[0]?.accountLoading).toBe(true)
-    finishAccount(new Response(JSON.stringify({ availability: 'unavailable', reason_code: 'missing', message: '缺少资金' })))
-    await loading
-    expect(progress.at(-1)?.accountLoading).toBe(false)
+    const controller = new AbortController()
+    const progress = vi.fn()
+    await expect(loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, controller.signal, progress)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(progress).not.toHaveBeenCalled()
   })
 })
