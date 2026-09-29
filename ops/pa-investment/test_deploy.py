@@ -207,8 +207,41 @@ class ProgressCommandTests(unittest.TestCase):
         self.assertTrue(events)
         self.assertTrue(all(event["phase"] == "pull-heartbeat" and event["attempt"] == 1
                             and event["elapsed_seconds"] >= 0 and event["timeout_seconds"] == 1
+                            and event["cli_output_bytes"] >= 0 and event["cli_idle_seconds"] >= 0
                             for event in events))
         self.assertNotIn("canary-private-value", output.getvalue())
+
+    def test_pull_reports_cli_activity_without_printing_raw_output(self):
+        output = io.StringIO()
+        activity = {}
+        driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+        with contextlib.redirect_stdout(output):
+            with self.assertRaises(deploy.CommandFailure):
+                driver.run([sys.executable, "-c",
+                            "import sys, time; print('canary-private-value', flush=True); "
+                            "time.sleep(0.12); print('unexpected EOF', file=sys.stderr, flush=True); "
+                            "sys.exit(1)"],
+                           timeout=1, progress_interval=0.03,
+                           progress_event={"phase": "pull-heartbeat", "attempt": 1},
+                           progress_summary=activity)
+        self.assertGreater(activity["cli_output_bytes"], 0)
+        self.assertEqual(activity["failure_category"], "unexpected_eof")
+        self.assertNotIn("canary-private-value", output.getvalue())
+        self.assertNotIn("unexpected EOF", output.getvalue())
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertTrue(any(event["cli_output_bytes"] > 0 for event in events))
+
+    def test_pull_timeout_reports_no_cli_activity(self):
+        activity = {}
+        driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(deploy.CommandFailure):
+                driver.run([sys.executable, "-c", "import time; time.sleep(2)"],
+                           timeout=0.09, progress_interval=0.03,
+                           progress_event={"phase": "pull-heartbeat", "attempt": 1},
+                           progress_summary=activity)
+        self.assertEqual(activity["cli_output_bytes"], 0)
+        self.assertEqual(activity["failure_category"], "no_cli_output")
 
     def test_long_command_timeout_still_stops_child(self):
         driver = deploy.DockerDriver(REGISTRY_USERNAME, REGISTRY_TOKEN)
@@ -367,6 +400,9 @@ class DriverTests(unittest.TestCase):
             if args[:2] == ["docker", "pull"]:
                 pull_attempts += 1
                 docker_config = kwargs["environment"]["DOCKER_CONFIG"]
+                kwargs["progress_summary"].update({"cli_output_bytes": 42,
+                                                    "cli_idle_seconds": 3.0,
+                                                    "failure_category": "unexpected_eof"})
                 running = deploy.read_json(self.root / "image-pull.json")["attempts"][-1]
                 self.assertEqual((running["attempt"], running["result"]), (pull_attempts, "running"))
                 raise deploy.CommandFailure("command exit 1: docker pull", "exit", 1)
@@ -381,6 +417,8 @@ class DriverTests(unittest.TestCase):
         pause.assert_called_once()
         attempts = deploy.read_json(self.root / "image-pull.json")["attempts"]
         self.assertEqual([item["result"] for item in attempts], ["exit", "exit"])
+        self.assertEqual([item["failure_category"] for item in attempts],
+                         ["unexpected_eof", "unexpected_eof"])
         self.assertTrue(all(item["started_at_utc"] and item["finished_at_utc"] for item in attempts))
         self.assertEqual([json.loads(line)["phase"] for line in output.getvalue().splitlines()],
                          ["pull-start", "pull-result", "pull-retry", "pull-start", "pull-result"])
