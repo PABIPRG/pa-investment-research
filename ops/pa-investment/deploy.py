@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import selectors
 import shutil
 import signal
 import stat
@@ -51,6 +52,23 @@ class CommandFailure(DeployError):
 
 class PullFailure(DeployError):
     """All bounded image-pull attempts failed before the service was stopped."""
+
+
+def pull_failure_category(output):
+    """Reduce untrusted Docker output to a fixed, credential-free error category."""
+    lower = output.lower()
+    for category, markers in (
+        ("disk_full", (b"no space left on device",)),
+        ("authentication", (b"unauthorized", b"authentication required", b"denied")),
+        ("rate_limit", (b"toomanyrequests", b"rate limit")),
+        ("unexpected_eof", (b"unexpected eof",)),
+        ("network_timeout", (b"i/o timeout", b"tls handshake timeout",
+                             b"connection timed out", b"context deadline exceeded")),
+        ("connection_reset", (b"connection reset by peer",)),
+    ):
+        if any(marker in lower for marker in markers):
+            return category
+    return "unknown"
 
 
 def require(condition, message):
@@ -209,37 +227,61 @@ class DockerDriver:
                         "-p", "pa-investment-research"]
 
     def run(self, args, timeout=120, input_text=None, environment=None,
-            progress_interval=None, progress_event=None):
+            progress_interval=None, progress_event=None, progress_summary=None):
         if progress_interval is not None:
             require(input_text is None and progress_interval > 0 and progress_event is not None,
                     "invalid command progress configuration")
-            # Docker may print registry URLs or other unreviewed content. Only emit our own
-            # fixed metadata while it runs; the exit code remains available on failure.
+            # Read Docker's output so we can tell whether its CLI is active, but never
+            # print or persist it: it may contain registry URLs or credentials.
+            summary = progress_summary if progress_summary is not None else {}
+            summary["cli_output_bytes"] = 0
             process = subprocess.Popen(args, env=environment or ENVIRONMENT, cwd="/",
-                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL)
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT)
             started = time.monotonic()
+            last_output = started
+            output_tail = b""
+            next_heartbeat = started + progress_interval
             try:
-                while True:
-                    remaining = timeout - (time.monotonic() - started)
-                    if remaining <= 0:
-                        raise CommandFailure("command timed out after " + str(timeout) + "s: " +
-                                             args[0] + " " + args[1], "timeout")
-                    try:
-                        returncode = process.wait(timeout=min(progress_interval, remaining))
-                    except subprocess.TimeoutExpired:
-                        print(json.dumps({**progress_event,
-                                          "elapsed_seconds": round(time.monotonic() - started, 2),
-                                          "timeout_seconds": timeout}), flush=True)
-                        continue
-                    if returncode:
-                        raise CommandFailure("command exit " + str(returncode) + ": " +
-                                             args[0] + " " + args[1], "exit", returncode)
-                    return ""
+                with selectors.DefaultSelector() as selector:
+                    selector.register(process.stdout, selectors.EVENT_READ)
+                    while True:
+                        now = time.monotonic()
+                        if now >= started + timeout:
+                            summary["cli_idle_seconds"] = round(now - last_output, 2)
+                            summary["failure_category"] = ("no_cli_output" if not summary["cli_output_bytes"]
+                                                           else pull_failure_category(output_tail))
+                            raise CommandFailure("command timed out after " + str(timeout) + "s: " +
+                                                 args[0] + " " + args[1], "timeout")
+                        events = selector.select(max(0, min(next_heartbeat, started + timeout) - now))
+                        if events:
+                            chunk = os.read(process.stdout.fileno(), 65536)
+                            if not chunk:
+                                break
+                            summary["cli_output_bytes"] += len(chunk)
+                            last_output = time.monotonic()
+                            output_tail = (output_tail + chunk)[-16384:]
+                        now = time.monotonic()
+                        if now >= next_heartbeat:
+                            print(json.dumps({**progress_event,
+                                              "elapsed_seconds": round(now - started, 2),
+                                              "timeout_seconds": timeout,
+                                              "cli_output_bytes": summary["cli_output_bytes"],
+                                              "cli_idle_seconds": round(now - last_output, 2)}), flush=True)
+                            next_heartbeat = now + progress_interval
+                returncode = process.wait()
+                summary["cli_idle_seconds"] = round(time.monotonic() - last_output, 2)
+                if returncode:
+                    summary["failure_category"] = ("no_cli_output" if not summary["cli_output_bytes"]
+                                                   else pull_failure_category(output_tail))
+                    raise CommandFailure("command exit " + str(returncode) + ": " +
+                                         args[0] + " " + args[1], "exit", returncode)
+                return ""
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+                process.stdout.close()
         try:
             result = subprocess.run(args, env=environment or ENVIRONMENT, cwd="/", capture_output=True,
                                     text=True, input=input_text, timeout=timeout, check=True)
@@ -271,16 +313,19 @@ class DockerDriver:
                 attempts.append({"attempt": attempt, "result": "running",
                                  "started_at_utc": started_at})
                 write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
+                activity = {}
                 try:
                     self.run(["docker", "pull", image], timeout=PULL_TIMEOUT_SECONDS,
                              environment=environment,
                              progress_interval=PULL_PROGRESS_INTERVAL_SECONDS,
-                             progress_event={"phase": "pull-heartbeat", "attempt": attempt})
+                             progress_event={"phase": "pull-heartbeat", "attempt": attempt},
+                             progress_summary=activity)
                 except CommandFailure as error:
                     event = {"attempt": attempt, "result": getattr(error, "kind", "error"),
                              "elapsed_seconds": round(time.monotonic() - started, 2),
                              "started_at_utc": started_at,
-                             "finished_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+                             "finished_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                             **activity}
                     if error.returncode is not None:
                         event["exit_code"] = error.returncode
                     attempts[-1] = event
@@ -295,7 +340,8 @@ class DockerDriver:
                     event = {"attempt": attempt, "result": "success",
                              "elapsed_seconds": round(time.monotonic() - started, 2),
                              "started_at_utc": started_at,
-                             "finished_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+                             "finished_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                             **activity}
                     attempts[-1] = event
                     write_json(record / "image-pull.json", {"image": image, "attempts": attempts})
                     print(json.dumps({"phase": "pull-result", **event}), flush=True)
