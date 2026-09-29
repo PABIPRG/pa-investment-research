@@ -54,10 +54,12 @@ class PublicHoldingsOperationsTests(unittest.TestCase):
         self.assertEqual(set(row), {"public_id", "category", "status", "occurred_at", "title", "summary"})
         self.assertEqual(row["category"], "operation")
         self.assertEqual(row["occurred_at"], "2026-09-21T09:02:00+08:00")
+        self.assertIn("600519", row["title"])
         self.assertIn("不代表买卖成交", row["summary"])
         detail = public_activity_detail(self.store, row["public_id"])
         self.assertEqual(detail["holdings_changes"], [{"ticker": "600519", "before_quantity": "100", "after_quantity": "150", "before_cost_price": "10", "after_cost_price": "11"}])
         self.assertIsNone(detail["related_snapshot_id"])
+        self.assertEqual(detail["title"], row["title"])
         for secret in ("SECRET", self.identity, "transactionId", "before\"", "account_id"):
             self.assertNotIn(secret, json.dumps(detail))
 
@@ -145,12 +147,23 @@ class PublicHoldingsOperationsTests(unittest.TestCase):
         rows = [public_activity_detail(self.store, row["public_id"]) for row in page["items"]]
         self.assertNotIn("SECRET", json.dumps(rows))
         adjustment = next(row for row in rows if "持仓数据更新" in row["title"])
+        self.assertIn("600519", adjustment["title"])
         self.assertEqual(adjustment["holdings_changes"][0]["after_quantity"], "3")
         self.assertEqual(adjustment["holdings_changes"][0]["after_cost_price"], "10.333333333333334")
         trades = next(row for row in rows if "成交记录更新" in row["title"])
         self.assertIn("新增 2 条", trades["summary"])
         self.assertIn("不表示此刻执行", trades["summary"])
         self.assertNotIn("holdings_changes", trades)
+
+    def test_multiple_changed_stocks_are_identified_without_exposing_other_fields(self):
+        self.archive(after={"holdings": {"default": [
+            {"ticker": "600519", "quantity": 150, "cost_price": 11},
+            {"ticker": "000001", "quantity": 200, "cost_price": 8},
+            {"ticker": "300750", "quantity": 50, "cost_price": 20},
+        ]}, "trades": {}})
+        row = public_activities(self.store, "2026-09-21")["items"][0]
+        self.assertIn("000001、300750 等 3 只", row["title"])
+        self.assertNotIn("SECRET", json.dumps(row))
 
     def test_pending_journal_blocks_publication_without_recovering_or_writing(self):
         from adapter import holdings_mutation_history as audit

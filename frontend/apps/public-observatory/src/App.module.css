@@ -11,9 +11,21 @@
 .brand small { font-size: .6429rem; letter-spacing: .16em; color: var(--dsw-alias-label-tertiary); }
 .headerActions, .timeControls, .refreshControls { display: flex; align-items: center; gap: 8px; }
 .timebar {
-  padding: 12px clamp(18px, 4vw, 64px); display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 12px clamp(18px, 4vw, 64px); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px;
   border-bottom: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-1);
 }
+.playbackTrack { flex: 1 0 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 4px 12px; }
+.playbackLabels { grid-column: 1; display: flex; justify-content: space-between; gap: 12px; color: var(--dsw-alias-label-secondary); font-size: .7857rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.playbackLabels > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.playbackLabels > span:last-child { flex: none; }
+.playbackProgress { grid-column: 1; position: relative; height: 28px; display: flex; align-items: center; }
+.playbackProgress input { position: absolute; inset: 0; width: 100%; height: 28px; margin: 0; appearance: none; background: transparent; cursor: pointer; }
+.playbackProgress input::-webkit-slider-runnable-track { height: 8px; background: transparent; }
+.playbackProgress input::-moz-range-track { height: 8px; background: transparent; }
+.playbackProgress input::-webkit-slider-thumb { width: 16px; height: 16px; margin-top: -4px; appearance: none; border: 2px solid var(--dsw-alias-bg-base); border-radius: 50%; background: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary); }
+.playbackProgress input::-moz-range-thumb { width: 12px; height: 12px; border: 2px solid var(--dsw-alias-bg-base); border-radius: 50%; background: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary); }
+.playbackProgress input:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.playbackTrack > button { grid-column: 2; grid-row: 1 / 3; }
 .refreshControls label { display: flex; align-items: center; gap: 7px; color: var(--dsw-alias-label-secondary); font-size: .8571rem; white-space: nowrap; }
 .refreshControls input { accent-color: var(--dsw-alias-brand-primary); }
 .main { width: min(1240px, calc(100% - 36px)); margin: 0 auto; padding: 44px 0 56px; }
@@ -33,11 +45,13 @@
 .pnlBlock > p { margin: 0 0 24px; font-size: 1.2857rem; font-weight: 650; }
 .formulaHelp { display: flex; align-items: center; gap: 4px; color: var(--dsw-alias-label-secondary); font-size: .8571rem; line-height: 1.5; }
 .heading > button { flex: none; }
-.metricGrid { padding: 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: var(--dsw-alias-bg-layer-1); }
+.heading > .iconButton { width: 36px; padding: 0; }
+.metricGrid { padding: 26px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr) auto; gap: 10px; background: var(--dsw-alias-bg-layer-1); }
 .metricGrid > div { padding: 19px 22px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); display: flex; flex-direction: column; gap: 5px; }
 .metricGrid span { color: var(--dsw-alias-label-secondary); font-size: .8571rem; }
 .metricGrid strong { font-size: clamp(1.2857rem, 2.4vw, 1.9286rem); letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .metricGrid small { color: var(--dsw-alias-label-tertiary); font-size: .7857rem; }
+.unavailableMetrics { grid-column: 1 / -1; margin: 0; color: var(--dsw-alias-label-tertiary); font-size: .7857rem; line-height: 1.5; }
 .statusline { min-height: 40px; padding: 0 4px; display: flex; align-items: center; gap: 18px; color: var(--dsw-alias-label-tertiary); font-size: .7857rem; }
 .statusline strong { color: var(--dsw-alias-state-success-primary); }
 .panel { margin-top: 18px; padding: clamp(18px, 2.6vw, 28px); background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l3); border-radius: 16px; }
@@ -63,7 +77,6 @@
 .activityRow > span { min-width: 0; display: grid; gap: 4px; }
 .activityRow small { color: var(--dsw-alias-label-tertiary); font-size: .7143rem; }
 .activityRow strong { font-size: .9286rem; }
-.activityRow em { overflow: hidden; color: var(--dsw-alias-label-secondary); font-size: .7857rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .partial, .inlineNotice, .staleNotice { margin: 0 0 12px; padding: 10px 12px; border-radius: 9px; color: var(--dsw-alias-state-warn-label); background: var(--dsw-alias-state-warn-tertiary); font-size: .8571rem; }
 .partial { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; line-height: 1.5; }
 .partial > button { flex: none; }
@@ -75,7 +88,13 @@
 .calendarGrid > button { min-height: 82px; padding: 9px; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-alias-radius-control); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); cursor: pointer; }
 .calendarGrid > button:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
 .calendarGrid > button:disabled { cursor: default; }
-.calendarGrid > button[data-trading-status='closed'] { background: var(--dsw-alias-bg-base); }
+.calendarGrid > button[data-trading-status='closed'] { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-tertiary); }
+.calendarGrid > button[data-trading-status='closed'] small, .calendarGrid > button[data-trading-status='closed'] span { color: var(--dsw-alias-label-tertiary); }
+.calendarGrid > button[data-direction='positive'] { background: var(--dsw-alias-state-success-tertiary); }
+.calendarGrid > button[data-direction='negative'] { background: var(--dsw-alias-state-error-tertiary); }
+.calendarGrid > button[data-direction='positive'] strong { color: var(--dsw-alias-state-success-primary); }
+.calendarGrid > button[data-direction='negative'] strong { color: var(--dsw-alias-state-error-primary); }
+.calendarGrid > button[data-trading-status='unknown'] { background: var(--dsw-alias-state-warn-tertiary); }
 .calendarGrid button small { font-size: .7143rem; line-height: 1.4; color: var(--dsw-alias-label-secondary); }
 .calendarGrid > button[data-selected='true'] { border-color: var(--dsw-alias-brand-primary); box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary); }
 .calendarGrid button span { color: var(--dsw-alias-label-secondary); font-size: .7857rem; }
