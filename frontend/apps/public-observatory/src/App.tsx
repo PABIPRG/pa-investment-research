@@ -6,6 +6,7 @@ import {
   type ObservatorySlice, type PublicCalendar, type PublicHistory, type PublicActivity, type PublicActivityDetail,
 } from './api.ts'
 import { EquityChart } from './EquityChart.tsx'
+import { marketStatus } from './marketStatus.ts'
 import css from './App.module.css'
 
 const currency = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -14,8 +15,8 @@ const categoryLabels = { research: '研究', operation: '操作', system: '系�
 const categoryOptions = [{ value: 'all', label: '全部' }, { value: 'research', label: '研究' }, { value: 'operation', label: '操作' }, { value: 'system', label: '系统' }]
 const statusOptions = [{ value: 'all', label: '全部' }, { value: 'completed', label: '完成' }, { value: 'failed', label: '失败 / 已回滚' }]
 
-function todayInShanghai(): string {
-  const parts = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date())
+function todayInShanghai(now: Date): string {
+  const parts = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now)
   const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(item => item.type === type)?.value ?? ''
   return `${part('year')}-${part('month')}-${part('day')}`
 }
@@ -64,7 +65,8 @@ function StatusNotice({ loading, error, hasData, label, retry }: { loading: bool
 }
 
 export function App() {
-  const today = useMemo(todayInShanghai, [])
+  const [now, setNow] = useState(() => new Date())
+  const today = useMemo(() => todayInShanghai(now), [now])
   const [selectedDate, setSelectedDate] = useState(today)
   const [calendarMonth, setCalendarMonth] = useState(today.slice(0, 7))
   const [filters, setFilters] = useState({ category: 'all', status: 'all' })
@@ -101,6 +103,10 @@ export function App() {
     document.body.toggleAttribute('data-ds-dark-theme', dark)
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
   }, [dark])
+  useEffect(() => {
+    const timer = window.setInterval(() => { setNow(new Date()) }, 30_000)
+    return () => { window.clearInterval(timer) }
+  }, [])
   useEffect(() => {
     const controller = new AbortController()
     const currentGeneration = ++generation.current
@@ -180,6 +186,9 @@ export function App() {
   const history = slice?.history ?? null
   const chartHistory = playbackIndex === null ? history : playbackHistory ?? history
   const calendar = slice?.calendar?.month === calendarMonth ? slice.calendar : null
+  const todayTradingStatus = calendar?.month === today.slice(0, 7)
+    ? calendar.days.find(day => day.date === today)?.trading_status : undefined
+  const market = marketStatus(now, todayTradingStatus, selectedDate === today)
   const minDate = history?.available_since ?? undefined
   const busy = slice === null || (slice.liveLoading && slice.historyLoading && slice.calendarLoading && slice.activitiesLoading)
   const selectDate = (value: string) => { setPlaying(false); setPlaybackDates([]); setPlaybackIndex(null); setPlaybackHistory(null); setSelectedDate(value) }
@@ -285,7 +294,7 @@ export function App() {
       </div>}
     </section>
     <main className={css.main}>
-      <div className={css.heroTitle}><div><p className={css.eyebrow}>HOLDINGS PERFORMANCE · UTC+8</p><h1>公开观察室</h1></div><div className={css.marketStatus}><i />A 股 · 现有持仓</div></div>
+      <div className={css.heroTitle}><div><p className={css.eyebrow}>HOLDINGS PERFORMANCE · UTC+8</p><h1>公开观察室</h1></div><div className={css.marketStatus} data-active={market.active}><i />A 股 · {market.label}</div></div>
       {state.error && <div className={css.partial} role="alert">{state.error}<Button variant="outline" onClick={refresh}>重试</Button></div>}
       <StatusNotice loading={slice?.liveLoading ?? true} error={slice?.liveError ?? false} hasData={live !== null} label="持仓" retry={refresh} />
       {slice?.live?.availability === 'unavailable' && <div className={css.inlineNotice}>{slice.live.message} 历史与活动仍可查看。</div>}
