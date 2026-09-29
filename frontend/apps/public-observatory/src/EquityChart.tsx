@@ -12,7 +12,7 @@ const money = new Intl.NumberFormat('zh-CN', {
   style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
 
-export function EquityChart({ points, dark }: { points: HistoryPoint[]; dark: boolean }) {
+export function EquityChart({ points, dark, activeDate }: { points: HistoryPoint[]; dark: boolean; activeDate?: string | null }) {
   const root = useRef<HTMLDivElement>(null)
   const chart = useRef<echarts.ECharts | null>(null)
   const [activeIndex, setActiveIndex] = useState(Math.max(0, points.length - 1))
@@ -62,6 +62,14 @@ export function EquityChart({ points, dark }: { points: HistoryPoint[]; dark: bo
     resize.observe(root.current)
     return () => { resize.disconnect(); instance.dispose(); chart.current = null }
   }, [dark, points])
+
+  useEffect(() => {
+    if (activeDate === null || activeDate === undefined) return
+    const index = points.findIndex(point => point.date === activeDate)
+    if (index < 0) return
+    setActiveIndex(index)
+    chart.current?.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: index })
+  }, [activeDate, points])
 
   if (points.length === 0) return <div className={css.empty}>所选区间暂无持仓历史估值。</div>
   const active = points[Math.min(activeIndex, points.length - 1)]

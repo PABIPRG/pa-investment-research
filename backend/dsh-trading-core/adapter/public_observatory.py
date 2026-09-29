@@ -799,6 +799,25 @@ def _activity_order(row: dict) -> tuple[int, str]:
     return operation_index.micros(_timestamp(row["occurred_at"])), row["public_id"]
 
 
+def _identified_holdings_update(row: dict, detail: dict | None) -> dict:
+    """用已核验的公开持仓差异标出证券，兼容现有索引中的通用标题。"""
+    if not _is_holdings_change(row) or detail is None:
+        return row
+    changes = detail.get("holdings_changes")
+    if not isinstance(changes, list) or not changes:
+        return row
+    tickers = sorted({change["ticker"] for change in changes})
+    names = "、".join(tickers[:2])
+    suffix = f" 等 {len(tickers)} 只" if len(tickers) > 2 else ""
+    return {**row, "title": f"{row['title']}：{names}{suffix}"}
+
+
+def _is_holdings_change(row: dict) -> bool:
+    return row["category"] == "operation" and any(
+        action in row["title"] for action in ("持仓数据更新", "持仓数据导入", "持仓数据重置")
+    )
+
+
 def public_activities(
     store: JsonStore,
     as_of: str,
@@ -838,6 +857,10 @@ def public_activities(
                         and (anchor is None or _activity_order(row) < anchor)), key=_activity_order, reverse=True)[:limit + 1]
         rows.sort(key=_activity_order, reverse=True)
         page = rows[:limit]
+        page = [_identified_holdings_update(
+            item, projection.detail(item["public_id"], since)
+            if since is not None and _is_holdings_change(item) else None,
+        ) for item in page]
         return {
             "as_of": as_of,
             "items": [{key: item[key] for key in operation_index.SUMMARY_FIELDS} for item in page],
@@ -857,7 +880,7 @@ def public_activity_detail(store: JsonStore, public_id: str) -> dict:
             item = projection.detail(public_id, since)
     if item is None:
         raise PublicSnapshotNotFound(public_id)
-    return dict(item)
+    return _identified_holdings_update(dict(item), item)
 
 
 def register_public_observatory_routes(
