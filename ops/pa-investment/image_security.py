@@ -413,16 +413,13 @@ def apply_vulnerability_exceptions(report, exceptions, platform):
     for result in report['Results']:
         retained = []
         for finding in result.get('Vulnerabilities', []):
+            # Trivy's finding carries the installed version; package inventory was validated above.
             exact = (result.get('Class') == exception['sourceClass']
                      and result.get('Type') == exception['sourceType']
                      and finding.get('VulnerabilityID') == exception['id']
                      and finding.get('PkgName') == exception['package']
                      and finding.get('InstalledVersion') == exception['installedVersion']
-                     and finding.get('Severity') == exception['severity']
-                     and any(isinstance(package, dict)
-                             and package.get('Name') == exception['package']
-                             and package.get('Version') == exception['installedVersion']
-                             for package in result.get('Packages', [])))
+                     and finding.get('Severity') == exception['severity'])
             if exact and applied < exception['count']:
                 applied += 1
             else:

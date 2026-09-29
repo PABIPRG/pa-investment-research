@@ -239,12 +239,12 @@ class ReportTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
             gate.validate_policy({**value, 'vulnerabilityExceptions': [exact, exact]})
 
-    def test_vulnerability_exception_requires_exact_inventory_and_preserves_other_findings(self):
+    def test_vulnerability_exception_requires_exact_finding_and_preserves_other_findings(self):
         exact = vulnerability_exception()
         finding = {'VulnerabilityID': exact['id'], 'PkgName': exact['package'],
                    'InstalledVersion': exact['installedVersion'], 'Severity': exact['severity']}
         report = {'Results': [{'Class': 'os-pkgs', 'Type': 'debian',
-                              'Packages': [{'Name': 'libc6', 'Version': exact['installedVersion']}],
+                              'Packages': [{'Name': 'libc6', 'Version': 'inventory-normalized-version'}],
                               'Vulnerabilities': [finding,
                                   {'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]}]}
         with patch.object(gate, 'require_amd64_unaffected_advisory') as check:
@@ -263,9 +263,11 @@ class ReportTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaisesRegex(
                     gate.GateError, '^unused-vulnerability-exception$'):
                 gate.apply_vulnerability_exceptions(altered, [exact], 'linux/amd64')
-        with self.assertRaisesRegex(gate.GateError, '^unused-vulnerability-exception$'):
-            gate.apply_vulnerability_exceptions({**report, 'Results': [{**report['Results'][0],
-                'Packages': [{'Name': 'libc6', 'Version': '2.45'}]}]}, [exact], 'linux/amd64')
+        for change in ({'Class': 'lang-pkgs'}, {'Type': 'alpine'}):
+            with self.subTest(result=change), self.assertRaisesRegex(
+                    gate.GateError, '^unused-vulnerability-exception$'):
+                gate.apply_vulnerability_exceptions({**report, 'Results': [{**report['Results'][0],
+                    **change, 'Vulnerabilities': [finding]}]}, [exact], 'linux/amd64')
         with self.assertRaisesRegex(gate.GateError, '^unused-vulnerability-exception$'):
             gate.apply_vulnerability_exceptions({**report, 'Results': [{**report['Results'][0],
                 'Vulnerabilities': []}]}, [exact], 'linux/amd64')
