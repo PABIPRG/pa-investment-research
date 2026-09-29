@@ -385,6 +385,24 @@ def blocking_vulnerability_ids(report, severities):
     return [{'id': identifier, 'findings': count} for identifier, count in sorted(counts.items())]
 
 
+def cve_97399_package_diagnostics(report):
+    """Expose only the OS package identity needed to review this one advisory."""
+    packages = []
+    for result in report['Results']:
+        if result.get('Class') != 'os-pkgs' or result.get('Type') != 'debian':
+            continue
+        for finding in result.get('Vulnerabilities', []):
+            if finding.get('VulnerabilityID') != 'CVE-2026-97399':
+                continue
+            name, version = finding.get('PkgName'), finding.get('InstalledVersion')
+            require(isinstance(name, str) and isinstance(version, str)
+                    and re.fullmatch(r'[A-Za-z0-9.+~:_-]{1,128}', name) is not None
+                    and re.fullmatch(r'[A-Za-z0-9.+~:_-]{1,128}', version) is not None,
+                    'invalid-vulnerability-report')
+            packages.append({'name': name, 'version': version})
+    return packages[:MAX_DIAGNOSTIC_SAMPLES]
+
+
 def scan(archive, image_id, revision, tools, work_parent, summary):
     rules = policy()
     summary.unlink(missing_ok=True)
@@ -454,6 +472,7 @@ def scan(archive, image_id, revision, tools, work_parent, summary):
         print(json.dumps({'kind': 'image-security-result', **result,
                           'vulnerabilityScan': 'completed',
                           'blockingVulnerabilityIds': identifiers[:MAX_DIAGNOSTIC_SAMPLES],
+                          'cve97399Packages': cve_97399_package_diagnostics(data),
                           'blockingVulnerabilityIdsOmitted': max(0, len(identifiers) - MAX_DIAGNOSTIC_SAMPLES)},
                          sort_keys=True), flush=True)
         require(blocked == 0, 'security-findings-block-publication')

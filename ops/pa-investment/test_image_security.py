@@ -229,6 +229,25 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(values[1]['id'], 'sha256:' + hashlib.sha256(b'SECRET_ID_CANARY').hexdigest())
         self.assertNotIn('CANARY', json.dumps(values))
 
+    def test_cve_package_diagnostics_only_expose_valid_target_package(self):
+        report = {'Results': [
+            {'Class': 'os-pkgs', 'Type': 'debian', 'Vulnerabilities': [
+                {'VulnerabilityID': 'CVE-2026-97399', 'PkgName': 'libc6',
+                 'InstalledVersion': '2.41-12+deb13u4', 'Secret': 'SECRET_CANARY'},
+                {'VulnerabilityID': 'CVE-2099-1234', 'PkgName': 'SECRET_CANARY',
+                 'InstalledVersion': '0'},
+            ]},
+            {'Class': 'lang-pkgs', 'Type': 'node-pkg', 'Vulnerabilities': [
+                {'VulnerabilityID': 'CVE-2026-97399', 'PkgName': 'SECRET_CANARY',
+                 'InstalledVersion': '0'},
+            ]},
+        ]}
+        self.assertEqual(gate.cve_97399_package_diagnostics(report),
+                         [{'name': 'libc6', 'version': '2.41-12+deb13u4'}])
+        report['Results'][0]['Vulnerabilities'][0]['PkgName'] = 'SECRET/CANARY'
+        with self.assertRaisesRegex(gate.GateError, '^invalid-vulnerability-report$'):
+            gate.cve_97399_package_diagnostics(report)
+
     def test_no_report_and_malformed_reports_block(self):
         for report in [None, {}, {'Results': []}]:
             with self.subTest(report=report), self.assertRaises(gate.GateError):
