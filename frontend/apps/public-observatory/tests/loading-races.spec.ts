@@ -87,7 +87,7 @@ it('retains the same query result with an explicit stale notice after refresh fa
 it('discards an old page after activity scope changes and preserves the new first page', async () => {
   await act(async () => { requests[0]!(state('第一页', 'cursor-one'), 'activities') })
   let finish!: (value: ReturnType<typeof activity>) => void
-  vi.mocked(loadMoreActivities).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  vi.mocked(loadMoreActivities).mockImplementation(() => new Promise((resolve) => { finish = resolve }))
   await act(async () => { button('加载更多').click() })
   await act(async () => { button('刷新数据').click() })
   await act(async () => { requests[1]!(state('新第一页'), 'activities') })
@@ -103,4 +103,22 @@ it('clears expired pagination and reloads after a revoked cursor', async () => {
   expect(container.textContent).toContain('记录范围已更新')
   expect(container.textContent).not.toContain('原第一页')
   expect(requests).toHaveLength(2)
+})
+
+
+it('shows each module refresh independently while retaining data without refresh banners', async () => {
+  await act(async () => {
+    for (const part of ['live', 'history', 'calendar', 'activities'] as const) requests[0]!(state('原有记录'), part)
+  })
+  await act(async () => { button('刷新数据').click() })
+  const loading = () => [...container.querySelectorAll('[data-refresh-indicator][data-loading="true"]')]
+  expect(loading()).toHaveLength(5)
+  expect(container.textContent).toContain('原有记录')
+  expect(container.textContent).not.toContain('正在刷新')
+  await act(async () => { requests[1]!(state('原有记录'), 'history') })
+  expect(loading()).toHaveLength(4)
+  expect(container.querySelector('[data-refresh-indicator="历史表现"]')?.getAttribute('data-loading')).toBe('false')
+  expect(container.querySelector('[data-refresh-indicator="日历"]')?.getAttribute('data-loading')).toBe('true')
+  await act(async () => { requests[1]!(state('原有记录'), 'live') })
+  expect(loading()).toHaveLength(2)
 })
