@@ -1,6 +1,10 @@
 {
   "schemaVersion": 3,
-  "blockingSeverities": ["UNKNOWN", "HIGH", "CRITICAL"],
+  "blockingSeverities": [
+    "UNKNOWN",
+    "HIGH",
+    "CRITICAL"
+  ],
   "exceptions": [
     {
       "kind": "gitleaks-finding",
@@ -94,7 +98,125 @@
       "expiresAt": "2026-10-06T23:59:00Z"
     }
   ],
-  "vulnerabilityExceptions": [],
+  "vulnerabilityExceptions": [
+    {
+      "kind": "trivy-fixed-package",
+      "id": "CVE-2026-42772",
+      "sourceClass": "os-pkgs",
+      "sourceType": "debian",
+      "package": "libssl3t64",
+      "installedVersion": "3.6.5-1",
+      "severity": "UNKNOWN",
+      "platform": "linux/amd64",
+      "count": 1,
+      "reason": "verified-fixed-package",
+      "advisory": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/42xxx/CVE-2026-42772.json",
+      "reviewedBy": "user-approved-pr156-2026-09-30",
+      "expiresAt": "2026-10-06T23:59:00Z",
+      "archiveSha256": "0a0ec84fe860c5c93c74d53cbb071aea0793327a3761b483080e9d7b73c21b37",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/libcrypto.so.3": "5a3ea7023b2170ac08536e921887adaf0f5c25af41f94573e11f1b32e2fc9074",
+        "usr/lib/x86_64-linux-gnu/libssl.so.3": "def2b9aab81332e82399546bd73d2f307c870ae671feca0a2f1b06928fef0e2e"
+      }
+    },
+    {
+      "kind": "trivy-fixed-package",
+      "id": "CVE-2026-54873",
+      "sourceClass": "os-pkgs",
+      "sourceType": "debian",
+      "package": "libssl3t64",
+      "installedVersion": "3.6.5-1",
+      "severity": "UNKNOWN",
+      "platform": "linux/amd64",
+      "count": 1,
+      "reason": "verified-fixed-package",
+      "advisory": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/54xxx/CVE-2026-54873.json",
+      "reviewedBy": "user-approved-pr156-2026-09-30",
+      "expiresAt": "2026-10-06T23:59:00Z",
+      "archiveSha256": "0a0ec84fe860c5c93c74d53cbb071aea0793327a3761b483080e9d7b73c21b37",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/libcrypto.so.3": "5a3ea7023b2170ac08536e921887adaf0f5c25af41f94573e11f1b32e2fc9074",
+        "usr/lib/x86_64-linux-gnu/libssl.so.3": "def2b9aab81332e82399546bd73d2f307c870ae671feca0a2f1b06928fef0e2e"
+      }
+    },
+    {
+      "kind": "trivy-fixed-package",
+      "id": "CVE-2026-84782",
+      "sourceClass": "os-pkgs",
+      "sourceType": "debian",
+      "package": "libssl3t64",
+      "installedVersion": "3.6.5-1",
+      "severity": "HIGH",
+      "platform": "linux/amd64",
+      "count": 1,
+      "reason": "verified-fixed-package",
+      "advisory": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/84xxx/CVE-2026-84782.json",
+      "reviewedBy": "user-approved-pr156-2026-09-30",
+      "expiresAt": "2026-10-06T23:59:00Z",
+      "archiveSha256": "0a0ec84fe860c5c93c74d53cbb071aea0793327a3761b483080e9d7b73c21b37",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/libcrypto.so.3": "5a3ea7023b2170ac08536e921887adaf0f5c25af41f94573e11f1b32e2fc9074",
+        "usr/lib/x86_64-linux-gnu/libssl.so.3": "def2b9aab81332e82399546bd73d2f307c870ae671feca0a2f1b06928fef0e2e"
+      }
+    },
+    {
+      "kind": "trivy-fixed-package",
+      "id": "CVE-2026-42772",
+      "sourceClass": "os-pkgs",
+      "sourceType": "debian",
+      "package": "openssl-provider-legacy",
+      "installedVersion": "3.6.5-1",
+      "severity": "UNKNOWN",
+      "platform": "linux/amd64",
+      "count": 1,
+      "reason": "verified-fixed-package",
+      "advisory": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/42xxx/CVE-2026-42772.json",
+      "reviewedBy": "user-approved-pr156-2026-09-30",
+      "expiresAt": "2026-10-06T23:59:00Z",
+      "archiveSha256": "82b7c056f7dfd91e4eedb1a0738d655867b6e13bd25ce03406e9cf464e9345ad",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so": "9c88e2bcbe05eb761a80209d9789a5cc68c5c80b51098c68c8eef3bd1dfac862"
+      }
+    },
+    {
+      "kind": "trivy-fixed-package",
+      "id": "CVE-2026-54873",
+      "sourceClass": "os-pkgs",
+      "sourceType": "debian",
+      "package": "openssl-provider-legacy",
+      "installedVersion": "3.6.5-1",
+      "severity": "UNKNOWN",
+      "platform": "linux/amd64",
+      "count": 1,
+      "reason": "verified-fixed-package",
+      "advisory": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/54xxx/CVE-2026-54873.json",
+      "reviewedBy": "user-approved-pr156-2026-09-30",
+      "expiresAt": "2026-10-06T23:59:00Z",
+      "archiveSha256": "82b7c056f7dfd91e4eedb1a0738d655867b6e13bd25ce03406e9cf464e9345ad",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so": "9c88e2bcbe05eb761a80209d9789a5cc68c5c80b51098c68c8eef3bd1dfac862"
+      }
+    },
+    {
+      "kind": "trivy-fixed-package",
+      "id": "CVE-2026-84782",
+      "sourceClass": "os-pkgs",
+      "sourceType": "debian",
+      "package": "openssl-provider-legacy",
+      "installedVersion": "3.6.5-1",
+      "severity": "HIGH",
+      "platform": "linux/amd64",
+      "count": 1,
+      "reason": "verified-fixed-package",
+      "advisory": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/84xxx/CVE-2026-84782.json",
+      "reviewedBy": "user-approved-pr156-2026-09-30",
+      "expiresAt": "2026-10-06T23:59:00Z",
+      "archiveSha256": "82b7c056f7dfd91e4eedb1a0738d655867b6e13bd25ce03406e9cf464e9345ad",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so": "9c88e2bcbe05eb761a80209d9789a5cc68c5c80b51098c68c8eef3bd1dfac862"
+      }
+    }
+  ],
   "scanners": {
     "gitleaks": {
       "version": "8.30.1",

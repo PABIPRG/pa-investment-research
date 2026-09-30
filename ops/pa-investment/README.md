@@ -217,10 +217,24 @@ git diff --check
   策略同时记录包名和版本、原因、审核人及到期日期，不接受整目录或整条规则例外。
   当前 8 条授权命中仅对应 Akshare 1.18.88、Tushare 1.4.29 与 protobuf 7.35.1 的固定公开
   运行常量或生成代码表达式，有效期至 2026-10-06 23:59 UTC；依赖变化或到期后必须重新评审。
-- `vulnerabilityExceptions` 当前为空。PR #156 的镜像扫描不再匹配原
-  `CVE-2026-97399` 精确例外，门禁按未使用例外失败关闭，因此移除该配置。
-  `UNKNOWN`、`HIGH`、`CRITICAL` 级别继续全部阻断；若该 CVE 再次出现，也不再豁免。
-  扫描器仍支持经逐项评审的精确例外，未使用、漂移或过期均失败关闭；新增例外需重新评审。
+- `vulnerabilityExceptions` 的旧 `CVE-2026-97399` 声明已移除，再次出现仍阻断。
+  用户于 2026-09-30 批准对固定 `libssl3t64`、`openssl-provider-legacy` `3.6.5-1` amd64 包
+  中的 `CVE-2026-42772`、`CVE-2026-54873`、`CVE-2026-84782` 添加六条临时已修复声明。
+  每条限定 Debian OS 包、精确版本/严重度、官方归档 SHA256、实际库 SHA256 和一个命中，
+  至 2026-10-06 23:59 UTC 到期；锁见 `containers/runtime-openssl-lock.json`。
+  完整扫描后仅移除这些精确命中，核对最终合并镜像层的真实库哈希，防止元数据伪造、
+  后续层覆盖、删除或链接替换。扫描及发布复核均实时读取 OpenSSL 官方 CNA，
+  受影响范围须与已评审记录一致；发布摘要另绑定归档、策略与已核验库集合的 SHA256。
+  未使用、重复、过期、哈希/版本/平台/严重度漂移或官方范围变化均失败关闭。
+  `UNKNOWN`、`HIGH`、`CRITICAL` 的其他命中仍阻断；未扩大通用忽略规则。
+
+运行镜像在固定 Debian 13 Distroless 基础上覆盖官方 Debian `libssl3t64` 与
+`openssl-provider-legacy` 的 `3.6.5-1` 修复包，处理 2026-09-29 发布的 OpenSSL 告警。
+构建辅助脚本固定 HTTPS 来源与 SHA256，解包前校验完整归档及包名、版本、amd64 架构、
+OpenSSL 来源；同时复制真实二进制、原始 control 与 md5sums，不单独改写扫描器版本记录。
+最终镜像边界检查使用随镜像携带的 Python 加载两项共享库、核对版本并创建 TLS 上下文；
+随后仍执行完整秘密及漏洞扫描。保持 OpenSSL 3 ABI、Node 24、非 root 与只读运行约束。
+该覆盖可在 trixie/Distroless 固定版本包含修复后移除；回退到旧库仍会被漏洞门禁阻断。
 
 Python sidecar 在写入 `runtime.json` 及进入镜像层前，仅删除官方
 `py-vapid==1.9.4` 的 `py_vapid/tests/test_vapid.py` 与 `.test_vapid.py.swp`。
