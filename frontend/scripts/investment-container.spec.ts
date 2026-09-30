@@ -39,11 +39,38 @@ interface ContainerCheckModule {
   lockState(root: string): Promise<{ application: boolean; container: boolean }>
 }
 
+interface RuntimeOpenSslModule {
+  packages: Array<{ name: string; version: string; sha256: string }>
+  verifyArchive(bytes: Buffer, specification: { sha256: string }): void
+  verifyControl(control: string, specification: { name: string; version: string }): void
+}
+
 async function containerModule<T>(name: string): Promise<T> {
   return await import(pathToFileURL(join(repoRoot, 'containers', name)).href) as T
 }
 
 describe('investment container delivery contract', () => {
+  it('rejects changed OpenSSL package archives and mismatched runtime package records', async () => {
+    const ssl = await containerModule<RuntimeOpenSslModule>('prepare-runtime-openssl.mjs')
+    const bytes = Buffer.from('verified Debian archive fixture')
+    const sha256 = createHash('sha256').update(bytes).digest('hex')
+    expect(() => ssl.verifyArchive(bytes, { sha256 })).not.toThrow()
+    expect(() => ssl.verifyArchive(Buffer.from('changed archive'), { sha256 })).toThrow(/checksum mismatch/u)
+    for (const specification of ssl.packages) {
+      const fields = {
+        Package: specification.name, Version: specification.version, Architecture: 'amd64', Source: 'openssl',
+      }
+      const record = (values: typeof fields) => Object.entries(values).map(([key, value]) => `${key}: ${value}`).join('\n')
+      expect(() => ssl.verifyControl(record(fields), specification)).not.toThrow()
+      for (const changed of [
+        { ...fields, Package: 'other' }, { ...fields, Version: '3.5.7-1~deb13u2' },
+        { ...fields, Architecture: 'arm64' }, { ...fields, Source: 'other' },
+      ]) {
+        expect(() => ssl.verifyControl(record(changed), specification)).toThrow(/identity mismatch/u)
+      }
+    }
+  })
+
   it('pins every Python requirement source and target lock', async () => {
     const lock = JSON.parse(await readFile(join(frontendDir, 'config', 'investment-python-runtime-lock.json'), 'utf8')) as {
       requirements: Record<string, string>
@@ -147,6 +174,8 @@ describe('investment container delivery contract', () => {
     expect(dockerfile).toMatch(/^USER 10001:10001$/mu)
     expect(dockerfile).toMatch(/^\s+HOME=\/var\/lib\/dsh \\/mu)
     expect(dockerfile).toContain('install -d -m 0700 -o 10001 -g 10001 /opt/runtime-root/var/lib/dsh')
+    expect(dockerfile).toContain('RUN node ../containers/prepare-runtime-openssl.mjs /opt/runtime-openssl')
+    expect(dockerfile).toContain('COPY --from=build --chown=0:0 /opt/runtime-openssl/ /')
     expect(dockerfile).toContain('ENTRYPOINT ["/nodejs/bin/node", "/opt/container/investment-entrypoint.mjs"]')
     expect(dockerfile).not.toContain('ln -s /opt/container/investment-entrypoint.mjs')
     expect(dockerfile).toContain('org.opencontainers.image.revision="$VCS_REF"')

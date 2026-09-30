@@ -22,6 +22,7 @@ RUN pnpm run build:lib && pnpm run build:web
 RUN CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 RUN node --import tsx/esm scripts/build-investment-container-app.ts --output /opt/dsh
 RUN install -d -m 0700 -o 10001 -g 10001 /opt/runtime-root/var/lib/dsh
+RUN node ../containers/prepare-runtime-openssl.mjs /opt/runtime-openssl
 
 FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d AS runtime
 
@@ -35,6 +36,7 @@ ENV DSH_HOME=/var/lib/dsh \
 LABEL org.opencontainers.image.source="https://github.com/PABIPRG/pa-investment-research" \
       org.opencontainers.image.revision="$VCS_REF"
 
+COPY --from=build --chown=0:0 /opt/runtime-openssl/ /
 COPY --from=build --chown=0:0 /opt/dsh /opt/dsh
 COPY --from=build --chown=0:0 /opt/investment-python /opt/investment-python
 COPY --from=build --chown=10001:10001 /opt/runtime-root/var/lib/dsh /var/lib/dsh

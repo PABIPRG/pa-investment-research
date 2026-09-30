@@ -65,6 +65,7 @@ export interface PublicActivityDetail extends PublicActivity {
   related_snapshot_id: string | null
   holdings_changes?: Array<{
     ticker: string
+    name?: string
     before_quantity: string
     after_quantity: string
     before_cost_price: string | null
@@ -138,9 +139,10 @@ export async function loadCalendar(month: string, signal?: AbortSignal): Promise
     requestJson<{ days: PublicCalendar['days'] }>(`/api/public/performance/v1/calendar?month=${encodeURIComponent(month)}`, signal),
     loadHistory(addDays(`${month}-01`, -1), end > today ? today : end, signal),
   ])
-  const tradingDates = new Set(days.days.filter(day => day.trading_status === 'trading').map(day => day.date))
-  const items = history.points.filter(point => tradingDates.has(point.date)).map(point => {
-    const prior = history.points.filter(row => row.date < point.date).at(-1)
+  const statuses = new Map(days.days.map(day => [day.date, day.trading_status]))
+  const points = [...history.points].sort((a, b) => a.date.localeCompare(b.date))
+  const items = points.filter(point => point.date.startsWith(`${month}-`) && point.value !== null && statuses.get(point.date) !== 'closed').map((point) => {
+    const prior = points.filter(row => row.date < point.date).at(-1)
     const daily = point.profit_loss !== null && prior?.profit_loss != null
       ? (Number(point.profit_loss) - Number(prior.profit_loss)).toFixed(2) : null
     return { date: point.date, daily_profit_loss: daily }
@@ -182,6 +184,8 @@ export async function loadObservatorySlice(
 export function loadActivityDetail(publicId: string, signal?: AbortSignal): Promise<PublicActivityDetail> {
   return requestJson(`/api/public/performance/v1/activities/${encodeURIComponent(publicId)}`, signal)
 }
-export function loadMoreActivities(asOf: string, filters: { category: string; status: string }, cursor: string, signal?: AbortSignal): Promise<PublicActivities> {
+export function loadMoreActivities(
+  asOf: string, filters: { category: string; status: string }, cursor: string, signal?: AbortSignal,
+): Promise<PublicActivities> {
   return requestJson(`/api/public/performance/v1/activities?as_of=${encodeURIComponent(asOf)}&category=${encodeURIComponent(filters.category)}&status=${encodeURIComponent(filters.status)}&cursor=${encodeURIComponent(cursor)}&limit=20`, signal)
 }

@@ -799,7 +799,7 @@ def _activity_order(row: dict) -> tuple[int, str]:
     return operation_index.micros(_timestamp(row["occurred_at"])), row["public_id"]
 
 
-def _identified_holdings_update(row: dict, detail: dict | None) -> dict:
+def _identified_holdings_update(row: dict, detail: dict | None, names: dict[str, str] | None = None) -> dict:
     """用已核验的公开持仓差异标出证券，兼容现有索引中的通用标题。"""
     if not _is_holdings_change(row) or detail is None:
         return row
@@ -807,9 +807,30 @@ def _identified_holdings_update(row: dict, detail: dict | None) -> dict:
     if not isinstance(changes, list) or not changes:
         return row
     tickers = sorted({change["ticker"] for change in changes})
-    names = "、".join(tickers[:2])
+    labels = "、".join(f"{names[ticker]} · {ticker}" if names and ticker in names else ticker for ticker in tickers[:2])
     suffix = f" 等 {len(tickers)} 只" if len(tickers) > 2 else ""
-    return {**row, "title": f"{row['title']}：{names}{suffix}"}
+    return {**row, "title": f"{row['title']}：{labels}{suffix}"}
+
+
+def _activity_security_names(details: list[dict], quote_loader: Callable[[list[str]], dict[str, dict]] | None) -> dict[str, str]:
+    """名称仅取公开差异代码对应的批量行情，失败不影响已核验的操作事实。"""
+    if quote_loader is None:
+        return {}
+    tickers = sorted({change["ticker"] for detail in details
+                      for change in detail.get("holdings_changes") or []})[:MAX_PUBLIC_POSITIONS]
+    if not tickers:
+        return {}
+    try:
+        quotes = quote_loader(tickers)
+    except Exception:
+        # 补充名称不可用时仍展示原有代码与操作，不阻断只读投影。
+        return {}
+    names = {}
+    for ticker in tickers:
+        name = quotes.get(ticker, {}).get("name")
+        if isinstance(name, str) and name.strip():
+            names[ticker] = name.strip()[:80]
+    return names
 
 
 def _is_holdings_change(row: dict) -> bool:
@@ -826,6 +847,7 @@ def public_activities(
     status: str = "all",
     cursor: str | None = None,
     limit: int = 20,
+    quote_loader: Callable[[list[str]], dict[str, dict]] | None = None,
 ) -> dict:
     """返回字段白名单活动摘要和不透明游标。"""
     cutoff = _parse_date(as_of, "截止日期")
@@ -857,18 +879,20 @@ def public_activities(
                         and (anchor is None or _activity_order(row) < anchor)), key=_activity_order, reverse=True)[:limit + 1]
         rows.sort(key=_activity_order, reverse=True)
         page = rows[:limit]
-        page = [_identified_holdings_update(
-            item, projection.detail(item["public_id"], since)
-            if since is not None and _is_holdings_change(item) else None,
-        ) for item in page]
-        return {
-            "as_of": as_of,
-            "items": [{key: item[key] for key in operation_index.SUMMARY_FIELDS} for item in page],
-            "next_cursor": projection.cursor(highwater, _activity_order(page[-1]), context) if len(rows) > limit else None,
-        }
+        details = {item["public_id"]: projection.detail(item["public_id"], since)
+                   for item in page if since is not None and _is_holdings_change(item)}
+        next_cursor = projection.cursor(highwater, _activity_order(page[-1]), context) if len(rows) > limit else None
+    names = _activity_security_names([item for item in details.values() if item is not None], quote_loader)
+    page = [_identified_holdings_update(item, details.get(item["public_id"]), names) for item in page]
+    return {
+        "as_of": as_of,
+        "items": [{key: item[key] for key in operation_index.SUMMARY_FIELDS} for item in page],
+        "next_cursor": next_cursor,
+    }
 
 
-def public_activity_detail(store: JsonStore, public_id: str) -> dict:
+def public_activity_detail(store: JsonStore, public_id: str, *,
+                           quote_loader: Callable[[list[str]], dict[str, dict]] | None = None) -> dict:
     """按服务端生成的 ID 返回一条经批准的活动详情。"""
     if len(public_id) != 24 or any(char not in "0123456789abcdef" for char in public_id):
         raise ValueError("public_id 无效")
@@ -880,7 +904,12 @@ def public_activity_detail(store: JsonStore, public_id: str) -> dict:
             item = projection.detail(public_id, since)
     if item is None:
         raise PublicSnapshotNotFound(public_id)
-    return _identified_holdings_update(dict(item), item)
+    names = _activity_security_names([item], quote_loader)
+    result = _identified_holdings_update(dict(item), item, names)
+    if "holdings_changes" in result and result["holdings_changes"] is not None and quote_loader is not None:
+        result["holdings_changes"] = [{**change, "name": names.get(change["ticker"], "")}
+                                     for change in result["holdings_changes"]]
+    return result
 
 
 def register_public_observatory_routes(
@@ -1010,7 +1039,7 @@ def register_public_observatory_routes(
         try:
             return public_activities(
                 read_store(), as_of, category=category, status=status,
-                cursor=cursor, limit=limit,
+                cursor=cursor, limit=limit, quote_loader=quote_loader,
             )
         except operation_index.CursorExpired as exc:
             raise HTTPException(status_code=409, detail={"code": "cursor-expired", "message": "记录范围已更新，请重新读取。"}) from exc
@@ -1020,7 +1049,7 @@ def register_public_observatory_routes(
     @app.get("/public/performance/v1/activities/{public_id}", response_model=dict)
     def public_performance_activity_detail(public_id: str):
         try:
-            return public_activity_detail(read_store(), public_id)
+            return public_activity_detail(read_store(), public_id, quote_loader=quote_loader)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except PublicSnapshotNotFound as exc:

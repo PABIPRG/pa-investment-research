@@ -363,6 +363,95 @@ class ReportTests(unittest.TestCase):
                         gate.run_scanner(['/tools/trivy', 'image'], root)
 
 
+class FixedOpenSslTests(unittest.TestCase):
+    def setUp(self):
+        self.rules = json.loads(gate.POLICY_PATH.read_text())
+        self.exceptions = self.rules['vulnerabilityExceptions']
+        self.payloads = {path: sha for e in self.exceptions for path, sha in e['payloads'].items()}
+        self.findings = [{'VulnerabilityID': e['id'], 'PkgName': e['package'],
+                         'InstalledVersion': e['installedVersion'], 'Severity': e['severity']}
+                        for e in self.exceptions]
+        self.report = {'Results': [{'Class': 'os-pkgs', 'Type': 'debian',
+                                   'Vulnerabilities': self.findings}]}
+
+    def test_policy_is_bounded_to_approved_packages_and_expiry(self):
+        self.assertEqual(len(gate.validate_policy(self.rules)['vulnerabilityExceptions']), 6)
+        for change in ({'installedVersion': '3.5.7-1'}, {'archiveSha256': '0' * 64},
+                       {'payloads': {}}, {'id': 'CVE-2099-1234'}, {'count': 2},
+                       {'severity': 'CRITICAL'}, {'expiresAt': '2026-10-07T00:00:00Z'},
+                       {'expiresAt': '2020-01-01T00:00:00Z'}):
+            with self.subTest(change=change), self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+                gate.validate_policy({**self.rules, 'vulnerabilityExceptions': [
+                    {**self.exceptions[0], **change}, *self.exceptions[1:]]})
+        with self.assertRaises(gate.GateError):
+            gate.validate_policy({**self.rules, 'vulnerabilityExceptions': self.exceptions * 2})
+
+    def test_exact_fixed_payloads_remove_only_six_reviewed_findings(self):
+        other = {'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}
+        report = {'Results': [{**self.report['Results'][0],
+                              'Vulnerabilities': self.findings + [other, self.findings[0]]}]}
+        with patch.object(gate, 'require_fixed_openssl_advisory') as advisory:
+            filtered, count = gate.apply_vulnerability_exceptions(
+                report, self.exceptions, 'linux/amd64', {'runtime_payloads': self.payloads})
+        self.assertEqual(count, 6)
+        self.assertEqual(filtered['Results'][0]['Vulnerabilities'], [other, self.findings[0]])
+        self.assertEqual(advisory.call_count, 3)
+        for payloads in ({}, {**self.payloads, next(iter(self.payloads)): '0' * 64}):
+            with self.assertRaisesRegex(gate.GateError, '^unverified-runtime-payload$'):
+                gate.apply_vulnerability_exceptions(report, self.exceptions, 'linux/amd64',
+                                                   {'runtime_payloads': payloads})
+        for findings in ([], [{**f, 'InstalledVersion': '3.5.7-1'} for f in self.findings]):
+            with self.assertRaisesRegex(gate.GateError, '^unused-vulnerability-exception$'):
+                gate.apply_vulnerability_exceptions({'Results': [{**self.report['Results'][0],
+                    'Vulnerabilities': findings}]}, self.exceptions, 'linux/amd64',
+                    {'runtime_payloads': self.payloads})
+
+    def test_official_fixed_range_changes_and_network_errors_block(self):
+        for id, specification in gate.OPENSSL_LOCK['advisories'].items():
+            advisory = {'cveMetadata': {'cveId': id, 'state': 'PUBLISHED', 'assignerShortName': 'openssl'},
+                        'containers': {'cna': {'affected': specification['affected']}}}
+            with patch.object(gate.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(advisory).encode())):
+                gate.require_fixed_openssl_advisory(id)
+            changed = json.loads(json.dumps(advisory))
+            changed['containers']['cna']['affected'][0]['versions'][1]['lessThan'] = '3.6.6'
+            with patch.object(gate.urllib.request, 'urlopen', return_value=io.BytesIO(json.dumps(changed).encode())):
+                with self.assertRaisesRegex(gate.GateError, '^unverified-vulnerability-exception$'):
+                    gate.require_fixed_openssl_advisory(id)
+            with patch.object(gate.urllib.request, 'urlopen', side_effect=OSError('SECRET_CANARY')):
+                with self.assertRaisesRegex(gate.GateError, '^unverified-vulnerability-exception$'):
+                    gate.require_fixed_openssl_advisory(id)
+
+    def test_payload_guard_uses_final_layers_and_rejects_overwrites_links_and_whiteouts(self):
+        path = next(iter(self.payloads))
+        for upper in ([(path, 'changed', 'file')], [(path, '/tmp/other', 'link')],
+                      [('usr/lib/x86_64-linux-gnu/.wh.libcrypto.so.3', '', 'file')],
+                      [('usr/lib/x86_64-linux-gnu/.wh..wh..opq', '', 'file')],
+                      [('usr/lib/x86_64-linux-gnu', '/tmp/other', 'link')]):
+            with self.subTest(upper=upper), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                archive, image, revision, _ = fixture(root, layers=[[(path, 'fixed', 'file')], upper])
+                work = root / 'work'
+                work.mkdir()
+                evidence = gate.prepare_archive(archive, work, image, revision)
+                self.assertNotEqual(evidence['runtime_payloads'].get(path), hashlib.sha256(b'fixed').hexdigest())
+
+
+    def test_same_layer_replacement_survives_whiteout_but_linked_parent_does_not(self):
+        path = next(iter(self.payloads))
+        whiteout = 'usr/lib/x86_64-linux-gnu/.wh.libcrypto.so.3'
+        for upper, expected in (([(path, 'fixed', 'file'), (whiteout, '', 'file')],
+                                 hashlib.sha256(b'fixed').hexdigest()),
+                                ([('usr/lib/x86_64-linux-gnu', '/tmp/other', 'link'),
+                                  (path, 'fixed', 'file')], None)):
+            with self.subTest(upper=upper), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                archive, image, revision, _ = fixture(root, layers=[[(path, 'old', 'file')], upper])
+                work = root / 'work'
+                work.mkdir()
+                evidence = gate.prepare_archive(archive, work, image, revision)
+                self.assertEqual(evidence['runtime_payloads'].get(path), expected)
+
+
 class OrchestrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -410,10 +499,15 @@ class OrchestrationTests(unittest.TestCase):
                                  'Vulnerabilities': (
                                      ([{'VulnerabilityID': 'CVE-2026-97399', 'Severity': 'UNKNOWN',
                                         'PkgName': 'libc6', 'InstalledVersion': '2.41-12+deb13u4'}]
-                                      if self.mode in ('cve', 'cve-and-unfixed') else [])
+                                      if self.mode in ('cve', 'cve-and-unfixed', 'fixed-and-cve') else [])
+                                     + ([{'VulnerabilityID': e['id'], 'Severity': e['severity'],
+                                          'PkgName': e['package'], 'InstalledVersion':
+                                          '3.5.7-1' if self.mode == 'fixed-old' else e['installedVersion']}
+                                         for e in json.loads(self.policy_path.read_text())['vulnerabilityExceptions']]
+                                        if self.mode.startswith('fixed') else [])
                                      + ([{'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]
                                         if self.mode in ('unfixed', 'secret-and-unfixed',
-                                                         'cve-and-unfixed') else []))}]}))
+                                                         'cve-and-unfixed', 'fixed-and-unfixed') else []))}]}))
             cache = Path(command[command.index('--cache-dir') + 1]) / 'db'
             cache.mkdir(parents=True)
             (cache / 'metadata.json').write_text(json.dumps({'UpdatedAt': datetime.now(timezone.utc).isoformat()}))
@@ -511,11 +605,82 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(blocked['remainingVulnerabilities']['HIGH'], 1)
         self.assertFalse(blocked['passed'])
 
+    def test_fixed_package_scan_and_publish_bind_files_and_advisories(self):
+        original = json.loads((Path(__file__).parent / 'image-security-policy.json').read_text())
+        exceptions = original['vulnerabilityExceptions']
+        packages = json.loads(json.dumps(gate.OPENSSL_PACKAGES))
+        contents = {path: ('inert fixture for ' + path).encode() for path in gate.OPENSSL_PAYLOADS}
+        hashes = {path: hashlib.sha256(value).hexdigest() for path, value in contents.items()}
+        for spec in packages.values():
+            spec['payloads'] = {path: hashes[path] for path in spec['payloads']}
+        for exception in exceptions:
+            exception['payloads'] = packages[exception['package']]['payloads']
+        policy_value = json.loads(self.policy_path.read_text())
+        policy_value['vulnerabilityExceptions'] = exceptions
+        self.policy_path.write_text(json.dumps(policy_value))
+        self.archive, self.image, self.revision, self.layers = fixture(self.root,
+            layers=[[(path, content, 'file') for path, content in contents.items()]])
+        self.mode = 'fixed'
+        with patch.object(gate, 'OPENSSL_PACKAGES', packages), patch.object(gate, 'OPENSSL_PAYLOADS', hashes), \
+             patch.object(gate, 'require_fixed_openssl_advisory') as advisory:
+            result = self.invoke()
+            gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+            self.assertEqual(advisory.call_count, 6)  # Three at scan, three before publication.
+            self.assertEqual(result['vulnerabilityExceptionsApplied'], 6)
+            self.assertEqual(result['vulnerabilities']['HIGH'], 2)
+            self.assertEqual(result['vulnerabilities']['UNKNOWN'], 4)
+            self.assertEqual(result['remainingVulnerabilities']['HIGH'], 0)
+            self.assertEqual(result['remainingVulnerabilities']['UNKNOWN'], 0)
+            with patch.object(gate, 'require_fixed_openssl_advisory', side_effect=gate.GateError('unverified-vulnerability-exception')):
+                with self.assertRaisesRegex(gate.GateError, '^unverified-vulnerability-exception$'):
+                    gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+            forged = {**result, 'runtimePayloadsSha256': '0' * 64}
+            self.summary.write_text(json.dumps(forged))
+            with self.assertRaisesRegex(gate.GateError, '^security-summary-not-passed$'):
+                gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+            for mode in ('fixed-and-unfixed', 'fixed-and-cve'):
+                self.mode = mode
+                self.output = io.StringIO()
+                with self.assertRaisesRegex(gate.GateError, '^security-findings-block-publication$'):
+                    self.invoke()
+                self.assertFalse(json.loads(self.summary.read_text())['passed'])
+            self.mode = 'fixed-old'
+            with self.assertRaisesRegex(gate.GateError, '^unused-vulnerability-exception$'):
+                self.invoke()
+            self.mode = 'fixed'
+            self.archive, self.image, self.revision, self.layers = fixture(self.root,
+                layers=[[(path, b'forged package metadata cannot replace fixed bytes', 'file')
+                         for path in contents]])
+            with self.assertRaisesRegex(gate.GateError, '^unverified-runtime-payload$'):
+                self.invoke()
+
     def test_success_is_bound_to_archive_and_publish_rejects_changed_archive(self):
         self.assertTrue(self.invoke()['passed'])
         gate.verify_summary(self.summary, self.archive, self.image, self.revision)
         with self.archive.open('ab') as stream:
             stream.write(b'changed')
+        with self.assertRaises(gate.GateError):
+            gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+
+    def test_repository_vulnerability_policy_passes_clean_report_and_blocks_returning_cve(self):
+        policy_value = json.loads(self.policy_path.read_text())
+        repository_policy = json.loads((Path(__file__).parent / 'image-security-policy.json').read_text())
+        self.assertFalse(any(e['id'] == 'CVE-2026-97399' for e in repository_policy['vulnerabilityExceptions']))
+        policy_value['vulnerabilityExceptions'] = []
+        self.policy_path.write_text(json.dumps(policy_value))
+        result = self.invoke()
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['vulnerabilityExceptionsApplied'], 0)
+        gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+
+        self.mode = 'cve'
+        self.output = io.StringIO()
+        with self.assertRaisesRegex(gate.GateError, '^security-findings-block-publication$'):
+            self.invoke()
+        blocked = json.loads(self.output.getvalue())
+        self.assertEqual(blocked['blockingVulnerabilityIds'], [{'id': 'CVE-2026-97399', 'findings': 1}])
+        self.assertFalse(blocked['passed'])
+        self.assertFalse(json.loads(self.summary.read_text())['passed'])
         with self.assertRaises(gate.GateError):
             gate.verify_summary(self.summary, self.archive, self.image, self.revision)
 

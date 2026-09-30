@@ -47,27 +47,49 @@ describe('public observatory independent data reads', () => {
     expect(result.activitiesError).toBe(true)
   })
 
-  it('only publishes estimated daily returns for confirmed trading days', async () => {
+  it('keeps recorded estimates when the trading calendar is unknown and excludes closed days', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
       const path = new URL(String(input)).pathname
       if (path.endsWith('/calendar')) return new Response(JSON.stringify({ days: [
+        { date: '2026-09-24', trading_status: 'unknown' },
         { date: '2026-09-25', trading_status: 'trading' },
         { date: '2026-09-26', trading_status: 'closed' },
         { date: '2026-09-28', trading_status: 'unknown' },
       ] }))
       return new Response(JSON.stringify({ points: [
-        { date: '2026-09-24', profit_loss: '10.00' },
-        { date: '2026-09-25', profit_loss: '12.00' },
-        { date: '2026-09-26', profit_loss: '12.00' },
-        { date: '2026-09-28', profit_loss: '15.00' },
+        { date: '2026-09-24', value: '110.00', profit_loss: '10.00' },
+        { date: '2026-09-25', value: '112.00', profit_loss: '12.00' },
+        { date: '2026-09-26', value: '112.00', profit_loss: '12.00' },
+        { date: '2026-09-28', value: '115.00', profit_loss: '15.00' },
       ], limitations: [] }))
     }))
     const calendar = await loadCalendar('2026-09')
-    expect(calendar.items).toEqual([{ date: '2026-09-25', daily_profit_loss: '2.00' }])
+    expect(calendar.items).toEqual([
+      { date: '2026-09-24', daily_profit_loss: null },
+      { date: '2026-09-25', daily_profit_loss: '2.00' },
+      { date: '2026-09-28', daily_profit_loss: '3.00' },
+    ])
   })
 
-  it.each(['http://evil.example', 'file://localhost/data', 'ftp://127.0.0.1'])('rejects unsafe API base %s before fetch', async base => {
+  it('uses the prior month as a baseline without publishing it or filling missing estimates with zero', async () => {
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      if (new URL(String(input)).pathname.endsWith('/calendar')) return new Response(JSON.stringify({ days: [] }))
+      return new Response(JSON.stringify({ points: [
+        { date: '2026-09-03', value: '110', profit_loss: null },
+        { date: '2026-09-02', value: null, profit_loss: null },
+        { date: '2026-09-01', value: '105', profit_loss: '5' },
+        { date: '2026-08-31', value: '100', profit_loss: '0' },
+      ], limitations: [] }))
+    }))
+    expect((await loadCalendar('2026-09')).items).toEqual([
+      { date: '2026-09-01', daily_profit_loss: '5.00' },
+      { date: '2026-09-03', daily_profit_loss: null },
+    ])
+  })
+
+  it.each(['http://evil.example' , 'file://localhost/data', 'ftp://127.0.0.1'])('rejects unsafe API base %s before fetch', async (base) => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', base)
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

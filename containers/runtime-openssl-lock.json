@@ -1,0 +1,152 @@
+{
+  "packages": [
+    {
+      "name": "libssl3t64",
+      "version": "3.6.5-1",
+      "sha256": "0a0ec84fe860c5c93c74d53cbb071aea0793327a3761b483080e9d7b73c21b37",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/libcrypto.so.3": "5a3ea7023b2170ac08536e921887adaf0f5c25af41f94573e11f1b32e2fc9074",
+        "usr/lib/x86_64-linux-gnu/libssl.so.3": "def2b9aab81332e82399546bd73d2f307c870ae671feca0a2f1b06928fef0e2e"
+      }
+    },
+    {
+      "name": "openssl-provider-legacy",
+      "version": "3.6.5-1",
+      "sha256": "82b7c056f7dfd91e4eedb1a0738d655867b6e13bd25ce03406e9cf464e9345ad",
+      "payloads": {
+        "usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so": "9c88e2bcbe05eb761a80209d9789a5cc68c5c80b51098c68c8eef3bd1dfac862"
+      }
+    }
+  ],
+  "advisories": {
+    "CVE-2026-42772": {
+      "url": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/42xxx/CVE-2026-42772.json",
+      "severity": "UNKNOWN",
+      "affected": [
+        {
+          "defaultStatus": "unaffected",
+          "product": "OpenSSL",
+          "vendor": "OpenSSL",
+          "versions": [
+            {
+              "lessThan": "4.0.3",
+              "status": "affected",
+              "version": "4.0.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.6.5",
+              "status": "affected",
+              "version": "3.6.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.5.9",
+              "status": "affected",
+              "version": "3.5.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.4.8",
+              "status": "affected",
+              "version": "3.4.0",
+              "versionType": "semver"
+            }
+          ]
+        }
+      ]
+    },
+    "CVE-2026-54873": {
+      "url": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/54xxx/CVE-2026-54873.json",
+      "severity": "UNKNOWN",
+      "affected": [
+        {
+          "defaultStatus": "unaffected",
+          "product": "OpenSSL",
+          "vendor": "OpenSSL",
+          "versions": [
+            {
+              "lessThan": "4.0.3",
+              "status": "affected",
+              "version": "4.0.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.6.5",
+              "status": "affected",
+              "version": "3.6.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.5.9",
+              "status": "affected",
+              "version": "3.5.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.4.8",
+              "status": "affected",
+              "version": "3.4.0",
+              "versionType": "semver"
+            }
+          ]
+        }
+      ]
+    },
+    "CVE-2026-84782": {
+      "url": "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2026/84xxx/CVE-2026-84782.json",
+      "severity": "HIGH",
+      "affected": [
+        {
+          "defaultStatus": "unaffected",
+          "product": "OpenSSL",
+          "vendor": "OpenSSL",
+          "versions": [
+            {
+              "lessThan": "4.0.3",
+              "status": "affected",
+              "version": "4.0.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.6.5",
+              "status": "affected",
+              "version": "3.6.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.5.9",
+              "status": "affected",
+              "version": "3.5.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.4.8",
+              "status": "affected",
+              "version": "3.4.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "3.0.23",
+              "status": "affected",
+              "version": "3.0.0",
+              "versionType": "semver"
+            },
+            {
+              "lessThan": "1.1.1zj",
+              "status": "affected",
+              "version": "1.1.1",
+              "versionType": "custom"
+            },
+            {
+              "lessThan": "1.0.2zs",
+              "status": "affected",
+              "version": "1.0.2",
+              "versionType": "custom"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

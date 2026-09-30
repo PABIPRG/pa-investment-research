@@ -1,4 +1,5 @@
 import { lstat, opendir, stat } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -53,6 +54,21 @@ export async function lockState(root = '/state') {
 async function run(mode) {
   if (mode === 'boundary') {
     await assertNoBrokenSymlinks(['/opt/dsh', '/opt/investment-python'])
+    // Load both upgraded shared libraries in the final image, beyond checking package metadata.
+    execFileSync('/opt/investment-python/runtime/bin/python3', ['-c', `
+import ctypes
+crypto = ctypes.CDLL('/usr/lib/x86_64-linux-gnu/libcrypto.so.3')
+crypto.OpenSSL_version.restype = ctypes.c_char_p
+assert crypto.OpenSSL_version(0).decode().startswith('OpenSSL 3.6.5 ')
+ssl = ctypes.CDLL('/usr/lib/x86_64-linux-gnu/libssl.so.3')
+ssl.TLS_method.restype = ctypes.c_void_p
+ssl.SSL_CTX_new.argtypes = [ctypes.c_void_p]
+ssl.SSL_CTX_new.restype = ctypes.c_void_p
+ssl.SSL_CTX_free.argtypes = [ctypes.c_void_p]
+context = ssl.SSL_CTX_new(ssl.TLS_method())
+assert context, 'OpenSSL TLS context creation failed'
+ssl.SSL_CTX_free(context)
+`], { stdio: 'inherit' })
     return
   }
   const state = await lockState()

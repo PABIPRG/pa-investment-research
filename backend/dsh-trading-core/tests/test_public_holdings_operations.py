@@ -63,6 +63,33 @@ class PublicHoldingsOperationsTests(unittest.TestCase):
         for secret in ("SECRET", self.identity, "transactionId", "before\"", "account_id"):
             self.assertNotIn(secret, json.dumps(detail))
 
+    def test_security_names_come_from_quotes_for_list_and_detail_even_after_removal(self):
+        self.archive(after={"holdings": {"default": []}, "trades": {}})
+        calls = []
+        def quotes(codes):
+            calls.append(codes)
+            return {"600519": {"name": "贵州茅台", "private_note": "SECRET"}}
+        page = public_activities(self.store, "2026-09-21", quote_loader=quotes)
+        self.assertIn("贵州茅台 · 600519", page["items"][0]["title"])
+        detail = public_activity_detail(self.store, page["items"][0]["public_id"], quote_loader=quotes)
+        self.assertEqual(detail["title"], page["items"][0]["title"])
+        self.assertEqual(detail["holdings_changes"][0]["name"], "贵州茅台")
+        self.assertEqual(calls, [["600519"], ["600519"]])
+        self.assertNotIn("SECRET", json.dumps(detail))
+        app = FastAPI()
+        register_public_observatory_routes(app, store_factory=lambda: self.store, quote_loader=quotes)
+        client = TestClient(app)
+        listed = client.get("/public/performance/v1/activities?as_of=2026-09-21").json()["items"][0]
+        response = client.get(f"/public/performance/v1/activities/{listed['public_id']}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["holdings_changes"][0]["name"], "贵州茅台")
+        self.assertEqual(response.json()["title"], listed["title"])
+        def failed_quotes(codes):
+            raise RuntimeError("quotes unavailable")
+        fallback = public_activities(self.store, "2026-09-21", quote_loader=failed_quotes)
+        self.assertIn("600519", fallback["items"][0]["title"])
+        self.assertNotIn("贵州茅台", fallback["items"][0]["title"])
+
     def test_default_off_and_revocation_apply_to_list_and_detail(self):
         self.archive()
         identity = public_activities(self.store, "2026-09-21")["items"][0]["public_id"]
