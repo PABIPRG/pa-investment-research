@@ -217,13 +217,10 @@ git diff --check
   策略同时记录包名和版本、原因、审核人及到期日期，不接受整目录或整条规则例外。
   当前 8 条授权命中仅对应 Akshare 1.18.88、Tushare 1.4.29 与 protobuf 7.35.1 的固定公开
   运行常量或生成代码表达式，有效期至 2026-10-06 23:59 UTC；依赖变化或到期后必须重新评审。
-- `vulnerabilityExceptions` 当前只允许一条 `CVE-2026-97399` 精确例外：
-  Debian OS 包 `libc6` 的 `2.41-12+deb13u4` 版本、`UNKNOWN` 级别、Linux amd64 镜像、单次命中。
-  [CVE 官方记录](https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/97xxx/CVE-2026-97399.json)
-  目前将受影响平台限定为 Power8，其余平台默认不受影响。扫描和发布复核都实时核对官方记录；
-  记录变化、获取失败、平台或包版本变化、命中消失、额外告警及 2026-10-06 23:59 UTC 到期均失败关闭。
-  摘要同时保留原始与例外后的漏洞计数及实际应用次数。若未来支持 Power8 或官方范围扩大，
-  应先移除此例外，升级已修复的 glibc/基础镜像并重跑完整 CI，再评审发布。
+- `vulnerabilityExceptions` 当前为空。PR #156 的镜像扫描不再匹配原
+  `CVE-2026-97399` 精确例外，门禁按未使用例外失败关闭，因此移除该配置。
+  `UNKNOWN`、`HIGH`、`CRITICAL` 级别继续全部阻断；若该 CVE 再次出现，也不再豁免。
+  扫描器仍支持经逐项评审的精确例外，未使用、漂移或过期均失败关闭；新增例外需重新评审。
 
 Python sidecar 在写入 `runtime.json` 及进入镜像层前，仅删除官方
 `py-vapid==1.9.4` 的 `py_vapid/tests/test_vapid.py` 与 `.test_vapid.py.swp`。

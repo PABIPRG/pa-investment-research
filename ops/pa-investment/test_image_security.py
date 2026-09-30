@@ -519,6 +519,27 @@ class OrchestrationTests(unittest.TestCase):
         with self.assertRaises(gate.GateError):
             gate.verify_summary(self.summary, self.archive, self.image, self.revision)
 
+    def test_repository_vulnerability_policy_passes_clean_report_and_blocks_returning_cve(self):
+        policy_value = json.loads(self.policy_path.read_text())
+        repository_policy = json.loads((Path(__file__).parent / 'image-security-policy.json').read_text())
+        policy_value['vulnerabilityExceptions'] = repository_policy['vulnerabilityExceptions']
+        self.policy_path.write_text(json.dumps(policy_value))
+        result = self.invoke()
+        self.assertTrue(result['passed'])
+        self.assertEqual(result['vulnerabilityExceptionsApplied'], 0)
+        gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+
+        self.mode = 'cve'
+        self.output = io.StringIO()
+        with self.assertRaisesRegex(gate.GateError, '^security-findings-block-publication$'):
+            self.invoke()
+        blocked = json.loads(self.output.getvalue())
+        self.assertEqual(blocked['blockingVulnerabilityIds'], [{'id': 'CVE-2026-97399', 'findings': 1}])
+        self.assertFalse(blocked['passed'])
+        self.assertFalse(json.loads(self.summary.read_text())['passed'])
+        with self.assertRaises(gate.GateError):
+            gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+
     def test_missing_reports_mismatch_secrets_and_unfixed_vulnerabilities_block(self):
         for mode in ('no-secret-report', 'no-vuln-report', 'identity', 'secret', 'unfixed'):
             self.mode = mode
