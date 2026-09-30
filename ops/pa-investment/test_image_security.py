@@ -60,6 +60,19 @@ def vulnerability_exception(version='2.41-12+deb13u4'):
             'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z'}
 
 
+def fixed_vulnerability_exceptions():
+    """Reviewed capability fixtures stay independent of the active production policy."""
+    return [{'kind': 'trivy-fixed-package', 'id': identifier,
+             'sourceClass': 'os-pkgs', 'sourceType': 'debian', 'package': spec['name'],
+             'installedVersion': spec['version'], 'severity': advisory['severity'],
+             'platform': 'linux/amd64', 'count': 1, 'reason': 'verified-fixed-package',
+             'advisory': advisory['url'], 'reviewedBy': 'test-reviewer',
+             'expiresAt': '2026-10-06T23:59:00Z', 'archiveSha256': spec['sha256'],
+             'payloads': dict(spec['payloads'])}
+            for spec in gate.OPENSSL_PACKAGES.values()
+            for identifier, advisory in gate.OPENSSL_LOCK['advisories'].items()]
+
+
 class ArchiveTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -366,6 +379,7 @@ class ReportTests(unittest.TestCase):
 class FixedOpenSslTests(unittest.TestCase):
     def setUp(self):
         self.rules = json.loads(gate.POLICY_PATH.read_text())
+        self.rules['vulnerabilityExceptions'] = fixed_vulnerability_exceptions()
         self.exceptions = self.rules['vulnerabilityExceptions']
         self.payloads = {path: sha for e in self.exceptions for path, sha in e['payloads'].items()}
         self.findings = [{'VulnerabilityID': e['id'], 'PkgName': e['package'],
@@ -470,6 +484,7 @@ class OrchestrationTests(unittest.TestCase):
         self.mode = 'clean'
         self.output = io.StringIO()
         self.vulnerability_scans = 0
+        self.extra_vulnerabilities = []
 
     def scanner(self, command, cwd, **kwargs):
         from datetime import datetime, timezone
@@ -507,7 +522,8 @@ class OrchestrationTests(unittest.TestCase):
                                         if self.mode.startswith('fixed') else [])
                                      + ([{'VulnerabilityID': 'CVE-2099-1234', 'Severity': 'HIGH'}]
                                         if self.mode in ('unfixed', 'secret-and-unfixed',
-                                                         'cve-and-unfixed', 'fixed-and-unfixed') else []))}]}))
+                                                         'cve-and-unfixed', 'fixed-and-unfixed') else [])
+                                     + self.extra_vulnerabilities)}]}))
             cache = Path(command[command.index('--cache-dir') + 1]) / 'db'
             cache.mkdir(parents=True)
             (cache / 'metadata.json').write_text(json.dumps({'UpdatedAt': datetime.now(timezone.utc).isoformat()}))
@@ -606,8 +622,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertFalse(blocked['passed'])
 
     def test_fixed_package_scan_and_publish_bind_files_and_advisories(self):
-        original = json.loads((Path(__file__).parent / 'image-security-policy.json').read_text())
-        exceptions = original['vulnerabilityExceptions']
+        exceptions = fixed_vulnerability_exceptions()
         packages = json.loads(json.dumps(gate.OPENSSL_PACKAGES))
         contents = {path: ('inert fixture for ' + path).encode() for path in gate.OPENSSL_PAYLOADS}
         hashes = {path: hashlib.sha256(value).hexdigest() for path, value in contents.items()}
@@ -665,8 +680,7 @@ class OrchestrationTests(unittest.TestCase):
     def test_repository_vulnerability_policy_passes_clean_report_and_blocks_returning_cve(self):
         policy_value = json.loads(self.policy_path.read_text())
         repository_policy = json.loads((Path(__file__).parent / 'image-security-policy.json').read_text())
-        self.assertFalse(any(e['id'] == 'CVE-2026-97399' for e in repository_policy['vulnerabilityExceptions']))
-        policy_value['vulnerabilityExceptions'] = []
+        policy_value['vulnerabilityExceptions'] = repository_policy['vulnerabilityExceptions']
         self.policy_path.write_text(json.dumps(policy_value))
         result = self.invoke()
         self.assertTrue(result['passed'])
@@ -683,6 +697,23 @@ class OrchestrationTests(unittest.TestCase):
         self.assertFalse(json.loads(self.summary.read_text())['passed'])
         with self.assertRaises(gate.GateError):
             gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+
+        self.mode = 'clean'
+        for exception in fixed_vulnerability_exceptions():
+            self.extra_vulnerabilities = [{
+                'VulnerabilityID': exception['id'], 'Severity': exception['severity'],
+                'PkgName': exception['package'], 'InstalledVersion': exception['installedVersion'],
+            }]
+            self.output = io.StringIO()
+            with self.subTest(package=exception['package'], cve=exception['id']):
+                with self.assertRaisesRegex(gate.GateError, '^security-findings-block-publication$'):
+                    self.invoke()
+                blocked = json.loads(self.output.getvalue())
+                self.assertEqual(blocked['blockingVulnerabilityIds'], [{'id': exception['id'], 'findings': 1}])
+                self.assertEqual(blocked['vulnerabilityExceptionsApplied'], 0)
+                self.assertFalse(blocked['passed'])
+                with self.assertRaises(gate.GateError):
+                    gate.verify_summary(self.summary, self.archive, self.image, self.revision)
 
     def test_missing_reports_mismatch_secrets_and_unfixed_vulnerabilities_block(self):
         for mode in ('no-secret-report', 'no-vuln-report', 'identity', 'secret', 'unfixed'):
