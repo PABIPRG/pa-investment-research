@@ -149,7 +149,7 @@ export async function loadCalendar(month: string, signal?: AbortSignal): Promise
   })
   return { month, days: days.days, items, limitations: history.limitations }
 }
-/** 各公开区块并行读取；单一区块失败不遮挡其他事实。 */
+/** 各公开区块并行读取；历史时间线固定为截至当日的 90 日，详情按所选日期读取。 */
 export async function loadObservatorySlice(
   date: string,
   filters: { category: string; status: string },
@@ -157,6 +157,7 @@ export async function loadObservatorySlice(
   onProgress?: (slice: ObservatorySlice, part: 'live' | 'history' | 'calendar' | 'activities') => void,
 ): Promise<ObservatorySlice> {
   configuredBaseUrl()
+  const timelineEnd = shanghaiToday()
   let result: ObservatorySlice = {
     liveLoading: true, historyLoading: true, calendarLoading: true, activitiesLoading: true,
     live: null, liveError: false, history: null, historyError: false,
@@ -175,7 +176,7 @@ export async function loadObservatorySlice(
   }
   await Promise.all([
     settle('live', loadLive(date, signal), live => ({ live, liveLoading: false }), { liveLoading: false, liveError: true }),
-    settle('history', loadHistory(addDays(date, -89), date, signal), history => ({ history, historyLoading: false }), { historyLoading: false, historyError: true }),
+    settle('history', loadHistory(addDays(timelineEnd, -89), timelineEnd, signal), history => ({ history, historyLoading: false }), { historyLoading: false, historyError: true }),
     settle('calendar', loadCalendar(date.slice(0, 7), signal), calendar => ({ calendar, calendarLoading: false }), { calendarLoading: false, calendarError: true }),
     settle('activities', requestJson<PublicActivities>(`/api/public/performance/v1/activities?as_of=${encodeURIComponent(date)}&category=${encodeURIComponent(filters.category)}&status=${encodeURIComponent(filters.status)}&limit=20`, signal), activities => ({ activities, activitiesLoading: false }), { activitiesLoading: false, activitiesError: true }),
   ])

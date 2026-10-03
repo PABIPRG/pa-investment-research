@@ -1,12 +1,45 @@
 // @vitest-environment jsdom
-import { useState } from 'react'
+import { act, useState } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, within } from '@testing-library/react'
 import { Select } from '../src/Select.tsx'
 import { HelpPopover } from '../src/HelpPopover.tsx'
 import { Modal } from '../src/Modal.tsx'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.useRealTimers() })
+
+it('可选悬停说明支持焦点、移入正文、点击固定及 Escape 关闭', () => {
+  const view = render(<HelpPopover label="收益说明" openOnHover>估算收益，不含现金。</HelpPopover>)
+  const trigger = view.getByRole('button', { name: '收益说明' })
+  fireEvent.mouseEnter(trigger)
+  expect(view.getByRole('tooltip').textContent).toContain('不含现金')
+  fireEvent.click(trigger)
+  fireEvent.blur(trigger, { relatedTarget: null })
+  fireEvent.mouseLeave(trigger)
+  expect(view.getByRole('tooltip')).toBeTruthy()
+  fireEvent.keyDown(trigger, { key: 'Escape' })
+  expect(view.queryByRole('tooltip')).toBeNull()
+  fireEvent.blur(trigger, { relatedTarget: document.body })
+  fireEvent.focus(trigger)
+  expect(view.getByRole('tooltip')).toBeTruthy()
+  fireEvent.keyDown(trigger, { key: 'Escape' })
+  expect(view.queryByRole('tooltip')).toBeNull()
+})
+
+it('悬停说明允许移入正文，离开触发点和正文后延时关闭', () => {
+  vi.useFakeTimers()
+  const view = render(<HelpPopover label="收益说明" openOnHover>说明正文</HelpPopover>)
+  const trigger = view.getByRole('button', { name: '收益说明' })
+  fireEvent.mouseEnter(trigger)
+  const popup = view.getByRole('tooltip')
+  fireEvent.mouseLeave(trigger)
+  fireEvent.mouseEnter(popup)
+  act(() => { vi.advanceTimersByTime(250) })
+  expect(view.getByRole('tooltip')).toBeTruthy()
+  fireEvent.mouseLeave(popup)
+  act(() => { vi.advanceTimersByTime(250) })
+  expect(view.queryByRole('tooltip')).toBeNull()
+})
 
 it('选择器保持空值和不透明值，方向键跳过禁用项，Esc 只关闭选择器', () => {
   const close = vi.fn()

@@ -2,6 +2,7 @@
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { fireEvent } from '@testing-library/react'
 import { App } from '../src/App.tsx'
 import { loadMoreActivities, loadObservatorySlice, PublicApiError, type ObservatorySlice } from '../src/api.ts'
 
@@ -64,14 +65,57 @@ it('previews history with a seekable progress bar without reloading every frame'
   await act(async () => { requests[0]!(current, 'history') })
   vi.useFakeTimers()
   await act(async () => { button('播放').click() })
-  expect(container.textContent).toContain('预览 2026.09.21')
+  expect(container.textContent).toContain('2026.09.21 · 持仓估值')
   expect(container.querySelector('input[aria-label="跳转历史播放日期"]')).not.toBeNull()
   await act(async () => { vi.advanceTimersByTime(1_200) })
-  expect(container.textContent).toContain('预览 2026.09.22')
+  expect(container.textContent).toContain('2026.09.22 · 持仓估值')
   expect(requests).toHaveLength(1)
   await act(async () => { button('暂停').click() })
   expect(requests).toHaveLength(2)
-  expect(container.textContent).toContain('预览 2026.09.22')
+  expect(container.textContent).toContain('2026.09.22 · 持仓估值')
+})
+
+it('seeks to the first day without shortening the timeline, including after refresh failure', async () => {
+  const current = state('持仓记录')
+  current.history = { ...current.history!, available_since: '2025-01-01', points: [
+    { date: '2026-09-21', value: '100', profit_loss: null },
+    { date: '2026-09-22', value: null, profit_loss: null },
+    { date: '2026-09-23', value: '120', profit_loss: '20' },
+    { date: '2026-09-24', value: '130', profit_loss: '30' },
+  ] }
+  await act(async () => { requests[0]!(current, 'history') })
+  await act(async () => { button('第一天').click() })
+  const seek = () => container.querySelector<HTMLInputElement>('input[aria-label="跳转历史播放日期"]')!
+  expect(seek().max).toBe('2')
+  expect(seek().value).toBe('0')
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-21')
+  await act(async () => { requests[1]!({ ...current, history: null, historyError: true }, 'history') })
+  expect(seek().max).toBe('2')
+  expect(container.textContent).toContain('历史表现刷新失败')
+  vi.useFakeTimers()
+  await act(async () => { button('播放').click() })
+  await act(async () => { vi.advanceTimersByTime(1_200) })
+  expect(seek().getAttribute('aria-valuetext')).toBe('2026-09-23')
+  expect(requests).toHaveLength(2)
+  await act(async () => { button('暂停').click() })
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-23')
+  await act(async () => { fireEvent.change(seek(), { target: { value: '0' } }) })
+  expect(seek().value).toBe('0')
+  await act(async () => { button('播放').click() })
+  await act(async () => { vi.advanceTimersByTime(1_200) })
+  expect(seek().value).toBe('1')
+})
+
+it('does not enable playback for a timeline with only one usable estimate', async () => {
+  const current = state('')
+  current.history = { ...current.history!, points: [
+    { date: '2026-09-21', value: null, profit_loss: null },
+    { date: '2026-09-22', value: '100', profit_loss: null },
+  ] }
+  await act(async () => { requests[0]!(current, 'history') })
+  expect(button('播放').disabled).toBe(true)
+  await act(async () => { button('第一天').click() })
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-22')
 })
 
 it('retains the same query result with an explicit stale notice after refresh failure', async () => {
@@ -121,4 +165,18 @@ it('shows each module refresh independently while retaining data without refresh
   expect(container.querySelector('[data-refresh-indicator="日历"]')?.getAttribute('data-loading')).toBe('true')
   await act(async () => { requests[1]!(state('原有记录'), 'live') })
   expect(loading()).toHaveLength(2)
+})
+
+
+it('plays the next estimate when a date without an estimate precedes the final point', async () => {
+  const current = state('')
+  current.history = { ...current.history!, points: [
+    { date: '2026-09-21', value: '100', profit_loss: null },
+    { date: '2026-09-23', value: '110', profit_loss: '10' },
+  ] }
+  await act(async () => { requests[0]!(current, 'history') })
+  await act(async () => { button('第一天').click() })
+  await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="后一日"]')!.click() })
+  await act(async () => { button('播放').click() })
+  expect(container.querySelector('input[aria-label="跳转历史播放日期"]')?.getAttribute('aria-valuetext')).toBe('2026-09-23')
 })
