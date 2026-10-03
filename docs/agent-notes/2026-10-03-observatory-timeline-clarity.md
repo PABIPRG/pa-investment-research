@@ -38,3 +38,11 @@
 | 生产数据、部署、真实账号链路 | not-tested | 未获本次远程操作授权；本轮不访问线上 |
 
 截图及请求记录保存在 `/private/tmp/observatory-timeline-uat-8767/`：`light-1440.png`、`light-1024.png`、`light-768.png`、`light-390.png`，对应四张 `dark-*.png`，以及 `help-hover-1024.png`、`touch-help-390.png`、`zoom-1024.png`、`viewports.json`、`requests.json`。与用户反馈图相比，历史图下两条常规黄色说明及日历内说明行已收进说明入口，时间信息移至模块标题；时间条持续可见且首日只改变位置。独立只读代码复核未发现剩余阻断项。
+
+## PR #158 的 urllib3 安全扫描修复
+
+PR 首次 CI 的代码检查、桌面打包、镜像构建与 Compose smoke 均通过；[镜像任务](https://github.com/PABIPRG/pa-investment-research/actions/runs/37088238952/job/111102835431) 在安全门禁报告 `CVE-2026-97687`、`CVE-2026-97689` 两项 HIGH。构建日志确认安装 `urllib3==2.7.0`。上游 [HTTPS 代理 TLS 公告](https://github.com/urllib3/urllib3/security/advisories/GHSA-8988-9cw3-xx77) 与[分块响应内存公告](https://github.com/urllib3/urllib3/security/advisories/GHSA-vxq7-64xx-v4gw) 均确认 2.8.0 为修复版本。用户确认修复方向后，在同一 worktree 和 PR 分支将四个平台锁定版本升级至 2.8.0，并同步 `investment-python-runtime-lock.json` 的四项 SHA-256；其他包版本、镜像安全门禁和例外策略不变。
+
+本轮复用首次 CI 的失败证据，不新增只重复版本号的测试。既有容器契约 15 项、Python sidecar 构建器 14 项测试通过；查询四平台共 180 个锁定发行版的 PyPI 元数据，确认所有生效的 urllib3 依赖约束与 2.8.0 兼容，且该版本支持目标 Python 3.10.20。在独立 Python 3.10.19 环境中按仓库版本安装 requests 调用链，依赖检查、正常分块响应、拒绝超长分块长度行及 requests 适配器初始化通过；这些运行检查未请求外部业务接口。验证脚本和结果存放在 `/private/tmp/pr158-urllib3-8767/`。本机没有 Docker；Trivy 0.74.0 包级复核尝试使用独立空凭据配置，GHCR 和内置官方镜像源均长时间未完成数据库下载，已停止本任务扫描进程，未形成扫描通过证据。最终 Linux 镜像安全门禁需由更新后的 CI 验证，不能以本地兼容性验证替代。
+
+GitHub PR 的机器人记录显示该分支已触发 `pair`、`pair-observe` 两个 Vercel 预览项目，仓库配置未声明跳过本轮提交。按远程服务器逐次授权规则，本轮先完成本地修复和提交；推送等待用户明确授权此次可能触发的两项目预览部署，不包含生产部署或业务服务器操作。
