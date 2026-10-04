@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadCalendar, loadObservatorySlice } from '../src/api.ts'
 
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 const live = {
   availability: 'available', date: '2026-09-29', currency: 'CNY', source: 'current_holdings', holdings_as_of: '2026-09-29',
@@ -21,6 +21,18 @@ function response(input: string | URL | Request): Response {
 }
 
 describe('public observatory independent data reads', () => {
+  it('keeps the complete timeline through today when reading the first day', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-03T06:00:00Z'))
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
+    const fetchMock = vi.fn(async (input: string | URL | Request) => response(input))
+    vi.stubGlobal('fetch', fetchMock)
+    await loadObservatorySlice('2026-09-15', { category: 'all', status: 'all' }, new AbortController().signal)
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(String(input)))
+    expect(urls.some(url => url.pathname.endsWith('/history') && url.searchParams.get('from') === '2026-07-06' && url.searchParams.get('to') === '2026-10-03')).toBe(true)
+    expect(urls.find(url => url.pathname.endsWith('/live'))?.searchParams.get('date')).toBe('2026-09-15')
+  })
+
   it('shows current holdings without any full account snapshot and keeps missing quotes null', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => response(input))

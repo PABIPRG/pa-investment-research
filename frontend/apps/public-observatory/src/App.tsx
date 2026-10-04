@@ -3,7 +3,7 @@ import { Button, DatePicker, HelpPopover, IconFullscreenOutline16, IconRefreshOu
 import brandIcon from '../../../official-site/app-icon.png'
 import {
   loadActivityDetail, loadCalendar, loadMoreActivities, loadObservatorySlice, PublicApiError,
-  type ObservatorySlice, type PublicCalendar, type PublicHistory, type PublicActivity, type PublicActivityDetail,
+  type ObservatorySlice, type PublicCalendar, type PublicActivity, type PublicActivityDetail,
 } from './api.ts'
 import { EquityChart } from './EquityChart.tsx'
 import { marketStatus } from './marketStatus.ts'
@@ -74,6 +74,13 @@ function RefreshIndicator({ loading, label }: { loading: boolean; label: string 
   return <span className={css.refreshIndicator} data-refresh-indicator={label} data-loading={loading} role="status" aria-live="off" aria-label={loading ? `${label}正在读取，已有内容保留` : undefined} aria-hidden={!loading} title={`${label}正在读取`}><IconRefreshOutline16 /></span>
 }
 
+function PerformanceHelp({ limitations, label }: { limitations: string[]; label: string }) {
+  return <span className={css.formulaHelp}><span>收益说明</span><HelpPopover label={label} openOnHover>
+    <p>历史收益为估算值，不含现金；缺失数据不补零。</p>
+    {limitations.map((limit, index) => <p key={index}>{limit}</p>)}
+  </HelpPopover></span>
+}
+
 export function App() {
   const [now, setNow] = useState(() => new Date())
   const today = useMemo(() => todayInShanghai(now), [now])
@@ -83,9 +90,7 @@ export function App() {
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [playing, setPlaying] = useState(false)
-  const [playbackDates, setPlaybackDates] = useState<string[]>([])
-  const [playbackIndex, setPlaybackIndex] = useState<number | null>(null)
-  const [playbackHistory, setPlaybackHistory] = useState<PublicHistory | null>(null)
+  const [previewDate, setPreviewDate] = useState<string | null>(null)
   const [dark, setDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
   const query = `${selectedDate}:${filters.category}:${filters.status}`
   const currentQuery = useRef(query)
@@ -94,6 +99,10 @@ export function App() {
   const detailGeneration = useRef(0)
   const firstPagePending = useRef(true)
   const [state, setState] = useState<LoadState>({ query, data: null, error: null })
+  const history = state.data?.history ?? null
+  const playbackDates = useMemo(() => history?.points.filter(row => row.value !== null).map(row => row.date).sort() ?? [], [history])
+  const displayDate = previewDate ?? selectedDate
+  const playbackIndex = Math.max(0, playbackDates.findLastIndex(date => date <= displayDate))
   const [holdingsOpen, setHoldingsOpen] = useState(false)
   const [activitiesOpen, setActivitiesOpen] = useState(false)
   const [activityDetail, setActivityDetail] = useState<PublicActivityDetail | null>(null)
@@ -103,9 +112,8 @@ export function App() {
   const [moreError, setMoreError] = useState(false)
   const refresh = () => {
     setPlaying(false)
-    setPlaybackDates([])
-    setPlaybackIndex(null)
-    setPlaybackHistory(null)
+    if (previewDate) setSelectedDate(previewDate)
+    setPreviewDate(null)
     setRefreshVersion(value => value + 1)
   }
 
@@ -126,7 +134,7 @@ export function App() {
       data: current.query === query && current.data !== null
         ? { ...current.data, liveLoading: true, historyLoading: true, calendarLoading: true, activitiesLoading: true,
           liveError: false, historyError: false, calendarError: false, activitiesError: false }
-        : emptySlice(),
+        : { ...emptySlice(), history: current.data?.history ?? null },
     }))
     setLoadingMore(false)
     setMoreError(false)
@@ -149,7 +157,7 @@ export function App() {
       setState(current => ({ ...current, error: message }))
     })
     return () => { controller.abort() }
-  }, [selectedDate, filters, query, refreshVersion])
+  }, [selectedDate, filters, query, refreshVersion, today])
   useEffect(() => {
     detailGeneration.current += 1
     setActivityDetail(null)
@@ -162,15 +170,17 @@ export function App() {
     return () => { window.clearInterval(timer) }
   }, [autoRefresh, selectedDate, today, playing])
   useEffect(() => {
-    if (!playing || playbackIndex === null) return
+    if (!playing || previewDate === null) return
     const timer = window.setTimeout(() => {
-      if (playbackIndex >= playbackDates.length - 1) {
+      const nextDate = playbackDates.find(date => date > previewDate)
+      if (nextDate === undefined) {
         setPlaying(false)
-        setSelectedDate(playbackDates[playbackIndex] ?? today)
-      } else setPlaybackIndex(playbackIndex + 1)
+        setSelectedDate(previewDate)
+        setPreviewDate(null)
+      } else setPreviewDate(nextDate)
     }, 1_200)
-    return () => { window.clearInterval(timer) }
-  }, [playing, playbackDates, playbackIndex, today])
+    return () => { window.clearTimeout(timer) }
+  }, [playing, playbackDates, previewDate])
   useEffect(() => {
     if (calendarMonth === selectedDate.slice(0, 7)) return
     const controller = new AbortController()
@@ -193,8 +203,6 @@ export function App() {
 
   const slice = state.query === query ? state.data : null
   const live = slice?.live?.availability === 'available' ? slice.live : null
-  const history = slice?.history ?? null
-  const chartHistory = playbackIndex === null ? history : playbackHistory ?? history
   const calendar = slice?.calendar?.month === calendarMonth ? slice.calendar : null
   const todayTradingStatus = calendar?.month === today.slice(0, 7)
     ? calendar.days.find(day => day.date === today)?.trading_status : undefined
@@ -202,18 +210,13 @@ export function App() {
   const minDate = history?.available_since ?? undefined
   const busy = slice === null || (slice.liveLoading && slice.historyLoading && slice.calendarLoading && slice.activitiesLoading)
   const selectDate = (value: string) => {
-    setPlaying(false); setPlaybackDates([]); setPlaybackIndex(null); setPlaybackHistory(null); setSelectedDate(value)
+    setPlaying(false); setPreviewDate(null); setSelectedDate(value)
   }
-  const previewDate = playbackIndex === null ? null : playbackDates[playbackIndex] ?? null
   const togglePlayback = () => {
-    if (playing) { setPlaying(false); if (previewDate) setSelectedDate(previewDate); return }
-    if (playbackIndex !== null && playbackIndex < playbackDates.length - 1) { setPlaying(true); return }
-    const source = playbackHistory ?? history
-    const dates = source?.points.filter(row => row.value !== null).map(row => row.date) ?? []
-    if (dates.length === 0) return
-    setPlaybackHistory(source)
-    setPlaybackDates(dates)
-    setPlaybackIndex(0)
+    if (playing) { selectDate(displayDate); return }
+    if (playbackDates.length < 2) return
+    const start = playbackDates.findIndex(date => date >= displayDate)
+    setPreviewDate(playbackDates[displayDate >= playbackDates.at(-1)! ? 0 : start]!)
     setPlaying(true)
   }
   async function showActivity(item: PublicActivity): Promise<void> {
@@ -291,18 +294,17 @@ export function App() {
     <header className={css.header}><a className={css.brand} href="/" aria-label="投研智能体公开观察室首页"><img src={brandIcon} alt="" /><span><strong>投研智能体</strong><small>PUBLIC OBSERVATORY</small></span></a><div className={css.headerActions}><Button variant="outline" onClick={() => { setDark(value => !value) }}>{dark ? '浅色' : '深色'}</Button></div></header>
     <section className={css.timebar} aria-label="全局时间切片">
       <div className={css.timeControls}>
-        <Button variant="outline" disabled={minDate === undefined} onClick={() => { if (minDate) selectDate(minDate) }}>第一天</Button>
-        <Button variant="outline" onClick={() => { selectDate(offsetDate(selectedDate, -1)) }} aria-label="前一日">←</Button>
-        <DatePicker value={selectedDate} {...minDate === undefined ? {} : { min: minDate }} max={today} onChange={selectDate} />
-        <Button variant="outline" disabled={selectedDate >= today} onClick={() => { selectDate(offsetDate(selectedDate, 1)) }} aria-label="后一日">→</Button>
+        <Button variant="outline" disabled={playbackDates.length === 0} onClick={() => { if (playbackDates[0]) selectDate(playbackDates[0]) }}>第一天</Button>
+        <Button variant="outline" disabled={minDate !== undefined && displayDate <= minDate} onClick={() => { selectDate(offsetDate(displayDate, -1)) }} aria-label="前一日">←</Button>
+        <DatePicker value={displayDate} {...minDate === undefined ? {} : { min: minDate }} max={today} onChange={selectDate} />
+        <Button variant="outline" disabled={displayDate >= today} onClick={() => { selectDate(offsetDate(displayDate, 1)) }} aria-label="后一日">→</Button>
         <Button variant="outline" onClick={() => { selectDate(today) }}>当日</Button>
-        <Button variant="outline" disabled={(chartHistory?.points.length ?? 0) === 0} onClick={togglePlayback}>{playing ? '暂停' : playbackIndex !== null && playbackIndex < playbackDates.length - 1 ? '继续' : playbackIndex !== null ? '重播' : '播放'}</Button>
+        <Button variant="outline" disabled={playbackDates.length < 2} title={playbackDates.length < 2 ? '至少需要两个历史估值日才能播放' : undefined} onClick={togglePlayback}>{playing ? '暂停' : '播放'}</Button>
       </div>
-      <div className={css.refreshControls}><label><input type="checkbox" checked={autoRefresh} disabled={selectedDate !== today || playing} onChange={(event) => { setAutoRefresh(event.currentTarget.checked) }} />{playing ? '播放预览 · 自动刷新暂停' : selectedDate === today ? '每 15 秒自动刷新' : '历史日期 · 自动刷新暂停'}</label><Button variant="outline" disabled={busy || playing} onClick={refresh}>刷新数据</Button></div>
-      {previewDate && <div className={css.playbackTrack}>
-        <div className={css.playbackLabels}><span aria-live="off">预览 {previewDate.replaceAll('-', '.')} · 持仓估值 {money(chartHistory?.points.find(point => point.date === previewDate)?.value)}</span><span>{(playbackIndex ?? 0) + 1} / {playbackDates.length}</span></div>
-        <div className={css.playbackProgress}><ProgressBar value={(playbackIndex ?? 0) + 1} max={playbackDates.length} ariaLabel="历史播放进度" /><input type="range" min="0" max={Math.max(0, playbackDates.length - 1)} value={playbackIndex ?? 0} aria-label="跳转历史播放日期" aria-valuetext={previewDate} onChange={(event) => { setPlaybackIndex(Number(event.currentTarget.value)) }} /></div>
-        <Button variant="ghost" onClick={() => { selectDate(previewDate) }}>查看此日</Button>
+      <div className={css.refreshControls}><label><input type="checkbox" checked={autoRefresh} disabled={selectedDate !== today || playing} onChange={(event) => { setAutoRefresh(event.currentTarget.checked) }} />{playing ? '播放中 · 自动刷新暂停' : selectedDate === today ? '每 15 秒自动刷新' : '历史日期 · 自动刷新暂停'}</label><Button variant="outline" disabled={busy || playing} onClick={refresh}>刷新数据</Button></div>
+      {playbackDates.length > 0 && <div className={css.playbackTrack}>
+        <div className={css.playbackLabels}><span aria-live="off">{displayDate.replaceAll('-', '.')} · 持仓估值 {money(history?.points.find(point => point.date === displayDate)?.value)}</span><span>{playbackIndex + 1} / {playbackDates.length}</span></div>
+        <div className={css.playbackProgress}><ProgressBar value={playbackIndex} max={Math.max(1, playbackDates.length - 1)} ariaLabel="历史播放进度" /><input type="range" min="0" max={Math.max(0, playbackDates.length - 1)} value={playbackIndex} disabled={playbackDates.length < 2} aria-label="跳转历史播放日期" aria-valuetext={playbackDates[playbackIndex]} onChange={(event) => { const date = playbackDates[Number(event.currentTarget.value)]; if (date) { if (playing) setPreviewDate(date); else selectDate(date) } }} /></div>
       </div>}
     </section>
     <main className={css.main}>
@@ -325,9 +327,16 @@ export function App() {
         </section>
         <div className={css.statusline} aria-live="polite"><strong>{live.source === 'current_holdings' ? '当前持仓' : '历史持仓记录'}</strong><span>持仓记录于 {live.holdings_as_of}</span><span>{live.freshness.stale ? '部分报价缺失' : '持仓估值可用'}</span></div>
       </>}
-      <section className={css.panel} aria-label="持仓历史表现"><div className={css.heading}><div><h2>持仓历史表现<RefreshIndicator loading={slice?.historyLoading ?? true} label="历史表现" /></h2><p>{playbackIndex === null ? '最近 90 日' : `播放区间 ${playbackDates[0]} 至 ${playbackDates.at(-1)}`} · 估算值，不含现金</p></div></div><StatusNotice loading={slice?.historyLoading ?? true} error={slice?.historyError ?? false} hasData={history !== null} label="历史表现" retry={refresh} />{chartHistory && <><EquityChart points={chartHistory.points} dark={dark} activeDate={previewDate} />{chartHistory.limitations.map((limit, index) => <p className={css.inlineNotice} key={index}>{limit}</p>)}</>}</section>
+      <section className={css.panel} aria-label="持仓历史表现">
+        <div className={css.heading}><div><h2>持仓历史表现<RefreshIndicator loading={state.data?.historyLoading ?? true} label="历史表现" /></h2><p>最近 90 日 · 估算值，不含现金</p></div>
+          <div className={css.headingMeta}>{playbackDates.length > 0 && <span>{playbackDates[0]} — {playbackDates.at(-1)}</span>}<PerformanceHelp label="历史收益说明" limitations={history?.limitations ?? []} /></div>
+        </div>
+        <StatusNotice loading={state.data?.historyLoading ?? true} error={state.data?.historyError ?? false} hasData={history !== null} label="历史表现" retry={refresh} />
+        {history?.quality === 'partial' && <p className={css.compactNotice}>部分历史估值缺失<HelpPopover label="历史数据缺失说明" openOnHover>{history.limitations.map((limit, index) => <p key={index}>{limit}</p>)}</HelpPopover></p>}
+        {history && <EquityChart points={history.points} dark={dark} activeDate={displayDate} />}
+      </section>
       <div className={css.columns}><section className={css.panel}><div className={css.heading}><div><h2>持仓<RefreshIndicator loading={slice?.liveLoading ?? true} label="持仓" /></h2><p>{live === null ? '所选日期暂无持仓明细' : `${live.items.length} 个持仓 · 不含现金`}</p></div><Button variant="ghost" disabled={live === null} onClick={() => { setHoldingsOpen(true) }}>展开明细</Button></div><div className={css.holdingList}>{live?.items.length === 0 && <div className={css.empty}>当前没有持仓。</div>}{live?.items.slice(0, 5).map(item => <div className={css.holdingRow} key={item.ticker}><div><strong>{item.name || item.ticker}</strong><small>{item.ticker} · {integer.format(Number(item.quantity))} 份</small></div><div><strong>{money(item.market_value)}</strong><small>{money(item.profit_loss)}</small></div></div>)}</div></section>{operationsPanel}</div>
-      <section className={css.panel} aria-label="每日盈亏日历"><div className={css.heading}><div><h2>每日盈亏<RefreshIndicator loading={slice?.calendarLoading ?? true} label="日历" /></h2><p>人民币 · 按持仓变化估算，缺失不补零</p></div><MonthPicker value={calendarMonth} onChange={setCalendarMonth} /></div><StatusNotice loading={slice?.calendarLoading ?? true} error={slice?.calendarError ?? false} hasData={calendar !== null} label="日历" retry={refresh} />{calendar?.limitations.map((limit, index) => <p className={css.calendarLimitation} key={index}>{limit}</p>)}<Calendar month={calendarMonth} selectedDate={selectedDate} calendar={calendar} onSelect={selectDate} /></section>
+      <section className={css.panel} aria-label="每日盈亏日历"><div className={css.heading}><div><h2>每日盈亏<RefreshIndicator loading={slice?.calendarLoading ?? true} label="日历" /></h2><p>人民币 · 按持仓变化估算，缺失不补零</p></div><div className={css.headingMeta}><PerformanceHelp label="日历收益说明" limitations={calendar?.limitations ?? []} /><MonthPicker value={calendarMonth} onChange={setCalendarMonth} /></div></div><StatusNotice loading={slice?.calendarLoading ?? true} error={slice?.calendarError ?? false} hasData={calendar !== null} label="日历" retry={refresh} /><Calendar month={calendarMonth} today={today} selectedDate={selectedDate} calendar={calendar} onSelect={selectDate} /></section>
       <footer>公开内容仅供了解持仓与研究过程，不构成投资建议。金额不含现金；历史收益为估算。</footer>
     </main>
     <Modal open={holdingsOpen} onClose={() => { setHoldingsOpen(false) }} title="持仓明细" closeLabel="关闭持仓明细" className={css.wideModal}><div className={css.tableWrap}><table><caption>{selectedDate} 的持仓资料与估值</caption><thead><tr><th>证券</th><th>数量</th><th>成本价</th><th>估值价</th><th>市值</th><th>浮盈</th></tr></thead><tbody>{live?.items.map(item => <tr key={item.ticker}><td><strong>{item.name || item.ticker}</strong><small>{item.ticker}</small></td><td>{integer.format(Number(item.quantity))}</td><td>{money(item.cost_price)}</td><td>{money(item.market_price)}</td><td>{money(item.market_value)}</td><td>{money(item.profit_loss)}<small>{percent(item.return_rate)}</small></td></tr>)}</tbody></table></div></Modal>
@@ -336,8 +345,9 @@ export function App() {
   </div>
 }
 
-function Calendar({ month, selectedDate, calendar, onSelect }: {
+function Calendar({ month, today, selectedDate, calendar, onSelect }: {
   month: string
+  today: string
   selectedDate: string
   calendar: PublicCalendar | null
   onSelect: (date: string) => void
@@ -357,7 +367,7 @@ function Calendar({ month, selectedDate, calendar, onSelect }: {
       const status = statuses.get(date) ?? 'unknown'
       const label = `${date}，${status === 'unknown' ? '交易日待确认' : statusLabels[status]}，${item === undefined ? '无历史估值' : item.daily_profit_loss === null ? '已有估值，缺少收益基准' : `估算盈亏 ${money(item.daily_profit_loss)}`}`
       const direction = item?.daily_profit_loss == null ? 'missing' : Number(item.daily_profit_loss) > 0 ? 'positive' : Number(item.daily_profit_loss) < 0 ? 'negative' : 'flat'
-      return <button type="button" key={date} disabled={item === undefined} data-selected={date === selectedDate} data-trading-status={status} data-direction={direction} aria-label={label} title={label} onClick={() => { onSelect(date) }}><span>{index + 1}</span><small>{statusLabels[status]}</small><strong>{money(item?.daily_profit_loss)}</strong></button>
+      return <button type="button" key={date} disabled={item === undefined} data-selected={date === selectedDate} data-trading-status={status} data-direction={direction} data-future={date > today} aria-label={label} title={label} onClick={() => { onSelect(date) }}><span>{index + 1}</span><small>{date > today && status === 'trading' ? '未到' : status === 'trading' && direction === 'missing' ? item === undefined ? '缺估值' : '缺基准' : statusLabels[status]}</small><strong>{money(item?.daily_profit_loss)}</strong></button>
     })}
   </div><p className={css.calendarStatus}>{calendar === null ? '日历数据未读取' : calendar.items.length === 0 ? '本月暂无可用历史估值' : `${calendar.items.length} 个历史估值日 · ${calendar.items.filter(item => item.daily_profit_loss !== null).length} 日可估算盈亏`}</p></div>
 }
