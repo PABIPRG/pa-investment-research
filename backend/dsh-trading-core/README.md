@@ -21,6 +21,16 @@ On Windows, use `init.bat`, `start_all.bat [fake|engine]`, and `verify.bat`. The
 
 ## API
 
+### 历史行情故障隔离
+
+BaoStock、东财和新浪分别在持久串行子进程内执行，父进程按原顺序降级；任一源卡死不会阻断下一来源。BaoStock 会话继续复用，空读立即报断连。三个源的热查询（含排队、IPC）预算分别为 1.5、1.5、1 秒，单源最多准入 8 次调用；超时或异常会终止并回收对应进程，退避 5 秒后重建。进程回收未完成时不另起一代，避免后台资源累积。
+
+依赖冷导入单独限制为 8 秒，应用启动时预热，不访问行情网络；源进程重建的首次读取可能超过 Host 的 5 秒预算，前端按失败退避重试，后续复用热进程。不要将冷启动限制简单加到所有热查询上。服务退出或启动失败时清理子进程；新生命周期只能在旧进程完全退出后重开。
+
+公开 live/history 与私有 portfolio/performance 共用 4 个准入名额，在线程池外满载拒绝。浏览器断开后，名额仍保持到实际计算结束；同标的缓存最多等锁 100 毫秒，读取失败退避 5 秒，不缓存为成功空行情，也不把过期值当成新鲜值。公开活动和其他同步接口因此保留执行容量。健康接口仅代表进程可响应，发布验收仍需检查公开业务接口。
+
+聚焦回归（离线夹具，不请求行情源）：`python -m unittest tests.test_bs_session tests.test_isolated_price_worker tests.test_price_resilience tests.test_portfolio_performance tests.test_public_observatory_live tests.test_public_observatory tests.test_shadow_business_rules tests.test_holdings_depth`。运行前使用独立 `DSH_INVESTMENT_STATE_DIR`，并设置 `ADAPTER_RUNNER=fake BRIEF_SCHEDULE_ENABLED=false`。
+
 服务提供分析、持仓、市场简报、自选、风险画像与持久通知中心接口。通知历史位于 `data/notifications.sqlite3`（打包版位于 Host 管理的状态目录），可通过“通知历史与设置”分类备份；恢复时不会迁移设备订阅，也不会重新激活未完成投递。
 
 浏览器 Web Push 需要配置 `.env.example` 中的 VAPID 变量；Server 酱、企业微信和邮件共用同一条持久投递队列。外部渠道不可用时，站内通知仍是权威记录。相关文档：

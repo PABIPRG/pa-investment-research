@@ -922,23 +922,24 @@ def register_public_observatory_routes(
     """注册内部账户快照写入与固定公开读取路由。"""
     write_store = store_factory or JsonStore
     read_store = store_factory or (lambda: JsonStore(create=False))
+    from .portfolio_price_cache import run_price_read
 
     @app.get("/public/performance/v1/live", response_model=PublicLiveAvailable | PublicLiveUnavailable)
-    def public_performance_live(requested_date: str = Query(alias="date", pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    async def public_performance_live(requested_date: str = Query(alias="date", pattern=r"^\d{4}-\d{2}-\d{2}$")):
         try:
-            return public_live(read_store(), requested_date, price_loader=price_loader, quote_loader=quote_loader)
+            return await run_price_read(lambda: public_live(read_store(), requested_date, price_loader=price_loader, quote_loader=quote_loader))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/public/performance/v1/history", response_model=PublicHistoryResponse)
-    def public_performance_history(
+    async def public_performance_history(
         from_date: str = Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
         to_date: str = Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
     ):
         if price_loader is None:
             raise HTTPException(status_code=503, detail="历史行情暂不可用")
         try:
-            return public_history(read_store(), from_date, to_date, price_loader)
+            return await run_price_read(lambda: public_history(read_store(), from_date, to_date, price_loader))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

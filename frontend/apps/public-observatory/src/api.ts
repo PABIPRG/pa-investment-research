@@ -73,6 +73,7 @@ export interface PublicActivityDetail extends PublicActivity {
   }> | null
 }
 export interface ObservatorySlice {
+  retryAfterMs?: number
   liveLoading: boolean
   historyLoading: boolean
   calendarLoading: boolean
@@ -87,7 +88,7 @@ export interface ObservatorySlice {
   activitiesError: boolean
 }
 export class PublicApiError extends Error {
-  constructor(readonly status: number, message: string) { super(message) }
+  constructor(readonly status: number, message: string, readonly retryAfterMs = status === 429 ? 60_000 : 0) { super(message) }
 }
 function configuredBaseUrl(): string {
   const value = import.meta.env.VITE_PUBLIC_API_BASE_URL?.trim()
@@ -98,20 +99,39 @@ function configuredBaseUrl(): string {
   return url.origin
 }
 async function requestJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(new URL(path, `${configuredBaseUrl()}/`), {
-    method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store',
-    headers: { accept: 'application/json' }, ...(signal === undefined ? {} : { signal }),
-  })
-  if (!response.ok) {
-    let message = response.status === 404 ? '所选日期没有公开记录。' : '公开数据暂时不可用。'
-    try {
-      const body = await response.json() as { message?: unknown }
-      if (typeof body.message === 'string') message = body.message
+  const url = new URL(path, `${configuredBaseUrl()}/`)
+  const controller = new AbortController()
+  const abort = () => { controller.abort(signal?.reason) }
+  if (signal?.aborted) abort()
+  else signal?.addEventListener('abort', abort, { once: true })
+  const timeoutError = new PublicApiError(0, '公开数据读取超时，请稍后重试。')
+  const timeout = setTimeout(() => { controller.abort(timeoutError) }, 30_000)
+  try {
+    const response = await fetch(url, {
+      method: 'GET', credentials: 'omit', redirect: 'error', cache: 'no-store',
+      headers: { accept: 'application/json' }, signal: controller.signal,
+    })
+    if (!response.ok) {
+      let message = response.status === 404 ? '所选日期没有公开记录。' : '公开数据暂时不可用。'
+      try {
+        const body = await response.json() as { message?: unknown }
+        if (typeof body.message === 'string') message = body.message
+      }
+      catch { /* keep the stable fallback */ }
+      const retryAfter = response.headers.get('retry-after')
+      const delay = retryAfter === null ? 0
+        : /^\d+$/.test(retryAfter.trim()) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()
+      const retryAfterMs = Math.max(response.status === 429 ? 60_000 : 0, Number.isFinite(delay) ? Math.min(delay, 2_147_483_647) : 0)
+      throw new PublicApiError(response.status, message, retryAfterMs)
     }
-    catch { /* keep the stable fallback */ }
-    throw new PublicApiError(response.status, message)
+    return await response.json() as T
   }
-  return await response.json() as T
+  catch (error) {
+    if (signal?.aborted) throw signal.reason
+    if (controller.signal.reason === timeoutError) throw timeoutError
+    throw error
+  }
+  finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort) }
 }
 function addDays(value: string, days: number): string {
   const date = new Date(`${value}T12:00:00+08:00`)
@@ -131,13 +151,19 @@ export function loadLive(date: string, signal?: AbortSignal): Promise<PublicLive
 export function loadHistory(from: string, to: string, signal?: AbortSignal): Promise<PublicHistory> {
   return requestJson(`/api/public/performance/v1/history?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, signal)
 }
-export async function loadCalendar(month: string, signal?: AbortSignal): Promise<PublicCalendar> {
+/** 历史估值按 T+1 展示，截止北京时间昨日。 */
+export function historyCutoff(date: string, today = shanghaiToday()): string {
+  const yesterday = addDays(today, -1)
+  return date < yesterday ? date : yesterday
+}
+export async function loadCalendar(month: string, signal?: AbortSignal, cutoff = historyCutoff(shanghaiToday())): Promise<PublicCalendar> {
   const [year, monthNumber] = month.split('-').map(Number)
   const end = `${month}-${String(new Date(year ?? 2000, monthNumber ?? 1, 0).getDate()).padStart(2, '0')}`
-  const today = shanghaiToday()
+  const from = addDays(`${month}-01`, -1)
+  const to = end > cutoff ? cutoff : end
   const [days, history] = await Promise.all([
     requestJson<{ days: PublicCalendar['days'] }>(`/api/public/performance/v1/calendar?month=${encodeURIComponent(month)}`, signal),
-    loadHistory(addDays(`${month}-01`, -1), end > today ? today : end, signal),
+    from <= to ? loadHistory(from, to, signal) : Promise.resolve({ points: [], limitations: [] }),
   ])
   const statuses = new Map(days.days.map(day => [day.date, day.trading_status]))
   const points = [...history.points].sort((a, b) => a.date.localeCompare(b.date))
@@ -149,17 +175,18 @@ export async function loadCalendar(month: string, signal?: AbortSignal): Promise
   })
   return { month, days: days.days, items, limitations: history.limitations }
 }
-/** 各公开区块并行读取；历史时间线固定为截至当日的 90 日，详情按所选日期读取。 */
+/** 并行读取指定区块；实时轮询可排除按日更新的历史与日历；时间线固定为截至北京时间昨日的 90 日。 */
 export async function loadObservatorySlice(
   date: string,
   filters: { category: string; status: string },
   signal: AbortSignal,
   onProgress?: (slice: ObservatorySlice, part: 'live' | 'history' | 'calendar' | 'activities') => void,
+  parts: ReadonlyArray<'live' | 'history' | 'calendar' | 'activities'> = ['live', 'history', 'calendar', 'activities'],
 ): Promise<ObservatorySlice> {
   configuredBaseUrl()
-  const timelineEnd = shanghaiToday()
   let result: ObservatorySlice = {
-    liveLoading: true, historyLoading: true, calendarLoading: true, activitiesLoading: true,
+    liveLoading: parts.includes('live'), historyLoading: parts.includes('history'),
+    calendarLoading: parts.includes('calendar'), activitiesLoading: parts.includes('activities'),
     live: null, liveError: false, history: null, historyError: false,
     calendar: null, calendarError: false, activities: null, activitiesError: false,
   }
@@ -171,14 +198,17 @@ export async function loadObservatorySlice(
     try { publish(part, success(await operation)) }
     catch (error) {
       if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
-      publish(part, failed)
+      publish(part, {
+        ...failed, retryAfterMs: Math.max(result.retryAfterMs ?? 0, error instanceof PublicApiError ? error.retryAfterMs : 0),
+      })
     }
   }
+  const timelineEnd = historyCutoff(shanghaiToday())
   await Promise.all([
-    settle('live', loadLive(date, signal), live => ({ live, liveLoading: false }), { liveLoading: false, liveError: true }),
-    settle('history', loadHistory(addDays(timelineEnd, -89), timelineEnd, signal), history => ({ history, historyLoading: false }), { historyLoading: false, historyError: true }),
-    settle('calendar', loadCalendar(date.slice(0, 7), signal), calendar => ({ calendar, calendarLoading: false }), { calendarLoading: false, calendarError: true }),
-    settle('activities', requestJson<PublicActivities>(`/api/public/performance/v1/activities?as_of=${encodeURIComponent(date)}&category=${encodeURIComponent(filters.category)}&status=${encodeURIComponent(filters.status)}&limit=20`, signal), activities => ({ activities, activitiesLoading: false }), { activitiesLoading: false, activitiesError: true }),
+    parts.includes('live') && settle('live', loadLive(date, signal), live => ({ live, liveLoading: false }), { liveLoading: false, liveError: true }),
+    parts.includes('history') && settle('history', loadHistory(addDays(timelineEnd, -89), timelineEnd, signal), history => ({ history, historyLoading: false }), { historyLoading: false, historyError: true }),
+    parts.includes('calendar') && settle('calendar', loadCalendar(date.slice(0, 7), signal), calendar => ({ calendar, calendarLoading: false }), { calendarLoading: false, calendarError: true }),
+    parts.includes('activities') && settle('activities', requestJson<PublicActivities>(`/api/public/performance/v1/activities?as_of=${encodeURIComponent(date)}&category=${encodeURIComponent(filters.category)}&status=${encodeURIComponent(filters.status)}&limit=20`, signal), activities => ({ activities, activitiesLoading: false }), { activitiesLoading: false, activitiesError: true }),
   ])
   return result
 }

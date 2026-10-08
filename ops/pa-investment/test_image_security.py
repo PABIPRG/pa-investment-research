@@ -8,9 +8,39 @@ import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import image_security as gate
+
+
+TEST_NOW = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+TEST_EXPIRY = '2026-10-06T23:59:00Z'
+
+
+def policy_fixture():
+    """Capability tests must not inherit production approvals or their expiry dates."""
+    return {'schemaVersion': 3, 'blockingSeverities': ['UNKNOWN', 'HIGH', 'CRITICAL'],
+            'exceptions': [], 'vulnerabilityExceptions': [], 'scanners': {
+                'gitleaks': {'version': '8.30.1', 'url': 'https://example.invalid/gitleaks', 'sha256': '2' * 64},
+                'trivy': {'version': '0.74.0', 'url': 'https://example.invalid/trivy', 'sha256': '3' * 64},
+            }}
+
+
+def secret_exception():
+    return {'kind': 'gitleaks-finding', 'rule': 'generic-api-key', 'sourceClass': 'python-dependency',
+            'pathSha256': '0' * 64, 'fileSha256': '1' * 64, 'line': 7, 'count': 1,
+            'package': 'example==1.0.0', 'reason': 'public-runtime-constant',
+            'reviewedBy': 'test-reviewer', 'expiresAt': TEST_EXPIRY}
+
+
+class PolicyTestCase(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        clock_patch = patch.object(gate, 'datetime', wraps=datetime)
+        self.clock = clock_patch.start()
+        self.addCleanup(clock_patch.stop)
+        self.clock.now.return_value = TEST_NOW
 
 
 def tar_bytes(entries):
@@ -57,7 +87,7 @@ def vulnerability_exception(version='2.41-12+deb13u4'):
             'sourceClass': 'os-pkgs', 'sourceType': 'debian', 'package': 'libc6',
             'installedVersion': version, 'severity': 'UNKNOWN', 'platform': 'linux/amd64',
             'count': 1, 'reason': 'unaffected-platform', 'advisory': gate.CVE_97399_ADVISORY,
-            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z'}
+            'reviewedBy': 'test-reviewer', 'expiresAt': TEST_EXPIRY}
 
 
 def fixed_vulnerability_exceptions():
@@ -67,7 +97,7 @@ def fixed_vulnerability_exceptions():
              'installedVersion': spec['version'], 'severity': advisory['severity'],
              'platform': 'linux/amd64', 'count': 1, 'reason': 'verified-fixed-package',
              'advisory': advisory['url'], 'reviewedBy': 'test-reviewer',
-             'expiresAt': '2026-10-06T23:59:00Z', 'archiveSha256': spec['sha256'],
+             'expiresAt': TEST_EXPIRY, 'archiveSha256': spec['sha256'],
              'payloads': dict(spec['payloads'])}
             for spec in gate.OPENSSL_PACKAGES.values()
             for identifier, advisory in gate.OPENSSL_LOCK['advisories'].items()]
@@ -172,12 +202,18 @@ class ArchiveTests(unittest.TestCase):
         archive, image, revision, _ = fixture(self.root, layers=[[('../SECRET_CLI_CANARY', 'payload', 'file')]])
         identity = self.root / 'image-id'
         identity.write_text(image)
-        result = subprocess.run([sys.executable, '-B', str(Path(gate.__file__)), 'scan',
+        policy_path = self.root / 'policy.json'
+        policy_path.write_text(json.dumps(policy_fixture()))
+        # Exercise the real CLI with an isolated policy, including its sanitized error boundary.
+        entrypoint = ('import sys; from pathlib import Path; import image_security as gate; '
+                      'gate.POLICY_PATH = Path(sys.argv.pop(1)); raise SystemExit(gate.main())')
+        result = subprocess.run([sys.executable, '-B', '-c', entrypoint, str(policy_path), 'scan',
                                  '--archive', str(archive), '--image-id-file', str(identity),
                                  '--revision', revision, '--tools', str(self.root),
                                  '--work-parent', str(self.root), '--summary', str(self.root / 'summary.json')],
-                                capture_output=True, timeout=10)
+                                capture_output=True, timeout=10, cwd=Path(gate.__file__).parent)
         self.assertEqual(result.returncode, 1)
+        self.assertIn(b'Image security gate blocked: unsafe-archive-path', result.stdout)
         self.assertNotIn(b'SECRET_CLI_CANARY', result.stdout + result.stderr)
         self.assertNotIn(b'Traceback', result.stdout + result.stderr)
 
@@ -186,7 +222,7 @@ class ArchiveTests(unittest.TestCase):
             self.prepare()
 
 
-class ReportTests(unittest.TestCase):
+class ReportTests(PolicyTestCase):
     def test_secret_exceptions_require_exact_location_and_count(self):
         path = 'opt/investment-python/site-packages/example/runtime.py'
         evidence = {
@@ -203,7 +239,7 @@ class ReportTests(unittest.TestCase):
             'pathSha256': evidence['locations']['layer-0/file-0.data']['pathSha256'],
             'fileSha256': evidence['locations']['layer-0/file-0.data']['fileSha256'],
             'line': 7, 'count': 2, 'package': 'example==1.0.0', 'reason': 'public-runtime-constant',
-            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
+            'reviewedBy': 'test-reviewer', 'expiresAt': TEST_EXPIRY,
         }
 
         remaining, applied = gate.apply_secret_exceptions([finding, finding], evidence, [exception])
@@ -221,17 +257,8 @@ class ReportTests(unittest.TestCase):
                 gate.apply_secret_exceptions([finding], evidence, [changed])
 
     def test_policy_rejects_expired_duplicate_and_broad_exceptions(self):
-        base = {
-            'kind': 'gitleaks-finding', 'rule': 'generic-api-key', 'sourceClass': 'python-dependency',
-            'pathSha256': '0' * 64, 'fileSha256': '1' * 64, 'line': 7, 'count': 1,
-            'package': 'example==1.0.0', 'reason': 'public-runtime-constant',
-            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
-        }
-        value = {'schemaVersion': 3, 'blockingSeverities': ['UNKNOWN', 'HIGH', 'CRITICAL'],
-                 'exceptions': [base], 'vulnerabilityExceptions': [], 'scanners': {
-                     'gitleaks': {'version': '8.30.1', 'url': 'https://example.invalid/gitleaks', 'sha256': '2' * 64},
-                     'trivy': {'version': '0.74.0', 'url': 'https://example.invalid/trivy', 'sha256': '3' * 64},
-                 }}
+        base = secret_exception()
+        value = {**policy_fixture(), 'exceptions': [base]}
         self.assertEqual(gate.validate_policy(value)['exceptions'], [base])
         for exceptions in ([base, base], [{**base, 'expiresAt': '2020-01-01T00:00:00Z'}],
                            [{**base, 'pathSha256': '*'}], [{**base, 'unexpected': True}]):
@@ -239,7 +266,7 @@ class ReportTests(unittest.TestCase):
                 gate.validate_policy({**value, 'exceptions': exceptions})
 
     def test_vulnerability_policy_rejects_broad_or_expired_exceptions(self):
-        value = json.loads(gate.POLICY_PATH.read_text())
+        value = policy_fixture()
         exact = vulnerability_exception()
         self.assertEqual(gate.validate_policy({**value, 'vulnerabilityExceptions': [exact]})[
             'vulnerabilityExceptions'], [exact])
@@ -251,6 +278,21 @@ class ReportTests(unittest.TestCase):
                 gate.validate_policy({**value, 'vulnerabilityExceptions': [exception]})
         with self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
             gate.validate_policy({**value, 'vulnerabilityExceptions': [exact, exact]})
+
+    def test_all_exception_kinds_expire_at_the_exact_utc_boundary(self):
+        expiry = datetime.fromisoformat(TEST_EXPIRY.replace('Z', '+00:00'))
+        for field, exceptions in [('exceptions', [secret_exception()]),
+                                  ('vulnerabilityExceptions', [vulnerability_exception()]),
+                                  ('vulnerabilityExceptions', fixed_vulnerability_exceptions())]:
+            value = {**policy_fixture(), field: exceptions}
+            with self.subTest(kind=exceptions[0]['kind']):
+                self.clock.now.return_value = expiry - timedelta(microseconds=1)
+                self.assertEqual(gate.validate_policy(value), value)
+                for now in (expiry, expiry + timedelta(microseconds=1), datetime(2100, 1, 1, tzinfo=timezone.utc)):
+                    self.clock.now.return_value = now
+                    with self.subTest(now=now), self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+                        gate.validate_policy(value)
+                self.clock.now.assert_called_with(timezone.utc)
 
     def test_vulnerability_exception_requires_exact_finding_and_preserves_other_findings(self):
         exact = vulnerability_exception()
@@ -376,9 +418,10 @@ class ReportTests(unittest.TestCase):
                         gate.run_scanner(['/tools/trivy', 'image'], root)
 
 
-class FixedOpenSslTests(unittest.TestCase):
+class FixedOpenSslTests(PolicyTestCase):
     def setUp(self):
-        self.rules = json.loads(gate.POLICY_PATH.read_text())
+        super().setUp()
+        self.rules = policy_fixture()
         self.rules['vulnerabilityExceptions'] = fixed_vulnerability_exceptions()
         self.exceptions = self.rules['vulnerabilityExceptions']
         self.payloads = {path: sha for e in self.exceptions for path, sha in e['payloads'].items()}
@@ -466,16 +509,14 @@ class FixedOpenSslTests(unittest.TestCase):
                 self.assertEqual(evidence['runtime_payloads'].get(path), expected)
 
 
-class OrchestrationTests(unittest.TestCase):
+class OrchestrationTests(PolicyTestCase):
     def setUp(self):
+        super().setUp()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.policy_path = self.root / 'policy.json'
-        policy_value = json.loads(gate.POLICY_PATH.read_text())
-        policy_value['exceptions'] = []
-        policy_value['vulnerabilityExceptions'] = []
-        self.policy_path.write_text(json.dumps(policy_value))
+        self.policy_path.write_text(json.dumps(policy_fixture()))
         policy_patch = patch.object(gate, 'POLICY_PATH', self.policy_path)
         policy_patch.start()
         self.addCleanup(policy_patch.stop)
@@ -487,7 +528,6 @@ class OrchestrationTests(unittest.TestCase):
         self.extra_vulnerabilities = []
 
     def scanner(self, command, cwd, **kwargs):
-        from datetime import datetime, timezone
         tool = Path(command[0]).name
         if command[1] in ('version', '--version'):
             return subprocess.CompletedProcess(command, 0, b'8.30.1' if tool == 'gitleaks' else b'Version: 0.74.0', b'')
@@ -526,12 +566,24 @@ class OrchestrationTests(unittest.TestCase):
                                      + self.extra_vulnerabilities)}]}))
             cache = Path(command[command.index('--cache-dir') + 1]) / 'db'
             cache.mkdir(parents=True)
-            (cache / 'metadata.json').write_text(json.dumps({'UpdatedAt': datetime.now(timezone.utc).isoformat()}))
+            (cache / 'metadata.json').write_text(json.dumps({'UpdatedAt': gate.datetime.now(timezone.utc).isoformat()}))
         return subprocess.CompletedProcess(command, 10 if tool == 'gitleaks' and self.mode in ('secret', 'secret-and-unfixed') else 0, b'', b'')
 
     def invoke(self):
         with patch.object(gate.subprocess, 'run', side_effect=self.scanner), redirect_stdout(self.output):
             return gate.scan(self.archive, self.image, self.revision, self.root, self.root, self.summary)
+
+    def assert_expiry_blocks_scan_and_publication(self):
+        expiry = datetime.fromisoformat(TEST_EXPIRY.replace('Z', '+00:00'))
+        previous_time = self.clock.now.return_value
+        self.clock.now.return_value = expiry
+        try:
+            with self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+                self.invoke()
+            with self.assertRaisesRegex(gate.GateError, '^unapproved-policy$'):
+                gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+        finally:
+            self.clock.now.return_value = previous_time
 
     def test_secret_and_path_only_failures_still_scan_vulnerabilities_and_do_not_publish(self):
         for mode in ('secret', 'path-only'):
@@ -578,7 +630,7 @@ class OrchestrationTests(unittest.TestCase):
             'pathSha256': hashlib.sha256(path.encode()).hexdigest(),
             'fileSha256': hashlib.sha256(b'safe').hexdigest(), 'line': 1, 'count': 1,
             'package': 'fixture==1.0.0', 'reason': 'public-runtime-constant',
-            'reviewedBy': 'test-reviewer', 'expiresAt': '2099-01-01T00:00:00Z',
+            'reviewedBy': 'test-reviewer', 'expiresAt': TEST_EXPIRY,
         }]
         self.policy_path.write_text(json.dumps(policy_value))
 
@@ -589,6 +641,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(result['secretExceptionsApplied'], 1)
         self.assertEqual(result['secretFindings'], 0)
         gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+        self.assert_expiry_blocks_scan_and_publication()
         self.assertNotIn('CANARY', self.output.getvalue())
 
     def test_exact_cve_exception_is_audited_and_other_high_still_blocks(self):
@@ -599,6 +652,7 @@ class OrchestrationTests(unittest.TestCase):
         with patch.object(gate, 'require_amd64_unaffected_advisory') as advisory:
             result = self.invoke()
             gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+            self.assert_expiry_blocks_scan_and_publication()
         self.assertEqual(advisory.call_count, 2)
         advisory.assert_called_with(gate.CVE_97399_ADVISORY)
         self.assertEqual(result['vulnerabilities']['UNKNOWN'], 1)
@@ -640,6 +694,7 @@ class OrchestrationTests(unittest.TestCase):
              patch.object(gate, 'require_fixed_openssl_advisory') as advisory:
             result = self.invoke()
             gate.verify_summary(self.summary, self.archive, self.image, self.revision)
+            self.assert_expiry_blocks_scan_and_publication()
             self.assertEqual(advisory.call_count, 6)  # Three at scan, three before publication.
             self.assertEqual(result['vulnerabilityExceptionsApplied'], 6)
             self.assertEqual(result['vulnerabilities']['HIGH'], 2)

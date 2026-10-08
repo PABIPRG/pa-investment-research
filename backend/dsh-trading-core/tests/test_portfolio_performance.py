@@ -512,34 +512,41 @@ class PortfolioPerformanceTests(unittest.TestCase):
 
 
 class PortfolioPriceLoaderTests(unittest.TestCase):
-    def test_unreachable_baostock_skips_the_blocking_client_and_uses_fallback(self):
-        from adapter import app as adapter_app
+    def setUp(self):
+        from adapter import portfolio_prices
+        worker = patch.object(portfolio_prices._http_worker, "call", side_effect=portfolio_prices._load_http_prices)
+        worker.start()
+        self.addCleanup(worker.stop)
+        sina = patch.object(portfolio_prices._sina_worker, "call", side_effect=portfolio_prices._load_sina_prices)
+        sina.start()
+        self.addCleanup(sina.stop)
+
+    def test_baostock_timeout_uses_http_fallback(self):
+        from adapter import portfolio_prices as adapter_app
 
         frame = pd.DataFrame({
             "日期": [date(2026, 9, 8)],
             "收盘": [11.73],
         })
         with (
-            patch("adapter.app._baostock_reachable", return_value=False),
-            patch("adapter.holdings_runner._bs_hist") as baostock,
+            patch("adapter.holdings_runner._bs_hist", side_effect=TimeoutError("数据源超时")) as baostock,
             patch("akshare.stock_zh_a_hist", return_value=frame),
         ):
             rows = adapter_app.load_portfolio_prices(
                 "000001", "2026-08-09", "2026-09-09"
             )
 
-        baostock.assert_not_called()
+        baostock.assert_called_once()
         self.assertEqual(rows, [{"date": "2026-09-08", "close": 11.73}])
 
     def test_baostock_empty_etf_falls_back_to_forward_adjusted_etf_history(self):
-        from adapter import app as adapter_app
+        from adapter import portfolio_prices as adapter_app
 
         frame = pd.DataFrame({
             "日期": [date(2026, 9, 7), date(2026, 9, 8)],
             "收盘": [0.996, 0.982],
         })
         with (
-            patch("adapter.app._baostock_reachable", return_value=True),
             patch("adapter.holdings_runner._bs_hist", return_value=[]),
             patch(
                 "akshare.fund_etf_hist_em",
@@ -564,7 +571,7 @@ class PortfolioPriceLoaderTests(unittest.TestCase):
         ])
 
     def test_etf_history_uses_sina_after_eastmoney_retries_are_exhausted(self):
-        from adapter import app as adapter_app
+        from adapter import portfolio_prices as adapter_app
 
         response = Mock()
         response.raise_for_status.return_value = None
@@ -573,7 +580,6 @@ class PortfolioPriceLoaderTests(unittest.TestCase):
             {"day": "2026-09-08", "close": "0.982"},
         ]
         with (
-            patch("adapter.app._baostock_reachable", return_value=True),
             patch("adapter.holdings_runner._bs_hist", return_value=[]),
             patch(
                 "akshare.fund_etf_hist_em",
@@ -593,14 +599,13 @@ class PortfolioPriceLoaderTests(unittest.TestCase):
         ])
 
     def test_baostock_failure_stock_falls_back_to_forward_adjusted_stock_history(self):
-        from adapter import app as adapter_app
+        from adapter import portfolio_prices as adapter_app
 
         frame = pd.DataFrame({
             "日期": [date(2026, 9, 7), date(2026, 9, 8)],
             "收盘": [11.61, 11.73],
         })
         with (
-            patch("adapter.app._baostock_reachable", return_value=True),
             patch(
                 "adapter.holdings_runner._bs_hist",
                 side_effect=ConnectionError("baostock unavailable"),
