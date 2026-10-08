@@ -24,6 +24,7 @@ from typing import Callable
 from .config import settings
 from .risk_profiles import get_risk_profile, profile, risk_level_for
 from .schemas import HoldingItem
+from .isolated_price_worker import IsolatedPriceWorker, PriceWorkerError
 
 logger = logging.getLogger("adapter.holdings")
 
@@ -42,6 +43,11 @@ _bs_lock = threading.Lock()
 _BS_SESSION_IDLE = 60.0
 _bs_session_held = False
 _bs_session_last_use = 0.0
+_bs_worker = IsolatedPriceWorker(__name__, "_bs_hist_direct", timeout=1.5, initializer="_prepare_bs")
+
+
+def _prepare_bs():
+    import baostock  # noqa: F401 — 预热不建立行情连接
 
 # 持仓 deep 要保留市场、社媒、新闻、基本面四分析师覆盖，但不额外增加辩论轮次。
 HOLDINGS_ENGINE_DEPTH = "standard"
@@ -92,6 +98,33 @@ def _bs_ensure_session(bs) -> None:
         raise HoldingDataError(f"baostock 登录失败: {lg.error_msg}")
     _bs_session_held = True
     _bs_session_last_use = now
+    _guard_bs_socket()
+
+
+class _CheckedSocket:
+    """仅包裹隔离进程拥有的会话，不修改 socket/baostock 全局函数。"""
+
+    def __init__(self, connection):
+        self._connection = connection
+
+    def recv(self, *args, **kwargs):
+        data = self._connection.recv(*args, **kwargs)
+        if not data:
+            self._connection.close()
+            raise ConnectionResetError("BaoStock 连接已关闭")
+        return data
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+def _guard_bs_socket() -> None:
+    from baostock.common import context
+
+    connection = getattr(context, "default_socket", None)
+    if connection is not None and not isinstance(connection, _CheckedSocket):
+        connection.settimeout(1.0)
+        context.default_socket = _CheckedSocket(connection)
 
 
 def _bs_query(bs, code: str, start: str, end: str, names: list) -> list:
@@ -122,6 +155,17 @@ def _bs_query(bs, code: str, start: str, end: str, names: list) -> list:
 
 
 def _bs_hist(code: str, start: str, end: str, fields: str = "date,close") -> list:
+    """有界父端入口；BaoStock 会话仅由持久子进程拥有。"""
+    names = [n.strip() for n in fields.split(",") if n.strip()]
+    if not names or names[0] != "date":
+        raise ValueError(f"baostock fields 必须以 date 开头: {fields!r}")
+    try:
+        return _bs_worker.call(code, start, end, fields)
+    except PriceWorkerError as exc:
+        raise HoldingDataError(str(exc)) from exc
+
+
+def _bs_hist_direct(code: str, start: str, end: str, fields: str = "date,close") -> list:
     """带锁 baostock 前复权日线，返回 [{"date", <各列>}, ...] 升序。
 
     fields 默认 "date,close"（向后兼容 holdings/brief 调用）；回测引擎用
@@ -129,22 +173,25 @@ def _bs_hist(code: str, start: str, end: str, fields: str = "date,close") -> lis
     停牌/无数据返回 None。网络现实（本机实测）：eastmoney HTTP 间歇性被墙/
     限流，baostock socket 稳定且与引擎数据源一致（data_source_manager 也走 BAOSTOCK）。
     """
+    global _bs_session_held, _bs_session_last_use
     import baostock as bs
 
     names = [n.strip() for n in fields.split(",") if n.strip()]
     if not names or names[0] != "date":
         raise ValueError(f"baostock fields 必须以 date 开头: {fields!r}")
 
-    with _bs_lock:
+    with _bs_lock:  # 只在隔离进程内使用；外部总预算涵盖任何内部锁等待。
         _bs_ensure_session(bs)
         try:
-            return _bs_query(bs, code, start, end, names)
+            rows = _bs_query(bs, code, start, end, names)
         except HoldingDataError:
             # 会话疑似被其它 baostock 封装（引擎 dataflows）logout → 重登重试一次
             logger.warning("baostock 查询失败(%s)，会话失效重置重试", code)
             _bs_session_held = False
             _bs_ensure_session(bs)
-            return _bs_query(bs, code, start, end, names)
+            rows = _bs_query(bs, code, start, end, names)
+        _bs_session_last_use = time.time()
+        return rows
 
 
 def _fetch_hist(ticker: str) -> "tuple[list, str]":

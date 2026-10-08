@@ -90,10 +90,10 @@
 .calendarGrid > button:disabled { cursor: default; }
 .calendarGrid > button[data-trading-status='closed'] { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-tertiary); }
 .calendarGrid > button[data-trading-status='closed'] small, .calendarGrid > button[data-trading-status='closed'] span { color: var(--dsw-alias-label-tertiary); }
-.calendarGrid > button[data-direction='positive'] { background: var(--dsw-alias-state-success-tertiary); }
-.calendarGrid > button[data-direction='negative'] { background: var(--dsw-alias-state-error-tertiary); }
-.calendarGrid > button[data-direction='positive'] strong { color: var(--dsw-alias-state-success-primary); }
-.calendarGrid > button[data-direction='negative'] strong { color: var(--dsw-alias-state-error-primary); }
+.calendarGrid > button[data-direction='positive'] { background: var(--dsw-alias-state-error-tertiary); }
+.calendarGrid > button[data-direction='negative'] { background: var(--dsw-alias-state-success-tertiary); }
+.calendarGrid > button[data-direction='positive'] strong { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 60%, var(--dsw-alias-label-primary)); }
+.calendarGrid > button[data-direction='negative'] strong { color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 60%, var(--dsw-alias-label-primary)); }
 .calendarGrid > button[data-trading-status='unknown'][data-direction='missing'] { background: var(--dsw-alias-bg-layer-2); }
 .calendarGrid button small { font-size: .7143rem; line-height: 1.4; color: var(--dsw-alias-label-secondary); }
 .calendarGrid > button[data-selected='true'] { border-color: var(--dsw-alias-brand-primary); box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary); }
@@ -102,8 +102,8 @@
 .calendarGrid button strong span { color: inherit; font: inherit; }
 .calendarAmountCompact { display: none; }
 .calendarStatus { color: var(--dsw-alias-label-tertiary); font-size: .7857rem; text-align: right; }
-.positive { color: var(--dsw-alias-state-success-primary) !important; }
-.negative { color: var(--dsw-alias-state-error-primary) !important; }
+.positive { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 60%, var(--dsw-alias-label-primary)) !important; }
+.negative { color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 60%, var(--dsw-alias-label-primary)) !important; }
 .empty { min-height: 130px; display: grid; place-items: center; color: var(--dsw-alias-label-tertiary); font-size: .8571rem; text-align: center; }
 .messageCard { padding: 42px; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-alias-radius-module); background: var(--dsw-alias-bg-layer-1); text-align: center; }
 .messageCard strong { font-size: 1.4286rem; }
@@ -154,6 +154,7 @@ footer { padding: 20px 0 0; color: var(--dsw-alias-label-tertiary); font-size: .
   .calendarAmountFull { display: none; }
   .calendarAmountCompact { display: inline; }
   .heading { align-items: flex-start; }
+  .heading > .iconButton { width: 44px; min-height: 44px; }
 }
 
 .heroTitle h1, .heading h2 { display: flex; align-items: center; gap: 8px; }

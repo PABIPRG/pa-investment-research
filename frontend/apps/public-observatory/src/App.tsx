@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, DatePicker, HelpPopover, IconFullscreenOutline16, IconRefreshOutline16, Modal, MonthPicker, ProgressBar, Select } from '@deepseek-ai/dsh-client-ui-primitives'
 import brandIcon from '../../../official-site/app-icon.png'
 import {
-  loadActivityDetail, loadCalendar, loadMoreActivities, loadObservatorySlice, PublicApiError,
+  historyCutoff, loadActivityDetail, loadCalendar, loadHistory, loadMoreActivities, loadObservatorySlice, PublicApiError,
   type ObservatorySlice, type PublicCalendar, type PublicHistory, type PublicActivity, type PublicActivityDetail,
 } from './api.ts'
 import { EquityChart } from './EquityChart.tsx'
 import { marketStatus } from './marketStatus.ts'
+import { startRefreshTask, type RefreshTask, type RefreshPolicy } from './refresh.ts'
 import css from './App.module.css'
 
 const currency = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -27,6 +28,9 @@ function offsetDate(value: string, amount: number): string {
 }
 function money(value: string | null | undefined): string { return value == null ? '—' : currency.format(Number(value)) }
 function percent(value: string | null | undefined): string { return value == null ? '—' : `${(Number(value) * 100).toFixed(2)}%` }
+function profitClass(value: string | null | undefined): string | undefined {
+  return value == null || Number(value) === 0 ? undefined : Number(value) > 0 ? css.positive : css.negative
+}
 function localTime(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
@@ -38,6 +42,7 @@ function emptySlice(): ObservatorySlice {
   }
 }
 type LoadState = { query: string; data: ObservatorySlice | null; error: string | null }
+type DailyState<T> = { key: string; data: T | null; loading: boolean; error: boolean }
 type Part = 'live' | 'history' | 'calendar' | 'activities'
 function mergePart(previous: ObservatorySlice, next: ObservatorySlice, part: Part): ObservatorySlice {
   if (part === 'live') return {
@@ -64,10 +69,9 @@ function StatusNotice({ loading, error, hasData, label, retry }: {
   label: string
   retry: () => void
 }) {
-  if (loading && !hasData) return <p role="status">正在读取{label}…</p>
-  if (loading) return null
+  if (loading && !hasData && !error) return <p role="status">正在读取{label}…</p>
   if (!error) return null
-  return <div className={css.partial} role="status"><span>{hasData ? `${label}刷新失败，当前显示上次结果，可能已过期。` : `${label}暂时无法读取。`}</span><Button variant="outline" onClick={retry}>重试{label}</Button></div>
+  return <div className={css.partial} role="status"><span>{hasData ? `${label}刷新失败，当前显示上次结果，可能已过期。` : `${label}暂时无法读取。`}</span><Button variant="outline" disabled={loading} onClick={retry}>重试{label}</Button></div>
 }
 
 function RefreshIndicator({ loading, label }: { loading: boolean; label: string }) {
@@ -82,10 +86,28 @@ export function App() {
   const [filters, setFilters] = useState({ category: 'all', status: 'all' })
   const [refreshVersion, setRefreshVersion] = useState(0)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [online, setOnline] = useState(() => navigator.onLine)
+  const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden')
   const [playing, setPlaying] = useState(false)
   const [playbackDates, setPlaybackDates] = useState<string[]>([])
   const [playbackIndex, setPlaybackIndex] = useState<number | null>(null)
   const [playbackHistory, setPlaybackHistory] = useState<PublicHistory | null>(null)
+  const historyEnd = playbackHistory?.to ?? historyCutoff(selectedDate, today)
+  const liveTask = useRef<RefreshTask | null>(null)
+  const historyTask = useRef<RefreshTask | null>(null)
+  const calendarTask = useRef<RefreshTask | null>(null)
+  const policy: { live: RefreshPolicy; daily: RefreshPolicy } = {
+    live: { intervalMs: autoRefresh && selectedDate === today && !playing ? 15_000 : null, retry: autoRefresh && !playing },
+    daily: { intervalMs: null, retry: autoRefresh && !playing },
+  }
+  const policies = useRef(policy)
+  policies.current = policy
+  const dateContext = useRef({ today, autoRefresh, playbackIndex })
+  dateContext.current = { today, autoRefresh, playbackIndex }
+  const [historyState, setHistoryState] = useState<DailyState<PublicHistory>>({ key: historyEnd, data: null, loading: true, error: false })
+  const [calendarState, setCalendarState] = useState<DailyState<PublicCalendar>>({
+    key: calendarMonth, data: null, loading: true, error: false,
+  })
   const [dark, setDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches)
   const query = `${selectedDate}:${filters.category}:${filters.status}`
   const currentQuery = useRef(query)
@@ -94,6 +116,7 @@ export function App() {
   const detailGeneration = useRef(0)
   const firstPagePending = useRef(true)
   const [state, setState] = useState<LoadState>({ query, data: null, error: null })
+  const frameReady = state.query === query && state.data?.liveLoading === false
   const [holdingsOpen, setHoldingsOpen] = useState(false)
   const [activitiesOpen, setActivitiesOpen] = useState(false)
   const [activityDetail, setActivityDetail] = useState<PublicActivityDetail | null>(null)
@@ -114,42 +137,93 @@ export function App() {
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
   }, [dark])
   useEffect(() => {
-    const timer = window.setInterval(() => { setNow(new Date()) }, 30_000)
-    return () => { window.clearInterval(timer) }
+    const update = () => {
+      const nextNow = new Date()
+      const nextToday = todayInShanghai(nextNow)
+      const previous = dateContext.current
+      if (nextToday !== previous.today && previous.autoRefresh && previous.playbackIndex === null) {
+        setSelectedDate(current => current === previous.today ? nextToday : current)
+      }
+      setNow(nextNow)
+      setOnline(navigator.onLine)
+      setVisible(document.visibilityState !== 'hidden')
+    }
+    const timer = window.setInterval(update, 30_000)
+    document.addEventListener('visibilitychange', update)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', update)
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
   }, [])
   useEffect(() => {
-    const controller = new AbortController()
-    const currentGeneration = ++generation.current
-    firstPagePending.current = true
-    setState(current => ({
-      query, error: null,
-      data: current.query === query && current.data !== null
-        ? { ...current.data, liveLoading: true, historyLoading: true, calendarLoading: true, activitiesLoading: true,
-          liveError: false, historyError: false, calendarError: false, activitiesError: false }
-        : emptySlice(),
-    }))
-    setLoadingMore(false)
-    setMoreError(false)
-    void loadObservatorySlice(selectedDate, filters, controller.signal, (next, part) => {
-      if (controller.signal.aborted || currentGeneration !== generation.current) return
-      if (part === 'activities') firstPagePending.current = false
-      setState(current => current.query !== query ? current : ({
-        ...current, data: mergePart(current.data ?? emptySlice(), next, part),
+    const task = startRefreshTask(async (signal) => {
+      // 浏览器恢复事件可能先于 React 提交新日界；等待新日期的 effect 接管读取。
+      if (today !== todayInShanghai(new Date())) return { failed: false }
+      const currentGeneration = ++generation.current
+      firstPagePending.current = true
+      setState(current => ({
+        query, error: null,
+        data: current.query === query && current.data !== null
+          ? { ...current.data, liveLoading: true, activitiesLoading: true }
+          : emptySlice(),
       }))
-      if (part === 'activities' && !next.activitiesError) {
-        setActivityDetail((current) => {
-          if (current === null || next.activities?.items.some(row => row.public_id === current.public_id)) return current
-          detailGeneration.current += 1
-          return null
-        })
+      setLoadingMore(false)
+      setMoreError(false)
+      try {
+        const result = await loadObservatorySlice(selectedDate, filters, signal, (next, part) => {
+          if (signal.aborted || currentGeneration !== generation.current) return
+          if (part === 'activities') firstPagePending.current = false
+          setState(current => current.query !== query ? current : ({
+            ...current, data: mergePart(current.data ?? emptySlice(), next, part),
+          }))
+          if (part === 'activities' && !next.activitiesError) {
+            setActivityDetail((current) => {
+              if (current === null || next.activities?.items.some(row => row.public_id === current.public_id)) return current
+              detailGeneration.current += 1
+              return null
+            })
+          }
+        }, ['live', 'activities'])
+        return { failed: result.liveError || result.activitiesError, retryAfterMs: result.retryAfterMs ?? 0 }
       }
-    }).catch((error: unknown) => {
-      if (controller.signal.aborted || currentGeneration !== generation.current) return
-      const message = error instanceof PublicApiError ? error.message : '公开数据加载失败，请稍后重试。'
-      setState(current => ({ ...current, error: message }))
-    })
-    return () => { controller.abort() }
-  }, [selectedDate, filters, query, refreshVersion])
+      catch (error) {
+        if (signal.aborted || currentGeneration !== generation.current) throw error
+        const message = error instanceof PublicApiError ? error.message : '公开数据加载失败，请稍后重试。'
+        firstPagePending.current = false
+        setState(current => ({ ...current, error: message, data: {
+          ...(current.data ?? emptySlice()), liveLoading: false, activitiesLoading: false, liveError: true, activitiesError: true,
+        } }))
+        return { failed: true, retryAfterMs: error instanceof PublicApiError ? error.retryAfterMs : 0 }
+      }
+    }, policies.current.live)
+    liveTask.current = task
+    return () => { task.dispose() }
+  }, [selectedDate, filters, query, refreshVersion, today])
+  useEffect(() => {
+    const task = startRefreshTask(async (signal) => {
+      if (today !== todayInShanghai(new Date())) return { failed: false }
+      setHistoryState(current => ({
+        key: historyEnd, data: current.key === historyEnd ? current.data : null,
+        loading: true, error: current.key === historyEnd && current.error,
+      }))
+      try {
+        const data = await loadHistory(offsetDate(historyEnd, -89), historyEnd, signal)
+        if (!signal.aborted) setHistoryState({ key: historyEnd, data, loading: false, error: false })
+        return { failed: false }
+      }
+      catch (error) {
+        if (signal.aborted) throw error
+        setHistoryState(current => ({ ...current, loading: false, error: true }))
+        return { failed: true, retryAfterMs: error instanceof PublicApiError ? error.retryAfterMs : 0 }
+      }
+    }, policies.current.daily)
+    historyTask.current = task
+    return () => { task.dispose() }
+  }, [historyEnd, today, refreshVersion])
   useEffect(() => {
     detailGeneration.current += 1
     setActivityDetail(null)
@@ -157,50 +231,55 @@ export function App() {
   }, [query])
   useEffect(() => { setCalendarMonth(selectedDate.slice(0, 7)) }, [selectedDate])
   useEffect(() => {
-    if (!autoRefresh || selectedDate !== today || playing) return
-    const timer = window.setInterval(refresh, 15_000)
-    return () => { window.clearInterval(timer) }
-  }, [autoRefresh, selectedDate, today, playing])
-  useEffect(() => {
-    if (!playing || playbackIndex === null) return
+    if (!playing || playbackIndex === null || !frameReady || !online || !visible) return
     const timer = window.setTimeout(() => {
       if (playbackIndex >= playbackDates.length - 1) {
         setPlaying(false)
         setSelectedDate(playbackDates[playbackIndex] ?? today)
-      } else setPlaybackIndex(playbackIndex + 1)
+      } else {
+        setPlaybackIndex(playbackIndex + 1)
+        setSelectedDate(playbackDates[playbackIndex + 1] ?? selectedDate)
+      }
     }, 1_200)
-    return () => { window.clearInterval(timer) }
-  }, [playing, playbackDates, playbackIndex, today])
+    return () => { window.clearTimeout(timer) }
+  }, [playing, playbackDates, playbackIndex, today, frameReady, online, visible, selectedDate])
   useEffect(() => {
-    if (calendarMonth === selectedDate.slice(0, 7)) return
-    const controller = new AbortController()
-    setState(current => current.query !== query || current.data === null ? current : ({
-      ...current, data: { ...current.data, calendarLoading: true, calendarError: false },
-    }))
-    void loadCalendar(calendarMonth, controller.signal).then((calendar) => {
-      if (controller.signal.aborted) return
-      setState(current => current.query !== query || current.data === null ? current : ({
-        ...current, data: { ...current.data, calendar, calendarLoading: false, calendarError: false },
+    const task = startRefreshTask(async (signal) => {
+      if (today !== todayInShanghai(new Date())) return { failed: false }
+      setCalendarState(current => ({
+        key: calendarMonth, data: current.key === calendarMonth ? current.data : null,
+        loading: true, error: current.key === calendarMonth && current.error,
       }))
-    }).catch(() => {
-      if (controller.signal.aborted) return
-      setState(current => current.query !== query || current.data === null ? current : ({
-        ...current, data: { ...current.data, calendarLoading: false, calendarError: true },
-      }))
-    })
-    return () => { controller.abort() }
-  }, [calendarMonth, selectedDate, query, refreshVersion])
+      try {
+        const data = await loadCalendar(calendarMonth, signal, historyCutoff(today, today))
+        if (!signal.aborted) setCalendarState({ key: calendarMonth, data, loading: false, error: false })
+        return { failed: false }
+      }
+      catch (error) {
+        if (signal.aborted) throw error
+        setCalendarState(current => ({ ...current, loading: false, error: true }))
+        return { failed: true, retryAfterMs: error instanceof PublicApiError ? error.retryAfterMs : 0 }
+      }
+    }, policies.current.daily)
+    calendarTask.current = task
+    return () => { task.dispose() }
+  }, [calendarMonth, today, refreshVersion])
+  useEffect(() => {
+    liveTask.current?.updatePolicy(policies.current.live)
+    historyTask.current?.updatePolicy(policies.current.daily)
+    calendarTask.current?.updatePolicy(policies.current.daily)
+  }, [autoRefresh, selectedDate, today, playing])
 
   const slice = state.query === query ? state.data : null
   const live = slice?.live?.availability === 'available' ? slice.live : null
-  const history = slice?.history ?? null
+  const history = historyState.key === historyEnd ? historyState.data : null
   const chartHistory = playbackIndex === null ? history : playbackHistory ?? history
-  const calendar = slice?.calendar?.month === calendarMonth ? slice.calendar : null
+  const calendar = calendarState.key === calendarMonth ? calendarState.data : null
   const todayTradingStatus = calendar?.month === today.slice(0, 7)
     ? calendar.days.find(day => day.date === today)?.trading_status : undefined
   const market = marketStatus(now, todayTradingStatus, selectedDate === today)
   const minDate = history?.available_since ?? undefined
-  const busy = slice === null || (slice.liveLoading && slice.historyLoading && slice.calendarLoading && slice.activitiesLoading)
+  const busy = slice === null || (slice.liveLoading && historyState.loading && calendarState.loading && slice.activitiesLoading)
   const selectDate = (value: string) => {
     setPlaying(false); setPlaybackDates([]); setPlaybackIndex(null); setPlaybackHistory(null); setSelectedDate(value)
   }
@@ -210,10 +289,12 @@ export function App() {
     if (playbackIndex !== null && playbackIndex < playbackDates.length - 1) { setPlaying(true); return }
     const source = playbackHistory ?? history
     const dates = source?.points.filter(row => row.value !== null).map(row => row.date) ?? []
-    if (dates.length === 0) return
+    const first = dates[0]
+    if (first === undefined) return
     setPlaybackHistory(source)
     setPlaybackDates(dates)
     setPlaybackIndex(0)
+    setSelectedDate(first)
     setPlaying(true)
   }
   async function showActivity(item: PublicActivity): Promise<void> {
@@ -298,10 +379,10 @@ export function App() {
         <Button variant="outline" onClick={() => { selectDate(today) }}>当日</Button>
         <Button variant="outline" disabled={(chartHistory?.points.length ?? 0) === 0} onClick={togglePlayback}>{playing ? '暂停' : playbackIndex !== null && playbackIndex < playbackDates.length - 1 ? '继续' : playbackIndex !== null ? '重播' : '播放'}</Button>
       </div>
-      <div className={css.refreshControls}><label><input type="checkbox" checked={autoRefresh} disabled={selectedDate !== today || playing} onChange={(event) => { setAutoRefresh(event.currentTarget.checked) }} />{playing ? '播放预览 · 自动刷新暂停' : selectedDate === today ? '每 15 秒自动刷新' : '历史日期 · 自动刷新暂停'}</label><Button variant="outline" disabled={busy || playing} onClick={refresh}>刷新数据</Button></div>
+      <div className={css.refreshControls}><label><input type="checkbox" checked={autoRefresh} disabled={selectedDate !== today || playing} onChange={(event) => { setAutoRefresh(event.currentTarget.checked) }} />{!online ? '网络已断开 · 自动刷新暂停' : playing ? '播放预览 · 自动刷新暂停' : selectedDate === today ? '每 15 秒自动刷新' : '历史日期 · 自动刷新暂停'}</label><Button variant="outline" disabled={busy || playing} onClick={refresh}>刷新数据</Button></div>
       {previewDate && <div className={css.playbackTrack}>
         <div className={css.playbackLabels}><span aria-live="off">预览 {previewDate.replaceAll('-', '.')} · 持仓估值 {money(chartHistory?.points.find(point => point.date === previewDate)?.value)}</span><span>{(playbackIndex ?? 0) + 1} / {playbackDates.length}</span></div>
-        <div className={css.playbackProgress}><ProgressBar value={(playbackIndex ?? 0) + 1} max={playbackDates.length} ariaLabel="历史播放进度" /><input type="range" min="0" max={Math.max(0, playbackDates.length - 1)} value={playbackIndex ?? 0} aria-label="跳转历史播放日期" aria-valuetext={previewDate} onChange={(event) => { setPlaybackIndex(Number(event.currentTarget.value)) }} /></div>
+        <div className={css.playbackProgress}><ProgressBar value={(playbackIndex ?? 0) + 1} max={playbackDates.length} ariaLabel="历史播放进度" /><input type="range" min="0" max={Math.max(0, playbackDates.length - 1)} value={playbackIndex ?? 0} aria-label="跳转历史播放日期" aria-valuetext={previewDate} onChange={(event) => { const index = Number(event.currentTarget.value); setPlaybackIndex(index); setSelectedDate(playbackDates[index] ?? selectedDate) }} /></div>
         <Button variant="ghost" onClick={() => { selectDate(previewDate) }}>查看此日</Button>
       </div>}
     </section>
@@ -313,21 +394,19 @@ export function App() {
       {state.error && <div className={css.partial} role="alert">{state.error}<Button variant="outline" onClick={refresh}>重试</Button></div>}
       <StatusNotice loading={slice?.liveLoading ?? true} error={slice?.liveError ?? false} hasData={live !== null} label="持仓" retry={refresh} />
       {slice?.live?.availability === 'unavailable' && <div className={css.inlineNotice}>{slice.live.message} 历史与活动仍可查看。</div>}
-      {live !== null && <>
-        {live.freshness.message && <div className={css.staleNotice}>{live.freshness.message}</div>}
-        <section className={css.summary} aria-label="持仓概览">
-          <div className={css.pnlBlock}><span className={css.summaryLabel}>截至 {live.date.replaceAll('-', '.')} · 持仓浮盈<RefreshIndicator loading={slice?.liveLoading ?? true} label="持仓概览" /></span><strong className={live.summary.floating_profit_loss === null ? undefined : Number(live.summary.floating_profit_loss) >= 0 ? css.positive : css.negative}>{money(live.summary.floating_profit_loss)}</strong><p>{percent(live.summary.cost_return)}</p><div className={css.formulaHelp}><span>计算口径</span><HelpPopover label="查看计算口径"><p>持仓浮盈 = 持仓市值 − 持仓成本；成本收益率 = 持仓浮盈 ÷ 持仓成本。</p><p>金额不含现金。缺少任何持仓报价时，汇总市值与浮盈显示为“—”；历史表现按持仓变更估算资金流。</p></HelpPopover></div></div>
-          <div className={css.metricGrid}>
-            <div><span>持仓市值</span><strong>{money(live.summary.market_value)}</strong><small>不含现金</small></div>
-            <div><span>持仓成本</span><strong>{money(live.summary.holdings_cost)}</strong><small>所选日期持仓数量 × 成本价</small></div>
-            <p className={css.unavailableMetrics}>现金 — · 完整总权益 —；暂无可靠来源，当前金额仅反映持仓。</p>
-          </div>
-        </section>
-        <div className={css.statusline} aria-live="polite"><strong>{live.source === 'current_holdings' ? '当前持仓' : '历史持仓记录'}</strong><span>持仓记录于 {live.holdings_as_of}</span><span>{live.freshness.stale ? '部分报价缺失' : '持仓估值可用'}</span></div>
-      </>}
-      <section className={css.panel} aria-label="持仓历史表现"><div className={css.heading}><div><h2>持仓历史表现<RefreshIndicator loading={slice?.historyLoading ?? true} label="历史表现" /></h2><p>{playbackIndex === null ? '最近 90 日' : `播放区间 ${playbackDates[0]} 至 ${playbackDates.at(-1)}`} · 估算值，不含现金</p></div></div><StatusNotice loading={slice?.historyLoading ?? true} error={slice?.historyError ?? false} hasData={history !== null} label="历史表现" retry={refresh} />{chartHistory && <><EquityChart points={chartHistory.points} dark={dark} activeDate={previewDate} />{chartHistory.limitations.map((limit, index) => <p className={css.inlineNotice} key={index}>{limit}</p>)}</>}</section>
-      <div className={css.columns}><section className={css.panel}><div className={css.heading}><div><h2>持仓<RefreshIndicator loading={slice?.liveLoading ?? true} label="持仓" /></h2><p>{live === null ? '所选日期暂无持仓明细' : `${live.items.length} 个持仓 · 不含现金`}</p></div><Button variant="ghost" disabled={live === null} onClick={() => { setHoldingsOpen(true) }}>展开明细</Button></div><div className={css.holdingList}>{live?.items.length === 0 && <div className={css.empty}>当前没有持仓。</div>}{live?.items.slice(0, 5).map(item => <div className={css.holdingRow} key={item.ticker}><div><strong>{item.name || item.ticker}</strong><small>{item.ticker} · {integer.format(Number(item.quantity))} 份</small></div><div><strong>{money(item.market_value)}</strong><small>{money(item.profit_loss)}</small></div></div>)}</div></section>{operationsPanel}</div>
-      <section className={css.panel} aria-label="每日盈亏日历"><div className={css.heading}><div><h2>每日盈亏<RefreshIndicator loading={slice?.calendarLoading ?? true} label="日历" /></h2><p>人民币 · 按持仓变化估算，缺失不补零</p></div><MonthPicker value={calendarMonth} onChange={setCalendarMonth} /></div><StatusNotice loading={slice?.calendarLoading ?? true} error={slice?.calendarError ?? false} hasData={calendar !== null} label="日历" retry={refresh} />{calendar?.limitations.map((limit, index) => <p className={css.calendarLimitation} key={index}>{limit}</p>)}<Calendar month={calendarMonth} selectedDate={selectedDate} calendar={calendar} onSelect={selectDate} /></section>
+      {live?.freshness.message && <div className={css.staleNotice}>{live.freshness.message}</div>}
+      <section className={css.summary} aria-label="持仓概览">
+        <div className={css.pnlBlock}><span className={css.summaryLabel}>截至 {selectedDate.replaceAll('-', '.')} · 持仓浮盈<RefreshIndicator loading={slice?.liveLoading ?? true} label="持仓概览" /></span><strong className={profitClass(live?.summary.floating_profit_loss)}>{money(live?.summary.floating_profit_loss)}</strong><p className={profitClass(live?.summary.cost_return)}>{percent(live?.summary.cost_return)}</p><div className={css.formulaHelp}><span>计算口径</span><HelpPopover label="查看计算口径"><p>持仓浮盈 = 持仓市值 − 持仓成本；成本收益率 = 持仓浮盈 ÷ 持仓成本。</p><p>金额不含现金。缺少任何持仓报价时，汇总市值与浮盈显示为“—”；历史表现按持仓变更估算资金流。</p></HelpPopover></div></div>
+        <div className={css.metricGrid}>
+          <div><span>持仓市值</span><strong>{money(live?.summary.market_value)}</strong><small>不含现金</small></div>
+          <div><span>持仓成本</span><strong>{money(live?.summary.holdings_cost)}</strong><small>所选日期持仓数量 × 成本价</small></div>
+          <p className={css.unavailableMetrics}>现金 — · 完整总权益 —；暂无可靠来源，当前金额仅反映持仓。</p>
+        </div>
+      </section>
+      <div className={css.statusline} aria-live={playing ? 'off' : 'polite'}>{live !== null ? <><strong>{live.source === 'current_holdings' ? '当前持仓' : '历史持仓记录'}</strong><span>持仓记录于 {live.holdings_as_of}</span><span>{live.freshness.stale ? '部分报价缺失' : '持仓估值可用'}</span></> : <span>{slice?.liveLoading !== false ? '正在读取所选日期持仓…' : '所选日期暂无可用持仓估值'}</span>}</div>
+      <section className={css.panel} aria-label="持仓历史表现"><div className={css.heading}><div><h2>持仓历史表现<RefreshIndicator loading={historyState.loading} label="历史表现" /></h2><p>{playbackIndex === null ? '最近 90 日' : `播放区间 ${playbackDates[0]} 至 ${playbackDates.at(-1)}`} · T+1 更新 · 估算值，不含现金</p></div></div><StatusNotice loading={historyState.loading} error={historyState.error} hasData={history !== null} label="历史表现" retry={refresh} />{chartHistory && <><EquityChart points={chartHistory.points} dark={dark} activeDate={previewDate} />{chartHistory.limitations.map((limit, index) => <p className={css.inlineNotice} key={index}>{limit}</p>)}</>}</section>
+      <div className={css.columns}><section className={css.panel}><div className={css.heading}><div><h2>持仓<RefreshIndicator loading={slice?.liveLoading ?? true} label="持仓" /></h2><p>{live === null ? '所选日期暂无持仓明细' : `${live.items.length} 个持仓 · 不含现金`}</p></div><Button variant="ghost" className={css.iconButton} aria-label="展开持仓明细" title="展开持仓明细" disabled={live === null} onClick={() => { setHoldingsOpen(true) }}><IconFullscreenOutline16 /></Button></div><div className={css.holdingList}>{live?.items.length === 0 && <div className={css.empty}>当前没有持仓。</div>}{live?.items.slice(0, 5).map(item => <div className={css.holdingRow} key={item.ticker}><div><strong>{item.name || item.ticker}</strong><small>{item.ticker} · {integer.format(Number(item.quantity))} 份</small></div><div><strong>{money(item.market_value)}</strong><small>{money(item.profit_loss)}</small></div></div>)}</div></section>{operationsPanel}</div>
+      <section className={css.panel} aria-label="每日盈亏日历"><div className={css.heading}><div><h2>每日盈亏<RefreshIndicator loading={calendarState.loading} label="日历" /></h2><p>人民币 · T+1 更新 · 按持仓变化估算，缺失不补零</p></div><MonthPicker value={calendarMonth} onChange={setCalendarMonth} /></div><StatusNotice loading={calendarState.loading} error={calendarState.error} hasData={calendar !== null} label="日历" retry={refresh} />{calendar?.limitations.map((limit, index) => <p className={css.calendarLimitation} key={index}>{limit}</p>)}<Calendar month={calendarMonth} selectedDate={selectedDate} calendar={calendar} onSelect={selectDate} /></section>
       <footer>公开内容仅供了解持仓与研究过程，不构成投资建议。金额不含现金；历史收益为估算。</footer>
     </main>
     <Modal open={holdingsOpen} onClose={() => { setHoldingsOpen(false) }} title="持仓明细" closeLabel="关闭持仓明细" className={css.wideModal}><div className={css.tableWrap}><table><caption>{selectedDate} 的持仓资料与估值</caption><thead><tr><th>证券</th><th>数量</th><th>成本价</th><th>估值价</th><th>市值</th><th>浮盈</th></tr></thead><tbody>{live?.items.map(item => <tr key={item.ticker}><td><strong>{item.name || item.ticker}</strong><small>{item.ticker}</small></td><td>{integer.format(Number(item.quantity))}</td><td>{money(item.cost_price)}</td><td>{money(item.market_price)}</td><td>{money(item.market_value)}</td><td>{money(item.profit_loss)}<small>{percent(item.return_rate)}</small></td></tr>)}</tbody></table></div></Modal>

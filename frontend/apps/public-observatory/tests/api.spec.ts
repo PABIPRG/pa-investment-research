@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadCalendar, loadObservatorySlice } from '../src/api.ts'
+import { historyCutoff, loadCalendar, loadLive, loadObservatorySlice, PublicApiError } from '../src/api.ts'
 
-afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals() })
+afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 const live = {
   availability: 'available', date: '2026-09-29', currency: 'CNY', source: 'current_holdings', holdings_as_of: '2026-09-29',
@@ -12,8 +12,10 @@ const live = {
 const history = { from: '2026-07-02', to: '2026-09-29', currency: 'CNY', quality: 'estimated', limitations: [], available_since: '2026-09-20', points: [] }
 const activities = { as_of: '2026-09-29', items: [{ public_id: 'a'.repeat(24), title: '持仓资料更新', category: 'operation', status: 'completed', occurred_at: '2026-09-29T10:00:00+08:00', summary: '资料变化，非成交' }], next_cursor: null }
 
+const requestUrl = (input: string | URL | Request) => input instanceof Request ? input.url : String(input)
+
 function response(input: string | URL | Request): Response {
-  const url = new URL(String(input))
+  const url = new URL(requestUrl(input))
   if (url.pathname.endsWith('/live')) return new Response(JSON.stringify(live))
   if (url.pathname.endsWith('/history')) return new Response(JSON.stringify(history))
   if (url.pathname.endsWith('/calendar')) return new Response(JSON.stringify({ days: [] }))
@@ -21,6 +23,83 @@ function response(input: string | URL | Request): Response {
 }
 
 describe('public observatory independent data reads', () => {
+  it.each(['headers', 'body'])('times out stalled %s without treating the timeout as a query cancellation', async (phase) => {
+    vi.useFakeTimers()
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    let signal!: AbortSignal
+    vi.stubGlobal('fetch', vi.fn((_url: URL, init: RequestInit) => {
+      signal = init.signal!
+      const pending = () => new Promise<never>((_resolve, reject) => { signal.addEventListener('abort', () => { reject(signal.reason instanceof Error ? signal.reason : new Error('aborted')) }, { once: true }) })
+      return phase === 'headers' ? pending() : Promise.resolve({ ok: true, json: pending })
+    }))
+    const controller = new AbortController()
+    const result = loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, controller.signal, undefined, ['live'])
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(signal.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(signal.aborted).toBe(true)
+    expect(controller.signal.aborted).toBe(false)
+    expect(await result).toMatchObject({ liveLoading: false, liveError: true })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('keeps external cancellation silent and releases the deadline timer', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    vi.stubGlobal('fetch', vi.fn((_url: URL, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => { reject(new DOMException('aborted', 'AbortError')) }, { once: true })
+    })))
+    const controller = new AbortController()
+    const progress = vi.fn()
+    const result = loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, controller.signal, progress, ['live'])
+    const rejected = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+    controller.abort()
+    await rejected
+    expect(progress).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('preserves the rate-limit delay across partial failures, including inaccessible headers', async () => {
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 429 })))
+    await expect(loadLive('2026-09-29')).rejects.toMatchObject({ status: 429, retryAfterMs: 60_000 })
+    vi.stubGlobal('fetch', vi.fn(async (input: URL) => input.pathname.endsWith('/live')
+      ? new Response('{}', { status: 429, headers: { 'Retry-After': '180' } }) : response(input)))
+    const result = await loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, new AbortController().signal, undefined, ['live', 'activities'])
+    expect(result).toMatchObject({ liveError: true, activitiesError: false, retryAfterMs: 180_000 })
+    expect(new PublicApiError(503, 'unavailable').retryAfterMs).toBe(0)
+  })
+
+  it('handles year boundaries and future months without requesting an inverted history interval', async () => {
+    expect(historyCutoff('2027-01-01', '2027-01-01')).toBe('2026-12-31')
+    expect(historyCutoff('2026-12-24', '2027-01-01')).toBe('2026-12-24')
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    const fetchMock = vi.fn(async (input: string | URL | Request) => response(input))
+    vi.stubGlobal('fetch', fetchMock)
+    expect((await loadCalendar('2027-02', undefined, '2026-12-31')).items).toEqual([])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(requestUrl(fetchMock.mock.calls[0]![0])).toContain('/calendar?month=2027-02')
+  })
+
+  it('refreshes only live holdings and activities when historical reads are excluded', async () => {
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    const fetchMock = vi.fn(async (input: string | URL | Request) => response(input))
+    vi.stubGlobal('fetch', fetchMock)
+    await loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, new AbortController().signal, undefined, ['live', 'activities'])
+    expect(fetchMock.mock.calls.map(([input]) => new URL(requestUrl(input)).pathname.split('/').at(-1))).toEqual(['live', 'activities'])
+  })
+
+  it('caps calendar valuations at yesterday in Shanghai while retaining the full trading calendar', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-29T16:01:00Z'))
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    const fetchMock = vi.fn(async (input: string | URL | Request) => response(input))
+    vi.stubGlobal('fetch', fetchMock)
+    await loadCalendar('2026-09')
+    const historyUrl = fetchMock.mock.calls.map(([input]) => new URL(requestUrl(input))).find(url => url.pathname.endsWith('/history'))!
+    expect(historyUrl.searchParams.get('to')).toBe('2026-09-29')
+  })
+
   it('shows current holdings without any full account snapshot and keeps missing quotes null', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
     const fetchMock = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => response(input))
@@ -38,7 +117,7 @@ describe('public observatory independent data reads', () => {
 
   it('isolates history, calendar and activities failures from current holdings', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => String(input).includes('/live?')
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => requestUrl(input).includes('/live?')
       ? response(input) : new Response('{}', { status: 503 })))
     const result = await loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, new AbortController().signal)
     expect(result.live?.availability).toBe('available')
@@ -50,7 +129,7 @@ describe('public observatory independent data reads', () => {
   it('keeps recorded estimates when the trading calendar is unknown and excludes closed days', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      const path = new URL(String(input)).pathname
+      const path = new URL(requestUrl(input)).pathname
       if (path.endsWith('/calendar')) return new Response(JSON.stringify({ days: [
         { date: '2026-09-24', trading_status: 'unknown' },
         { date: '2026-09-25', trading_status: 'trading' },
@@ -75,7 +154,7 @@ describe('public observatory independent data reads', () => {
   it('uses the prior month as a baseline without publishing it or filling missing estimates with zero', async () => {
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'https://pair-api.xiexin.dev')
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
-      if (new URL(String(input)).pathname.endsWith('/calendar')) return new Response(JSON.stringify({ days: [] }))
+      if (new URL(requestUrl(input)).pathname.endsWith('/calendar')) return new Response(JSON.stringify({ days: [] }))
       return new Response(JSON.stringify({ points: [
         { date: '2026-09-03', value: '110', profit_loss: null },
         { date: '2026-09-02', value: null, profit_loss: null },

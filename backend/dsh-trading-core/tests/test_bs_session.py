@@ -7,10 +7,11 @@
 """
 
 import unittest
+import sys
 from unittest.mock import patch
 
 import adapter.holdings_runner as h
-from adapter.holdings_runner import HoldingDataError, _bs_ensure_session, _bs_hist
+from adapter.holdings_runner import HoldingDataError, _bs_ensure_session, _bs_hist_direct as _bs_hist
 
 
 def _reset_session_state() -> None:
@@ -36,6 +37,9 @@ class _FakeBS:
 class BsSessionReuseTests(unittest.TestCase):
     def setUp(self) -> None:
         _reset_session_state()
+        guard = patch.object(h, "_guard_bs_socket")
+        guard.start()
+        self.addCleanup(guard.stop)
 
     def tearDown(self) -> None:
         _reset_session_state()
@@ -78,6 +82,40 @@ class BsSessionReuseTests(unittest.TestCase):
                    side_effect=HoldingDataError("baostock 登录失败: 黑名单用户")):
             with self.assertRaises(HoldingDataError):
                 _bs_hist("sh.600519", "2026-01-01", "2026-09-01")
+
+    def test_real_session_state_is_reset_before_retry(self):
+        fake = _FakeBS()
+        with patch.dict(sys.modules, {"baostock": fake}), \
+                patch.object(h, "_bs_query", side_effect=[HoldingDataError("断线"), []]):
+            _bs_hist("sh.600519", "2026-01-01", "2026-09-01")
+        self.assertEqual(fake.logins, 2)
+
+    def test_success_updates_idle_timestamp(self):
+        fake = _FakeBS()
+        with patch.dict(sys.modules, {"baostock": fake}), \
+                patch.object(h, "_bs_query", return_value=[]), \
+                patch.object(h.time, "time", side_effect=[100, 150]):
+            _bs_hist("sh.600519", "2026-01-01", "2026-09-01")
+        self.assertEqual(h._bs_session_last_use, 150)
+
+    def test_eof_socket_stops_at_first_empty_read(self):
+        from unittest.mock import Mock
+        raw = Mock()
+        raw.recv.return_value = b""
+        with self.assertRaises(ConnectionResetError):
+            h._CheckedSocket(raw).recv(8192)
+        raw.recv.assert_called_once_with(8192)
+        raw.close.assert_called_once()
+
+    def test_baostock_receive_loop_exits_on_guarded_eof(self):
+        from unittest.mock import Mock
+        from baostock.common import context
+        from baostock.util.socketutil import send_msg
+        raw = Mock()
+        raw.recv.return_value = b""
+        with patch.object(context, "default_socket", h._CheckedSocket(raw), create=True):
+            self.assertIsNone(send_msg("offline fixture"))
+        raw.recv.assert_called_once_with(8192)
 
 
 if __name__ == "__main__":
