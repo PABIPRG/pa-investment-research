@@ -23,6 +23,18 @@ function response(input: string | URL | Request): Response {
 }
 
 describe('public observatory independent data reads', () => {
+  it('keeps the complete T+1 timeline when reading the first day', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-03T06:00:00Z'))
+    vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')
+    const fetchMock = vi.fn(async (input: string | URL | Request) => response(input))
+    vi.stubGlobal('fetch', fetchMock)
+    await loadObservatorySlice('2026-09-15', { category: 'all', status: 'all' }, new AbortController().signal)
+    const urls = fetchMock.mock.calls.map(([input]) => new URL(requestUrl(input)))
+    expect(urls.some(url => url.pathname.endsWith('/history') && url.searchParams.get('from') === '2026-07-05' && url.searchParams.get('to') === '2026-10-02')).toBe(true)
+    expect(urls.find(url => url.pathname.endsWith('/live'))?.searchParams.get('date')).toBe('2026-09-15')
+  })
+
   it.each(['headers', 'body'])('times out stalled %s without treating the timeout as a query cancellation', async (phase) => {
     vi.useFakeTimers()
     vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3409')

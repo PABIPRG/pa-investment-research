@@ -2,6 +2,7 @@
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { fireEvent } from '@testing-library/react'
 import { App } from '../src/App.tsx'
 import { loadCalendar, loadHistory, loadMoreActivities, loadObservatorySlice, PublicApiError, type ObservatorySlice } from '../src/api.ts'
 
@@ -69,22 +70,83 @@ afterEach(async () => {
   vi.useRealTimers()
 })
 
+it('keeps the complete timeline on first-day selection, skips gaps and preserves it after failure', async () => {
+  const history = { ...state('').history!, to: '2026-09-28', available_since: '2025-01-01', points: [
+    { date: '2026-09-21', value: '100', profit_loss: null },
+    { date: '2026-09-22', value: null, profit_loss: null },
+    { date: '2026-09-23', value: '120', profit_loss: '20' },
+  ] }
+  vi.mocked(loadHistory).mockResolvedValue(history)
+  await act(async () => { button('刷新数据').click() })
+  const reads = vi.mocked(loadHistory).mock.calls.length
+  await act(async () => { button('第一天').click() })
+  const seek = () => container.querySelector<HTMLInputElement>('input[aria-label="跳转历史播放日期"]')!
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-21')
+  expect(loadHistory).toHaveBeenCalledTimes(reads)
+  expect(seek().max).toBe('1')
+  expect(seek().value).toBe('0')
+  await act(async () => { requests.at(-1)!(state(''), 'live'); button('播放').click() })
+  await act(async () => { vi.advanceTimersByTime(1_200) })
+  expect(seek().getAttribute('aria-valuetext')).toBe('2026-09-23')
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-23')
+  expect(loadHistory).toHaveBeenCalledTimes(reads)
+  await act(async () => { button('暂停').click(); fireEvent.change(seek(), { target: { value: '0' } }) })
+  expect(seek().value).toBe('0')
+  vi.mocked(loadHistory).mockRejectedValueOnce(new Error('temporary failure'))
+  await act(async () => { requests.at(-1)!(state(''), 'live'); requests.at(-1)!(state(''), 'activities') })
+  await act(async () => { button('刷新数据').click() })
+  expect(container.textContent).toContain('历史表现刷新失败')
+  expect(seek().max).toBe('1')
+  expect(seek().value).toBe('0')
+})
+
+it('disables single-point playback and starts at the next estimate after a gap', async () => {
+  vi.mocked(loadHistory).mockResolvedValue({ ...state('').history!, to: '2026-09-28', points: [
+    { date: '2026-09-21', value: null, profit_loss: null },
+    { date: '2026-09-23', value: '120', profit_loss: null },
+  ] })
+  await act(async () => { button('刷新数据').click() })
+  expect(button('播放').disabled).toBe(true)
+  await act(async () => { button('第一天').click() })
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-23')
+  vi.mocked(loadHistory).mockResolvedValue({ ...state('').history!, to: '2026-09-28', points: [
+    { date: '2026-09-21', value: '100', profit_loss: null },
+    { date: '2026-09-23', value: '120', profit_loss: '20' },
+  ] })
+  await act(async () => { requests.at(-1)!(state(''), 'live'); requests.at(-1)!(state(''), 'activities') })
+  await act(async () => { button('刷新数据').click() })
+  await act(async () => { button('第一天').click() })
+  await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="后一日"]')!.click() })
+  await act(async () => { button('播放').click() })
+  expect(vi.mocked(loadObservatorySlice).mock.calls.at(-1)?.[0]).toBe('2026-09-23')
+})
+
+it('distinguishes T+1 pending today from missing historical and future trading days', async () => {
+  vi.mocked(loadCalendar).mockResolvedValue({ ...state('').calendar!, days: ['28', '29', '30'].map(day => ({ date: `2026-09-${day}`, trading_status: 'trading' as const })) })
+  await act(async () => { button('刷新数据').click() })
+  const day = (date: string) => container.querySelector<HTMLButtonElement>(`button[aria-label^="${date}，"]`)!
+  expect(day('2026-09-28').textContent).toContain('缺估值')
+  expect(day('2026-09-29').textContent).toContain('待更新')
+  expect(day('2026-09-29').getAttribute('aria-label')).toContain('T+1 待更新')
+  expect(day('2026-09-30').textContent).toContain('未到')
+})
+
 it('synchronizes all summary amounts with each playback date and waits for a slow frame', async () => {
   await act(async () => { requests[0]!(state('持仓记录'), 'live') })
   await act(async () => { button('播放').click() })
-  expect(container.textContent).toContain('预览 2026.09.21')
+  expect(container.textContent).toContain('2026.09.21')
   expect(container.querySelector('input[aria-label="跳转历史播放日期"]')).not.toBeNull()
   const summary = () => container.querySelector('[aria-label="持仓概览"]')!.textContent
   expect(summary()).toContain('截至 2026.09.21')
   expect(summary()).not.toContain('¥120.00')
   await act(async () => { vi.advanceTimersByTime(5_000) })
-  expect(container.textContent).toContain('预览 2026.09.21')
+  expect(container.textContent).toContain('2026.09.21')
   const frame = state('持仓记录')
   frame.live = { ...live, date: '2026-09-21', summary: { ...live.summary, holdings_cost: '80.00', market_value: '100.00', floating_profit_loss: '20.00', cost_return: '0.25' } }
   await act(async () => { requests[1]!(frame, 'live') })
   for (const value of ['¥80.00', '¥100.00', '¥20.00', '25.00%']) expect(summary()).toContain(value)
   await act(async () => { vi.advanceTimersByTime(1_200) })
-  expect(container.textContent).toContain('预览 2026.09.22')
+  expect(container.textContent).toContain('2026.09.22')
   frame.live = { ...live, date: '2026-09-22', summary: { ...live.summary, holdings_cost: '200.00', market_value: '180.00', floating_profit_loss: '-20.00', cost_return: '-0.10' } }
   await act(async () => { requests[2]!(frame, 'live') })
   for (const value of ['¥200.00', '¥180.00', '-¥20.00', '-10.00%']) expect(summary()).toContain(value)
@@ -93,10 +155,10 @@ it('synchronizes all summary amounts with each playback date and waits for a slo
   await act(async () => { button('暂停').click() })
   await act(async () => { vi.advanceTimersByTime(5_000) })
   expect(requests).toHaveLength(3)
-  expect(container.textContent).toContain('预览 2026.09.22')
-  await act(async () => { button('继续').click(); vi.advanceTimersByTime(1_200) })
+  expect(container.textContent).toContain('2026.09.22')
+  await act(async () => { button('播放').click(); vi.advanceTimersByTime(1_200) })
   await act(async () => { vi.advanceTimersByTime(1_200) })
-  expect(container.textContent).toContain('预览 2026.09.23')
+  expect(container.textContent).toContain('2026.09.23')
 })
 
 it('retains the same query result with an explicit stale notice after refresh failure', async () => {
@@ -269,7 +331,7 @@ it('discards the previous playback date response and advances past unavailable d
   await act(async () => { requests[3]!({ ...state(''), live: { availability: 'unavailable', reason_code: 'missing', message: '所选日期没有持仓记录。' } }, 'live') })
   expect(container.querySelector('[aria-label="持仓概览"]')!.textContent).not.toContain('¥120.00')
   await act(async () => { vi.advanceTimersByTime(1_200) })
-  expect(container.textContent).toContain('预览 2026.09.22')
+  expect(container.textContent).toContain('2026.09.22')
 })
 
 it('keeps the displayed calendar month when an older month finishes late or a refresh fails', async () => {

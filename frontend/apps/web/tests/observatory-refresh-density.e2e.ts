@@ -50,6 +50,8 @@ beforeAll(async () => {
     const path = url.pathname.split('/').at(-1)!
     requestCounts.set(path, (requestCounts.get(path) ?? 0) + 1)
     const date = url.searchParams.get('date') ?? '2026-09-30'
+    const month = url.searchParams.get('month') ?? date.slice(0, 7)
+    const [year, monthNumber] = month.split('-').map(Number) as [number, number]
     const dayIndex = Math.round((Date.parse(date) - Date.parse('2026-09-15')) / 86_400_000)
     const marketValue = 28000 + dayIndex * 40
     const cost = 27000 + dayIndex * 2000
@@ -65,7 +67,7 @@ beforeAll(async () => {
       available_since: '2026-09-15', limitations: ['历史表现为估算，不含现金。'],
       points: points.filter(row => row.date >= url.searchParams.get('from')! && row.date <= url.searchParams.get('to')!),
     } : path === 'calendar' ? {
-      days: Array.from({ length: 30 }, (_, i) => ({ date: `2026-09-${String(i + 1).padStart(2, '0')}`, trading_status: [0, 6].includes(new Date(2026, 8, i + 1).getDay()) ? 'closed' : 'unknown' })),
+      days: Array.from({ length: new Date(year, monthNumber, 0).getDate() }, (_, i) => ({ date: `${month}-${String(i + 1).padStart(2, '0')}`, trading_status: [0, 6].includes(new Date(year, monthNumber - 1, i + 1).getDay()) ? 'closed' : 'unknown' })),
     } : path === 'activities' ? { as_of: '2026-09-30', items: [activity], next_cursor: null } : {
       ...activity, related_snapshot_id: null,
       holdings_changes: [{ ticker: '002518', name: '科士达', before_quantity: '200', after_quantity: '100', before_cost_price: '36.712', after_cost_price: '36.712' }],
@@ -295,7 +297,7 @@ it('pauses hidden and offline requests, preserves playback and retries only fail
   await page.clock.runFor(60_000)
   expect(await page.getByRole('region', { name: '持仓概览' }).innerText()).toContain('2026.09.15')
   await page.context().setOffline(false)
-  await page.getByRole('checkbox', { name: '播放预览 · 自动刷新暂停' }).waitFor()
+  await page.getByRole('checkbox', { name: '播放中 · 自动刷新暂停' }).waitFor()
   await page.clock.runFor(1_200)
   await page.getByText('持仓记录于 2026-09-16').waitFor()
   expect(await page.getByRole('region', { name: '持仓概览' }).innerText()).toContain('29,000.00')

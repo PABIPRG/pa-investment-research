@@ -13,7 +13,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-arm64.txt",
-      "requirementsSha256": "0a7ff90282759e8f6b9d7a4fcd8795c7b71aa1e3a475001610295df46d275d84"
+      "requirementsSha256": "c058719b7cc1d1f627d0de91dc073a146e61c0628b4f59235c16975527e4379a"
     },
     "darwin-x64": {
       "pythonVersion": "3.10.20",
@@ -22,7 +22,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/darwin-x64.txt",
-      "requirementsSha256": "0a7ff90282759e8f6b9d7a4fcd8795c7b71aa1e3a475001610295df46d275d84"
+      "requirementsSha256": "c058719b7cc1d1f627d0de91dc073a146e61c0628b4f59235c16975527e4379a"
     },
     "linux-x64": {
       "pythonVersion": "3.10.20",
@@ -31,7 +31,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/bin/python3",
       "requirementsLock": "frontend/config/investment-python-requirements/linux-x64.txt",
-      "requirementsSha256": "e962b9a1906cd36e8d5fcb4161f5ea9b224f2b22af3fd5a9bbb2e70ae920910f"
+      "requirementsSha256": "83fa0fad7b241b110102b827b325de10038a8f4a40afb79a26f0fedc0b605031"
     },
     "win32-x64": {
       "pythonVersion": "3.10.20",
@@ -40,7 +40,7 @@
       "archiveRuntimeRoot": "python",
       "archiveExecutable": "python/python.exe",
       "requirementsLock": "frontend/config/investment-python-requirements/win32-x64.txt",
-      "requirementsSha256": "440ce0c730c4a3c2b98e597e991ca4290171b6631d25e681708eecb09b096364"
+      "requirementsSha256": "f41e900f271f9084cf0db20c2fb1b73ac81fcf1f808a8e6912b9174e35805d9e"
     }
   }
 }

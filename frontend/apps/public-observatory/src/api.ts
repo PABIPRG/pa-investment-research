@@ -175,7 +175,7 @@ export async function loadCalendar(month: string, signal?: AbortSignal, cutoff =
   })
   return { month, days: days.days, items, limitations: history.limitations }
 }
-/** 并行读取指定区块；实时轮询可排除按日更新的历史与日历。 */
+/** 并行读取指定区块；实时轮询可排除按日更新的历史与日历；时间线固定为截至北京时间昨日的 90 日。 */
 export async function loadObservatorySlice(
   date: string,
   filters: { category: string; status: string },
@@ -203,9 +203,10 @@ export async function loadObservatorySlice(
       })
     }
   }
+  const timelineEnd = historyCutoff(shanghaiToday())
   await Promise.all([
     parts.includes('live') && settle('live', loadLive(date, signal), live => ({ live, liveLoading: false }), { liveLoading: false, liveError: true }),
-    parts.includes('history') && settle('history', loadHistory(addDays(historyCutoff(date), -89), historyCutoff(date), signal), history => ({ history, historyLoading: false }), { historyLoading: false, historyError: true }),
+    parts.includes('history') && settle('history', loadHistory(addDays(timelineEnd, -89), timelineEnd, signal), history => ({ history, historyLoading: false }), { historyLoading: false, historyError: true }),
     parts.includes('calendar') && settle('calendar', loadCalendar(date.slice(0, 7), signal), calendar => ({ calendar, calendarLoading: false }), { calendarLoading: false, calendarError: true }),
     parts.includes('activities') && settle('activities', requestJson<PublicActivities>(`/api/public/performance/v1/activities?as_of=${encodeURIComponent(date)}&category=${encodeURIComponent(filters.category)}&status=${encodeURIComponent(filters.status)}&limit=20`, signal), activities => ({ activities, activitiesLoading: false }), { activitiesLoading: false, activitiesError: true }),
   ])
