@@ -16,8 +16,8 @@
       "count": 1,
       "package": "tushare==1.4.29",
       "reason": "public-runtime-constant",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     },
     {
       "kind": "gitleaks-finding",
@@ -29,8 +29,8 @@
       "count": 1,
       "package": "tushare==1.4.29",
       "reason": "generated-code-expression",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     },
     {
       "kind": "gitleaks-finding",
@@ -42,8 +42,8 @@
       "count": 2,
       "package": "akshare==1.18.88",
       "reason": "public-runtime-constant",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     },
     {
       "kind": "gitleaks-finding",
@@ -55,8 +55,8 @@
       "count": 1,
       "package": "akshare==1.18.88",
       "reason": "public-runtime-constant",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     },
     {
       "kind": "gitleaks-finding",
@@ -68,8 +68,8 @@
       "count": 1,
       "package": "akshare==1.18.88",
       "reason": "public-runtime-constant",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     },
     {
       "kind": "gitleaks-finding",
@@ -81,8 +81,8 @@
       "count": 1,
       "package": "akshare==1.18.88",
       "reason": "public-runtime-constant",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     },
     {
       "kind": "gitleaks-finding",
@@ -94,8 +94,8 @@
       "count": 1,
       "package": "protobuf==7.35.1",
       "reason": "generated-code-expression",
-      "reviewedBy": "xiexin (Codex task approval 2026-09-22)",
-      "expiresAt": "2026-10-06T23:59:00Z"
+      "reviewedBy": "xiexin (Codex task renewal approval 2026-10-08)",
+      "expiresAt": "2026-10-22T23:59:00Z"
     }
   ],
   "vulnerabilityExceptions": [],

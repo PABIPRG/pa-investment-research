@@ -216,7 +216,9 @@ git diff --check
   SHA256、行号和授权数量必须同时匹配；未使用、重复、过期或内容漂移的例外均失败关闭。
   策略同时记录包名和版本、原因、审核人及到期日期，不接受整目录或整条规则例外。
   当前 8 条授权命中仅对应 Akshare 1.18.88、Tushare 1.4.29 与 protobuf 7.35.1 的固定公开
-  运行常量或生成代码表达式，有效期至 2026-10-06 23:59 UTC；依赖变化或到期后必须重新评审。
+  运行常量或生成代码表达式；2026-10-08 经重新核验并获用户批准，有效期续至
+  2026-10-22 23:59 UTC。依赖变化或到期后必须重新评审，详见
+  [本次七条例外复核](../../docs/agent-notes/2026-10-08-image-security-expiry-review.md)。
 - `vulnerabilityExceptions` 当前为空。PR #156 曾为固定 OpenSSL 修复包添加六条临时声明，
   2026-09-30 的 Trivy 数据库更新已识别修复版本，声明不再命中，导致合并后的运行
   `36685910520` 按 `unused-vulnerability-exception` 失败关闭，因此撤销全部六条声明。
@@ -259,5 +261,7 @@ pnpm --dir frontend exec vitest run scripts/investment-container.spec.ts scripts
 
 完整设计、官方依赖来源和验证债务见
 [镜像安全加固设计](../../docs/superpowers/specs/2026-09-21-pab29-image-security.md)。
+门禁能力单测使用独立策略样本和固定测试时钟，并覆盖到期前、到期点、到期后及发布时的
+再次校验；生产扫描与发布仍读取真实时间及仓库策略。单测通过不表示当前策略例外仍在有效期内。
 本机通过的解析/门禁测试不等于 Linux 新镜像安全通过；发布前必须取得新候选的扫描、
 运行依赖加载、Compose smoke 和表格导入真实产品验收证据。
