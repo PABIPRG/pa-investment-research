@@ -39,11 +39,13 @@ class PriceResilienceTests(unittest.TestCase):
         scheduler.shutdown.side_effect = RuntimeError("调度器退出失败")
         with patch.object(adapter_app, "setup_scheduler", return_value=scheduler), \
                 patch.object(adapter_app, "open_price_workers"), \
+                patch.object(adapter_app, "warm_price_workers") as warm, \
                 patch.object(adapter_app, "close_price_workers") as close:
             with self.assertRaisesRegex(RuntimeError, "调度器退出失败"):
                 with TestClient(adapter_app.create_app()):
                     pass
             close.assert_called_once()
+            warm.assert_called_once()
 
     def test_hung_eastmoney_still_reaches_sina_in_parent(self):
         from adapter import portfolio_prices

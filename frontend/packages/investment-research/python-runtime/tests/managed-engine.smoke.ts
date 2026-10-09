@@ -84,7 +84,6 @@ describe.skipIf(!enabled)('managed investment engines', () => {
     const byId = new Map(rows.map(row => [row.id, row]))
     Object.assign(byId.get('investment-python-runtime')!, { config: {
       dshHome: join(root, 'home'),
-      startupTimeoutMs: 60_000,
       healthPollMs: 100,
       shutdownGraceMs: 5_000,
     } })
