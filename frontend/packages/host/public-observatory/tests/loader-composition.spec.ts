@@ -196,11 +196,11 @@ describe('public observatory Loader + real HTTP', () => {
     })
     cleanups.push(async () => {
       if (child.exitCode !== null) return
-      await new Promise<void>(resolve => { child.once('exit', () => resolve()); child.kill('SIGTERM') })
+      await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM') })
     })
     const address = await new Promise<{ baseUrl: string; storePath: string }>((resolve, reject) => {
       let output = ''
-      child.stdout.on('data', chunk => { output += String(chunk); if (output.includes('\n')) resolve(JSON.parse(output.split('\n')[0]!)) })
+      child.stdout.on('data', (chunk) => { output += String(chunk); if (output.includes('\n')) resolve(JSON.parse(output.split('\n')[0]!)) })
       child.once('error', reject)
       child.once('exit', () => reject(new Error('Python fixture exited before readiness')))
     })
@@ -251,11 +251,11 @@ describe('public observatory Loader + real HTTP', () => {
     })
     cleanups.push(async () => {
       if (child.exitCode !== null) return
-      await new Promise<void>(resolve => { child.once('exit', () => resolve()); child.kill('SIGTERM') })
+      await new Promise<void>((resolve) => { child.once('exit', () => resolve()); child.kill('SIGTERM') })
     })
     const address = await new Promise<{ baseUrl: string; storePath: string; snapshotId: string }>((resolve, reject) => {
       let output = ''
-      child.stdout.on('data', chunk => {
+      child.stdout.on('data', (chunk) => {
         output += String(chunk)
         if (output.includes('\n')) resolve(JSON.parse(output.split('\n')[0]!))
       })
@@ -300,7 +300,7 @@ describe('public observatory Loader + real HTTP', () => {
     const responses = await Promise.all([
       `/holdings?snapshot_id=${address.snapshotId}`, '/equity?from=2026-09-01&to=2026-09-20',
       '/calendar?month=2026-09', '/activities?as_of=2026-09-20',
-    ].map(async path => { const response = await app.request(path); expect(response.status).toBe(200); return response.json() }))
+    ].map(async (path) => { const response = await app.request(path); expect(response.status).toBe(200); return response.json() }))
     const activity = responses[3].items[0]
     expect(responses[3].items).toHaveLength(1)
     expect((await app.request(`/activities/${activity.public_id}`)).status).toBe(200)
