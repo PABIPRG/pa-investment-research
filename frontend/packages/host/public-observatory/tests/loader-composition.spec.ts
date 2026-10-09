@@ -9,6 +9,8 @@ import type { AddressInfo } from 'node:net'
 import { connect } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { InvestmentBackendManager } from '../../../investment-research/python-runtime/src/runtime.ts'
+import type { PythonBackendDefinition } from '../../../investment-research/python-runtime/src/types.ts'
 import { Context, Service } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
@@ -24,7 +26,7 @@ afterEach(async () => {
   cleanups.length = 0
 })
 
-async function composition(options: { requests?: number; total?: number; concurrent?: number; timeout?: number; large?: boolean; endpoint?: string } = {}) {
+async function composition(options: { requests?: number; total?: number; concurrent?: number; timeout?: number; large?: boolean; endpoint?: string; getRunningBackend?: () => ReturnType<InvestmentBackendManager['getRunningBackend']> } = {}) {
   let upstreamCalls = 0
   let pending: (() => void) | undefined
   let hold = false
@@ -43,7 +45,7 @@ async function composition(options: { requests?: number; total?: number; concurr
   cleanups.push(async () => { backend.closeAllConnections(); await new Promise<void>(resolve => backend.close(() => resolve())) })
   const endpoint = options.endpoint ?? `http://127.0.0.1:${(backend.address() as AddressInfo).port}`
   const acquire = vi.fn(() => { throw new Error('public requests must never acquire') })
-  const getRunning = vi.fn(async () => ({ id: 'trading-core', baseUrl: endpoint }))
+  const getRunning = vi.fn(options.getRunningBackend ?? (async () => ({ id: 'trading-core' as const, baseUrl: endpoint })))
   class RuntimeFixture extends Service {
     constructor(ctx: Context) { super(ctx, 'investmentPythonRuntime') }
     acquire = acquire
@@ -99,6 +101,88 @@ async function composition(options: { requests?: number; total?: number; concurr
 }
 
 describe('public observatory Loader + real HTTP', () => {
+  it.skipIf(!process.env.OBSERVATORY_TEST_PYTHON).each(['stalled', 'ready'])('keeps real managed startup independent of price warmup (%s)', async (mode) => {
+    const python = process.env.OBSERVATORY_TEST_PYTHON!
+    const backendRoot = fileURLToPath(new URL('../../../../../backend/dsh-trading-core/', import.meta.url))
+    const root = await mkdtemp(join(tmpdir(), 'investment-startup-recovery-http-'))
+    cleanups.push(() => rm(root, { recursive: true, force: true }))
+    const listener = createServer()
+    await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve))
+    const port = (listener.address() as AddressInfo).port
+    await new Promise<void>(resolve => listener.close(() => resolve()))
+    const ctx = new Context()
+    cleanups.push(() => ctx.fiber.dispose())
+    const dlopen = process.dlopen.bind(process)
+    process.dlopen = ((module, filename, flags) => {
+      if (filename.includes('node-pty') && filename.endsWith('.node')) {
+        (module as { exports: unknown }).exports = {}
+        return
+      }
+      dlopen(module, filename, flags)
+    })
+    let LocalSubprocessRuntime: typeof import('../../../subprocess/subprocess-local/src/index.ts').default
+    try {
+      LocalSubprocessRuntime = (await import('../../../subprocess/subprocess-local/src/index.ts')).default
+    } finally {
+      process.dlopen = dlopen
+    }
+    await ctx.plugin(LocalSubprocessRuntime)
+    const manager = new InvestmentBackendManager({
+      subprocess: ctx.subprocess,
+      config: { dshHome: join(root, 'home') }, // Use the production 30-second startup budget.
+      resolvePaths: () => ({ source: 'source', projectDir: backendRoot, pythonExecutable: python }),
+    })
+    cleanups.push(() => manager.dispose())
+    manager.register({
+      id: 'trading-core', service: 'trading-core', mode: 'managed',
+      baseUrl: `http://127.0.0.1:${port}`, repositoryPath: ['backend', 'dsh-trading-core'],
+      // 仅此回归使用夹具入口；生产定义继续限制为三个正式应用模块。
+      module: 'tests.price_startup_fixture:app' as PythonBackendDefinition['module'], healthPath: '/health',
+      healthOk: { service: 'trading-core', status: 'ok' },
+      initCommand: { posix: './init.sh', windows: 'init.bat' },
+      managedEnv: { ADAPTER_RUNNER: 'fake', BRIEF_SCHEDULE_ENABLED: 'false',
+        PRICE_FIXTURE_CONTROL_DIR: root, PRICE_FIXTURE_WARM_MODE: mode },
+    })
+    const started = performance.now()
+    const lease = await manager.acquire('trading-core')
+    expect(lease.ownership).toBe('owned')
+    expect(performance.now() - started).toBeLessThan(30_000)
+    const gateway = await composition({ getRunningBackend: () => manager.getRunningBackend('trading-core') })
+    await vi.waitFor(async () => {
+      expect((await readdir(root)).filter(name => name.endsWith('.pid'))).toHaveLength(3)
+    }, { timeout: 5000 })
+    const pids = await Promise.all(['bs', 'http', 'sina'].map(async name => Number(await readFile(join(root, `${name}.pid`), 'utf8'))))
+    expect((await gateway.request('/activities?as_of=2026-01-07')).status).toBe(200)
+    if (mode === 'ready') {
+      const history = '/history?from=2026-01-05&to=2026-01-07'
+      const response = await gateway.request(history)
+      expect(response.status).toBe(200)
+      expect((await response.json()).points.map((row: { value: string }) => row.value)).toEqual(['190.00', '205.00', '220.00'])
+      const live = await gateway.request('/live?date=2026-01-07')
+      expect(live.status).toBe(200)
+      expect((await live.json()).summary).toMatchObject({ market_value: '220.00', holdings_cost: '150.00', floating_profit_loss: '70.00' })
+      expect((await gateway.request('/calendar?month=2026-01')).status).toBe(200)
+      await writeFile(join(root, 'failure'), 'controlled provider outage')
+      const pending = gateway.request('/history?from=2026-01-05&to=2026-01-08')
+      await delay(100)
+      expect((await gateway.request('/activities?as_of=2026-01-08')).status).toBe(200)
+      expect((await pending).status).toBe(503)
+      expect((await gateway.request(history)).status).toBe(200) // Failed extension preserves the covered cache.
+      await rm(join(root, 'failure'))
+      await vi.waitFor(async () => {
+        const recovered = await gateway.request('/history?from=2026-01-05&to=2026-01-08')
+        expect(recovered.status).toBe(200)
+        expect((await recovered.json()).points.at(-1).value).toBe('235.00')
+      }, { timeout: 12_000, interval: 1000 })
+    }
+    const currentPids = await Promise.all(['bs', 'http', 'sina'].map(async name => Number(await readFile(join(root, `${name}.pid`), 'utf8'))))
+    const shutdown = performance.now()
+    await manager.dispose()
+    expect(performance.now() - shutdown).toBeLessThan(5000)
+    for (const pid of new Set([...pids, ...currentPids])) expect(() => process.kill(pid, 0)).toThrow()
+    expect(gateway.acquire).not.toHaveBeenCalled()
+  }, 45_000)
+
   it.skipIf(!process.env.OBSERVATORY_TEST_PYTHON)('publishes real verified backups once after a lost ACK and private restart recovery', async () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'observatory-export-http-'))
     cleanups.push(() => rm(dshHome, { recursive: true, force: true }))
@@ -186,11 +270,11 @@ describe('public observatory Loader + real HTTP', () => {
       expect(activityPage.items).toHaveLength(5)
       expect(activityPage.items.map((item: { status: string }) => item.status)).toEqual(['completed', 'failed', 'completed', 'completed', 'completed'])
       const detail = await (await app.request(`/activities/${activityPage.items[0].public_id}`)).json()
-      expect(detail.holdings_changes).toEqual([{ ticker: '600519', before_quantity: '2', after_quantity: '0', before_cost_price: '100', after_cost_price: null }])
+      expect(detail.holdings_changes).toEqual([{ ticker: '600519', name: '合成测试证券', before_quantity: '2', after_quantity: '0', before_cost_price: '100', after_cost_price: null }])
       expect(JSON.stringify(detail)).not.toContain('TEST-PRIVATE')
       const adjustment = await (await app.request(`/activities/${activityPage.items[4].public_id}`)).json()
-      expect(adjustment.title).toBe('完成 · 持仓数据更新')
-      expect(adjustment.holdings_changes).toEqual([{ ticker: '600519', before_quantity: '1', after_quantity: '3', before_cost_price: '100', after_cost_price: '100' }])
+      expect(adjustment.title).toBe('完成 · 持仓数据更新：合成测试证券 · 600519')
+      expect(adjustment.holdings_changes).toEqual([{ ticker: '600519', name: '合成测试证券', before_quantity: '1', after_quantity: '3', before_cost_price: '100', after_cost_price: '100' }])
       const trades = await (await app.request(`/activities/${activityPage.items[3].public_id}`)).json()
       expect(trades.summary).toContain('新增 1 条，移除 0 条')
       expect(JSON.stringify([activityPage, adjustment, trades])).not.toContain('TEST-PRIVATE')

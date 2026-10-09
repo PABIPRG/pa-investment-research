@@ -3,6 +3,7 @@
 import logging
 import math
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
 
 from .isolated_price_worker import IsolatedPriceWorker
 
@@ -147,10 +148,21 @@ def close_price_workers() -> None:
 
 
 def open_price_workers() -> None:
+    """仅重开生命周期；依赖冷导入不参与服务就绪。"""
     from .holdings_runner import _bs_worker
     for worker in (_bs_worker, _http_worker, _sina_worker):
         worker.open()
+
+
+def warm_price_workers() -> None:
+    """并行预热已重开的源；关闭事件会中断等待，不会重新开启 worker。"""
+    from .holdings_runner import _bs_worker
+
+    def warm(worker):
         try:
             worker.warm()
         except Exception:
-            logger.warning("行情源预热失败；其他接口仍可用，下次查询按退避重试")
+            logger.warning("行情源预热未完成；查询按既有降级和退避处理")
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="price-warmup") as executor:
+        list(executor.map(warm, (_bs_worker, _http_worker, _sina_worker)))

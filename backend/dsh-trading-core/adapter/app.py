@@ -8,6 +8,7 @@ API：
   POST /analyze/{id}/...（见各路由 docstring）
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -44,7 +45,7 @@ from .portfolio_performance import (
     set_history_start_override,
 )
 from .portfolio_price_cache import PortfolioPriceHistoryCache, run_price_read
-from .portfolio_prices import load_portfolio_prices, close_price_workers, open_price_workers
+from .portfolio_prices import load_portfolio_prices, close_price_workers, open_price_workers, warm_price_workers
 from .public_observatory import register_public_observatory_routes
 from . import position_risk
 from .risk_profiles import get_risk_profile, profile
@@ -189,6 +190,7 @@ def _build_registry() -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     sched = None
+    warmup = None
     try:
         await run_in_threadpool(open_price_workers)
         from . import backtest_tasks as bt
@@ -255,6 +257,7 @@ async def lifespan(app: FastAPI):
         )
         app.state.scheduler = sched
         logger.info("适配器启动完成（runners=%s）", {k: v.name for k, v in app.state.manager.registry.items()})
+        warmup = asyncio.create_task(run_in_threadpool(warm_price_workers))
         yield
     finally:
         try:
@@ -262,7 +265,24 @@ async def lifespan(app: FastAPI):
                 sched.shutdown(wait=False)
         finally:
             app.state.scheduler = None
-            await run_in_threadpool(close_price_workers)
+            async def cleanup_workers():
+                try:
+                    await run_in_threadpool(close_price_workers)
+                finally:
+                    if warmup is not None:
+                        await warmup
+
+            # 退出取消也必须等同步线程结束，不能将清理任务留给下一生命周期。
+            cleanup = asyncio.create_task(cleanup_workers())
+            cancelled = None
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError as exc:
+                    cancelled = exc
+            cleanup.result()
+            if cancelled is not None:
+                raise cancelled
 
 
 def create_app(

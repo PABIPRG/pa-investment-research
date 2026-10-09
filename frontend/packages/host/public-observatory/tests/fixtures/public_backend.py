@@ -85,12 +85,18 @@ with tempfile.TemporaryDirectory(prefix="observatory-http-fixture-") as temporar
             json.dumps([snapshot["snapshot_id"]]) if os.environ["DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS"] == "[]" else "[]",
         ))
     app = FastAPI()
-    register_public_observatory_routes(app, store_factory=lambda: store)
+    register_public_observatory_routes(app, store_factory=lambda: store,
+                                      quote_loader=lambda codes: {code: {"name": "合成测试证券"} for code in codes})
     if os.environ.get("OBSERVATORY_TEST_EXPORT_COORDINATOR"):
         register_data_transfer_routes(app, store_factory=lambda: store, token="fixture-private-export-token")
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
-    print(json.dumps({"baseUrl": f"http://127.0.0.1:{listener.getsockname()[1]}",
-                      "storePath": str(Path(temporary) / "holdings.json"),
-                      "snapshotId": snapshot["snapshot_id"]}), flush=True)
-    uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False)).run(sockets=[listener])
+    class ReadyServer(uvicorn.Server):
+        async def startup(self, sockets=None):
+            await super().startup(sockets=sockets)
+            if self.started:
+                print(json.dumps({"baseUrl": f"http://127.0.0.1:{listener.getsockname()[1]}",
+                                  "storePath": str(Path(temporary) / "holdings.json"),
+                                  "snapshotId": snapshot["snapshot_id"]}), flush=True)
+
+    ReadyServer(uvicorn.Config(app, log_level="warning", access_log=False)).run(sockets=[listener])
