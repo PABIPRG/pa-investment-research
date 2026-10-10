@@ -76,6 +76,22 @@ jobs:
           docker run --rm --entrypoint /nodejs/bin/node "$IMAGE" /opt/container/investment-container-check.mjs boundary
           docker image inspect --format '{{.Id}}' "$IMAGE" > "${RUNNER_TEMP}/investment-container.image-id"
 
+      - name: Verify price worker startup and recovery in the exact image
+        timeout-minutes: 5
+        env:
+          IMAGE: pa-investment-research:${{ github.sha }}
+        run: |
+          docker run --rm --network none \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/backend/dsh-trading-core,target=/tests,readonly" \
+            --env PYTHONPATH=/opt/investment-python/site-packages:/opt/investment-python/backends/dsh-trading-core:/tests \
+            --env DSH_INVESTMENT_STATE_DIR=/tmp/price-startup-tests \
+            --env ADAPTER_RUNNER=fake \
+            --env BRIEF_SCHEDULE_ENABLED=false \
+            --workdir /tmp \
+            --entrypoint /opt/investment-python/runtime/bin/python3 "$IMAGE" \
+            -B -m unittest tests.test_price_worker_lifespan tests.test_isolated_price_worker \
+            tests.test_price_resilience tests.test_portfolio_performance
+
       - name: Start the exact image with Compose
         env:
           DSH_IMAGE: pa-investment-research:${{ github.sha }}

@@ -61,3 +61,9 @@
 截图和请求记录位于 `/private/tmp/observatory-f6a0-uat/`（临时证据，不是仓库资产），包括 `layout-*-*.png`、`zoom-125.png`、`failed-retained.png`、`recovered.png` 和 `requests-*.json`。前端构建设置本机 API 地址 `http://127.0.0.1:3419`，仅用于本次验收；上线须按目标环境重新构建并配套部署后端。
 
 未验证：生产数据、真实行情提供方时延、Linux CI 和线上配套升级。本轮没有远程授权，也没有发布授权；这些不是本地验收通过的推论。若进入发布，由发布执行者在上线前关闭该验证项，条件为目标环境配套构建与真实数据回归通过。Linear 尚不可用，PAB-30 状态未更新，不能据此标为 Done。既有 lint 诊断及大分块提示不在此次修复范围。
+
+### PR 前增量检查
+
+创建 PR 前获取公仓最新基线 `3e26a274ec`（启动恢复修复），以 merge-forward 保留历史。重叠仅涉及后端说明与 Host 测试夹具/断言：保留启动就绪后通知、合成证券名称和新增生命周期回归，并保留本次批量接口覆盖。合并后 Host → Python 10 项全部通过（`/private/tmp/obs-f6a0-pr-loader.log`）；产品代码未因冲突处理改变，其余适用证据复用。
+
+按 `dsh-pre-push-checks` 补跑 change-scope 和 doc-sync。doc-sync 整体未通过：既有导出 JSDoc、配置/服务目录、文档图、README 模型说明、历史 Agent Note 格式、类型等价与翻译配对存在失败；本次已同时更新的 ui-primitives 中英文 README 已重新登记配对校验。未把仓库级失败当作通过，也未扩展修复无关文档。完整输出：`/private/tmp/obs-f6a0-doc-sync.log`。PR 不代表 CI、线上验收或发布完成。
