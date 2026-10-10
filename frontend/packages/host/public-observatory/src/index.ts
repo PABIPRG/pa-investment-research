@@ -113,12 +113,13 @@ function backendTarget(requestUrl: URL): string | undefined {
     return exactKeys(params, ['date']) && validDate(params.get('date') ?? '')
       ? `/public/performance/v1/live?${params.toString()}` : undefined
   }
-  if (path === `${PUBLIC_OBSERVATORY_PREFIX}/history`) {
+  if (path === `${PUBLIC_OBSERVATORY_PREFIX}/history` || path === `${PUBLIC_OBSERVATORY_PREFIX}/bundle`) {
+    const days = path.endsWith('/bundle') ? 90 : 366
     const from = params.get('from') ?? ''
     const to = params.get('to') ?? ''
     return exactKeys(params, ['from', 'to'])
-      && validDate(from) && validDate(to) && from <= to && Date.parse(to) - Date.parse(from) < 366 * 86_400_000
-      ? `/public/performance/v1/history?${params.toString()}` : undefined
+      && validDate(from) && validDate(to) && from <= to && Date.parse(to) - Date.parse(from) < days * 86_400_000
+      ? `/public/performance/v1/${path.endsWith('/bundle') ? 'bundle' : 'history'}?${params.toString()}` : undefined
   }
   if (path === `${PUBLIC_OBSERVATORY_PREFIX}/overview`) {
     return exactKeys(params, ['date']) && validDate(params.get('date') ?? '')
@@ -165,6 +166,7 @@ function backendTarget(requestUrl: URL): string | undefined {
 
 function isKnownPath(path: string): boolean {
   return path === `${PUBLIC_OBSERVATORY_PREFIX}/live`
+    || path === `${PUBLIC_OBSERVATORY_PREFIX}/bundle`
     || path === `${PUBLIC_OBSERVATORY_PREFIX}/history`
     || path === `${PUBLIC_OBSERVATORY_PREFIX}/overview`
     || path === `${PUBLIC_OBSERVATORY_PREFIX}/calendar`

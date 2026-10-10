@@ -10,6 +10,8 @@ Pure React atoms (zero cordis): StateDot, DisclosureRow, ic_ds_* icons, Button/P
 
 `Select` composes the shared `Menu` into a controlled single-choice control (`value`, `options`, `onValueChange`). Values remain opaque strings, including empty values. Unknown values show the supplied placeholder without selecting the first option. It supports disabled and empty states, arrows, Home/End, typeahead, Tab and Escape. Popups stay inside the nearest Dialog's focus boundary; Escape dismisses the popup before its dialog and returns focus to the trigger. Consumers supply localized labels.
 
+`DatePicker.availableDates` optionally limits selection to the supplied dates in addition to min/max; an empty array disables every day. Consumers own the valid-date list and the selected value.
+
 `HelpPopover` toggles a small anchored explanation on click/touch and dismisses on Escape, a second click or outside press. Optional `openOnHover` reveals the explanation on hover or keyboard focus; clicking pins it, and pointer grace allows moving into the popup to read its content. It adds no modal mask or confirmation action. Use `Modal` for submission and destructive confirmation. `Menu.portalContainer` selects the owning dialog; `Modal` recognizes child-popup Escape handling. Safety-sensitive dialogs can focus Cancel with `onOpenAutoFocus` and reject outside dismissal with `preventOutsideClose`. `Button` forwards its DOM ref for anchoring and focus restoration.
 
 ## Hover cards

@@ -21,6 +21,10 @@ On Windows, use `init.bat`, `start_all.bat [fake|engine]`, and `verify.bat`. The
 
 ## API
 
+### 观察室批量历史
+
+`GET /public/performance/v1/bundle?from=YYYY-MM-DD&to=YYYY-MM-DD` 复用持仓历史、区间行情和经许可的活动投影，返回同批有效日期、估值、逐日持仓、日历和活动详情；不写业务文档。范围最多 90 日且截止早于北京时间当日，每只证券一次区间读取，当前报价仅补名称。完整响应限 2 MiB，活动最多 1000 条且截断明确标记。浏览器通过 [公开 Host 网关](../../frontend/packages/host/public-observatory/README.md#t1-批量读取) 访问，原分项接口继续保留。
+
 ### 历史行情故障隔离
 
 BaoStock、东财和新浪分别在持久串行子进程内执行，父进程按原顺序降级；任一源卡死不会阻断下一来源。BaoStock 会话继续复用，空读立即报断连。三个源的热查询（含排队、IPC）预算分别为 1.5、1.5、1 秒，单源最多准入 8 次调用；超时或异常会终止并回收对应进程，退避 5 秒后重建。进程回收未完成时不另起一代，避免后台资源累积。

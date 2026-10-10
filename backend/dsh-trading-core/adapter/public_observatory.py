@@ -35,6 +35,8 @@ MAX_PUBLISHED_SNAPSHOTS = 366
 MAX_WRITE_BYTES = 512 * 1024
 MAX_PUBLIC_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_PUBLIC_POSITIONS = 1000
+MAX_BUNDLE_ACTIVITIES = 1000
+MAX_BUNDLE_BYTES = 2 * 1024 * 1024
 
 
 class _HoldingsView:
@@ -42,6 +44,11 @@ class _HoldingsView:
 
     def __init__(self, store: JsonStore):
         self.document = store.read_bounded_snapshot("holdings", max_bytes=MAX_PUBLIC_DOCUMENT_BYTES)
+
+    def read_bounded_snapshot(self, collection: str, *, max_bytes: int) -> dict:
+        if collection != "holdings":
+            raise ValueError("公开读取只能访问持仓文档")
+        return self.document
 
     def get(self, collection: str, key: str, default: Any = None) -> Any:
         if collection != "holdings":
@@ -683,6 +690,10 @@ def public_calendar(store: JsonStore, month: str) -> dict:
             "daily_profit_loss": _money_text(daily_profit) if daily_profit is not None else None,
             "daily_return": _rate_text(daily_return) if daily_return is not None else None,
         })
+    return {"month": month, "currency": "CNY", "items": items, "days": _calendar_days(month_start)}
+
+
+def _calendar_days(month_start: date) -> list[dict]:
     from .brief_engine import cached_trade_dates
 
     trading_dates = set(cached_trade_dates())
@@ -701,7 +712,7 @@ def public_calendar(store: JsonStore, month: str) -> dict:
         else:
             status = "unknown"
         days.append({"date": value, "trading_status": status})
-    return {"month": month, "currency": "CNY", "items": items, "days": days}
+    return days
 
 
 def public_equity(store: JsonStore, from_date: str, to_date: str) -> dict:
@@ -814,11 +825,13 @@ def _identified_holdings_update(row: dict, detail: dict | None, names: dict[str,
 
 def _activity_security_names(details: list[dict], quote_loader: Callable[[list[str]], dict[str, dict]] | None) -> dict[str, str]:
     """名称仅取公开差异代码对应的批量行情，失败不影响已核验的操作事实。"""
-    if quote_loader is None:
-        return {}
     tickers = sorted({change["ticker"] for detail in details
                       for change in detail.get("holdings_changes") or []})[:MAX_PUBLIC_POSITIONS]
-    if not tickers:
+    return _security_names(tickers, quote_loader)
+
+
+def _security_names(tickers: list[str], quote_loader: Callable[[list[str]], dict[str, dict]] | None) -> dict[str, str]:
+    if quote_loader is None or not tickers:
         return {}
     try:
         quotes = quote_loader(tickers)
@@ -912,6 +925,113 @@ def public_activity_detail(store: JsonStore, public_id: str, *,
     return result
 
 
+def _bundle_activities(store: JsonStore, as_of: str) -> tuple[list[dict], str]:
+    """一次索引读事务内获取获准摘要/详情；数量截断显式返回。"""
+    cutoff = operation_index.micros(datetime.combine(_parse_date(as_of) + timedelta(days=1), time.min, SHANGHAI))
+    rows = [row for row in [*_system_activities(store), *_research_activities(store)]
+            if _activity_order(row)[0] < cutoff]
+    configured = os.environ.get("DSH_PUBLIC_OBSERVATORY_OPERATIONS_SINCE", "").strip()
+    if configured:
+        since = operation_index.micros(_timestamp(configured))
+        with operation_index.reader(store) as projection:
+            rows += projection.page(since, cutoff, "all", projection.highwater, None, MAX_BUNDLE_ACTIVITIES + 1)
+            rows.sort(key=_activity_order, reverse=True)
+            selected = rows[:MAX_BUNDLE_ACTIVITIES]
+            details = []
+            size = 0
+            for row in selected:
+                detail = projection.detail(row["public_id"], since) if row["category"] == "operation" else row
+                size += len(json.dumps(detail, ensure_ascii=False).encode())
+                if size > MAX_BUNDLE_BYTES:
+                    raise RuntimeError("公开活动批次过大")
+                details.append(detail)
+            selected = details
+    else:
+        rows.sort(key=_activity_order, reverse=True)
+        selected = rows[:MAX_BUNDLE_ACTIVITIES]
+    result = []
+    for row in selected:
+        if row is None:
+            raise RuntimeError("公开活动详情不完整")
+        item = {key: row[key] for key in operation_index.SUMMARY_FIELDS}
+        item["related_snapshot_id"] = row.get("related_snapshot_id")
+        if "holdings_changes" in row:
+            item["holdings_changes"] = None if row["holdings_changes"] is None else [
+                {key: change[key] for key in ("ticker", "before_quantity", "after_quantity", "before_cost_price", "after_cost_price")}
+                for change in row["holdings_changes"]]
+        result.append(item)
+    return result, "truncated" if len(rows) > MAX_BUNDLE_ACTIVITIES else "ready"
+
+
+def public_bundle(store: JsonStore, from_date: str, to_date: str,
+                  price_loader: Callable[[str, str, str], list[dict]], *, today: date | None = None,
+                  quote_loader: Callable[[list[str]], dict[str, dict]] | None = None) -> dict:
+    """最多 90 日的 T+1 公开批次；每证券只读一次范围行情，切片不再访问行情源。"""
+    start, end = _parse_date(from_date), _parse_date(to_date)
+    current_day = today or datetime.now(SHANGHAI).date()
+    if start > end or (end - start).days >= 90 or end >= current_day:
+        raise ValueError("批量历史必须为截至昨日、最多 90 日的区间")
+    view = _HoldingsView(store)
+    loaded: dict[str, list[dict]] = {}
+
+    def range_prices(ticker: str, first: str, last: str) -> list[dict]:
+        rows = price_loader(ticker, first, last)
+        loaded[ticker] = rows
+        return rows
+
+    history = public_history(view, from_date, to_date, range_prices)
+    # 逐日明细仅从已经读取的区间行情取值，不允许用前日收盘价冒充当天报价。
+    def local_prices(ticker: str, first: str, last: str) -> list[dict]:
+        return loaded.get(ticker, [])
+
+    months = []
+    month = start.replace(day=1)
+    while month <= end:
+        months.append({"month": month.strftime("%Y-%m"), "days": _calendar_days(month), "items": [], "limitations": history["limitations"]})
+        month = (month.replace(day=28) + timedelta(days=4)).replace(day=1)
+    statuses = {day["date"]: day["trading_status"] for month in months for day in month["days"]}
+    frames, points = [], []
+    previous = None
+    for point in history["points"]:
+        if point["value"] is None or statuses.get(point["date"]) == "closed":
+            continue
+        frame = public_live(view, point["date"], today=current_day, price_loader=local_prices)
+        if frame["availability"] != "available" or frame["summary"]["market_value"] is None:
+            continue
+        frames.append(frame)
+        points.append({**point, "value": frame["summary"]["market_value"]})
+        gap = previous is not None and any(previous["date"] < day < point["date"] and status != "closed" for day, status in statuses.items())
+        daily = (Decimal(point["profit_loss"]) - Decimal(previous["profit_loss"])) if not gap and previous is not None and previous["profit_loss"] is not None and point["profit_loss"] is not None else None
+        next(month for month in months if point["date"].startswith(month["month"]))["items"].append({
+            "date": point["date"], "daily_profit_loss": _money_text(daily) if daily is not None else None,
+        })
+        previous = point
+    history = {**history, "points": points}
+    try:
+        activities, activity_status = _bundle_activities(store, to_date)
+    except Exception:
+        # 活动索引损坏或许可变更只影响活动，绝不返回旧许可内容或内部异常。
+        activities, activity_status = [], "error"
+    tickers = sorted({*loaded, *(change["ticker"] for item in activities for change in item.get("holdings_changes") or [])})[:MAX_PUBLIC_POSITIONS]
+    names = _security_names(tickers, quote_loader)
+    for frame in frames:
+        for item in frame["items"]:
+            item["name"] = names.get(item["ticker"], "")
+    for item in activities:
+        for change in item.get("holdings_changes") or []:
+            change["name"] = names.get(change["ticker"], "")
+        item.update(_identified_holdings_update(item, item, names))
+    result = {"from": from_date, "to": to_date, "currency": "CNY", "history": history,
+              "available_dates": [frame["date"] for frame in frames], "frames": frames,
+              "calendars": months, "activities": activities, "activities_status": activity_status}
+    encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    result["data_version"] = hashlib.sha256(encoded).hexdigest()
+    # 与公开网关缺省上限保持一致，包含完整 JSON 包装与版本字段。
+    if len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()) > MAX_BUNDLE_BYTES:
+        raise RuntimeError("公开批量响应超过大小限制")
+    return result
+
+
 def register_public_observatory_routes(
     app: FastAPI,
     *,
@@ -923,6 +1043,21 @@ def register_public_observatory_routes(
     write_store = store_factory or JsonStore
     read_store = store_factory or (lambda: JsonStore(create=False))
     from .portfolio_price_cache import run_price_read
+
+    @app.get("/public/performance/v1/bundle", response_model=dict)
+    async def public_performance_bundle(
+        request: Request,
+        from_date: str = Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+        to_date: str = Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    ):
+        if set(request.query_params) != {"from", "to"}:
+            raise HTTPException(status_code=422, detail="请求参数无效")
+        if price_loader is None:
+            raise HTTPException(status_code=503, detail="历史行情暂不可用")
+        try:
+            return await run_price_read(lambda: public_bundle(read_store(), from_date, to_date, price_loader, quote_loader=quote_loader))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/public/performance/v1/live", response_model=PublicLiveAvailable | PublicLiveUnavailable)
     async def public_performance_live(requested_date: str = Query(alias="date", pattern=r"^\d{4}-\d{2}-\d{2}$")):

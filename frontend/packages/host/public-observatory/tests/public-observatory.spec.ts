@@ -61,6 +61,7 @@ describe('handlePublicObservatoryRequest', () => {
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-09-18', { method: 'POST' }), facts('POST'), 405],
       [new Request('https://pair-api.xiexin.dev/api/public/performance/v1/overview?date=2026-09-18'), facts('GET', 'https://evil.example'), 403],
     ]
+    for (const query of ['from=2026-01-01&to=2026-09-01', 'from=2026-09-01&to=2026-09-02&extra=1', 'from=2026-09-01&to=2026-09-02&to=2026-09-03']) cases.push([new Request(`https://pair-api.xiexin.dev/api/public/performance/v1/bundle?${query}`), facts(), 422])
     for (const [request, requestFacts, status] of cases) {
       const response = await handlePublicObservatoryRequest(
         request, requestFacts, baseConfig, acquire,
@@ -72,7 +73,7 @@ describe('handlePublicObservatoryRequest', () => {
 
   it('routes live holdings and historical performance only to fixed internal reads', async () => {
     const paths: string[] = []
-    for (const path of ['/live?date=2026-09-18', '/history?from=2026-09-01&to=2026-09-18']) {
+    for (const path of ['/live?date=2026-09-18', '/history?from=2026-09-01&to=2026-09-18', '/bundle?from=2026-09-01&to=2026-09-18']) {
       const response = await handlePublicObservatoryRequest(
         new Request(`https://pair-api.xiexin.dev/api/public/performance/v1${path}`, { headers: { origin: baseConfig.allowedOrigins[0]! } }),
         facts(), baseConfig, async () => ({ baseUrl: 'http://127.0.0.1:4321' }),
@@ -83,6 +84,7 @@ describe('handlePublicObservatoryRequest', () => {
     expect(paths).toEqual([
       'http://127.0.0.1:4321/public/performance/v1/live?date=2026-09-18',
       'http://127.0.0.1:4321/public/performance/v1/history?from=2026-09-01&to=2026-09-18',
+      'http://127.0.0.1:4321/public/performance/v1/bundle?from=2026-09-01&to=2026-09-18',
     ])
   })
 

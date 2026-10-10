@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, within } from '@testing-library/react'
 import { Select } from '../src/Select.tsx'
 import { HelpPopover } from '../src/HelpPopover.tsx'
+import { DatePicker } from '../src/DatePicker.tsx'
 import { Modal } from '../src/Modal.tsx'
 
 afterEach(() => { cleanup(); vi.useRealTimers() })
@@ -118,4 +119,16 @@ it('说明正文保留 portal 内的焦点，Escape 返回图标而不关闭父�
   expect(view.queryByRole('tooltip')).toBeNull()
   expect(document.activeElement).toBe(trigger)
   expect(close).not.toHaveBeenCalled()
+})
+
+it('日期选择器共享可用日期集合，且不改变未提供集合的调用方', () => {
+  const change = vi.fn()
+  const view = render(<DatePicker value="2026-09-28" availableDates={['2026-09-25', '2026-09-28']} onChange={change} />)
+  fireEvent.click(view.getByRole('button', { name: /选择日期，当前/ }))
+  expect((view.getByRole('button', { name: '27' }) as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.click(view.getByRole('button', { name: '25' }))
+  expect(change).toHaveBeenCalledWith('2026-09-25')
+  view.rerender(<DatePicker value="2026-09-28" min="2026-09-20" max="2026-09-30" onChange={change} />)
+  fireEvent.click(view.getByRole('button', { name: /选择日期，当前/ }))
+  expect((view.getByRole('button', { name: '27' }) as HTMLButtonElement).disabled).toBe(false)
 })

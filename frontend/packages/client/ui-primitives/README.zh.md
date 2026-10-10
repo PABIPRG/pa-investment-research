@@ -10,6 +10,8 @@
 
 `Select` 在共享 `Menu` 上提供受控单选：`value`、`options`、`onValueChange`。值是不透明字符串，支持空值；未命中选项时显示 `placeholder`，不擅自选第一项。支持禁用、空列表禁用、方向键、Home/End、文字搜索、Tab 与 Escape。浮层进入最近的 Dialog 内，保留父弹窗的焦点边界；第一次 Escape 只关闭下拉，关闭后焦点返回触发器。业务方传入本地化标签，不把值序列化到 DOM。
 
+`DatePicker.availableDates` 可在 min/max 范围之外进一步限定可选日期；空数组禁用全部日期。调用方负责有效日期列表与受控选中值。
+
 `HelpPopover` 用问号图标承载简短解释，点击／触屏展开锚定浮层，Escape、再次点击或外部点击收起。它不创建第二层模态遮罩，也不需要确认按钮；需要提交或危险确认时仍使用 `Modal`。`Menu.portalContainer` 可指定所属弹窗，`Modal` 统一识别子浮层的 Escape。安全确认可通过 `onOpenAutoFocus` 聚焦取消，通过 `preventOutsideClose` 避免外部误关闭。`Button` 转发 DOM ref，供浮层锚定与焦点恢复。
 
 ## 悬浮卡片
