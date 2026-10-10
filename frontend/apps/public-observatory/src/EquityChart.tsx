@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, DataZoomComponent } from 'echarts/components'
@@ -12,10 +12,15 @@ const money = new Intl.NumberFormat('zh-CN', {
   style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2,
 })
 
-export function EquityChart({ points, dark, activeDate }: { points: HistoryPoint[]; dark: boolean; activeDate?: string | null }) {
+export function EquityChart({ points, dark, activeDate, onSelect }: {
+  points: HistoryPoint[]
+  dark: boolean
+  activeDate: string
+  onSelect: (date: string) => void
+}) {
   const root = useRef<HTMLDivElement>(null)
   const chart = useRef<echarts.ECharts | null>(null)
-  const [activeIndex, setActiveIndex] = useState(Math.max(0, points.length - 1))
+  const activeIndex = Math.max(0, points.findIndex(point => point.date === activeDate))
 
   useEffect(() => {
     if (root.current === null) return
@@ -64,10 +69,8 @@ export function EquityChart({ points, dark, activeDate }: { points: HistoryPoint
   }, [dark, points])
 
   useEffect(() => {
-    if (activeDate === null || activeDate === undefined) return
     const index = points.findIndex(point => point.date === activeDate)
     if (index < 0) return
-    setActiveIndex(index)
     chart.current?.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: index })
   }, [activeDate, points])
 
@@ -85,7 +88,8 @@ export function EquityChart({ points, dark, activeDate }: { points: HistoryPoint
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
           event.preventDefault()
           const next = Math.max(0, Math.min(points.length - 1, activeIndex + (event.key === 'ArrowRight' ? 1 : -1)))
-          setActiveIndex(next)
+          const date = points[next]?.date
+          if (date !== undefined) onSelect(date)
           chart.current?.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: next })
         }}
       />

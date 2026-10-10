@@ -180,18 +180,26 @@ describe('public observatory Loader + real HTTP', () => {
     })
     const app = await composition({ endpoint: address.baseUrl })
     const before = await readFile(address.storePath, 'utf8')
+    const batchResponse = await app.request('/bundle?from=2026-09-20&to=2026-09-21')
+    expect(batchResponse.status).toBe(200)
+    const batch = await batchResponse.json() as { data_version: string; activities_status: string; activities: unknown[] }
+    expect(batch.data_version).toMatch(/^[a-f0-9]{64}$/)
+    expect(batch.activities_status).toBe('ready')
+    expect(batch.activities).toHaveLength(operations ? 5 : 1)
+    expect(JSON.stringify(batch)).not.toContain('TEST-PRIVATE')
+    expect(await readFile(address.storePath, 'utf8')).toBe(before)
     if (operations) {
       expect(await (await app.request('/overview?date=2026-09-21')).json()).toMatchObject({ availability: 'unavailable' })
-      const activityPage = await (await app.request('/activities?as_of=2026-09-21')).json()
+      const activityPage = await (await app.request('/activities?as_of=2026-09-21')).json() as { items: Array<{ public_id: string; status: string }> }
       expect(activityPage.items).toHaveLength(5)
       expect(activityPage.items.map((item: { status: string }) => item.status)).toEqual(['completed', 'failed', 'completed', 'completed', 'completed'])
-      const detail = await (await app.request(`/activities/${activityPage.items[0].public_id}`)).json()
-      expect(detail.holdings_changes).toEqual([{ ticker: '600519', before_quantity: '2', after_quantity: '0', before_cost_price: '100', after_cost_price: null }])
+      const detail = await (await app.request(`/activities/${activityPage.items[0]!.public_id}`)).json() as { holdings_changes: unknown }
+      expect(detail.holdings_changes).toEqual([{ ticker: '600519', name: '', before_quantity: '2', after_quantity: '0', before_cost_price: '100', after_cost_price: null }])
       expect(JSON.stringify(detail)).not.toContain('TEST-PRIVATE')
-      const adjustment = await (await app.request(`/activities/${activityPage.items[4].public_id}`)).json()
-      expect(adjustment.title).toBe('完成 · 持仓数据更新')
-      expect(adjustment.holdings_changes).toEqual([{ ticker: '600519', before_quantity: '1', after_quantity: '3', before_cost_price: '100', after_cost_price: '100' }])
-      const trades = await (await app.request(`/activities/${activityPage.items[3].public_id}`)).json()
+      const adjustment = await (await app.request(`/activities/${activityPage.items[4]!.public_id}`)).json() as { title: string; holdings_changes: unknown }
+      expect(adjustment.title).toBe('完成 · 持仓数据更新：600519')
+      expect(adjustment.holdings_changes).toEqual([{ ticker: '600519', name: '', before_quantity: '1', after_quantity: '3', before_cost_price: '100', after_cost_price: '100' }])
+      const trades = await (await app.request(`/activities/${activityPage.items[3]!.public_id}`)).json() as { summary: string }
       expect(trades.summary).toContain('新增 1 条，移除 0 条')
       expect(JSON.stringify([activityPage, adjustment, trades])).not.toContain('TEST-PRIVATE')
       const first = await (await app.request('/activities?as_of=2026-09-21&limit=2')).json()

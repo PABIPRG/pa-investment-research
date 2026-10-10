@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { historyCutoff, loadCalendar, loadLive, loadObservatorySlice, PublicApiError } from '../src/api.ts'
+import { availableDate, loadBundle, historyCutoff, loadCalendar, loadLive, loadObservatorySlice, PublicApiError } from '../src/api.ts'
 
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
@@ -196,4 +196,18 @@ describe('public observatory independent data reads', () => {
     await expect(loadObservatorySlice('2026-09-29', { category: 'all', status: 'all' }, controller.signal, progress)).rejects.toMatchObject({ name: 'AbortError' })
     expect(progress).not.toHaveBeenCalled()
   })
+})
+
+it('requests exactly one bounded T+1 bundle and resolves non-trading selections locally', async () => {
+  vi.stubEnv('VITE_PUBLIC_API_BASE_URL', 'http://127.0.0.1:3419')
+  const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}'))
+  vi.stubGlobal('fetch', fetchMock)
+  await loadBundle('2026-10-10')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(requestUrl(fetchMock.mock.calls[0]![0])).toContain('/bundle?from=2026-07-12&to=2026-10-09')
+  const dates = ['2026-09-25', '2026-09-28', '2026-10-09']
+  expect(availableDate(dates, null)).toBe('2026-10-09')
+  expect(availableDate(dates, '2026-10-01')).toBe('2026-09-28')
+  expect(availableDate(dates, '2026-09-01')).toBe('2026-09-25')
+  expect(availableDate([], null)).toBe('')
 })

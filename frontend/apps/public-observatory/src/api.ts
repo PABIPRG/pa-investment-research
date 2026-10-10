@@ -220,3 +220,25 @@ export function loadMoreActivities(
 ): Promise<PublicActivities> {
   return requestJson(`/api/public/performance/v1/activities?as_of=${encodeURIComponent(asOf)}&category=${encodeURIComponent(filters.category)}&status=${encodeURIComponent(filters.status)}&cursor=${encodeURIComponent(cursor)}&limit=20`, signal)
 }
+
+export interface PublicBundle {
+  from: string
+  to: string
+  currency: 'CNY'
+  data_version: string
+  available_dates: string[]
+  frames: PublicLiveAvailable[]
+  history: PublicHistory
+  calendars: PublicCalendar[]
+  activities: PublicActivityDetail[]
+  activities_status: 'ready' | 'truncated' | 'error'
+}
+/** 一次读取当前 90 日的 T+1 批次；浏览操作只使用返回的数据。 */
+export function loadBundle(today: string, signal?: AbortSignal): Promise<PublicBundle> {
+  const to = historyCutoff(today, today)
+  return requestJson(`/api/public/performance/v1/bundle?from=${addDays(to, -89)}&to=${to}`, signal)
+}
+/** 非有效日定位到前一有效日；早于区间时定位首日。 */
+export function availableDate(dates: readonly string[], requested: string | null): string {
+  return (requested === null ? dates.at(-1) : dates.findLast(date => date <= requested) ?? dates[0]) ?? ''
+}

@@ -85,7 +85,8 @@ with tempfile.TemporaryDirectory(prefix="observatory-http-fixture-") as temporar
             json.dumps([snapshot["snapshot_id"]]) if os.environ["DSH_PUBLIC_OBSERVATORY_SNAPSHOT_IDS"] == "[]" else "[]",
         ))
     app = FastAPI()
-    register_public_observatory_routes(app, store_factory=lambda: store)
+    register_public_observatory_routes(app, store_factory=lambda: store,
+        price_loader=lambda *_: [{"date": "2026-09-21", "close": 200}], quote_loader=lambda _: {})
     if os.environ.get("OBSERVATORY_TEST_EXPORT_COORDINATOR"):
         register_data_transfer_routes(app, store_factory=lambda: store, token="fixture-private-export-token")
     listener = socket.socket()

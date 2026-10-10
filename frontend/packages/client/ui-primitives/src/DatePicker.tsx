@@ -23,13 +23,15 @@ export interface DatePickerProps {
   onChange: (value: string) => void
   label?: string
   iconOnly?: boolean
+  /** When provided, only these dates are selectable, in addition to min/max. */
+  availableDates?: readonly string[]
   min?: string
   max?: string
   disabled?: boolean
 }
 
 /** Token-styled calendar picker that does not depend on the browser's native date input UI. */
-export function DatePicker({ value, onChange, label = '选择日期', iconOnly = false, min, max, disabled }: DatePickerProps) {
+export function DatePicker({ value, onChange, label = '选择日期', iconOnly = false, min, max, availableDates, disabled }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [view, setView] = useState(() => {
     const date = parseDate(value)
@@ -38,7 +40,7 @@ export function DatePicker({ value, onChange, label = '选择日期', iconOnly =
   const cells = useMemo(() => {
     const firstWeekday = (view.getDay() + 6) % 7
     const days = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate()
-    return [...Array(firstWeekday).fill(null), ...Array.from({ length: days }, (_, index) => index + 1)]
+    return [...Array.from({ length: firstWeekday }, () => null), ...Array.from({ length: days }, (_, index) => index + 1)]
   }, [view])
   return (
     <>
@@ -70,7 +72,8 @@ export function DatePicker({ value, onChange, label = '选择日期', iconOnly =
           {cells.map((day, index) => {
             if (day === null) return <span key={`blank-${index}`} />
             const candidate = dateValue(new Date(view.getFullYear(), view.getMonth(), day))
-            const unavailable = (min !== undefined && candidate < min) || (max !== undefined && candidate > max)
+            const unavailable = (availableDates !== undefined && !availableDates.includes(candidate)) ||
+              (min !== undefined && candidate < min) || (max !== undefined && candidate > max)
             return (
               <button
                 type="button"
