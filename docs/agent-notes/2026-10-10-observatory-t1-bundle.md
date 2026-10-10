@@ -73,3 +73,13 @@
 首轮 Linux 镜像构建、Windows 桌面打包及 Windows 源码运行验证均在客户端类型检查阶段报 TS2353：新增日期测试给 Testing Library 的 `getByRole` 传入了不支持的 Playwright `exact` 参数。此前应用级类型检查未包含 `packages/client/*/tests`，Vitest 执行也不替代类型检查，因此之前的通过证据不能证明整个客户端构建通过。
 
 本地使用 CI 相同的 `pnpm exec tsc -b tsconfig.client.json` 复现三处错误后，删除三处多余参数；字符串 `name` 继续按完整可访问名称匹配，业务行为与断言不变。修复后该客户端完整类型检查、`select-help.client.spec.tsx` 的 8 项测试、该文件 oxlint 及差异检查全部通过。证据分别为 `/private/tmp/obs-pr162-client-before.log`、`/private/tmp/obs-pr162-client-after.log`、`/private/tmp/obs-pr162-select-help.log`、`/private/tmp/obs-pr162-select-help-lint.log`。后续涉及客户端测试的修改须同时选择客户端聚合类型检查，不能只运行应用或包源码类型检查。
+
+### 合并后的日历状态反馈
+
+用户反馈底部日历没有明显区分休市与无记录。复用现有 `calendar.days`、日期格子和主题 token，仅调整状态层级：主要位置显示“休市”“无记录”或盈亏金额；已有估值但缺基准继续保留“—”与解释。休市优先于估值内容，不可选；未知交易日仍注明“待确认”，不从缺记录推断休市。刷新、空态、错误和播放沿用批量状态，未新增请求、状态所有者或交易日历来源。
+
+PR #162 已于 2026-10-10 合并，后续本地改动保留在同一专属工作区的 `codex/observatory-calendar-states` 分支，基于 `4cbed63a03`，未提交或推送。先新增三种状态回归并确认“休市”原先仅显示金额占位符的断言失败，再完成修复。8 项组件测试、应用及完整客户端类型检查、修改文件 lint、主题检查、观察室构建与 8 项真实浏览器验收通过。浏览器覆盖 1440/1024/768/390px、明暗主题、125% 缩放；休市和无记录禁用，盈亏日可选，切日零新增请求。截图位于 `/private/tmp/observatory-calendar-uat/`，含三种状态同屏的 `calendar-states.png`；日志为 `/private/tmp/obs-calendar-*.log`。合成行情和既有日历夹具不证明线上节假日日历缓存完整，本次未访问服务器或部署。
+
+用户进一步要求区分技术要求和业务文案：移除时间栏正常状态下的“切换日期无需重新加载”，离线提示只说明数据可能不是最新，活动截断只说明展示范围，不再介绍“载入”或“本批”。该原则纳入 DESIGN.md；日期和请求行为不变，同步更新已有界面快照。
+
+上述文案调整后，观察室构建、修改文件 lint 和 8 项浏览器回归通过（`/private/tmp/obs-calendar-copy-build.log`、`/private/tmp/obs-calendar-copy-lint.log`、`/private/tmp/obs-calendar-copy-web.log`），窄屏截图已复核。用户随后明确要求创建新 PR；分支快进到文件内容相同的公仓合并基线 `0ed056afb9`，复用适用验证，不重复全套检查。授权仅限本次提交、私仓推送和公仓 PR，不含合并或部署。

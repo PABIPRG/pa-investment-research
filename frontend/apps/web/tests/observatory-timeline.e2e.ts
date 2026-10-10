@@ -19,6 +19,16 @@ it('uses one real batch and one price range; every navigation path shares valid 
   await dialog.getByRole('button', { name: '25', exact: true }).click()
   expect(await seek().getAttribute('aria-valuetext')).toBe('2026-09-25')
   expect(requests).toHaveLength(1)
+  const calendar = page.getByRole('region', { name: '每日盈亏日历' })
+  const closed = calendar.getByRole('button', { name: '2026-09-27，休市', exact: true })
+  expect(await closed.locator('strong').innerText()).toBe('休市')
+  expect(await closed.isDisabled()).toBe(true)
+  const missing = calendar.getByRole('button', { name: '2026-09-29，交易日，无记录', exact: true })
+  expect(await missing.locator('strong').innerText()).toBe('无记录')
+  expect(await missing.isDisabled()).toBe(true)
+  expect(await calendar.getByRole('button', { name: /2026-09-28，交易日，估算盈亏/ }).locator('strong').innerText()).toBe('¥4.00')
+  expect(await calendar.getByRole('button', { name: /2026-09-30，交易日，已有估值/ }).locator('strong').innerText()).toBe('—')
+  await calendar.screenshot({ path: join(evidenceDir, 'calendar-states.png') })
   expect(await page.getByRole('region', { name: '全局时间切片' }).innerText()).toMatchInlineSnapshot(`
     "第一天
     ←
@@ -27,7 +37,6 @@ it('uses one real batch and one price range; every navigation path shares valid 
     →
     最新数据
     播放
-    T+1 更新 · 切换日期无需重新加载
     刷新数据
     2026.09.25 · 持仓估值 ¥20.00
     1 / 4"

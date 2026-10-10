@@ -149,7 +149,7 @@ export function App() {
         {(filters.category !== 'all' || filters.status !== 'all') && <Button variant="ghost" onClick={() => { setFilters({ category: 'all', status: 'all' }) }}>清除筛选</Button>}
       </div>
       <StatusNotice loading={loading} error={bundle?.activities_status === 'error'} hasData={bundle !== null && bundle.activities_status !== 'error'} label="操作记录" retry={refresh} />
-      {bundle?.activities_status === 'truncated' && <p role="status">仅载入最近 {bundle.activities.length} 条公开记录，更早记录未包含在本批数据中。</p>}
+      {bundle?.activities_status === 'truncated' && <p role="status">仅展示最近 {bundle.activities.length} 条公开记录。</p>}
       <div className={css.activityList}>
         {bundle !== null && bundle.activities_status !== 'error' && activities.length === 0 && <div className={css.empty}>{filters.category === 'all' && filters.status === 'all' ? '截至所选日期暂无已公开记录。' : '当前筛选条件下暂无公开记录。'}</div>}
         {activityRows.map(item => <button type="button" className={css.activityRow} key={item.public_id} onClick={() => { showActivity(item) }}><i data-status={item.status} /><span><small>{categoryLabels[item.category]} · {item.category === 'operation' ? '记录于 ' : ''}{localTime(item.occurred_at)}</small><strong>{item.title}</strong></span></button>)}
@@ -168,7 +168,7 @@ export function App() {
         <Button variant="outline" disabled={timelineDates.length === 0} onClick={() => { setPlaying(false); setRequestedDate(null); setDateNotice('') }}>最新数据</Button>
         <Button variant="outline" disabled={timelineDates.length < 2} title={timelineDates.length < 2 ? '至少需要两个历史估值日才能播放' : undefined} onClick={togglePlayback}>{playing ? '暂停' : '播放'}</Button>
       </div>
-      <div className={css.refreshControls}><span>{!online ? '离线 · 可继续浏览已载入数据' : 'T+1 更新 · 切换日期无需重新加载'}</span><Button variant="outline" disabled={loading || playing || !online} onClick={refresh}>刷新数据</Button></div>
+      <div className={css.refreshControls}>{!online && <span role="status">网络已断开，数据可能不是最新。</span>}<Button variant="outline" disabled={loading || playing || !online} onClick={refresh}>刷新数据</Button></div>
       {dateNotice && <p role="status">{dateNotice}</p>}
       {timelineDates.length > 0 && <div className={css.playbackTrack}>
         <div className={css.playbackLabels}><span aria-live="off">{selectedDate ? selectedDate.replaceAll('-', '.') : '—'} · 持仓估值 {money(chartHistory?.points.find(point => point.date === selectedDate)?.value)}</span><span>{timelineIndex + 1} / {timelineDates.length}</span></div>
@@ -227,11 +227,12 @@ function Calendar({ month, today, selectedDate, calendar, onSelect }: {
     {Array.from({ length: blanks }, (_, index) => <span key={`blank-${index}`} />)}
     {Array.from({ length: days }, (_, index) => {
       const date = `${month}-${String(index + 1).padStart(2, '0')}`
-      const item = values.get(date)
       const status = statuses.get(date) ?? 'unknown'
-      const label = `${date}，${status === 'unknown' ? '交易日待确认' : statusLabels[status]}，${date === today && status === 'trading' ? 'T+1 待更新' : item === undefined ? '无历史估值' : item.daily_profit_loss === null ? '已有估值，缺少收益基准' : `估算盈亏 ${money(item.daily_profit_loss)}`}`
+      const item = status === 'closed' ? undefined : values.get(date)
+      const label = status === 'closed' ? `${date}，休市` : `${date}，${status === 'unknown' ? '交易日待确认' : statusLabels[status]}，${date === today && status === 'trading' ? 'T+1 待更新' : item === undefined ? '无记录' : item.daily_profit_loss === null ? '已有估值，缺少收益基准' : `估算盈亏 ${money(item.daily_profit_loss)}`}`
       const direction = item?.daily_profit_loss == null ? 'missing' : Number(item.daily_profit_loss) > 0 ? 'positive' : Number(item.daily_profit_loss) < 0 ? 'negative' : 'flat'
-      return <button type="button" key={date} disabled={item === undefined} data-selected={date === selectedDate} data-trading-status={status} data-direction={direction} data-future={date > today} data-pending={date === today} aria-label={label} title={label} onClick={() => { onSelect(date) }}><span>{index + 1}</span><small>{date > today && status === 'trading' ? '未到' : date === today && status === 'trading' ? '待更新' : status === 'trading' && direction === 'missing' ? item === undefined ? '缺估值' : '缺基准' : statusLabels[status]}</small><strong>{money(item?.daily_profit_loss)}</strong></button>
+      const content = status === 'closed' ? '休市' : item === undefined && date < today ? '无记录' : money(item?.daily_profit_loss)
+      return <button type="button" key={date} disabled={item === undefined} data-selected={date === selectedDate} data-trading-status={status} data-direction={direction} data-future={date > today} data-pending={date === today} aria-label={label} title={label} onClick={() => { onSelect(date) }}><span>{index + 1}</span><small>{status === 'closed' ? '非交易日' : date > today && status === 'trading' ? '未到' : date === today && status === 'trading' ? '待更新' : status === 'trading' && direction === 'missing' ? item === undefined ? '缺估值' : '缺基准' : statusLabels[status]}</small><strong>{content}</strong></button>
     })}
   </div><p className={css.calendarStatus}>{calendar === null ? '日历数据未读取' : calendar.items.length === 0 ? '本月暂无可用历史估值' : `${calendar.items.length} 个历史估值日 · ${calendar.items.filter(item => item.daily_profit_loss !== null).length} 日可估算盈亏`}</p></div>
 }

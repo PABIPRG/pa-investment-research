@@ -85,3 +85,21 @@ it('clears retained data when public access is denied', async () => {
   await mount(); vi.mocked(loadBundle).mockRejectedValue(new PublicApiError(403, '公开访问不可用')); await click('刷新数据')
   expect(container.textContent).not.toContain('¥120.00')
 })
+
+it('distinguishes market closure, missing records and profit in calendar cells', async () => {
+  const data = fixture()
+  const month = data.calendars.find(item => item.month === '2026-10')!
+  month.days.push({ date: '2026-10-01', trading_status: 'closed' }, { date: '2026-10-08', trading_status: 'trading' })
+  vi.mocked(loadBundle).mockResolvedValue(data)
+  await mount()
+  const cell = (date: string) => container.querySelector<HTMLButtonElement>(`[aria-label^="${date}，"]`)!
+  expect(cell('2026-10-01').querySelector('strong')!.textContent).toBe('休市')
+  expect(cell('2026-10-01').getAttribute('aria-label')).toBe('2026-10-01，休市')
+  expect(cell('2026-10-01').disabled).toBe(true)
+  expect(cell('2026-10-08').querySelector('strong')!.textContent).toBe('无记录')
+  expect(cell('2026-10-08').disabled).toBe(true)
+  expect(cell('2026-10-09').querySelector('strong')!.textContent).toBe('¥10.00')
+  expect(cell('2026-10-09').disabled).toBe(false)
+  expect(cell('2026-10-02').textContent).toContain('待确认')
+  expect(loadBundle).toHaveBeenCalledTimes(1)
+})
