@@ -67,3 +67,9 @@
 创建 PR 前获取公仓最新基线 `3e26a274ec`（启动恢复修复），以 merge-forward 保留历史。重叠仅涉及后端说明与 Host 测试夹具/断言：保留启动就绪后通知、合成证券名称和新增生命周期回归，并保留本次批量接口覆盖。合并后 Host → Python 10 项全部通过（`/private/tmp/obs-f6a0-pr-loader.log`）；产品代码未因冲突处理改变，其余适用证据复用。
 
 按 `dsh-pre-push-checks` 补跑 change-scope 和 doc-sync。doc-sync 整体未通过：既有导出 JSDoc、配置/服务目录、文档图、README 模型说明、历史 Agent Note 格式、类型等价与翻译配对存在失败；本次已同时更新的 ui-primitives 中英文 README 已重新登记配对校验。未把仓库级失败当作通过，也未扩展修复无关文档。完整输出：`/private/tmp/obs-f6a0-doc-sync.log`。PR 不代表 CI、线上验收或发布完成。
+
+### PR #162 构建回归修复
+
+首轮 Linux 镜像构建、Windows 桌面打包及 Windows 源码运行验证均在客户端类型检查阶段报 TS2353：新增日期测试给 Testing Library 的 `getByRole` 传入了不支持的 Playwright `exact` 参数。此前应用级类型检查未包含 `packages/client/*/tests`，Vitest 执行也不替代类型检查，因此之前的通过证据不能证明整个客户端构建通过。
+
+本地使用 CI 相同的 `pnpm exec tsc -b tsconfig.client.json` 复现三处错误后，删除三处多余参数；字符串 `name` 继续按完整可访问名称匹配，业务行为与断言不变。修复后该客户端完整类型检查、`select-help.client.spec.tsx` 的 8 项测试、该文件 oxlint 及差异检查全部通过。证据分别为 `/private/tmp/obs-pr162-client-before.log`、`/private/tmp/obs-pr162-client-after.log`、`/private/tmp/obs-pr162-select-help.log`、`/private/tmp/obs-pr162-select-help-lint.log`。后续涉及客户端测试的修改须同时选择客户端聚合类型检查，不能只运行应用或包源码类型检查。
