@@ -26,6 +26,7 @@
 .playbackProgress input::-moz-range-thumb { width: 12px; height: 12px; border: 2px solid var(--dsw-alias-bg-base); border-radius: 50%; background: var(--dsw-alias-state-business-primary); box-shadow: 0 0 0 1px var(--dsw-alias-state-business-primary); }
 .playbackProgress input:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 .refreshControls > span { display: flex; align-items: center; gap: 7px; color: var(--dsw-alias-label-secondary); font-size: .8571rem; line-height: 1.5; }
+.refreshControls > button { margin-inline-start: auto; }
 .refreshControls input { accent-color: var(--dsw-alias-brand-primary); }
 .main { width: min(1240px, calc(100% - 36px)); margin: 0 auto; padding: 20px 0 32px; }
 .heroTitle { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
@@ -92,6 +93,7 @@
 .calendarGrid > button:disabled { cursor: default; }
 .calendarGrid > button[data-trading-status='closed'] { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-tertiary); }
 .calendarGrid > button[data-trading-status='closed'] small, .calendarGrid > button[data-trading-status='closed'] span { color: var(--dsw-alias-label-tertiary); }
+.calendarGrid > button[data-trading-status='closed'] strong { color: var(--dsw-alias-label-secondary); }
 .calendarGrid > button[data-direction='positive'] { background: var(--dsw-alias-state-error-tertiary); }
 .calendarGrid > button[data-direction='negative'] { background: var(--dsw-alias-state-success-tertiary); }
 .calendarGrid > button[data-direction='positive'] strong { color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 60%, var(--dsw-alias-label-primary)); }
