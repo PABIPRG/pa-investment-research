@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto'
 import { appendFileSync, closeSync, createReadStream, openSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { basename, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
@@ -133,6 +134,24 @@ function processEnvironment(): NodeJS.ProcessEnv {
   return env
 }
 
+/**
+ * Extract a ZIP with Node filesystem APIs in an independently bounded child.
+ * @param zip - source ZIP, passed as a literal argument including Unicode paths.
+ * @param destination - existing empty extraction directory.
+ * @param options - retained log and child termination budgets.
+ * @returns completion after extraction, or rejection with the retained child log.
+ */
+export function extractZipWithNode(zip: string, destination: string, options: {
+  logPath: string
+  timeoutMs: number
+  killGraceMs?: number
+}): Promise<void> {
+  const cli = createRequire(import.meta.url).resolve('extract-zip/cli.js')
+  return runSmokeProcess(process.execPath, [cli, resolve(zip), resolve(destination)], {
+    ...options, env: processEnvironment(),
+  })
+}
+
 function launch(executable: string, root: string, iteration: number): Promise<void> {
   const env = processEnvironment()
   Object.assign(env, {
@@ -194,10 +213,7 @@ export async function smokeInvestmentDesktop(zipRoot: string, reportRoot?: strin
     const extraction = options.extraction ?? { timeoutMs: 600_000, killGraceMs: 15_000 }
     await stage('extract', () => process.platform === 'darwin'
       ? runSmokeProcess('/usr/bin/ditto', ['-x', '-k', zip, extracted], { logPath: join(root, 'extract.log'), ...extraction })
-      : runSmokeProcess(join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'tar.exe'),
-        ['-xf', zip, '-C', extracted], {
-          env: processEnvironment(), logPath: join(root, 'extract.log'), ...extraction,
-        }))
+      : extractZipWithNode(zip, extracted, { logPath: join(root, 'extract.log'), ...extraction }))
     const executable = await stage('verify-executable', async () => {
       const entries = await readdir(extracted)
       if (process.platform === 'darwin') {

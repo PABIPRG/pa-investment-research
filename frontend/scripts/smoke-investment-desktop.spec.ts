@@ -6,7 +6,13 @@ import type { ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { load } from 'js-yaml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { runSmokeProcess, smokeInvestmentDesktop, validateSmokeReport } from './smoke-investment-desktop.ts'
+import { extractZipWithNode, runSmokeProcess, smokeInvestmentDesktop, validateSmokeReport } from './smoke-investment-desktop.ts'
+
+// Python zipfile fixture: deflated binary data and an empty file, without an application.
+const fixtureZip = () => Buffer.from(
+  'UEsDBBQAAAgIAAAAIVxN5ebaCgAAAGQAAAAgAAAAcmVzb3VyY2VzL+S4reaWhyDmoLfmnKwvZGF0YS5iaW5jYKxv+M9AWwIAUEsDBBQAAAAIAAAAIVwAAAAAAgAAAAAAAAATAAAAcmVzb3VyY2VzL2VtcHR5LnR4dAMAUEsBAhQDFAAACAgAAAAhXE3l5toKAAAAZAAAACAAAAAAAAAAAAAAAIABAAAAAHJlc291cmNlcy/kuK3mlocg5qC35pysL2RhdGEuYmluUEsBAhQDFAAAAAgAAAAhXAAAAAACAAAAAAAAABMAAAAAAAAAAAAAAIABSAAAAHJlc291cmNlcy9lbXB0eS50eHRQSwUGAAAAAAIAAgCPAAAAewAAAAAA',
+  'base64',
+)
 
 const temporary: string[] = []
 const logFile = () => {
@@ -18,6 +24,39 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.useRealTimers()
   for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true })
+})
+
+describe('Node ZIP extraction used on Windows', () => {
+  it.each(['valid', 'invalid'])('extracts Unicode paths or rejects a %s archive without a shell', async (kind) => {
+    const parent = process.env.DSH_DESKTOP_SMOKE_TEST_ROOT ?? tmpdir()
+    mkdirSync(parent, { recursive: true })
+    const root = mkdtempSync(join(parent, "desktop-node-中文 ' &-"))
+    const archive = join(root, '中文 archive.zip')
+    const destination = join(root, '中文 output')
+    mkdirSync(destination)
+    const bytes = kind === 'valid' ? fixtureZip() : Buffer.from('not a ZIP')
+    writeFileSync(archive, bytes)
+    const logPath = join(root, 'extract.log')
+    let verified = false
+    try {
+      const extraction = extractZipWithNode(archive, destination, { logPath, timeoutMs: 30_000, killGraceMs: 2_000 })
+      if (kind === 'valid') {
+        await extraction
+        expect(readFileSync(join(destination, 'resources', '中文 样本', 'data.bin'))).toEqual(Buffer.from(Array.from({ length: 20 }, () => [0, 1, 127, 128, 255]).flat()))
+        expect(readFileSync(join(destination, 'resources', 'empty.txt'))).toHaveLength(0)
+        expect(readFileSync(logPath, 'utf8')).toContain('exit 0; signal null; timedOut false')
+      } else {
+        await expect(extraction).rejects.toThrow(/^Process failed \(exit [1-9]\d*, signal null\)/)
+        expect(readFileSync(logPath, 'utf8')).toContain('end of central directory record signature not found')
+        expect(readFileSync(logPath, 'utf8')).toContain('timedOut false')
+      }
+      expect(readFileSync(archive)).toEqual(bytes)
+      verified = true
+    } finally {
+      if (verified) temporary.push(root)
+      else console.error(`Node extraction evidence retained at ${root}`)
+    }
+  }, 45_000)
 })
 
 describe('bounded smoke processes', () => {
@@ -91,11 +130,7 @@ describe('bounded smoke processes', () => {
     const parent = process.env.DSH_DESKTOP_SMOKE_TEST_ROOT ?? tmpdir()
     mkdirSync(parent, { recursive: true })
     const root = mkdtempSync(join(parent, "desktop-smoke-中文 ' &-"))
-    // Python zipfile fixture: deflated binary data and an empty file, without an application.
-    const zip = Buffer.from(
-      'UEsDBBQAAAgIAAAAIVxN5ebaCgAAAGQAAAAgAAAAcmVzb3VyY2VzL+S4reaWhyDmoLfmnKwvZGF0YS5iaW5jYKxv+M9AWwIAUEsDBBQAAAAIAAAAIVwAAAAAAgAAAAAAAAATAAAAcmVzb3VyY2VzL2VtcHR5LnR4dAMAUEsBAhQDFAAACAgAAAAhXE3l5toKAAAAZAAAACAAAAAAAAAAAAAAAIABAAAAAHJlc291cmNlcy/kuK3mlocg5qC35pysL2RhdGEuYmluUEsBAhQDFAAAAAgAAAAhXAAAAAACAAAAAAAAABMAAAAAAAAAAAAAAIABSAAAAHJlc291cmNlcy9lbXB0eS50eHRQSwUGAAAAAAIAAgCPAAAAewAAAAAA',
-      'base64',
-    )
+    const zip = fixtureZip()
     const zipPath = join(root, `valid-${process.platform}-${process.arch}.zip`)
     writeFileSync(zipPath, zip)
     const evidence = join(root, 'evidence')
