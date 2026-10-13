@@ -63,6 +63,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
     '    authMode: !!js ctx.webStartup.authMode',
     '    authUsername: !!js ctx.webStartup.authUsername',
     '    authPasswordHashFile: !!js ctx.webStartup.authPasswordHashFile',
+    '    authPasswordChangeEnabled: !!js ctx.webStartup.authPasswordChangeEnabled',
     '    secureCookies: !!js ctx.webStartup.secureCookies',
     '    publicObservatoryOrigins: !!js ctx.webStartup.publicObservatoryOrigins',
     '    deploymentSurface: !!js ctx.webStartup.deploymentSurface',
@@ -108,7 +109,7 @@ describe('web command-line provider', () => {
       port: 8080,
       trustedHosts: ['lab.internal', 'lab-2.internal', '10.0.0.9'],
       trustedProxyAddresses: ['127.0.0.1', '10.0.0.10'],
-      authMode: 'disabled',
+      authMode: 'disabled', authPasswordChangeEnabled: false,
       secureCookies: true,
       publicObservatoryOrigins: [],
     })
@@ -118,13 +119,13 @@ describe('web command-line provider', () => {
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
     const { values, observed } = await bootProvider([])
-    expect(values).toEqual({ deploymentSurface: 'local-web', trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', secureCookies: true, publicObservatoryOrigins: [] })
+    expect(values).toEqual({ deploymentSurface: 'local-web', trustedHosts: [], trustedProxyAddresses: [], authMode: 'disabled', authPasswordChangeEnabled: false, secureCookies: true, publicObservatoryOrigins: [] })
     expect(observed.readerConfig).toEqual({
       host: '127.0.0.1',
       port: 3080,
       trustedHosts: [],
       trustedProxyAddresses: [],
-      authMode: 'disabled',
+      authMode: 'disabled', authPasswordChangeEnabled: false,
       secureCookies: true,
       deploymentSurface: 'local-web',
       publicObservatoryOrigins: [],
@@ -176,6 +177,7 @@ describe('web command-line provider', () => {
   it('allows all-interfaces binding only with a closed auth configuration', async () => {
     vi.stubEnv('DSH_WEB_AUTH', 'required')
     vi.stubEnv('DSH_WEB_ADMIN_USERNAME', 'admin')
+    vi.stubEnv('DSH_WEB_PASSWORD_CHANGE_ENABLED', '1')
     vi.stubEnv('DSH_WEB_ADMIN_PASSWORD_HASH_FILE', '/run/secrets/dsh-web-password')
     const { values, observed } = await bootProvider([
       '--host', '0.0.0.0',
@@ -183,7 +185,7 @@ describe('web command-line provider', () => {
       '--trusted-proxy', '127.0.0.1',
     ])
     expect(values).toMatchObject({
-      host: '0.0.0.0', authMode: 'required', authUsername: 'admin',
+      host: '0.0.0.0', authMode: 'required', authUsername: 'admin', authPasswordChangeEnabled: true,
       authPasswordHashFile: '/run/secrets/dsh-web-password', secureCookies: true,
       trustedHosts: ['harness.internal'], trustedProxyAddresses: ['127.0.0.1'],
     })

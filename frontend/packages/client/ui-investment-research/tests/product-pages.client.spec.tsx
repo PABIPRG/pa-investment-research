@@ -697,6 +697,29 @@ describe('投研产品闭环', () => {
     })
   })
 
+  it.each([
+    ['view-data-all.json 超过允许的大小上限', '产业链数据超过当前版本的下载上限，请联系管理员更新服务。'],
+    ['种子数据总大小超过允许的上限', '产业链数据超过当前版本的下载上限，请联系管理员更新服务。'],
+    ['network-data.json 不是有效的 JSON 数据', '产业链数据校验未通过，请稍后重新下载。'],
+    ['companies.json 数据结构不完整', '产业链数据校验未通过，请稍后重新下载。'],
+    ['stats.json 下载失败，请检查网络后重试', '产业链数据下载失败，请检查网络后重试。'],
+    ['/private/secret/config.json Traceback sk-secret', '产业链数据未能完整下载，请重试；若持续失败，请联系管理员。'],
+    [null, '产业链数据未能完整下载，请重试；若持续失败，请联系管理员。'],
+  ])('产业链下载失败显示准确且安全的原因：%s', async (error, message) => {
+    const requestData = vi.fn(async (request: { operation: string }) => {
+      if (request.operation === 'industry-chain.data-status') return {
+        status: 'error', files_completed: 0, files_total: 5, downloaded_bytes: 70_000_000,
+        current_file: null, error,
+      }
+      if (request.operation === 'trading-core.personalized-impact') return { events: [] }
+      throw new Error('unexpected operation')
+    })
+    render(<IndustryChainPage requestData={requestData as never} query="" onQuery={() => {}} onAnalyze={() => {}} onOpenStock={() => {}} />)
+    expect(await screen.findByText(message)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '重新下载' })).toBeTruthy()
+    expect(screen.queryByText(/sk-secret|Traceback/)).toBeNull()
+  })
+
   it('本机缺少产业链数据时先由用户显式下载，完成前不读取图谱', async () => {
     let finishBootstrap: ((value: unknown) => void) | undefined
     const bootstrap = new Promise((resolve) => { finishBootstrap = resolve })
@@ -720,7 +743,7 @@ describe('投研产品闭环', () => {
     expect(view.container.firstElementChild?.classList.contains(primaryRouteSurfaceClass)).toBe(true)
 
     expect(await screen.findByText('首次使用需下载产业链数据')).toBeTruthy()
-    expect(screen.getByText(/约 80 MB/)).toBeTruthy()
+    expect(screen.getByText(/数据体积随数据源更新变化/)).toBeTruthy()
     expect(requestData.mock.calls.some(([request]) => request.operation === 'industry-chain.stats')).toBe(false)
     const reservedProgress = view.container.querySelector(`.${css.industryProgress}`)
     expect(reservedProgress?.getAttribute('aria-hidden')).toBe('true')

@@ -7,9 +7,10 @@ type SessionState =
   | { state: 'disabled' }
   | { state: 'unavailable'; reason: 'configuration' | 'transport' }
   | { state: 'signed-out'; captchaRequired?: boolean }
-  | { state: 'signed-in'; username: string; csrfToken: string; expiresAt: number }
+  | { state: 'signed-in'; username: string; csrfToken: string; expiresAt: number; passwordChangeEnabled?: boolean }
 
 type LoginPhase = 'ready' | 'submitting' | 'invalid' | 'limited' | 'unavailable' | 'network' | 'transport' | 'expired' | 'success'
+  | 'password-changed' | 'password-change-unknown'
   | 'captcha-required' | 'captcha-invalid' | 'captcha-expired'
 interface Captcha { id: string; image: string; expiresAt: number }
 interface Proof { id: string; answer: string }
@@ -59,7 +60,7 @@ export function LoginGate({ initialPhase, initialCaptchaRequired = false, onLogi
     if (captcha === undefined) return
     focusCaptcha()
     const timer = setTimeout(() => { setExpired(true); setPhase('captcha-expired') }, Math.max(0, captcha.expiresAt - Date.now()))
-    return () => clearTimeout(timer)
+    return () => { clearTimeout(timer) }
   }, [captcha])
   useEffect(() => {
     if (refreshing || !['invalid', 'network', 'captcha-invalid', 'captcha-required'].includes(phase)) return
@@ -76,16 +77,18 @@ export function LoginGate({ initialPhase, initialCaptchaRequired = false, onLogi
     catch { setPhase('network') }
     finally { busy.current = false; setAnnouncement('') }
   }
-  const message = phase === 'invalid' ? '用户名或密码不正确，请重试。'
-    : phase === 'limited' ? '尝试次数过多，请稍后再试。'
-      : phase === 'unavailable' ? '管理员登录尚未配置完成，请联系部署管理员。'
-        : phase === 'network' ? '无法连接到登录服务，请检查网络后重试。'
-          : phase === 'transport' ? '当前连接未经过受信任的 HTTPS 入口，请使用部署管理员提供的安全地址。'
-            : phase === 'expired' ? '登录已过期，请重新登录。'
-              : phase === 'captcha-required' ? '请先完成验证码，再验证用户名和密码。'
-                : phase === 'captcha-invalid' ? '验证码不正确，图片已更新，请重试。'
-                  : phase === 'captcha-expired' ? '验证码已过期，请使用新图片；若未更新，请点击换一张。'
-                    : phase === 'success' ? '验证成功，正在进入工作台…' : undefined
+  const message = phase === 'password-changed' ? '密码已更新，所有旧登录已失效，请使用新密码重新登录。'
+    : phase === 'password-change-unknown' ? '连接中断，修改结果尚未确认。请先尝试新密码登录；不成功再使用原密码。'
+      : phase === 'invalid' ? '用户名或密码不正确，请重试。'
+        : phase === 'limited' ? '尝试次数过多，请稍后再试。'
+          : phase === 'unavailable' ? '管理员登录尚未配置完成，请联系部署管理员。'
+            : phase === 'network' ? '无法连接到登录服务，请检查网络后重试。'
+              : phase === 'transport' ? '当前连接未经过受信任的 HTTPS 入口，请使用部署管理员提供的安全地址。'
+                : phase === 'expired' ? '登录已过期，请重新登录。'
+                  : phase === 'captcha-required' ? '请先完成验证码，再验证用户名和密码。'
+                    : phase === 'captcha-invalid' ? '验证码不正确，图片已更新，请重试。'
+                      : phase === 'captcha-expired' ? '验证码已过期，请使用新图片；若未更新，请点击换一张。'
+                        : phase === 'success' ? '验证成功，正在进入工作台…' : undefined
   return (
     <main className={css.page}>
       <section className={css.card} aria-labelledby="web-auth-title">
@@ -97,12 +100,12 @@ export function LoginGate({ initialPhase, initialCaptchaRequired = false, onLogi
           <label className={css.field}>
             <span>用户名</span>
             <Input autoComplete="username" autoFocus disabled={blocked}
-              value={username} onChange={event => { setUsername(event.target.value) }} />
+              value={username} onChange={(event) => { setUsername(event.target.value) }} />
           </label>
           <label className={css.field}>
             <span>密码</span>
             <Input type="password" autoComplete="current-password" disabled={blocked}
-              value={password} onChange={event => { setPassword(event.target.value) }} />
+              value={password} onChange={(event) => { setPassword(event.target.value) }} />
           </label>
           {required && <div className={css.captcha}>
             <label className={css.captchaLabel} htmlFor="web-auth-captcha"><span>验证码</span></label>
@@ -118,7 +121,7 @@ export function LoginGate({ initialPhase, initialCaptchaRequired = false, onLogi
             </div>
             <Input id="web-auth-captcha" inputMode="numeric" autoComplete="off" maxLength={6}
               aria-describedby="web-auth-captcha-help" disabled={blocked} value={answer}
-              onChange={event => { setAnswer(event.target.value.replace(/[^0-9]/g, '').slice(0, 6)) }} />
+              onChange={(event) => { setAnswer(event.target.value.replace(/[^0-9]/g, '').slice(0, 6)) }} />
             <p id="web-auth-captcha-help" className={css.captchaHelp}>输入图片中的 6 位数字，2 分钟内有效。看不清可换一张。图片验证暂不支持读屏识别，请联系部署管理员协助。</p>
           </div>}
           <p className={phase === 'success' ? css.success : phase === 'ready' || phase === 'submitting' ? css.status : css.message} role="status" aria-live="polite" aria-atomic="true">{submitting || refreshing ? announcement : message ?? announcement}</p>
@@ -137,6 +140,8 @@ export function LoginGate({ initialPhase, initialCaptchaRequired = false, onLogi
 }
 
 let csrfToken: string | undefined
+let account: { username: string; canChangePassword: boolean } | undefined
+let changingPassword = false
 let authRoot: Root | undefined
 let expiryWatch: ReturnType<typeof setTimeout> | undefined
 
@@ -157,12 +162,38 @@ async function loadBootManifest(): Promise<boolean> {
 function installBridge(): void {
   ;(globalThis as typeof globalThis & { __DSH_WEB_AUTH__?: unknown }).__DSH_WEB_AUTH__ = {
     csrfToken: () => csrfToken,
+    account: () => account,
     unauthorized: () => {
+      if (changingPassword) return
       clearTimeout(expiryWatch)
       sessionStorage.setItem('dsh-auth-reason', 'expired')
       location.reload()
     },
     enabled: () => csrfToken !== undefined,
+    changePassword: async (currentPassword: string, newPassword: string, confirmation: string) => {
+      if (changingPassword) return 'rate-limited'
+      changingPassword = true
+      try {
+        const response = await fetch('/auth/password', {
+          method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-csrf': csrfToken ?? '' },
+          body: JSON.stringify({ currentPassword, newPassword, confirmation }),
+        })
+        if (!response.ok) {
+          const body = await response.json() as { code?: string }
+          if (response.status === 401 || body.code === 'csrf-invalid') {
+            sessionStorage.setItem('dsh-auth-reason', 'expired'); location.reload()
+            return 'password-change-expired'
+          }
+          return body.code ?? 'password-save-failed'
+        }
+        clearTimeout(expiryWatch); csrfToken = undefined; account = undefined
+        sessionStorage.setItem('dsh-auth-reason', 'password-changed'); location.reload()
+        return 'changed'
+      } catch {
+        sessionStorage.setItem('dsh-auth-reason', 'password-change-unknown'); location.reload()
+        return 'unknown'
+      } finally { changingPassword = false }
+    },
     logout: async () => {
       try {
         const response = await fetch('/auth/logout', {
@@ -179,11 +210,16 @@ function installBridge(): void {
 }
 
 function watchExpiry(state: Extract<SessionState, { state: 'signed-in' }>): void {
+  account = { username: state.username, canChangePassword: state.passwordChangeEnabled === true }
   clearTimeout(expiryWatch)
   const delay = Math.max(250, state.expiresAt - Date.now() + 50)
   const verifyExpiry = async (): Promise<void> => {
+    if (changingPassword) { expiryWatch = setTimeout(() => { void verifyExpiry() }, 500); return }
     try {
       const latest = await readSession()
+      // A user can start a password change while the session request is in flight.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
+      if (changingPassword) { expiryWatch = setTimeout(() => { void verifyExpiry() }, 500); return }
       if (latest.state === 'signed-in') { csrfToken = latest.csrfToken; watchExpiry(latest); return }
     } catch { /* the reload below presents the retryable unavailable state */ }
     sessionStorage.setItem('dsh-auth-reason', 'expired')
@@ -247,6 +283,6 @@ export async function bootstrapWebAuth(el: HTMLElement, onAuthenticated: () => P
     sessionStorage.removeItem('dsh-auth-reason')
     showGate(el, state.state === 'unavailable'
       ? state.reason === 'transport' ? 'transport' : 'unavailable'
-      : reason === 'expired' ? 'expired' : 'ready', onAuthenticated, state.state === 'signed-out' && state.captchaRequired === true)
+      : reason === 'password-changed' || reason === 'password-change-unknown' || reason === 'expired' ? reason : 'ready', onAuthenticated, state.state === 'signed-out' && state.captchaRequired === true)
   } catch { showGate(el, 'network', onAuthenticated) }
 }

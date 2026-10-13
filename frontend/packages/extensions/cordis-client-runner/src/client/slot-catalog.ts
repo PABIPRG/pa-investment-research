@@ -1415,6 +1415,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     slotInject: '',
     declaredBy: 'an entry in \'sidebar.settings\' (client-ui-settings-general), so it exists while that entry is mounted',
     occupants: [
+      'api-web-auth PasswordSection id \'account-security\'',
       'client-ui-agent-preset AgentPresetSection id \'agent-presets\'',
       'client-ui-desktop-shortcuts ShortcutsSection id \'shortcuts\'',
       'client-ui-settings-general GeneralSection id \'general\'',

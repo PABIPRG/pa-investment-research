@@ -132,6 +132,16 @@ describe('SettingsRoot trigger', () => {
 })
 
 describe('SettingsPanel chrome seats', () => {
+  it('renders outside the sidebar stacking context and removes the layer on close', () => {
+    const { view } = mount({ wide: false })
+    openPanel()
+    const dialog = screen.getByRole('dialog')
+    expect(view.container.contains(dialog)).toBe(false)
+    expect(document.body.contains(dialog)).toBe(true)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(document.body.contains(dialog)).toBe(false)
+  })
+
   it('names the dialog via aria-labelledby pointing at the header seat node', () => {
     mount()
     openPanel()

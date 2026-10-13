@@ -11,6 +11,7 @@
     { "path": "../../client/runtime" },
     { "path": "../../client/ui-primitives" },
     { "path": "../../client/ui-sidebar" },
+    { "path": "../../client/ui-settings" },
     { "path": "../../client/ui-slots" }
   ]
 }

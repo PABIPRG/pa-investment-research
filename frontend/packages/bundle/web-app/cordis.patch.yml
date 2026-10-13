@@ -151,6 +151,7 @@
         mode: !!js ctx.webStartup.authMode
         username: !!js ctx.webStartup.authUsername
         passwordHashFile: !!js ctx.webStartup.authPasswordHashFile
+        passwordChangeEnabled: !!js ctx.webStartup.authPasswordChangeEnabled
         secureCookies: !!js ctx.webStartup.secureCookies
         trustedHosts: !!js ctx.webRuntime.trustedHosts
         trustedProxyAddresses: !!js ctx.webStartup.trustedProxyAddresses

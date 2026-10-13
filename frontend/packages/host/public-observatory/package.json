@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-host-public-observatory",
   "description": "Exact-origin, unauthenticated read-only gateway for the public investment observatory",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0-alpha.3",
   "publishConfig": {
     "access": "public"
   },
