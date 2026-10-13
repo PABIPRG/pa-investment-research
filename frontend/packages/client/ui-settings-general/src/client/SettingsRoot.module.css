@@ -224,3 +224,16 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* 小屏将设置导航移到表单上方，避免账号安全等内容被固定侧栏挤压。 */
+@media (max-width: 600px) {
+  .panel { flex-direction: column; max-width: calc(100vw - 24px); height: calc(100dvh - 24px); }
+  .nav { width: 100%; gap: 12px; padding: 16px 12px 0; }
+  .navTitle { padding-right: 40px; }
+  .navList { flex-direction: row; overflow-x: auto; }
+  .navCell { flex: none; }
+  .content { min-height: 0; }
+  .header { height: 12px; padding: 0; }
+  .close { position: absolute; top: 14px; right: 14px; }
+  .options { padding: 0 8px 16px; }
+}

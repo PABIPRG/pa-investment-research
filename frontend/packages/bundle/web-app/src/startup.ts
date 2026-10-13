@@ -38,6 +38,8 @@ export interface WebStartupValues {
   authUsername?: string
   /** Path to the protected versioned password-hash file. */
   authPasswordHashFile?: string
+  /** Whether this deployment permits durable self-service password replacement. */
+  authPasswordChangeEnabled: boolean
   /** Secure cookie policy; false is an explicit loopback-only development concession. */
   secureCookies: boolean
   /** Exact public observatory browser origins; empty keeps the public gateway disabled. */
@@ -118,6 +120,7 @@ export function apply(ctx: Context): void {
       authMode,
       ...authUsername !== undefined && { authUsername },
       ...authPasswordHashFile !== undefined && { authPasswordHashFile },
+      authPasswordChangeEnabled: environment.get('DSH_WEB_PASSWORD_CHANGE_ENABLED')?.value === '1',
       secureCookies: environment.get('DSH_WEB_INSECURE_COOKIES')?.value !== '1',
       publicObservatoryOrigins: (() => {
         const origin = environment.get('DSH_PUBLIC_OBSERVATORY_ORIGIN')?.value

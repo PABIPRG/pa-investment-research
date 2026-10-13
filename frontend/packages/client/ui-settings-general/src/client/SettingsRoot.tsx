@@ -11,6 +11,7 @@
  * to the step, so a mounted-but-deciding step paints nothing here.
  */
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import {
   IconAgentPresetOutline16, IconCloseOutline16, IconDataOutline16,
@@ -65,7 +66,8 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, openSection, onCl
     previousActive.current = active
   }, [active])
 
-  return (
+  // Keep settings above the collapsed sidebar and its sibling workspace.
+  return createPortal(
     <div className={css.overlay} role="presentation">
       <div className={css.mask} aria-hidden="true" onClick={onClose} />
       <div className={css.panel} role="dialog" aria-modal="true" aria-labelledby={titleId}>
@@ -103,7 +105,8 @@ function SettingsPanel({ rows, renderSlot, activeId, onSelect, openSection, onCl
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

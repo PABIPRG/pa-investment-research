@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { randomUUID } from 'node:crypto'
-import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -155,20 +155,36 @@ export async function acquireInstanceLock(instanceRoot) {
   }
 }
 
-async function preparePasswordHash(source, destination) {
+/** Initialize under the instance lease; an existing password is never replaced by the bootstrap secret. */
+export async function preparePasswordHash(source, destination) {
+  const directory = resolve(destination, '..')
+  const created = await mkdir(directory, { mode: 0o700, recursive: true })
+  const parent = await lstat(directory)
+  if (!parent.isDirectory() || (parent.mode & 0o077) !== 0) throw new Error('password directory must be private')
+  let existing
+  try { existing = await lstat(destination) }
+  catch (error) { if (!isNodeError(error, 'ENOENT')) throw error }
+  if (existing !== undefined) {
+    if (!existing.isFile() || existing.size > 4_096 || (existing.mode & 0o077) !== 0) throw new Error('persisted password file is unsafe')
+    if (!(await readFile(destination, 'utf8')).trim()) throw new Error('persisted password file is empty')
+    return
+  }
+  if (created === undefined) throw new Error('persisted password file is missing; administrator recovery required')
   const sourceMetadata = await lstat(source)
-  if (!sourceMetadata.isFile()) throw new Error('password hash secret must be a regular file')
+  if (!sourceMetadata.isFile() || sourceMetadata.size > 4_096) throw new Error('password hash secret must be a bounded regular file')
   const value = await readFile(source, 'utf8')
-  if (!value.trim() || value.length > 8_192) throw new Error('password hash secret is empty or too large')
-  await mkdir(resolve(destination, '..'), { mode: 0o700, recursive: true })
-  await copyFile(source, destination)
-  await chmod(destination, 0o600)
+  if (!value.trim()) throw new Error('password hash secret is empty')
+  const temporary = join(directory, `.initial-password-${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporary, value, { mode: 0o600, flag: 'wx' })
+    await rename(temporary, destination)
+  } finally { await rm(temporary, { force: true }) }
 }
 
 async function run() {
   const configuration = validateConfiguration(process.env)
   const lease = await acquireInstanceLock(join(configuration.dshHome, 'investment-research'))
-  const passwordHashFile = '/run/dsh/web-admin-password.hash'
+  const passwordHashFile = join(configuration.dshHome, 'web-auth', 'password.hash')
   try {
     await preparePasswordHash(configuration.passwordHashSourceFile, passwordHashFile)
     const args = [
@@ -183,6 +199,7 @@ async function run() {
         DSH_DEPLOYMENT_SURFACE: configuration.deploymentSurface,
         DSH_CONTAINER_INSTANCE_LEASE_FILE: lease.ownerFile,
         DSH_WEB_ADMIN_PASSWORD_HASH_FILE: passwordHashFile,
+        DSH_WEB_PASSWORD_CHANGE_ENABLED: '1',
       },
       stdio: 'inherit',
     })
@@ -207,7 +224,6 @@ async function run() {
     process.exitCode = result.code ?? ({ SIGHUP: 129, SIGINT: 130, SIGTERM: 143, SIGKILL: 137 }[result.signal] ?? 1)
   } finally {
     await lease.release()
-    await rm(passwordHashFile, { force: true })
   }
 }
 

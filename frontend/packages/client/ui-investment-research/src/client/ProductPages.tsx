@@ -69,10 +69,10 @@ function useDataResource(requestData: InvestmentRequestData) {
           setState(previous => options.background === true
             ? { ...previous, error: productErrorText(reason) }
             : {
-                phase: 'error',
-                value: settledKey.current === key ? previous.value : undefined,
-                error: productErrorText(reason),
-              })
+              phase: 'error',
+              value: settledKey.current === key ? previous.value : undefined,
+              error: productErrorText(reason),
+            })
         }
       },
     )
@@ -783,7 +783,10 @@ function BacktestManagementDialog({
               return (
                 <article key={taskIdText} className={css.backtestTaskCard} role="listitem" aria-label={`${backtestSourceLabel(task.source)} · ${taskStatusLabel(task.status)}`}>
                   <div className={css.backtestTaskHead}>
-                    <div><strong>{backtestWindowLabel(task)}</strong><small>{backtestSourceLabel(task.source)} · 创建于 {reportTimeLabel(task.created_at)}</small></div>
+                    <div>
+                      <strong>{backtestWindowLabel(task)}</strong>
+                      <small>{backtestSourceLabel(task.source)} · 创建于 {reportTimeLabel(task.created_at)}</small>
+                    </div>
                     <span className={css.statusBadge} data-status={taskStatus}>{taskStatusLabel(task.status)}</span>
                   </div>
                   <dl className={css.backtestTaskFacts}>
@@ -1015,7 +1018,7 @@ export function StrategyResearchPage({
     let current = true
     setDetailItem(undefined)
     setNotice('正在读取策略详情…')
-    void requestData({ operation: 'trading-core.strategy-detail', input: { strategy_id: selectedStrategyId } }).then(result => {
+    void requestData({ operation: 'trading-core.strategy-detail', input: { strategy_id: selectedStrategyId } }).then((result) => {
       if (!current) return
       setDetailItem({ ...asRecord(result), id: selectedStrategyId })
       setNotice('')
@@ -1400,7 +1403,7 @@ export function StrategyResearchPage({
             </div>
             <Input id={searchId} className={css.strategyQueryInput} type="search" icon={<IconSearchOutline16 />}
               value={strategyQuery} maxLength={80} placeholder="筛选策略中的证券，如 600519 或 茅台"
-              onChange={event => { setStrategyQuery(event.target.value); setFilter('all') }} />
+              onChange={(event) => { setStrategyQuery(event.target.value); setFilter('all') }} />
           </div>
           <Button variant="outline" type="button" className={css.secondaryButton}
             disabled={strategyQuery === '' && filter === 'all'}
@@ -3418,7 +3421,10 @@ function IndustryGraphExplorer({
         <dl className={css.industryGraphDetailGrid}>
           <div><dt>传导环节</dt><dd>{selectedRelation.via || '未标注'}</dd></div>
           <div><dt>关系类型</dt><dd>{selectedRelation.relationType || '关系未标注'}</dd></div>
-          <div><dt>关系权重</dt><dd>{industryWeightLabel(selectedRelation.share, selectedRelation.shareSource, selectedRelation.confidence)}</dd></div>
+          <div>
+            <dt>关系权重</dt>
+            <dd>{industryWeightLabel(selectedRelation.share, selectedRelation.shareSource, selectedRelation.confidence)}</dd>
+          </div>
           <div><dt>关联边</dt><dd>{focusedNode.relations.length || viewGraph.edges.filter(edge => edge.source === focusedNode.id || edge.target === focusedNode.id).length || '—'}</dd></div>
         </dl>
         <p className={css.industryGraphDetailNote}>关系权重用于图谱关联强度；披露值来自财报或研报抽取，默认值仅用于展示和排序，不代表真实采购、销售或营收占比。</p>
@@ -3845,6 +3851,16 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
   const downloadedBytes = number(statusValue.downloaded_bytes) ?? 0
   const downloadActive = bootstrapBusy || status === 'downloading'
   const downloadFailed = bootstrapFailed || status === 'error'
+  const downloadError = text(statusValue.error, '')
+  // Only known seed errors select public copy; never render raw backend exceptions.
+  const seedFileError = /^(?:stats|companies|market-caps|view-data-all|network-data)\.json (.+)$/.exec(downloadError)?.[1]
+  const downloadFailureMessage = seedFileError === '超过允许的大小上限' || downloadError === '种子数据总大小超过允许的上限'
+    ? '产业链数据超过当前版本的下载上限，请联系管理员更新服务。'
+    : seedFileError === '不是有效的 JSON 数据' || seedFileError === '数据结构不完整' || seedFileError === '为空文件'
+      ? '产业链数据校验未通过，请稍后重新下载。'
+      : seedFileError === '下载失败，请检查网络后重试'
+        ? '产业链数据下载失败，请检查网络后重试。'
+        : '产业链数据未能完整下载，请重试；若持续失败，请联系管理员。'
   const progressMax = Math.max(filesTotal, 1)
   const progressValue = Math.min(filesCompleted, progressMax)
   const progressPercent = Math.max(0, Math.min(100, (progressValue / progressMax) * 100))
@@ -3962,8 +3978,8 @@ export function IndustryChainPage({ requestData, query, onQuery, onAnalyze, onOp
             <p>{downloadActive
               ? `已完成 ${filesCompleted}/${filesTotal} 个数据文件，已下载 ${(downloadedBytes / 1024 / 1024).toFixed(1)} MB。`
               : downloadFailed
-                ? '数据未能完整下载，未完成的文件已清理。请检查网络后重试。'
-                : '产业链公司与上下游关系数据约 80 MB，仅在你明确确认后保存到本机应用数据目录。'}</p>
+                ? downloadFailureMessage
+                : '产业链公司与上下游关系数据仅在你确认后下载，数据体积随数据源更新变化，下载期间会显示已下载大小。'}</p>
           </div>
           <div
             className={css.industryProgress}

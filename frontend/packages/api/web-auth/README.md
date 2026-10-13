@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-为 Web 组合提供单管理员、进程内会话鉴权。包在 Host 侧注册 `/auth/session`、`/auth/login`、`/auth/logout`、`/auth/captcha` 与 `/healthz`，并向浏览器传输层提供统一授权、CSRF 校验和 WebSocket/SSE 生命周期管理能力。
+为 Web 组合提供单管理员、进程内会话鉴权。包在 Host 侧注册 `/auth/session`、`/auth/login`、`/auth/logout`、`/auth/password`、`/auth/captcha` 与 `/healthz`，并向浏览器传输层提供统一授权、CSRF 校验和 WebSocket/SSE 生命周期管理能力。
 
 管理员密码至少需要 12 个 Unicode 字符，并拒绝全空白或单一字符重复等明显弱口令；密码只从受保护的版本化 scrypt 哈希文件读取。服务启动时一次性加载并严格校验普通文件、大小、POSIX 权限与记录格式，不接受明文密码配置。会话令牌使用高熵随机值，服务端只保存摘要；Cookie 默认带有 `HttpOnly`、`SameSite=Strict`、`Path=/` 与 `Secure`。仅回环开发模式可以显式关闭 `Secure`，非回环绑定会拒绝该配置。
 
@@ -39,4 +39,5 @@ English | [中文](README.zh.md)
 - 会话只保存在当前服务进程中；重启、滚动切换或多副本部署不会共享会话。
 - 当前只支持一个静态管理员身份，不提供用户目录、角色或权限分级。
 - TLS 由受信反向代理终止；本包不负责证书签发或 HTTPS 监听。
-- 哈希文件在启动时读取，轮换后必须重启服务才能使新凭据生效并清除旧会话。
+- 哈希文件在启动时读取；离线轮换必须停服后替换并重启。显式启用 `passwordChangeEnabled` 时，已登录用户可在设置中在线改密，成功后立即撤销本实例全部会话。
+- 自助改密要求私有可写目录、单进程所有权；不支持多副本共享同一个密码文件。

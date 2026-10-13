@@ -154,6 +154,45 @@ class SeedDataManagerTests(unittest.TestCase):
         self.assertEqual(list(self.data_dir.iterdir()), [existing])
         self.assertFalse(any("download" in path.name for path in self.data_dir.parent.iterdir()))
 
+    def test_current_upstream_sizes_are_accepted_at_the_download_boundary(self):
+        # HEAD sizes observed on 2026-10-12; avoid a 140 MiB fixture in unit tests.
+        sizes = dict(zip(SEED_FILES, [147, 1650488, 2004317, 69588338, 72505730]))
+
+        def get(url: str, **_kwargs):
+            name = url.rsplit("/", 1)[-1]
+            response = _Response(self.payloads[name])
+            response.headers["Content-Length"] = str(sizes[name])
+            return response
+
+        result = SeedDataManager(self.data_dir, "https://fixed.example/data", http_get=get).bootstrap()
+        self.assertEqual(result["status"], "ready", result["error"])
+        # Total-byte guard must also permit the observed complete dataset.
+        self.assertGreaterEqual(seed_data.MAX_TOTAL_BYTES, sum(sizes.values()))
+
+    def test_streamed_overlimit_without_content_length_is_rejected(self):
+        def get(url: str, **_kwargs):
+            response = _Response(self.payloads[url.rsplit("/", 1)[-1]])
+            response.headers = {}
+            return response
+
+        with mock.patch.object(seed_data, "MAX_FILE_BYTES", 8):
+            result = SeedDataManager(self.data_dir, "https://fixed.example/data", http_get=get).bootstrap()
+        self.assertEqual(result["status"], "error")
+        self.assertIn("大小上限", result["error"] or "")
+        self.assertFalse(self.data_dir.exists())
+        self.assertEqual(list(self.data_dir.parent.iterdir()), [])
+
+    def test_total_stream_limit_preserves_unrelated_user_data(self):
+        sentinel = Path(self.temporary.name) / "credentials-sentinel"
+        sentinel.write_text("unchanged")
+        with mock.patch.object(seed_data, "MAX_TOTAL_BYTES", len(self.payloads["stats.json"]) + 1):
+            result = SeedDataManager(self.data_dir, "https://fixed.example/data", http_get=self._http_get([])).bootstrap()
+        self.assertEqual(result["status"], "error")
+        self.assertIn("总大小", result["error"] or "")
+        self.assertEqual(sentinel.read_text(), "unchanged")
+        self.assertFalse(self.data_dir.exists())
+        self.assertEqual(list(self.data_dir.parent.iterdir()), [])
+
     def test_declared_oversize_file_is_rejected_before_writing(self):
         calls: list[str] = []
 

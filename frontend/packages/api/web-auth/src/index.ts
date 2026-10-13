@@ -12,6 +12,7 @@ import {
   type WebRequestLifecycleResource,
 } from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
+import { replaceProtectedPasswordHash } from './password-file.ts'
 import { createCaptcha, type CaptchaView, type CaptchaProof, type CaptchaRecord, verifyCaptcha } from './captcha.ts'
 
 declare module '@deepseek-ai/cordis' { interface Context { webAuth?: WebAuthService } }
@@ -33,6 +34,8 @@ export interface WebAuthConfig {
   username?: string
   /** Protected file containing the versioned scrypt password record. */
   passwordHashFile?: string
+  /** Explicit opt-in for replacing the protected password file from an authenticated session. */
+  passwordChangeEnabled?: boolean
   /** Whether session cookies require an HTTPS browser transport. */
   secureCookies?: boolean
   /** Public hostnames accepted for non-loopback browser requests. */
@@ -57,6 +60,7 @@ export const Config: z<WebAuthConfig> = z.object({
   mode: z.union([z.const('disabled'), z.const('required')]).default('disabled'),
   username: z.string(),
   passwordHashFile: z.string(),
+  passwordChangeEnabled: z.boolean().default(false),
   secureCookies: z.boolean().default(true),
   trustedHosts: z.array(String).default([]),
   trustedProxyAddresses: z.array(String).default([]),
@@ -82,7 +86,7 @@ interface SessionRecord {
   resources: Set<WebRequestLifecycleResource>
 }
 
-interface SessionView { username: string; csrfToken: string; expiresAt: number }
+interface SessionView { username: string; csrfToken: string; expiresAt: number; passwordChangeEnabled: boolean }
 
 export type WebAuthSessionState =
   | { state: 'disabled' }
@@ -106,6 +110,31 @@ export type WebAuthLoginResult = WebAuthDecision & Partial<{
   captcha: CaptchaView
 }>
 
+/** Stable result of an authenticated password replacement; failures never expose credentials. */
+export type PasswordChangeResult = { ok: true } | {
+  ok: false
+  status: 400 | 401 | 403 | 429 | 503
+  code: 'password-change-disabled' | 'current-password-invalid' | 'password-weak' | 'password-mismatch'
+    | 'password-unchanged' | 'password-save-failed' | 'password-change-expired' | Exclude<WebAuthDecision, { ok: true }>['code']
+}
+
+function passwordStrengthValid(password: string): boolean {
+  const characters = Array.from(password)
+  return Buffer.byteLength(password, 'utf8') <= 4_096 && characters.length >= MIN_PASSWORD_CHARACTERS
+    && password.trim() !== '' && new Set(characters).size > 1
+}
+
+async function hashPasswordWithoutBlocking(password: string): Promise<string> {
+  const salt = randomBytes(16)
+  const derived = await new Promise<Buffer>((resolve, reject) => {
+    scrypt(password, salt, SCRYPT_KEY_BYTES, {
+      N: SCRYPT_COST, r: SCRYPT_BLOCK_SIZE, p: SCRYPT_PARALLELISM, maxmem: 64 * 1024 * 1024,
+    }, (error, result) => { if (error === null) resolve(result); else reject(error) })
+  })
+  return [PASSWORD_PREFIX, SCRYPT_COST, SCRYPT_BLOCK_SIZE, SCRYPT_PARALLELISM, Array.from(password).length,
+    salt.toString('base64url'), derived.toString('base64url')].join('$')
+}
+
 /** Produce a salted, versioned password record suitable for a protected file. */
 export function hashPassword(password: string): string {
   const characters = Array.from(password)
@@ -113,7 +142,7 @@ export function hashPassword(password: string): string {
   if (characterCount < MIN_PASSWORD_CHARACTERS) {
     throw new Error(`web-auth: password must contain at least ${String(MIN_PASSWORD_CHARACTERS)} characters`)
   }
-  if (password.trim() === '' || new Set(characters).size === 1) {
+  if (!passwordStrengthValid(password)) {
     throw new Error('web-auth: password strength rejects blank or single-character repetition')
   }
   const salt = randomBytes(16)
@@ -219,7 +248,12 @@ export class WebAuthService extends Service {
   readonly available: boolean
   readonly cookieName: string
   private readonly username: string | undefined
-  private readonly passwordHash: string | undefined
+  private passwordHash: string | undefined
+  private readonly passwordHashFile: string | undefined
+  private readonly passwordChangeEnabled: boolean
+  private changingPassword = false
+  private passwordVersion = 0
+  private changeAttempts: number[] = []
   private readonly secureCookies: boolean
   private readonly idleTimeoutMs: number
   private readonly absoluteTimeoutMs: number
@@ -238,6 +272,8 @@ export class WebAuthService extends Service {
     super(ctx, 'webAuth')
     this.enabled = config.mode === 'required'
     this.username = config.username
+    this.passwordHashFile = config.passwordHashFile
+    this.passwordChangeEnabled = config.passwordChangeEnabled === true
     this.secureCookies = config.secureCookies ?? true
     this.cookieName = this.secureCookies ? '__Host-dsh-session' : 'dsh-dev-session'
     this.idleTimeoutMs = config.idleTimeoutMs ?? 30 * 60_000
@@ -318,6 +354,8 @@ export class WebAuthService extends Service {
     if (!this.isAllowedTransport(facts)) {
       return { ok: false, status: 403, code: 'secure-transport-required' }
     }
+    if (this.changingPassword) return { ok: false, status: 429, code: 'rate-limited' }
+    const passwordVersion = this.passwordVersion
     this.cleanupAttempts()
     const address = requestClientAddress(facts, this.trustedProxyAddresses)
     if (address === undefined || (!this.clients.has(address) && this.clients.size >= this.loginMaxTrackedAddresses)) {
@@ -355,7 +393,11 @@ export class WebAuthService extends Service {
       this.activePasswordVerifications -= 1
       client.verifying = false
     }
+    // Concurrent requests and disposal may change these flags across the KDF await.
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
     if (this.disposed) return { ok: false, status: 503, code: 'auth-unavailable' }
+    // oxlint-disable-next-line typescript/no-unnecessary-condition
+    if (passwordVersion !== this.passwordVersion || this.changingPassword) return { ok: false, status: 401, code: 'invalid-credentials' }
     if (!usernameMatches || !passwordMatches) {
       client.failures = Math.min(CAPTCHA_THRESHOLD, client.failures + 1)
       client.lastFailureAt = Date.now()
@@ -373,6 +415,54 @@ export class WebAuthService extends Service {
     this.sessions.set(id, record)
     this.schedule(id, record)
     return { ok: true, cookieName: this.cookieName, token, session: this.view(record) }
+  }
+
+  /**
+   * Replace this instance's password after reauthentication and durable file replacement.
+   * @param currentPassword - existing password, used only for reauthentication.
+   * @param newPassword - new password, never stored in plaintext.
+   * @param confirmation - repeated new password from the form.
+   * @param facts - authenticated POST request with CSRF and trusted transport.
+   * @returns a stable rejection or success after all old sessions are revoked.
+   */
+  async changePassword(
+    currentPassword: string, newPassword: string, confirmation: string, facts: BrowserTrustRequest,
+  ): Promise<PasswordChangeResult> {
+    if (!this.enabled || !this.passwordChangeEnabled) return { ok: false, status: 403, code: 'password-change-disabled' }
+    const decision = this.authorize(facts)
+    if (!decision.ok) return decision
+    if (facts.method !== 'POST') return { ok: false, status: 403, code: 'csrf-invalid' }
+    if (newPassword !== confirmation) return { ok: false, status: 400, code: 'password-mismatch' }
+    if (!passwordStrengthValid(newPassword) || Buffer.byteLength(currentPassword) > 4_096) return { ok: false, status: 400, code: 'password-weak' }
+    if (currentPassword === newPassword) return { ok: false, status: 400, code: 'password-unchanged' }
+    this.changeAttempts = this.changeAttempts.filter(at => at > Date.now() - this.loginWindowMs)
+    if (this.changingPassword || this.changeAttempts.length >= this.loginMaxAttempts
+      || this.activePasswordVerifications >= this.loginMaxConcurrentVerifications) return { ok: false, status: 429, code: 'rate-limited' }
+    this.changeAttempts.push(Date.now())
+    this.changingPassword = true
+    this.activePasswordVerifications += 1
+    const expected = this.passwordHash as string
+    const sessionId = this.find(facts, false)?.id
+    try {
+      if (!await verifyPasswordWithoutBlocking(currentPassword, expected)) return { ok: false, status: 400, code: 'current-password-invalid' }
+      const next = await hashPasswordWithoutBlocking(newPassword)
+      // Recheck after both asynchronous KDFs: logout, expiry or plugin disposal wins.
+      if (this.disposed || sessionId === undefined || this.find(facts, false)?.id !== sessionId) {
+        return { ok: false, status: 401, code: 'password-change-expired' }
+      }
+      if (this.passwordHashFile === undefined) return { ok: false, status: 503, code: 'password-save-failed' }
+      // The small atomic write and in-memory commit contain no await boundary.
+      replaceProtectedPasswordHash(this.passwordHashFile, expected, next)
+      this.passwordHash = next
+      this.passwordVersion += 1
+      for (const id of [...this.sessions.keys()]) this.revoke(id)
+      return { ok: true }
+    } catch {
+      return { ok: false, status: 503, code: 'password-save-failed' }
+    } finally {
+      this.activePasswordVerifications -= 1
+      this.changingPassword = false
+    }
   }
 
   /**
@@ -440,7 +530,7 @@ export class WebAuthService extends Service {
   }
 
   private view(record: SessionRecord): SessionView {
-    return { username: record.username, csrfToken: record.csrfToken,
+    return { username: record.username, csrfToken: record.csrfToken, passwordChangeEnabled: this.passwordChangeEnabled,
       expiresAt: Math.min(record.lastSeenAt + this.idleTimeoutMs, record.createdAt + this.absoluteTimeoutMs) }
   }
 
@@ -456,7 +546,10 @@ export class WebAuthService extends Service {
     const record = this.sessions.get(id)
     if (record === undefined) return
     this.sessions.delete(id); clearTimeout(record.timer)
-    for (const resource of record.resources) resource.destroy()
+    for (const resource of record.resources) {
+      try { resource.destroy() }
+      catch { /* A failed transport teardown cannot restore the already-revoked session or block the remaining connections. */ }
+    }
     record.resources.clear()
   }
 
@@ -510,7 +603,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown, headers: 
   res.end(JSON.stringify(body))
 }
 
-async function readLoginBody(req: IncomingMessage): Promise<{ username: string; password: string; proof?: CaptchaProof } | undefined> {
+async function readAuthBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
   let size = 0; const chunks: Uint8Array[] = []
   for await (const chunk of req) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk); size += bytes.length
@@ -520,16 +613,21 @@ async function readLoginBody(req: IncomingMessage): Promise<{ username: string; 
   try {
     const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
     if (typeof parsed !== 'object' || parsed === null) return undefined
-    const body = parsed as Record<string, unknown>
-    const proof = body.captcha
-    if (proof !== undefined && (typeof proof !== 'object' || proof === null
-      || typeof (proof as Record<string, unknown>).id !== 'string'
-      || typeof (proof as Record<string, unknown>).answer !== 'string'
-      || ((proof as Record<string, unknown>).id as string).length > 64
-      || ((proof as Record<string, unknown>).answer as string).length > 16)) return undefined
-    return typeof body.username === 'string' && typeof body.password === 'string'
-      ? { username: body.username, password: body.password, ...(proof === undefined ? {} : { proof: proof as CaptchaProof }) } : undefined
+    return parsed as Record<string, unknown>
   } catch { return undefined }
+}
+
+async function readLoginBody(req: IncomingMessage): Promise<{ username: string; password: string; proof?: CaptchaProof } | undefined> {
+  const body = await readAuthBody(req)
+  if (body === undefined) return undefined
+  const proof = body.captcha
+  if (proof !== undefined && (typeof proof !== 'object' || proof === null
+    || typeof (proof as Record<string, unknown>).id !== 'string'
+    || typeof (proof as Record<string, unknown>).answer !== 'string'
+    || ((proof as Record<string, unknown>).id as string).length > 64
+    || ((proof as Record<string, unknown>).answer as string).length > 16)) return undefined
+  return typeof body.username === 'string' && typeof body.password === 'string'
+    ? { username: body.username, password: body.password, ...(proof === undefined ? {} : { proof: proof as CaptchaProof }) } : undefined
 }
 
 /** Mount authentication routes and provide the authority to the transport. */
@@ -574,6 +672,17 @@ export function apply(ctx: Context, config: WebAuthConfig): void {
     if (!result.ok) { writeJson(res, result.status, { code: result.code, captcha: result.captcha }); return }
     if (result.session === undefined || result.token === undefined) { writeJson(res, 200, { state: 'disabled' }); return }
     writeJson(res, 200, { state: 'signed-in', ...result.session }, { 'set-cookie': auth.cookieHeader(result.token) })
+  })
+  route('/auth/password', async (req, res) => {
+    if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
+    const authorized = auth.authorize(req)
+    if (!authorized.ok) { writeJson(res, authorized.status, { code: authorized.code }); return }
+    const body = await readAuthBody(req)
+    if (body === undefined || typeof body.currentPassword !== 'string' || typeof body.newPassword !== 'string'
+      || typeof body.confirmation !== 'string') { writeJson(res, 400, { code: 'invalid-request' }); return }
+    const result = await auth.changePassword(body.currentPassword, body.newPassword, body.confirmation, req)
+    if (!result.ok) { writeJson(res, result.status, { code: result.code }); return }
+    writeJson(res, 200, { state: 'signed-out', reason: 'password-changed' }, { 'set-cookie': auth.clearCookieHeader() })
   })
   route('/auth/captcha', (req, res) => {
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return }
