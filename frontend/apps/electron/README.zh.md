@@ -8,6 +8,8 @@ DeepSeek Harness 的 Electron 桌面应用。它启动所选 profile（默认为
 
 最终 ZIP 验收：在 frontend 工作区执行 `node scripts/smoke-investment-desktop.ts --zip-root release-assets --report-root <全新目录>`。检查在原生平台解包并两次启动真实可执行文件，隔离 HOME、DSH_HOME 与 userData，验证三个自有包内后端、业务读取、禁用提醒的持久化、界面导航及子进程退出，保留截图、日志和未变化的 ZIP 摘要。两个桌面工作流均在上传 ZIP 前执行该检查。`DSH_DESKTOP_SMOKE=1` 仅用于显式测试，必须配置对应隔离根目录；正常启动保持既有用户数据位置。
 
+验收在 `stage.json` 与 `progress.log` 中记录每个阶段，子进程运行时直接将输出写入日志文件。ZIP 解压期限为 10 分钟；每次应用启动期限为 2 分钟，随后有 15 秒终止宽限期及最多 1 秒的强制退出确认时间。CLI 总期限为 20 分钟，工作流步骤上限为 25 分钟，保留上传证据的时间。超时一律判失败，即使终止时返回零退出码；无法确认退出时明确记录清理未完成。只向本次创建的子进程句柄发送信号。Windows 通过非交互 PowerShell 调用 .NET ZipFile 解压，并禁用进度输出。
+
 在仓库根目录运行：
 
 ```sh

@@ -8,6 +8,8 @@ Electron desktop application for DeepSeek Harness. It boots the selected profile
 
 Final ZIP acceptance: run `node scripts/smoke-investment-desktop.ts --zip-root release-assets --report-root <fresh-directory>` from the frontend workspace. On its native host, the check extracts the ZIP and launches its real executable twice with temporary HOME, DSH_HOME and userData. It verifies three owned bundled backends, business reads, persisted disabled alert data, renderer navigation and child exit, recording screenshots, logs and the unchanged ZIP digest. Both desktop workflows require it before uploading ZIPs. `DSH_DESKTOP_SMOKE=1` is opt-in test mode requiring a matching isolated root; normal launches retain user data locations.
 
+Acceptance records each stage in `stage.json` and `progress.log`, and writes child output directly to log files while processes run. ZIP extraction has a 10-minute deadline; each application launch has a 2-minute deadline followed by a 15-second termination grace and at most 1 second to confirm forced exit. The CLI has a 20-minute watchdog and each workflow step a 25-minute limit, leaving time to upload evidence. Timeout always fails acceptance, even if termination returns exit zero; unconfirmed exit is reported as incomplete cleanup. Only the spawned child handle is signalled. Windows extraction uses .NET ZipFile through noninteractive PowerShell with progress disabled.
+
 From the repository root:
 
 ```sh

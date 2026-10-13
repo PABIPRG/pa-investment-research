@@ -1,8 +1,102 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import type { ChildProcess } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { load } from 'js-yaml'
-import { describe, expect, it } from 'vitest'
-import { validateSmokeReport } from './smoke-investment-desktop.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { runSmokeProcess, smokeInvestmentDesktop, validateSmokeReport } from './smoke-investment-desktop.ts'
+
+const temporary: string[] = []
+const logFile = () => {
+  const directory = mkdtempSync(join(tmpdir(), 'desktop-smoke-process-'))
+  temporary.push(directory)
+  return join(directory, 'process.log')
+}
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+  for (const directory of temporary.splice(0)) rmSync(directory, { recursive: true, force: true })
+})
+
+describe('bounded smoke processes', () => {
+  it('persists output while the child is still running', async () => {
+    const logPath = logFile()
+    let finished = false
+    const running = runSmokeProcess(process.execPath, ['-e', 'console.log("live-evidence"); setTimeout(() => {}, 800)'], {
+      logPath, timeoutMs: 5_000,
+    }).then(() => { finished = true })
+    await expect.poll(() => readFileSync(logPath, 'utf8')).toContain('live-evidence')
+    expect(finished).toBe(false)
+    await running
+  })
+
+  it('does not wait for inherited output handles after the direct child exits', async () => {
+    const logPath = logFile()
+    const script = 'const {spawn}=require("node:child_process"); spawn(process.execPath,["-e","setTimeout(()=>{},3000)"],{stdio:["ignore",1,2]}); process.exit(0)'
+    try {
+      await runSmokeProcess(process.execPath, ['-e', script], { logPath, timeoutMs: 2_000 })
+    } finally {
+      // The fixture descendant self-exits; keep its file available on Windows until then.
+      await delay(3_100)
+    }
+  })
+
+  it('reports a deadline even if the child handles termination and exits zero', async () => {
+    const logPath = logFile()
+    await expect(runSmokeProcess(process.execPath, ['-e', 'process.on("SIGTERM",()=>process.exit(0)); setInterval(()=>{},100)'], {
+      logPath, timeoutMs: 500, killGraceMs: 200,
+    })).rejects.toThrow(/timed out/)
+    expect(readFileSync(logPath, 'utf8')).toContain('timed out')
+  })
+
+  it('rejects nonzero exits and leaves diagnostic output', async () => {
+    const logPath = logFile()
+    await expect(runSmokeProcess(process.execPath, ['-e', 'console.error("fixture-failure"); process.exit(3)'], {
+      logPath, timeoutMs: 5_000,
+    })).rejects.toThrow(/exit 3/)
+    expect(readFileSync(logPath, 'utf8')).toContain('fixture-failure')
+  })
+
+  it('records a missing executable failure', async () => {
+    const logPath = logFile()
+    await expect(runSmokeProcess(join(logPath, 'missing'), [], { logPath, timeoutMs: 5_000 })).rejects.toThrow()
+    expect(readFileSync(logPath, 'utf8')).toContain('failed')
+  })
+
+  it('rejects after the hard deadline even when termination never confirms exit', async () => {
+    vi.useFakeTimers()
+    const logPath = logFile()
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => false), unref: vi.fn() })
+    const rejected = expect(runSmokeProcess('fixture', [], {
+      logPath, timeoutMs: 100, killGraceMs: 200, spawnProcess: () => child as unknown as ChildProcess,
+    })).rejects.toThrow(/exit unconfirmed/)
+    await vi.advanceTimersByTimeAsync(1_300)
+    await rejected
+    expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']])
+    expect(child.unref).toHaveBeenCalledOnce()
+    expect(readFileSync(logPath, 'utf8')).toContain('cleanup is incomplete')
+  })
+
+  it('retains a failure report even before an executable can be launched', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'desktop-smoke-stage-'))
+    temporary.push(root)
+    await expect(smokeInvestmentDesktop(join(root, 'missing-zips'), root)).rejects.toThrow()
+    expect(JSON.parse(readFileSync(join(root, 'failure.json'), 'utf8'))).toMatchObject({ stage: 'acceptance', status: 'failed' })
+    expect(readFileSync(join(root, 'progress.log'), 'utf8')).toContain('"status":"started"')
+  })
+
+  it.skipIf(!['darwin', 'win32'].includes(process.platform))('retains the extraction failure stage and live extractor output', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'desktop-smoke-bad-zip-'))
+    temporary.push(root)
+    writeFileSync(join(root, `invalid-${process.platform}-${process.arch}.zip`), 'not a ZIP')
+    const evidence = join(root, 'evidence')
+    await expect(smokeInvestmentDesktop(root, evidence)).rejects.toThrow()
+    expect(JSON.parse(readFileSync(join(evidence, 'failure.json'), 'utf8'))).toMatchObject({ stage: 'extract', status: 'failed' })
+    expect(readFileSync(join(evidence, 'extract.log'), 'utf8')).toContain('exit ')
+  })
+})
 
 const report = () => ({
   status: 'passed',
@@ -27,14 +121,16 @@ describe('final desktop artifact acceptance', () => {
 
   it.each(['investment-release.yml', 'investment-sidecar.yml'])('%s gates uploaded ZIPs on real startup after staging', (filename) => {
     const workflow = load(readFileSync(resolve(import.meta.dirname, '../../.github/workflows', filename), 'utf8')) as {
-      jobs: Record<string, { steps: { name?: string; run?: string; if?: string; 'continue-on-error'?: boolean }[] }>
+      jobs: Record<string, { steps: { name?: string; run?: string; if?: string; 'continue-on-error'?: boolean; 'timeout-minutes'?: number }[] }>
     }
     const steps = Object.values(workflow.jobs).find(job => job.steps.some(step => step.name === 'Smoke final desktop ZIP'))!.steps
+    expect(Object.values(workflow.jobs).some(job => job.steps.some(step => step.run?.includes('scripts/smoke-investment-desktop.spec.ts')))).toBe(true)
     const smokeIndex = steps.findIndex(step => step.name === 'Smoke final desktop ZIP')
     expect(steps[smokeIndex]?.run).toContain('node scripts/smoke-investment-desktop.ts')
     expect(steps[smokeIndex]?.run).toContain('--zip-root release-assets')
     expect(steps[smokeIndex]?.if).toBeUndefined()
     expect(steps[smokeIndex]?.['continue-on-error']).toBeUndefined()
+    expect(steps[smokeIndex]?.['timeout-minutes']).toBe(25)
     expect(steps.slice(0, smokeIndex).some(step => step.run?.includes('investment-release.ts stage'))).toBe(true)
     expect(steps.slice(smokeIndex + 1).some(step => /Upload (release candidate|downloadable test package)/.test(step.name ?? ''))).toBe(true)
   })

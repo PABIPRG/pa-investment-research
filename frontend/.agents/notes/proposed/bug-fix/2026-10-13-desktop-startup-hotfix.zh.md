@@ -46,9 +46,14 @@ Electron 的 managed 后端使用本实例选取的三个互不相同的空闲�
 | 完整校验不饿死健康探测 | passed | 19842 文件用时 2623ms，20ms 计时器运行 125 次；篡改拒绝与共享缓存测试通过 |
 | 旧端口与身份竞争 | passed | 错误 UUID 回归通过；真实验收前后原 8000/8100 进程 PID 均为 24703/24704，自有进程全部退出 |
 | 本机最终 ZIP | passed | macOS arm64 真实窗口、三个包内后端、业务读取、禁用提醒持久化、两次启动及退出、运行后签名全部通过 |
-| Windows / Intel Mac | not-tested | 原生 CI 运行相同 ZIP 检查，失败阻断发布 |
+| Intel Mac | passed | PR CI 最终 ZIP 检查通过 |
+| Windows | blocked | 最终 ZIP 检查耗尽作业期限；待修复后的原生验收 |
 
 本机证据位于 `/tmp/pab34-desktop-final`：`acceptance.json`、`verification.json`、两份进程报告和截图。ZIP SHA-256 为 `f160e516a621bad4c0437f36502453b0f4d5291b48e57f39a5c35d2057738238`。界面停在首次内测声明，背后研究工作台已渲染；未把全业务人工交互视为通过。本地测试候选沿用基线 alpha.3 版本号，不能作为 alpha.4 发布，本 PR 已统一升版 alpha.4，其最终产物仍需运行完整原生门禁。
+
+[运行 38358166115](https://github.com/PABIPRG/pa-investment-research/actions/runs/38358166115) 中 Windows 作业耗尽 90 分钟上限，其中约 75 分钟处于最终 ZIP 验收，且无证据文件。解压无期限、等待 close 事件和延迟写日志使旧记录无法区分解压与启动卡住。后续修复限制解压与进程退出等待时间，直接落盘输出，保留阶段及失败记录，并添加 CLI 和工作流期限。本地进程夹具证明子进程可在父进程退出后继续持有管道，但这不证明它就是本次 Windows 卡住的原因。修复后的 Windows 原生验收通过前继续阻断发布。
+
+后续验证：27 项聚焦测试、严格类型检查和聚焦 lint 通过。修复后的脚本对 CI 生成的 alpha.4 darwin-arm64 ZIP 完成两次启动，约 41 秒通过，其中解压约 14 秒。证据保留在 `/tmp/pab34-timeout-alpha4-evidence`，ZIP SHA-256 为 `4b9451883617f4651b5a98fa3755f6384a9fe88aea41ec81838a3ef64459d4c4`。这证明新验收脚本可以验证未改动的真实应用产物；修复后的 Windows 路径仍需原生 CI 验证。
 
 ## Risks
 

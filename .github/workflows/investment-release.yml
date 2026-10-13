@@ -57,6 +57,9 @@ jobs:
       - name: Install frontend
         run: pnpm install --frozen-lockfile
 
+      - name: Test desktop acceptance supervisor
+        run: pnpm exec vitest run scripts/smoke-investment-desktop.spec.ts
+
       - name: Validate version and lock commit
         id: release_plan
         env:
@@ -255,6 +258,7 @@ jobs:
           --destination-root release-assets
 
       - name: Smoke final desktop ZIP
+        timeout-minutes: 25
         run: >-
           node scripts/smoke-investment-desktop.ts
           --zip-root release-assets

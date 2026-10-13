@@ -71,6 +71,7 @@ jobs:
           scripts/investment-backend-package-policy.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
+          scripts/smoke-investment-desktop.spec.ts
 
       - name: Verify shared application version
         id: app_version
@@ -182,6 +183,7 @@ jobs:
           --destination-root release-assets
 
       - name: Smoke final desktop ZIP
+        timeout-minutes: 25
         run: >-
           node scripts/smoke-investment-desktop.ts
           --zip-root release-assets

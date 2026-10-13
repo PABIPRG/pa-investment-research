@@ -46,9 +46,14 @@ This partially extends [Python runtime lifecycle](../../implemented/architecture
 | Complete verification and timer liveness | passed | 19842 files in 2623ms with 125 timer ticks at 20ms; tampering and shared-cache regressions pass |
 | Old ports and identity races | passed | Wrong UUID rejected; existing 8000/8100 listener PIDs remain 24703/24704; all owned children exit |
 | Native final ZIP | passed | macOS arm64 window, bundled backends, business reads, persisted disabled alert, two launches, exit and post-run signature pass |
-| Windows / Intel Mac | not-tested | Native CI runs the same ZIP check and blocks publication on failure |
+| Intel Mac | passed | PR CI final ZIP check passes |
+| Windows | blocked | Final ZIP check reached the job limit; corrected native acceptance is pending |
 
 Local evidence is retained at `/tmp/pab34-desktop-final`: `acceptance.json`, `verification.json`, two process reports and screenshots. ZIP SHA-256 is `f160e516a621bad4c0437f36502453b0f4d5291b48e57f39a5c35d2057738238`. The first-run notice overlays the rendered workbench; this does not establish manual acceptance of every business interaction. The local candidate retains the alpha.3 baseline version and is not an alpha.4 release; the PR bumps the shared version to alpha.4, whose final artifacts still require every native check.
+
+The Windows job in [run 38358166115](https://github.com/PABIPRG/pa-investment-research/actions/runs/38358166115) reached its 90-minute limit, with about 75 minutes inside final ZIP acceptance and no evidence files. The missing extraction deadline, close-event wait and delayed log writes prevented distinguishing extraction from startup. The follow-up bounds extraction and process exit, uses direct file output, retains stage/failure records, and applies CLI/workflow deadlines. A local process fixture proves that a descendant can keep a pipe open after its parent exits; it does not prove that this caused the Windows incident. Keep Windows release-blocking until the corrected native check passes.
+
+Follow-up validation: 27 focused tests, strict type checking and focused lint pass. The corrected script also passes both launches of the CI-produced alpha.4 darwin-arm64 ZIP in about 41 seconds; extraction takes about 14 seconds. Evidence is retained at `/tmp/pab34-timeout-alpha4-evidence`, with ZIP SHA-256 `4b9451883617f4651b5a98fa3755f6384a9fe88aea41ec81838a3ef64459d4c4`. This verifies the new supervisor against an unchanged real application artifact; the corrected Windows path remains unverified until native CI runs.
 
 ## Risks
 
