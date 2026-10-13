@@ -10,6 +10,8 @@ Status: implemented
 
 ## 决策
 
+每个原生目标在不可变附件暂存后、上传前必须通过[最终 ZIP 启动检查](../../proposed/bug-fix/2026-10-13-desktop-startup-hotfix.md)。检查两次启动解包后的可执行文件，保留报告、截图与 ZIP 摘要；失败阻止发布任务。下文版本与提交锁定规则继续适用。
+
 ### 手动发布意图与仓库持有的版本
 
 `.github/workflows/investment-release.yml` 仅支持手动运行。它接收预期版本以及 `prerelease` 或 `stable` 渠道，而 `frontend/package.json` 仍是版本真源。运行必须从 `master` 发起；预期值必须等于仓库值；预发布版本与稳定版本必须使用各自匹配的渠道。

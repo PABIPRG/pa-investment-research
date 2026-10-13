@@ -26,11 +26,13 @@ import {
   STREAM_OPEN_CHANNEL,
 } from './ipc.ts'
 import { formatStartupError, presentStartupFailure } from './startup-error.ts'
+import { configureStartupSmoke, runStartupSmoke } from './startup-smoke.ts'
 
 const ELECTRON_PATCH = fileURLToPath(new URL('../electron.patch.yml', import.meta.url))
 const RENDERER_DIR = fileURLToPath(new URL('../renderer/', import.meta.url))
 const PRELOAD = fileURLToPath(new URL('./preload.cjs', import.meta.url))
 const PROFILE = resolveElectronProfile(process.argv, app.isPackaged ? 'investment-research' : 'web')
+const SMOKE_ROOT = configureStartupSmoke()
 
 interface StreamOpenRequest {
   kind: ElectronStreamKind
@@ -232,6 +234,10 @@ async function runApplication(): Promise<void> {
       window.focus()
     })
     lifecycleReady.resolve()
+    if (SMOKE_ROOT !== undefined) {
+      await runStartupSmoke(SMOKE_ROOT, window, ctx)
+      await quitOnce()
+    }
   } catch (error) {
     lifecycleReady.reject(error)
     if (errorCode(error) === 'DSH_INVESTMENT_INSTANCE_CONFLICT') {
@@ -242,6 +248,11 @@ async function runApplication(): Promise<void> {
     const logPath = await recordStartupFailure(error)
     const failure = presentStartupFailure(error, logPath)
     process.stderr.write(`${failure.message}\n${formatStartupError(error)}\n`)
+    if (SMOKE_ROOT !== undefined) {
+      if (profileShutdown !== undefined) await profileShutdown.shutdown(1)
+      app.exit(1)
+      return
+    }
     await dialog.showMessageBox({
       type: 'error',
       title: '投研智能体启动失败',

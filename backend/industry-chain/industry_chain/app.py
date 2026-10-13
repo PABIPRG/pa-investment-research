@@ -6,6 +6,7 @@
 """
 
 import time
+import os
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,7 +37,9 @@ def _company_or_404(code: str, result):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "industry-chain", "port": 8200, "ts": int(time.time())}
+    return {"ok": True, "service": "industry-chain", "port": 8200, "ts": int(time.time()),
+            **({"runtimeInstance": os.environ["DSH_INVESTMENT_INSTANCE_ID"]}
+               if os.getenv("DSH_INVESTMENT_INSTANCE_ID") else {})}
 
 
 @app.get("/data/status")

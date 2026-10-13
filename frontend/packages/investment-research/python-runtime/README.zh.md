@@ -21,6 +21,8 @@
 
 ## Backend 生命周期
 
+Electron 的 managed 后端始终在互不相同的动态回环端口启动自有子进程。健康响应必须匹配 `DSH_INVESTMENT_INSTANCE_ID` 中的本次启动 UUID；端口占用不能授予进程归属。Runtime 设置对应的 `MW_URL` 和 `IC_URL`，继续使用既有 DSH_HOME 数据目录；显式 external 后端保留配置地址。自有进程启动期间，单次探测超时和暂时不可达会在总启动期限内重试；身份不符或子进程退出立即失败。下文固定端口 managed 行为适用于其他部署形态。
+
 `managed` 是业务插件的默认模式。runtime 会验证 loopback HTTP URL，从本包位置解析 backend 目录而不使用调用方工作目录，检查项目虚拟环境解释器，并探测 `/health`。只有探测明确返回 connection refused 时才会启动 Uvicorn；未知网络失败、已占用 endpoint 或服务身份不匹配都会使启动失败，且不会触碰作出响应的进程。spawn 前已健康的服务归类为 `attached`，通过 `ctx.subprocess` 启动的子进程归类为 `owned`。
 
 `external` 接受 HTTP 或 HTTPS，验证配置的健康身份并返回 `external` lease。它绝不启动、发送信号或停止服务。最后一个 lease 释放时只会停止内存中持有 handle 的 `owned` 进程；attached 与 external 服务继续存活。runtime dispose（释放）会拒绝新工作、等待进行中的获取，再等待所有 owned 进程树完全退出。状态文件只用于诊断，绝不授权按 PID 或端口接管进程。
@@ -38,6 +40,8 @@
 通知渠道使用独立的管理员 Remote，而非浏览器安全的 `request-data`。本机 Web 可配置自管 trading backend 的渠道；云端 Web 则通过 WebAuth 管理员会话和可信 HTTPS 代理配置。配置保存在当前实例的凭据存储中。此操作对 `attached` 和 `external` backend 仍不可用。
 
 ## 项目发现与初始化
+
+同一 Runtime 的 managed 启动共享一次包内异步校验，成功和失败都按生命周期缓存。校验在文件及目录之间让出事件循环；同步 readiness 只读取结果，不扫描安装包。构建完整性检查仍可使用同步校验器。单个大文件的哈希计算仍会阻塞到该文件检查结束。
 
 源码启动会从本安装包向上查找 `backend/dsh-trading-core`、`backend/market-watch` 与 `backend/industry-chain`。使用 `pnpm run investment:python:init` 按固定顺序初始化三个环境，再用 `pnpm run investment:python:verify` 执行只读检查。industry-chain 的初始化和验证都不会下载种子数据；首次下载仍是独立的用户确认产品操作。verify 会报告每个缺失环境及其 init 命令，不执行安装。不含该仓库布局的部署必须设置业务插件的绝对 `backendProjectDir`；相对路径或不存在的目录会失败。POSIX 解释器为 `<projectDir>/env/bin/python`，Windows 解释器为 `<projectDir>\env\Scripts\python.exe`。
 

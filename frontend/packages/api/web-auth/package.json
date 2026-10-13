@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-api-web-auth",
   "description": "Single-administrator Web authentication boundary with server-side sessions, CSRF, rate limiting, and socket revocation",
-  "version": "0.2.0-alpha.3",
+  "version": "0.2.0-alpha.4",
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",

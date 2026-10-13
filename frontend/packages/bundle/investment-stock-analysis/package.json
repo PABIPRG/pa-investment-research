@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-investment-stock-analysis-bundle",
   "description": "Investment research stock analysis profile bundle",
-  "version": "0.2.0-alpha.3",
+  "version": "0.2.0-alpha.4",
   "publishConfig": {
     "access": "public"
   },

@@ -195,6 +195,7 @@ export class InvestmentPythonRuntime extends Service {
     this.notificationSettings = new NotificationSettings(ctx.credentials, this.notificationInternalToken)
     this.manager = new InvestmentBackendManager({
       subprocess: ctx.subprocess,
+      isolatedManagedBackends: this.deploymentSnapshot.surface === 'electron',
       config,
       resolveCredential: ctx.credentials.resolve.bind(ctx.credentials),
       describeCredential: ctx.credentials.describe.bind(ctx.credentials),

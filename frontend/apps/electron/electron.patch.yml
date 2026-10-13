@@ -17,6 +17,9 @@
 - id: web-auth
   disabled: true
 
+- id: public-observatory
+  disabled: true
+
 - id: directory-picker
   disabled: true
 

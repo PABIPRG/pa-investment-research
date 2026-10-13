@@ -6,6 +6,8 @@ DeepSeek Harness 的 Electron 桌面应用。它启动所选 profile（默认为
 
 ## 从源码启动
 
+最终 ZIP 验收：在 frontend 工作区执行 `node scripts/smoke-investment-desktop.ts --zip-root release-assets --report-root <全新目录>`。检查在原生平台解包并两次启动真实可执行文件，隔离 HOME、DSH_HOME 与 userData，验证三个自有包内后端、业务读取、禁用提醒的持久化、界面导航及子进程退出，保留截图、日志和未变化的 ZIP 摘要。两个桌面工作流均在上传 ZIP 前执行该检查。`DSH_DESKTOP_SMOKE=1` 仅用于显式测试，必须配置对应隔离根目录；正常启动保持既有用户数据位置。
+
 在仓库根目录运行：
 
 ```sh

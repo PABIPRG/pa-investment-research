@@ -43,6 +43,7 @@ describe('Electron profile overlay', () => {
     const byId = new Map(composedRows().map(row => [row.id, row]))
 
     expect(byId.get('web-auth')).toEqual(expect.objectContaining({ disabled: true }))
+    expect(byId.get('public-observatory')).toEqual(expect.objectContaining({ disabled: true }))
     expect(byId.get('client-hmr')).toEqual(expect.objectContaining({ disabled: true }))
     expect(byId.get('modules')).toEqual(expect.objectContaining({
       inject: null,
@@ -57,7 +58,7 @@ describe('Electron profile overlay', () => {
 
   it('activates the real clientModules service without Web services and passes the startup audit', async () => {
     const rows = composedRows().filter(row => [
-      'web-startup', 'webserver', 'web-runtime', 'web-auth', 'client-hmr', 'modules',
+      'web-startup', 'webserver', 'web-runtime', 'web-auth', 'client-hmr', 'modules', 'public-observatory',
     ].includes(row.id))
     const ctx = new Context()
     ctx.baseUrl = new URL('../', import.meta.url).href

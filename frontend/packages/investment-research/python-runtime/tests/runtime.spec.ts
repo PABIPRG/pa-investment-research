@@ -118,6 +118,89 @@ class StubCredentials extends CredentialProvider {
 }
 
 describe('InvestmentBackendManager', () => {
+  it('fails a desktop bind/identity conflict and cleans up only the child it started', async () => {
+    const base = await harness()
+    base.handle.autoExitOnTerminate = true
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home }, isolatedManagedBackends: true,
+      checkHealth: async () => ({ status: 'occupied', healthUrl: 'http://127.0.0.1/health', httpStatus: 200 }),
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: '/fake/python' }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    try {
+      await expect(manager.acquire('trading-core')).rejects.toThrow(/occupied/)
+      expect(base.specs).toHaveLength(1)
+      expect(base.handle.terminateCalls).toBe(1)
+      expect(manager.invariantSnapshot().active).toHaveLength(0)
+    } finally { await manager.dispose() }
+  })
+
+  it('preserves explicitly external addresses and process ownership on desktop', async () => {
+    const base = await harness()
+    const probe = vi.fn(async (_definition: PythonBackendDefinition) => healthy)
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home },
+      isolatedManagedBackends: true, checkHealth: probe,
+    })
+    const external = { ...definition, mode: 'external' as const }
+    manager.register(external)
+    try {
+      const lease = await manager.acquire('trading-core')
+      expect(lease).toMatchObject({ ownership: 'external', baseUrl: external.baseUrl })
+      expect(probe.mock.calls[0]?.[0]).toEqual(external)
+      await lease.release()
+    } finally { await manager.dispose() }
+    expect(base.specs).toHaveLength(0)
+    expect(base.handle.terminateCalls).toBe(0)
+  })
+
+  it('retries a slow owned health probe within the startup budget', async () => {
+    const base = await harness()
+    base.handle.autoExitOnTerminate = true
+    let probes = 0
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home, healthTimeoutMs: 5, healthPollMs: 1, startupTimeoutMs: 200 },
+      isolatedManagedBackends: true,
+      checkHealth: () => ++probes === 1 ? new Promise(() => {}) : Promise.resolve(healthy),
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: '/fake/python' }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    try {
+      expect((await manager.acquire('trading-core')).ownership).toBe('owned')
+      expect(probes).toBe(2)
+    } finally { await manager.dispose() }
+  })
+
+  it('isolates desktop ports, routes peers to this instance, and never attaches to an old healthy service', async () => {
+    const base = await harness()
+    base.handle.autoExitOnTerminate = true
+    const probes: PythonBackendDefinition[] = []
+    const manager = new InvestmentBackendManager({
+      subprocess: base.subprocess, config: { dshHome: base.home },
+      isolatedManagedBackends: true,
+      checkHealth: async (value) => { probes.push(value); return healthy },
+      resolvePaths: () => ({ source: 'source', projectDir: base.projectDir, pythonExecutable: '/fake/python' }),
+      executableExists: async () => true,
+    })
+    manager.register(definition)
+    try {
+      const lease = await manager.acquire('trading-core')
+      expect(lease.ownership).toBe('owned')
+      expect(lease.baseUrl).not.toBe(definition.baseUrl)
+      expect(probes.every(value => value.baseUrl === lease.baseUrl)).toBe(true)
+      const spec = base.specs[0]!
+      expect(spec.env?.DSH_INVESTMENT_INSTANCE_ID).toEqual(expect.any(String))
+      expect(probes[0]?.healthOk.runtimeInstance).toBe(spec.env?.DSH_INVESTMENT_INSTANCE_ID)
+      expect(spec.env?.MW_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+      expect(spec.env?.MW_URL).not.toBe('http://127.0.0.1:8100')
+      expect(spec.env?.IC_URL).not.toBe('http://127.0.0.1:8200')
+      await lease.release()
+    } finally { await manager.dispose() }
+    expect(base.handle.terminateCalls).toBe(1)
+  })
+
   it('cancels an owned initializer without waiting for a queued callback to settle', async () => {
     const base = await harness()
     base.handle.autoExitOnTerminate = true

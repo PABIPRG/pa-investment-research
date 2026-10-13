@@ -6,6 +6,8 @@ Electron desktop application for DeepSeek Harness. It boots the selected profile
 
 ## Launch from source
 
+Final ZIP acceptance: run `node scripts/smoke-investment-desktop.ts --zip-root release-assets --report-root <fresh-directory>` from the frontend workspace. On its native host, the check extracts the ZIP and launches its real executable twice with temporary HOME, DSH_HOME and userData. It verifies three owned bundled backends, business reads, persisted disabled alert data, renderer navigation and child exit, recording screenshots, logs and the unchanged ZIP digest. Both desktop workflows require it before uploading ZIPs. `DSH_DESKTOP_SMOKE=1` is opt-in test mode requiring a matching isolated root; normal launches retain user data locations.
+
 From the repository root:
 
 ```sh

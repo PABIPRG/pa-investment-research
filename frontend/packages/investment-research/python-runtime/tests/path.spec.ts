@@ -1,7 +1,7 @@
 import path, { posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
-import { createBackendPathResolver, resolveBackendAddress, resolveBackendPaths } from '../src/path.ts'
+import { createAsyncBackendPathResolver, createBackendPathResolver, resolveBackendAddress, resolveBackendPaths } from '../src/path.ts'
 import type { VerifiedInvestmentRuntime } from '../src/descriptor.ts'
 import type { PythonBackendDefinition } from '../src/types.ts'
 
@@ -45,6 +45,33 @@ function bundledRuntime(root: string): VerifiedInvestmentRuntime {
 }
 
 describe('investment backend path resolution', () => {
+  it('shares startup verification and keeps readiness from starting a synchronous scan', async () => {
+    const root = '/resources/investment-python'
+    const verifyDescriptor = vi.fn(() => bundledRuntime(root))
+    const resolver = createAsyncBackendPathResolver({
+      packageDir: '/resources/app', pathApi: posix, dshHome: '/home/test',
+      isFile: candidate => candidate === `${root}/runtime.json`, verifyDescriptor,
+    })
+    expect(() => resolver.peek(backend())).toThrow(/verification is pending/)
+    expect(verifyDescriptor).not.toHaveBeenCalled()
+    const paths = await Promise.all([resolver.resolve(backend()), resolver.resolve(backend())])
+    expect(paths[0]).toEqual(paths[1])
+    expect(resolver.peek(backend())).toEqual(paths[0])
+    expect(verifyDescriptor).toHaveBeenCalledOnce()
+  })
+
+  it('retains asynchronous verification failure without falling back to source or rehashing', async () => {
+    const verifyDescriptor = vi.fn(() => { throw new Error('packaged runtime is invalid') })
+    const resolver = createAsyncBackendPathResolver({
+      packageDir: '/resources/app', pathApi: posix, dshHome: '/home/test',
+      isFile: candidate => candidate === '/resources/investment-python/runtime.json', verifyDescriptor,
+    })
+    await expect(resolver.resolve(backend())).rejects.toThrow(/invalid/)
+    await expect(resolver.resolve(backend())).rejects.toThrow(/invalid/)
+    expect(() => resolver.peek(backend())).toThrow(/invalid/)
+    expect(verifyDescriptor).toHaveBeenCalledOnce()
+  })
+
   it('discovers the source checkout backend from import.meta.url defaults without reading cwd', () => {
     const expectedProjectDir = path.normalize(fileURLToPath(new URL(
       '../../../../../backend/dsh-trading-core',
@@ -54,7 +81,9 @@ describe('investment backend path resolution', () => {
       throw new Error('cwd must not be read')
     })
     try {
-      const resolved = resolveBackendPaths(backend())
+      const resolved = resolveBackendPaths(backend(), {
+        isFile: candidate => candidate === path.join(expectedProjectDir, 'env', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'),
+      })
       expect(resolved.projectDir).toBe(expectedProjectDir)
       expect(cwd).not.toHaveBeenCalled()
     } finally {
