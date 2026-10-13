@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -88,14 +88,25 @@ describe('bounded smoke processes', () => {
   })
 
   it.skipIf(!['darwin', 'win32'].includes(process.platform))('retains the extraction failure stage and live extractor output', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'desktop-smoke-bad-zip-'))
-    temporary.push(root)
+    const parent = process.env.DSH_DESKTOP_SMOKE_TEST_ROOT ?? tmpdir()
+    mkdirSync(parent, { recursive: true })
+    const root = mkdtempSync(join(parent, 'desktop-smoke-bad-zip-'))
     writeFileSync(join(root, `invalid-${process.platform}-${process.arch}.zip`), 'not a ZIP')
     const evidence = join(root, 'evidence')
-    await expect(smokeInvestmentDesktop(root, evidence)).rejects.toThrow()
-    expect(JSON.parse(readFileSync(join(evidence, 'failure.json'), 'utf8'))).toMatchObject({ stage: 'extract', status: 'failed' })
-    expect(readFileSync(join(evidence, 'extract.log'), 'utf8')).toContain('exit ')
-  })
+    let verified = false
+    try {
+      await expect(smokeInvestmentDesktop(root, evidence, {
+        extraction: { timeoutMs: 30_000, killGraceMs: 2_000 },
+      })).rejects.toThrow(/^Process failed \(exit [1-9]\d*, signal null\)/)
+      expect(JSON.parse(readFileSync(join(evidence, 'failure.json'), 'utf8'))).toMatchObject({ stage: 'extract', status: 'failed' })
+      expect(readFileSync(join(evidence, 'extract.log'), 'utf8')).toContain('timedOut false')
+      verified = true
+    } finally {
+      // Do not delete failed evidence or race cleanup against a still-running extractor.
+      if (verified) temporary.push(root)
+      else console.error(`Extraction regression evidence retained at ${root}`)
+    }
+  }, 45_000)
 })
 
 const report = () => ({
@@ -121,10 +132,17 @@ describe('final desktop artifact acceptance', () => {
 
   it.each(['investment-release.yml', 'investment-sidecar.yml'])('%s gates uploaded ZIPs on real startup after staging', (filename) => {
     const workflow = load(readFileSync(resolve(import.meta.dirname, '../../.github/workflows', filename), 'utf8')) as {
-      jobs: Record<string, { steps: { name?: string; run?: string; if?: string; 'continue-on-error'?: boolean; 'timeout-minutes'?: number }[] }>
+      jobs: Record<string, { steps: { name?: string; run?: string; if?: string; env?: Record<string, string>; with?: Record<string, unknown>; 'continue-on-error'?: boolean; 'timeout-minutes'?: number }[] }>
     }
     const steps = Object.values(workflow.jobs).find(job => job.steps.some(step => step.name === 'Smoke final desktop ZIP'))!.steps
     expect(Object.values(workflow.jobs).some(job => job.steps.some(step => step.run?.includes('scripts/smoke-investment-desktop.spec.ts')))).toBe(true)
+    const testSteps = Object.values(workflow.jobs).find(job => job.steps.some(step => step.run?.includes('scripts/smoke-investment-desktop.spec.ts')))!.steps
+    const testIndex = testSteps.findIndex(step => step.run?.includes('scripts/smoke-investment-desktop.spec.ts'))
+    expect(testSteps[testIndex]?.env?.DSH_DESKTOP_SMOKE_TEST_ROOT).toContain('desktop-smoke-tests')
+    expect(testSteps[testIndex + 1]).toMatchObject({
+      name: 'Upload desktop acceptance test failures', if: 'failure()',
+      with: { path: '${{ runner.temp }}/desktop-smoke-tests/' },
+    })
     const smokeIndex = steps.findIndex(step => step.name === 'Smoke final desktop ZIP')
     expect(steps[smokeIndex]?.run).toContain('node scripts/smoke-investment-desktop.ts')
     expect(steps[smokeIndex]?.run).toContain('--zip-root release-assets')

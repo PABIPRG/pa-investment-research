@@ -55,6 +55,8 @@ The Windows job in [run 38358166115](https://github.com/PABIPRG/pa-investment-re
 
 Follow-up validation: 27 focused tests, strict type checking and focused lint pass. The corrected script also passes both launches of the CI-produced alpha.4 darwin-arm64 ZIP in about 41 seconds; extraction takes about 14 seconds. Evidence is retained at `/tmp/pab34-timeout-alpha4-evidence`, with ZIP SHA-256 `4b9451883617f4651b5a98fa3755f6384a9fe88aea41ec81838a3ef64459d4c4`. This verifies the new supervisor against an unchanged real application artifact; the corrected Windows path remains unverified until native CI runs.
 
+PR #166 exposed a second Windows limitation: the real corrupt-ZIP regression reached Vitest’s default 5-second timeout during extraction, before application packaging. Its supervisor budget remained 10 minutes and cleanup could remove evidence before the extractor finished. The fixture now owns a 30-second extraction budget plus 3 seconds for termination and confirmation within a 45-second test; it requires a nonzero extractor exit, retains failures and has dedicated artifact upload. PowerShell logs readiness and extraction milestones. The 27 focused tests, strict type checking and lint pass locally; Windows must still validate this correction. Production extraction deadlines remain unchanged.
+
 ## Risks
 
 This is deep cross-layer startup acceptance. Signing, notarization, download quarantine and manual interactions across every screen are not proven by startup. Layout, colors and interactions are unchanged; rendering checks focus on the normal entry, not unrelated filtering, destructive actions or responsive redesign. Process visibility never authorizes termination.

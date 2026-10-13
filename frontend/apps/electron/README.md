@@ -10,6 +10,8 @@ Final ZIP acceptance: run `node scripts/smoke-investment-desktop.ts --zip-root r
 
 Acceptance records each stage in `stage.json` and `progress.log`, and writes child output directly to log files while processes run. ZIP extraction has a 10-minute deadline; each application launch has a 2-minute deadline followed by a 15-second termination grace and at most 1 second to confirm forced exit. The CLI has a 20-minute watchdog and each workflow step a 25-minute limit, leaving time to upload evidence. Timeout always fails acceptance, even if termination returns exit zero; unconfirmed exit is reported as incomplete cleanup. Only the spawned child handle is signalled. Windows extraction uses .NET ZipFile through noninteractive PowerShell with progress disabled.
 
+The corrupt-ZIP native regression has a separate 30-second extraction budget, a 2-second termination grace, and up to 1 second for exit confirmation inside a 45-second test limit. It passes only when the extractor rejects the archive with a nonzero exit code, never on timeout. Failed fixtures remain under `DSH_DESKTOP_SMOKE_TEST_ROOT` and both workflows upload them separately from final-application evidence; successful fixtures are removed only after the extractor finishes.
+
 From the repository root:
 
 ```sh

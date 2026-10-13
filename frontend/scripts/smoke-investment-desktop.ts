@@ -84,6 +84,7 @@ export function runSmokeProcess(executable: string, args: string[], options: {
       record(`failed: ${error instanceof Error ? error.message : String(error)}`)
       throw error
     } finally { closeSync(output) }
+    record(`spawned pid ${child.pid ?? 'unavailable'}`)
     let finished = false
     let timedOut = false
     let force: ReturnType<typeof setTimeout> | undefined
@@ -149,9 +150,12 @@ function launch(executable: string, root: string, iteration: number): Promise<vo
  * Extract and exercise one final release ZIP without changing it or real user data.
  * @param zipRoot - directory containing exactly one native-target ZIP.
  * @param reportRoot - retained evidence directory; defaults to a fresh temporary directory.
+ * @param options - optional extraction budget for bounded native regression fixtures; production defaults stay unchanged.
  * @returns evidence location and digest of the accepted ZIP.
  */
-export async function smokeInvestmentDesktop(zipRoot: string, reportRoot?: string): Promise<{ root: string; sha256: string }> {
+export async function smokeInvestmentDesktop(zipRoot: string, reportRoot?: string, options: {
+  extraction?: { timeoutMs: number; killGraceMs: number }
+} = {}): Promise<{ root: string; sha256: string }> {
   const root = reportRoot === undefined ? await mkdtemp(join(tmpdir(), 'investment-desktop-smoke-')) : resolve(reportRoot)
   await mkdir(root, { recursive: true })
   let failedStage = false
@@ -187,12 +191,13 @@ export async function smokeInvestmentDesktop(zipRoot: string, reportRoot?: strin
     await mkdir(extracted) // Refuse reuse of stale extraction or results.
     await mkdir(join(root, 'user'))
     const run = promisify(execFile)
+    const extraction = options.extraction ?? { timeoutMs: 600_000, killGraceMs: 15_000 }
     await stage('extract', () => process.platform === 'darwin'
-      ? runSmokeProcess('/usr/bin/ditto', ['-x', '-k', zip, extracted], { logPath: join(root, 'extract.log'), timeoutMs: 600_000 })
+      ? runSmokeProcess('/usr/bin/ditto', ['-x', '-k', zip, extracted], { logPath: join(root, 'extract.log'), ...extraction })
       : runSmokeProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:SMOKE_ZIP, $env:SMOKE_EXTRACTED)"], {
+        "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Write-Output 'PowerShell ready'; Add-Type -AssemblyName System.IO.Compression.FileSystem; Write-Output 'ZIP extraction started'; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:SMOKE_ZIP, $env:SMOKE_EXTRACTED); Write-Output 'ZIP extraction finished'"], {
         env: { ...processEnvironment(), SMOKE_ZIP: zip, SMOKE_EXTRACTED: extracted },
-        logPath: join(root, 'extract.log'), timeoutMs: 600_000,
+        logPath: join(root, 'extract.log'), ...extraction,
       }))
     const executable = await stage('verify-executable', async () => {
       const entries = await readdir(extracted)
