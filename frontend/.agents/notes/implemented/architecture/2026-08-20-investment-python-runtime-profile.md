@@ -10,6 +10,8 @@ The investment function plugins need three Python HTTP services, but plugin acti
 
 ## Decision
 
+The fixed-port managed lifecycle below applies outside Electron. Desktop managed children use isolated ephemeral endpoints and per-launch health identities, as described in the [desktop startup hotfix](../../proposed/bug-fix/2026-10-13-desktop-startup-hotfix.md). External ownership, leases, diagnostics and instance data semantics remain shared.
+
 `@deepseek-ai/dsh-investment-python-runtime` provides the Host service `ctx.investmentPythonRuntime`. Business plugins register complete backend definitions and acquire verified URL leases before registering tools. Per-backend acquisition is single-flight and leases are reference-counted. `managed` may spawn Uvicorn through the existing [`ctx.subprocess`](../../../../packages/subprocess/subprocess/README.md) service only after an identity-aware health probe explicitly reports connection refused. A healthy pre-existing managed endpoint is attached. `external` verifies an HTTP(S) endpoint without starting or stopping it.
 
 Process authority comes only from the live `SubprocessHandle` returned to this Runtime instance. The last lease release and Runtime disposal terminate and join only those owned handles. A responding port, a PID in `runtime.json`, or stale state never authorizes adoption, signalling, or cleanup. Unknown network failures, occupied endpoints, and mismatched service identities fail startup while the other process remains alive. Logs and owner-only state under `$DSH_HOME/investment-research/<id>/` provide diagnostics, not recovery authority.

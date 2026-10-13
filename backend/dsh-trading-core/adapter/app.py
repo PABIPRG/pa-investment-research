@@ -422,6 +422,8 @@ def create_app(
         return {
             "service": "trading-core",
             "status": "ok",
+            **({"runtimeInstance": os.environ["DSH_INVESTMENT_INSTANCE_ID"]}
+               if os.getenv("DSH_INVESTMENT_INSTANCE_ID") else {}),
             "runners": {k: v.name for k, v in manager.registry.items()},
         }
 

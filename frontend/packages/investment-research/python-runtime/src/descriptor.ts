@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path, { dirname } from 'node:path'
 import type { PlatformPath } from 'node:path'
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import type { InvestmentBackendId } from './types.ts'
 
 const BACKEND_MODULES = {
@@ -88,19 +89,20 @@ function directoryExists(candidate: string): boolean {
   }
 }
 
-function listRuntimeFiles(root: string): readonly string[] {
+function* listRuntimeFiles(root: string): Generator<void, readonly string[]> {
   const files: string[] = []
-  const visit = (directory: string, prefix: string): void => {
+  function* visit(directory: string, prefix: string): Generator<void> {
+    yield
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
       const absolute = path.join(directory, entry.name)
       if (entry.isSymbolicLink()) throw invalid(`symbolic link: ${relative}`)
-      if (entry.isDirectory()) visit(absolute, relative)
+      if (entry.isDirectory()) yield* visit(absolute, relative)
       else if (entry.isFile() && relative !== 'runtime.json') files.push(relative)
       else if (!entry.isFile()) throw invalid(`unsupported file: ${relative}`)
     }
   }
-  visit(root, '')
+  yield* visit(root, '')
   return files.sort()
 }
 
@@ -207,13 +209,42 @@ export function verifyInvestmentRuntimeDescriptor(
   descriptorPath: string,
   options: InvestmentRuntimeDescriptorOptions = {},
 ): VerifiedInvestmentRuntime {
+  const steps = verificationSteps(descriptorPath, options)
+  for (;;) {
+    const step = steps.next()
+    if (step.done) return step.value
+  }
+}
+
+/**
+ * Verify the same complete descriptor while allowing health probes and cancellation
+ * to run between files and directories. No partially verified paths are returned.
+ * @param descriptorPath - absolute runtime.json path.
+ * @param options - target and I/O facts used for verification.
+ * @returns immutable, fully verified runtime paths.
+ */
+export async function verifyInvestmentRuntimeDescriptorAsync(
+  descriptorPath: string,
+  options: InvestmentRuntimeDescriptorOptions = {},
+): Promise<VerifiedInvestmentRuntime> {
+  const steps = verificationSteps(descriptorPath, options)
+  for (;;) {
+    await yieldToEventLoop()
+    const step = steps.next()
+    if (step.done) return step.value
+  }
+}
+
+function* verificationSteps(
+  descriptorPath: string,
+  options: InvestmentRuntimeDescriptorOptions,
+): Generator<void, VerifiedInvestmentRuntime> {
   const platform = options.platform ?? process.platform
   const arch = options.arch ?? process.arch
   const pathApi = options.pathApi ?? path
   const readFile = options.readFile ?? readFileSync
   const isFile = options.isFile ?? fileExists
   const isDirectory = options.isDirectory ?? directoryExists
-  const listFiles = options.listFiles ?? listRuntimeFiles
   let decoded: unknown
   try {
     decoded = JSON.parse(Buffer.from(readFile(descriptorPath)).toString('utf8'))
@@ -236,12 +267,13 @@ export function verifyInvestmentRuntimeDescriptor(
     if (!isDirectory(projectDir)) throw invalid(`${id} backend missing`)
   }
   for (const entry of descriptor.files) {
+    yield
     const absolute = resolveRelative(root, entry.path, pathApi)
     if (!isFile(absolute)) throw invalid(`file missing: ${entry.path}`)
     const actual = createHash('sha256').update(readFile(absolute)).digest('hex')
     if (actual !== entry.sha256) throw invalid(`hash mismatch: ${entry.path}`)
   }
-  const actualFiles = listFiles(root)
+  const actualFiles = options.listFiles === undefined ? yield* listRuntimeFiles(root) : options.listFiles(root)
   const declaredFiles = descriptor.files.map(entry => entry.path)
   if (actualFiles.length !== declaredFiles.length || actualFiles.some((entry, index) => entry !== declaredFiles[index])) {
     throw invalid('incomplete file list')

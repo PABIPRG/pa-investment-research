@@ -6,6 +6,7 @@
 """
 
 import logging
+import os
 import threading
 import time
 import uuid
@@ -61,7 +62,9 @@ def _authorize_position_risk(token: str) -> None:
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "market-watch", "port": 8100, "ts": int(time.time())}
+    return {"ok": True, "service": "market-watch", "port": 8100, "ts": int(time.time()),
+            **({"runtimeInstance": os.environ["DSH_INVESTMENT_INSTANCE_ID"]}
+               if os.getenv("DSH_INVESTMENT_INSTANCE_ID") else {})}
 
 
 @app.post("/watchlist/add")

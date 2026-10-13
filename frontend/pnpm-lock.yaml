@@ -415,6 +415,9 @@ importers:
       '@deepseek-ai/dsh-investment-market-watch-bundle':
         specifier: workspace:^
         version: link:../../packages/bundle/investment-market-watch
+      '@deepseek-ai/dsh-investment-python-runtime':
+        specifier: workspace:^
+        version: link:../../packages/investment-research/python-runtime
       '@deepseek-ai/dsh-investment-runtime-bundle':
         specifier: workspace:^
         version: link:../../packages/bundle/investment-runtime

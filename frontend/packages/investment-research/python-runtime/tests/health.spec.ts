@@ -35,6 +35,16 @@ function jsonFetch(body: unknown, status = 200): typeof fetch {
 }
 
 describe('investment backend health classification', () => {
+  it('rejects a healthy old process whose launch identity differs', async () => {
+    const isolated = { ...definition, healthOk: { status: 'ok', runtimeInstance: 'this-launch' } }
+    await expect(checkBackendHealth(isolated, {
+      fetch: jsonFetch({ service: 'trading-core', status: 'ok', runtimeInstance: 'old-launch' }),
+    })).resolves.toMatchObject({ status: 'occupied' })
+    await expect(checkBackendHealth(isolated, {
+      fetch: jsonFetch({ service: 'trading-core', status: 'ok', runtimeInstance: 'this-launch' }),
+    })).resolves.toMatchObject({ status: 'healthy' })
+  })
+
   it('classifies an identity and health-field match as healthy', async () => {
     await expect(checkBackendHealth(definition, {
       fetch: jsonFetch({ service: 'trading-core', status: 'ok', extra: true }),

@@ -254,6 +254,25 @@ jobs:
           --source-root apps/electron/out/make
           --destination-root release-assets
 
+      - name: Smoke final desktop ZIP
+        run: >-
+          node scripts/smoke-investment-desktop.ts
+          --zip-root release-assets
+          --report-root "${{ runner.temp }}/desktop-smoke"
+
+      - name: Upload desktop startup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-startup-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/desktop-smoke/*.json
+            ${{ runner.temp }}/desktop-smoke/*.png
+            ${{ runner.temp }}/desktop-smoke/*.log
+            ${{ runner.temp }}/desktop-smoke/logs/startup.log
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

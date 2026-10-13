@@ -1,10 +1,14 @@
 /** Electron restart orchestration through a self-starting, isolated main module. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createProcessShutdown } from '../../cli/src/process-shutdown.ts'
 import { SHORTCUT_CAPTURE_CHANNEL, STREAM_CLOSE_CHANNEL, STREAM_OPEN_CHANNEL } from '../src/ipc.ts'
 
 const originalArgv = [...process.argv]
+const homes: string[] = []
 const WINDOWS_ARGV = [
   'C:\\Program Files\\DSH & Research\\dsh.exe',
   'C:\\Program Files\\DSH & Research\\app.asar',
@@ -55,6 +59,8 @@ async function start(): Promise<RestartHarness> {
   const streamOpened = deferred()
   const handlers = new Map<string, (...args: unknown[]) => void>()
   const events: string[] = []
+  const home = mkdtempSync(join(tmpdir(), 'electron-restart-'))
+  homes.push(home)
   const contents = {
     isDestroyed: () => false,
     mainFrame: {},
@@ -77,6 +83,7 @@ async function start(): Promise<RestartHarness> {
     webContents: contents,
   }
   const app = {
+    getPath: () => home,
     dock: { setIcon: vi.fn() },
     exit: vi.fn((code: number) => { events.push(`fail-loud-exit:${code}`) }),
     on: vi.fn((name: string, listener: (...args: unknown[]) => void) => { handlers.set(name, listener) }),
@@ -162,6 +169,7 @@ async function finishStartup(harness: RestartHarness): Promise<void> {
 }
 
 afterEach(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
   process.argv = [...originalArgv]
   vi.doUnmock('electron')
   vi.doUnmock('@deepseek-ai/dsh-app-boot')

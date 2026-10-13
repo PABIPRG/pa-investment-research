@@ -21,6 +21,8 @@ Host Service for registering, verifying, and leasing the Python endpoints used b
 
 ## Backend lifecycle
 
+Electron managed backends always start owned children on distinct ephemeral loopback ports. Each health response must match the child launch UUID in `DSH_INVESTMENT_INSTANCE_ID`; an occupied port never grants ownership. The runtime supplies peer `MW_URL` and `IC_URL` addresses and retains existing DSH_HOME state directories. Explicit external backends retain their configured addresses. During owned startup, probe timeouts and transient unavailability retry within the startup budget; identity mismatch and child exit fail immediately. The fixed-port managed behavior below applies to other deployment surfaces.
+
 `managed` is the default business-plugin mode. The runtime validates a loopback HTTP URL, resolves the backend directory without using the caller's working directory, verifies the project virtual-environment interpreter, and probes `/health`. It starts Uvicorn only when the probe is explicitly connection-refused; an unknown network failure, occupied endpoint, or service-identity mismatch fails startup without touching the process that answered. A healthy service found before spawn is `attached`, while a child started through `ctx.subprocess` is `owned`.
 
 `external` accepts HTTP or HTTPS, verifies the configured health identity, and returns an `external` lease. It never starts, signals, or stops the service. Releasing the last lease stops only an in-memory `owned` handle; attached and external services survive. Runtime disposal rejects new work, waits for in-flight acquisitions, and then joins every owned process tree. State files are diagnostic records and never authorize PID or port takeover.
@@ -38,6 +40,8 @@ Readiness reports backend ownership, safe credential facts, capability level, to
 Notification channels use a separate administrator Remote rather than browser-safe `request-data`. Local Web can configure channels on its owned trading backend; Cloud Web can do so through a WebAuth-authenticated administrator session and the trusted HTTPS proxy. The configuration is stored in the current instance's credential store. Attached and external backends remain unavailable for this operation.
 
 ## Project discovery and initialization
+
+Managed startup shares one asynchronous packaged verification per runtime lifetime, including failed verification. Verification yields between files and directories; synchronous readiness reads the completed result without scanning the package. The synchronous verifier remains available for build-time integrity checks. Hashing a single large file still blocks until that file has been checked.
 
 Source launches discover `backend/dsh-trading-core`, `backend/market-watch`, and `backend/industry-chain` by walking upward from this installed package. Initialize all three environments in fixed order with `pnpm run investment:python:init`, then run the read-only check with `pnpm run investment:python:verify`. Industry-chain initialization and verification do not download seed data; first download remains a separate user-confirmed product action. The verify command reports each missing environment and its init command without installing anything. A deployment without the repository layout must set the business plugin's absolute `backendProjectDir`; relative paths and missing directories fail. The interpreter is `<projectDir>/env/bin/python` on POSIX and `<projectDir>\env\Scripts\python.exe` on Windows.
 

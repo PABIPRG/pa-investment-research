@@ -10,6 +10,8 @@ The investment desktop package workflow produced short-lived pull request artifa
 
 ## Decision
 
+After immutable staging, each native target must pass the [final ZIP startup check](../../proposed/bug-fix/2026-10-13-desktop-startup-hotfix.md) before artifact upload. The check launches the extracted executable twice and retains its reports, screenshots and ZIP digest; failure prevents the publish job. Version and commit locking below remain unchanged.
+
 ### Manual release intent and repository-owned version
 
 `.github/workflows/investment-release.yml` is manual-only. It accepts an expected version and a `prerelease` or `stable` channel while `frontend/package.json` remains the version source of truth. The run must be dispatched from `master`; the expected value must equal the repository value; prerelease versions and stable versions must use their matching channels.

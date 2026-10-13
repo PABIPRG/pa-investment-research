@@ -1,11 +1,13 @@
 import { access } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import type { CredentialInfo, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { resolveDshHome, resolveDshInstanceLayout } from '@deepseek-ai/dsh-home-paths'
 import { checkBackendHealth as defaultCheckHealth } from './health.ts'
 import { BackendLog, backendLogPaths, safeErrorMessage } from './log.ts'
 import type { BackendLogPaths } from './log.ts'
-import { createBackendPathResolver as defaultCreatePathResolver, resolveBackendAddress } from './path.ts'
+import { createAsyncBackendPathResolver, resolveBackendAddress } from './path.ts'
+import { allocateBackendEndpoints } from './endpoints.ts'
 import { InvestmentReadinessTracker } from './readiness.ts'
 import type { BackendReadinessState, RuntimeCredentialFact } from './readiness.ts'
 import {
@@ -80,6 +82,7 @@ const RUNTIME_ENVIRONMENT_KEYS = [
   'DSH_DATA_TRANSFER_TOKEN',
   'DSH_DATA_TRANSFER_COORDINATOR_DIR',
   'DSH_POSITION_RISK_TOKEN',
+  'DSH_INVESTMENT_INSTANCE_ID',
 ] as const
 
 interface StartupFlight {
@@ -133,6 +136,8 @@ function waitWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T
 
 /** Injectable runtime dependencies used by deterministic lifecycle tests. */
 export interface InvestmentBackendManagerOptions {
+  /** Desktop composition owns fresh loopback children rather than attaching to fixed ports. */
+  readonly isolatedManagedBackends?: boolean
   /** Initialize owned backends after health but before exposing the first lease. */
   readonly onOwnedReady?: (definition: PythonBackendDefinition, signal: AbortSignal) => Promise<void>
   readonly subprocess: SubprocessRuntime
@@ -252,6 +257,8 @@ class OwnedStartupFailure extends Error {
   }
 }
 
+class HealthProbeTimeout extends Error {}
+
 async function executableExists(path: string): Promise<boolean> {
   try {
     await access(path)
@@ -276,6 +283,9 @@ export class InvestmentBackendManager {
   private readonly config: RuntimeConfig
   private readonly checkHealth: HealthCheck
   private readonly resolvePaths: (definition: PythonBackendDefinition) => ResolvedBackendPaths
+  private readonly preparePaths: (definition: PythonBackendDefinition) => Promise<ResolvedBackendPaths>
+  private readonly isolatedManagedBackends: boolean
+  private endpoints: ReturnType<typeof allocateBackendEndpoints> | undefined
   private readonly resolveCredential: CredentialResolver
   private readonly describeCredential: CredentialDescriber | undefined
   private readonly resolveLogPaths: LogPathResolver
@@ -296,7 +306,10 @@ export class InvestmentBackendManager {
     this.onOwnedReady = options.onOwnedReady
     this.config = { ...DEFAULT_CONFIG, ...options.config, dshHome: resolveDshHome(options.config?.dshHome) }
     this.checkHealth = options.checkHealth ?? defaultCheckHealth
-    this.resolvePaths = options.resolvePaths ?? defaultCreatePathResolver({ dshHome: this.config.dshHome })
+    const resolver = createAsyncBackendPathResolver({ dshHome: this.config.dshHome })
+    this.resolvePaths = options.resolvePaths ?? resolver.peek
+    this.preparePaths = options.resolvePaths === undefined ? resolver.resolve : definition => Promise.resolve(this.resolvePaths(definition))
+    this.isolatedManagedBackends = options.isolatedManagedBackends ?? false
     this.resolveCredential = options.resolveCredential ?? (() => Promise.resolve(undefined))
     this.describeCredential = options.describeCredential
     this.resolveLogPaths = options.resolveLogPaths ?? backendLogPaths
@@ -471,6 +484,7 @@ export class InvestmentBackendManager {
     }
     await this.verifyActiveHealth(id, entry, signal)
     signal?.throwIfAborted()
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- disposal can race the awaited health probe.
     if (this.disposed || this.definitions.get(id) !== registered
       || this.active.get(id) !== entry || entry.refs === 0 || this.stopping.has(id)) {
       throw new Error(`investment Python backend "${id}" is not running`)
@@ -526,13 +540,16 @@ export class InvestmentBackendManager {
     entry.healthGeneration += 1
   }
 
-  private async probeHealth(definition: PythonBackendDefinition, signal: AbortSignal): Promise<BackendHealthResult> {
+  private async probeHealth(
+    definition: PythonBackendDefinition, signal: AbortSignal, budgetMs = this.config.healthTimeoutMs,
+  ): Promise<BackendHealthResult> {
     signal.throwIfAborted()
     const timeout = new AbortController()
-    const timeoutError = new Error(
-      `investment Python backend "${definition.id}" health probe timed out after ${this.config.healthTimeoutMs}ms`,
+    const timeoutMs = Math.min(this.config.healthTimeoutMs, Math.max(1, budgetMs))
+    const timeoutError = new HealthProbeTimeout(
+      `investment Python backend "${definition.id}" health probe timed out after ${timeoutMs}ms`,
     )
-    const timer = setTimeout(() => { timeout.abort(timeoutError) }, this.config.healthTimeoutMs)
+    const timer = setTimeout(() => { timeout.abort(timeoutError) }, timeoutMs)
     const probeSignal = AbortSignal.any([signal, timeout.signal])
     try {
       return await waitWithSignal(this.checkHealth(definition, { signal: probeSignal }), probeSignal)
@@ -681,7 +698,20 @@ export class InvestmentBackendManager {
 
   private async start(definition: PythonBackendDefinition, signal: AbortSignal): Promise<ActiveEntry> {
     resolveBackendAddress(definition)
-    const health = await this.probeHealth(definition, signal)
+    const isolated = definition.mode === 'managed' && this.isolatedManagedBackends
+    let instanceId: string | undefined
+    let peerEnv: Record<string, string> = {}
+    if (isolated) {
+      const endpoints = await waitWithSignal(this.endpoints ??= allocateBackendEndpoints(), signal)
+      instanceId = randomUUID()
+      definition = { ...definition, baseUrl: endpoints[definition.id], healthOk: { ...definition.healthOk, runtimeInstance: instanceId } }
+      const peerUrl = (id: InvestmentBackendId): string => {
+        const peer = this.definitions.get(id)?.definition
+        return peer?.mode === 'external' ? peer.baseUrl : endpoints[id]
+      }
+      peerEnv = { MW_URL: peerUrl('market-watch'), IC_URL: peerUrl('industry-chain') }
+    }
+    const health = isolated ? { status: 'refused' as const } : await this.probeHealth(definition, signal)
     signal.throwIfAborted()
     if (health.status === 'healthy') {
       if (definition.mode === 'managed') {
@@ -707,7 +737,8 @@ export class InvestmentBackendManager {
       throw new Error(`investment Python backend "${definition.id}" health is ${health.status}`)
     }
 
-    const paths = this.resolvePaths(definition)
+    const paths = await waitWithSignal(this.preparePaths(definition), signal)
+    signal.throwIfAborted()
     if (!await this.internals.executableExists(paths.pythonExecutable)) {
       /* v8 ignore next -- Windows selection is exercised by path tests on non-Windows CI */
       const init = process.platform === 'win32' ? definition.initCommand.windows : definition.initCommand.posix
@@ -732,7 +763,10 @@ export class InvestmentBackendManager {
     const bundledEnv = paths.source === 'bundled'
       ? { ...managedStateEnv, PYTHONPATH: paths.sitePackages, PYTHONDONTWRITEBYTECODE: '1' }
       : managedStateEnv
-    const spawnEnv = { ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...dataTransferEnvironment }
+    const spawnEnv = {
+      ...definition.managedEnv, ...credentialEnv, ...bundledEnv, ...dataTransferEnvironment, ...peerEnv,
+      ...(instanceId === undefined ? {} : { DSH_INVESTMENT_INSTANCE_ID: instanceId }),
+    }
     const redactors = {
       stdout: new CredentialOutputRedactor({ ...credentialEnv, ...dataTransferEnvironment }),
       stderr: new CredentialOutputRedactor({ ...credentialEnv, ...dataTransferEnvironment }),
@@ -782,13 +816,20 @@ export class InvestmentBackendManager {
     }
     try {
       const deadlineAt = this.internals.now() + this.config.startupTimeoutMs
+      let remainingMs = this.config.startupTimeoutMs
       for (;;) {
         signal.throwIfAborted()
-        const next = await this.probeHealth(definition, signal)
+        let next: BackendHealthResult
+        try {
+          next = await this.probeHealth(definition, signal, remainingMs)
+        } catch (error) {
+          signal.throwIfAborted()
+          if (!(error instanceof HealthProbeTimeout)) throw error
+          next = { status: 'unavailable', healthUrl: new URL(definition.healthPath, definition.baseUrl).href, error }
+        }
         await drain()
         signal.throwIfAborted()
-        if (next.status === 'healthy') break
-        if (next.status !== 'refused') {
+        if (next.status === 'occupied') {
           throw new Error(`investment Python backend "${definition.id}" health is ${next.status}`)
         }
         if (spawnFailure !== undefined || outcome !== undefined) {
@@ -797,7 +838,9 @@ export class InvestmentBackendManager {
             : safeErrorMessage(spawnFailure, spawnEnv)
           throw new OwnedStartupFailure('exited', fact)
         }
-        if (this.internals.now() >= deadlineAt) {
+        if (next.status === 'healthy') break
+        remainingMs = deadlineAt - this.internals.now()
+        if (remainingMs <= 0) {
           throw new OwnedStartupFailure('timed-out')
         }
         await this.internals.sleep(this.config.healthPollMs)

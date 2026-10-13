@@ -10,6 +10,8 @@ Status: implemented
 
 ## 决策
 
+下文固定端口 managed 生命周期适用于 Electron 之外的形态。桌面 managed 子进程使用独立动态端口与每次启动的健康标识，详见[桌面启动热修复](../../proposed/bug-fix/2026-10-13-desktop-startup-hotfix.md)。external 归属、lease、诊断与实例数据语义继续共用。
+
 `@deepseek-ai/dsh-investment-python-runtime` 提供 Host service `ctx.investmentPythonRuntime`。业务插件注册完整 backend 定义，并在注册工具前获取经过验证的 URL lease。按 backend 的获取采用 single-flight，lease 使用引用计数。只有身份感知健康探测明确报告 connection refused 后，`managed` 才能通过现有 [`ctx.subprocess`](../../../../packages/subprocess/subprocess/README.md) service 启动 Uvicorn。已经健康的 managed endpoint 会以 attached 方式连接。`external` 验证 HTTP(S) endpoint，不启动或停止它。
 
 进程授权只来自本 Runtime 实例收到的实时 `SubprocessHandle`。最后一次 lease 释放与 Runtime dispose 只会终止并等待这些 owned handle。作出响应的端口、`runtime.json` 中的 PID 或 stale state 都不能授权采用、发送信号或清理。未知网络失败、已占用 endpoint 与服务身份不匹配都会使启动失败，同时让对方进程继续存活。`$DSH_HOME/investment-research/<id>/` 下的日志与仅 owner 可读写的状态用于诊断，不是恢复授权。

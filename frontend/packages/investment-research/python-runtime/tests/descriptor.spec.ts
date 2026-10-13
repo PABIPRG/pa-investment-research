@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { verifyInvestmentRuntimeDescriptor } from '../src/descriptor.ts'
+import { verifyInvestmentRuntimeDescriptor, verifyInvestmentRuntimeDescriptorAsync } from '../src/descriptor.ts'
 
 const roots: string[] = []
 
@@ -68,6 +68,18 @@ async function fixture(): Promise<{
 }
 
 describe('investment packaged Runtime descriptor', () => {
+  it('keeps the event loop live during packaged verification and still rejects tampering', async () => {
+    const { root, descriptorPath } = await fixture()
+    let ticked = false
+    const tick = new Promise<void>(resolve => setImmediate(() => { ticked = true; resolve() }))
+    const verified = await verifyInvestmentRuntimeDescriptorAsync(descriptorPath)
+    expect(ticked).toBe(true)
+    await tick
+    expect(verified).toEqual(verifyInvestmentRuntimeDescriptor(descriptorPath))
+    await writeFile(join(root, 'runtime', 'bin', 'python3'), 'tampered')
+    await expect(verifyInvestmentRuntimeDescriptorAsync(descriptorPath)).rejects.toThrow(/hash mismatch/)
+  })
+
   it('accepts one closed matching descriptor and verifies every listed file', async () => {
     const { root, descriptorPath } = await fixture()
     const verified = verifyInvestmentRuntimeDescriptor(descriptorPath)

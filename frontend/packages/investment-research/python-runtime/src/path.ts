@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import path, { dirname } from 'node:path'
 import type { PlatformPath } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verifyInvestmentRuntimeDescriptor } from './descriptor.ts'
+import { verifyInvestmentRuntimeDescriptor, verifyInvestmentRuntimeDescriptorAsync } from './descriptor.ts'
 import type { VerifiedInvestmentRuntime } from './descriptor.ts'
 import type {
   PythonBackendDefinition,
@@ -180,6 +180,61 @@ export function createBackendPathResolver(
 
 function isLoopbackHost(host: string): boolean {
   return host === 'localhost' || host === '::1' || host.startsWith('127.')
+}
+
+class VerificationRequired extends Error {
+  constructor(readonly descriptorPath: string) {
+    super('investment Python packaged runtime verification is pending')
+  }
+}
+
+/**
+ * Share asynchronous verification across startup flights; synchronous readiness only
+ * reads the completed result. Both success and failure are cached for this lifecycle.
+ * @param options - stable path discovery and runtime home facts.
+ * @returns async startup resolver and side-effect-free readiness lookup.
+ */
+export function createAsyncBackendPathResolver(options: BackendPathResolutionOptions = {}): {
+  resolve: (definition: PythonBackendDefinition) => Promise<ResolvedBackendPaths>
+  peek: (definition: PythonBackendDefinition) => ResolvedBackendPaths
+} {
+  const cache = new Map<string, CachedDescriptorVerification>()
+  const pending = new Map<string, Promise<void>>()
+  const peek = (definition: PythonBackendDefinition): ResolvedBackendPaths => resolveBackendPaths(definition, {
+    ...options,
+    verifyDescriptor: (descriptorPath) => {
+      const result = cache.get(descriptorPath)
+      if (result?.status === 'verified') return result.runtime
+      if (result?.status === 'invalid') throw result.reason
+      throw new VerificationRequired(descriptorPath)
+    },
+  })
+  return {
+    peek,
+    async resolve(definition) {
+      try { return peek(definition) } catch (error) {
+        if (!(error instanceof VerificationRequired)) throw error
+        const descriptorPath = error.descriptorPath
+        let flight = pending.get(descriptorPath)
+        if (flight === undefined) {
+          flight = Promise.resolve().then(async () => {
+            try {
+              const runtime = options.verifyDescriptor === undefined
+                ? await verifyInvestmentRuntimeDescriptorAsync(descriptorPath, options)
+                : options.verifyDescriptor(descriptorPath)
+              cache.set(descriptorPath, { status: 'verified', runtime })
+            } catch (reason) {
+              cache.set(descriptorPath, { status: 'invalid', reason })
+              throw reason
+            } finally { pending.delete(descriptorPath) }
+          })
+          pending.set(descriptorPath, flight)
+        }
+        await flight
+        return peek(definition)
+      }
+    },
+  }
 }
 
 /**
