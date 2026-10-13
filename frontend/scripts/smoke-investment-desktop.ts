@@ -73,7 +73,7 @@ export function runSmokeProcess(executable: string, args: string[], options: {
   const record = (message: string) => {
     appendFileSync(options.logPath, `[${new Date().toISOString()}] ${message}\n`, { mode: 0o600 })
   }
-  record('starting process')
+  record(`starting process: ${executable}`)
   return new Promise((accept, reject) => {
     // File descriptors remain usable by descendants without keeping a parent pipe open.
     const output = openSync(options.logPath, 'a', 0o600)
@@ -194,11 +194,10 @@ export async function smokeInvestmentDesktop(zipRoot: string, reportRoot?: strin
     const extraction = options.extraction ?? { timeoutMs: 600_000, killGraceMs: 15_000 }
     await stage('extract', () => process.platform === 'darwin'
       ? runSmokeProcess('/usr/bin/ditto', ['-x', '-k', zip, extracted], { logPath: join(root, 'extract.log'), ...extraction })
-      : runSmokeProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; Write-Output 'PowerShell ready'; Add-Type -AssemblyName System.IO.Compression.FileSystem; Write-Output 'ZIP extraction started'; [System.IO.Compression.ZipFile]::ExtractToDirectory($env:SMOKE_ZIP, $env:SMOKE_EXTRACTED); Write-Output 'ZIP extraction finished'"], {
-        env: { ...processEnvironment(), SMOKE_ZIP: zip, SMOKE_EXTRACTED: extracted },
-        logPath: join(root, 'extract.log'), ...extraction,
-      }))
+      : runSmokeProcess(join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'tar.exe'),
+        ['-xf', zip, '-C', extracted], {
+          env: processEnvironment(), logPath: join(root, 'extract.log'), ...extraction,
+        }))
     const executable = await stage('verify-executable', async () => {
       const entries = await readdir(extracted)
       if (process.platform === 'darwin') {

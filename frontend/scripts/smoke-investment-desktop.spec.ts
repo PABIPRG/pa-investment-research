@@ -87,6 +87,36 @@ describe('bounded smoke processes', () => {
     expect(readFileSync(join(root, 'progress.log'), 'utf8')).toContain('"status":"started"')
   })
 
+  it.skipIf(!['darwin', 'win32'].includes(process.platform))('extracts deflated ZIP bytes and Unicode paths before inspecting the executable', async () => {
+    const parent = process.env.DSH_DESKTOP_SMOKE_TEST_ROOT ?? tmpdir()
+    mkdirSync(parent, { recursive: true })
+    const root = mkdtempSync(join(parent, "desktop-smoke-中文 ' &-"))
+    // Python zipfile fixture: deflated binary data and an empty file, without an application.
+    const zip = Buffer.from(
+      'UEsDBBQAAAgIAAAAIVxN5ebaCgAAAGQAAAAgAAAAcmVzb3VyY2VzL+S4reaWhyDmoLfmnKwvZGF0YS5iaW5jYKxv+M9AWwIAUEsDBBQAAAAIAAAAIVwAAAAAAgAAAAAAAAATAAAAcmVzb3VyY2VzL2VtcHR5LnR4dAMAUEsBAhQDFAAACAgAAAAhXE3l5toKAAAAZAAAACAAAAAAAAAAAAAAAIABAAAAAHJlc291cmNlcy/kuK3mlocg5qC35pysL2RhdGEuYmluUEsBAhQDFAAAAAgAAAAhXAAAAAACAAAAAAAAABMAAAAAAAAAAAAAAIABSAAAAHJlc291cmNlcy9lbXB0eS50eHRQSwUGAAAAAAIAAgCPAAAAewAAAAAA',
+      'base64',
+    )
+    const zipPath = join(root, `valid-${process.platform}-${process.arch}.zip`)
+    writeFileSync(zipPath, zip)
+    const evidence = join(root, 'evidence')
+    let verified = false
+    try {
+      await expect(smokeInvestmentDesktop(root, evidence, {
+        extraction: { timeoutMs: 30_000, killGraceMs: 2_000 },
+      })).rejects.toThrow()
+      expect(JSON.parse(readFileSync(join(evidence, 'failure.json'), 'utf8'))).toMatchObject({ stage: 'verify-executable', status: 'failed' })
+      const extracted = join(evidence, 'extracted', 'resources')
+      expect(readFileSync(join(extracted, '中文 样本', 'data.bin'))).toEqual(Buffer.from(Array.from({ length: 20 }, () => [0, 1, 127, 128, 255]).flat()))
+      expect(readFileSync(join(extracted, 'empty.txt'))).toHaveLength(0)
+      expect(readFileSync(zipPath)).toEqual(zip)
+      expect(readFileSync(join(evidence, 'extract.log'), 'utf8')).toContain('exit 0; signal null; timedOut false')
+      verified = true
+    } finally {
+      if (verified) temporary.push(root)
+      else console.error(`Extraction regression evidence retained at ${root}`)
+    }
+  }, 45_000)
+
   it.skipIf(!['darwin', 'win32'].includes(process.platform))('retains the extraction failure stage and live extractor output', async () => {
     const parent = process.env.DSH_DESKTOP_SMOKE_TEST_ROOT ?? tmpdir()
     mkdirSync(parent, { recursive: true })
