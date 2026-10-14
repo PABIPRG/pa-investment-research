@@ -11,6 +11,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_SCHEME } from '../src/protocol.ts'
 
@@ -103,7 +104,7 @@ describe('Electron main startup', () => {
 
     await vi.waitFor(() => { expect(mocks.runProfile).toHaveBeenCalledOnce() })
     expect(stages().slice(-2).map(entry => entry.stage)).toEqual(['electron-ready', 'profile-start'])
-    expect(mocks.healProfilesModuleFallback).toHaveBeenCalledWith(expect.stringMatching(/electron[\/]package\.json$/u))
+    expect(mocks.healProfilesModuleFallback).toHaveBeenCalledWith(fileURLToPath(new URL('../package.json', import.meta.url)))
     const startupOptions = mocks.runProfile.mock.calls[0]?.[0]
     expect(startupOptions).toMatchObject({
       profile: 'investment-research',
