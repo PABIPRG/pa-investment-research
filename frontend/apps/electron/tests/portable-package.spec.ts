@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { describe, it, expect } from 'vitest'
-import { copyPortablePackageTree } from '../src/packaging.ts'
+import { copyPortablePackageTree, materializePackagingWorkspaceLinks } from '../src/packaging.ts'
 
 describe('portable package dependencies', () => {
   it('preserves transitive versions and cycles after dereferencing and relocating a pnpm tree', async () => {
@@ -44,6 +44,46 @@ describe('portable package dependencies', () => {
       await rm(source, { recursive: true, force: true })
       expect(createRequire(join(destination, 'package.json'))('./index.cjs')).toEqual([{ label: 'first', value: 'first-v1' }, { value: 'v2' }])
       expect((await lstat(join(destination, 'node_modules/dependency'))).isSymbolicLink()).toBe(false)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
+  it.each(['empty directory', 'external alias'])('repairs a workspace peer deployed as an %s', async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), 'portable-workspace-peer-'))
+    const workspace = join(root, 'workspace')
+    const alias = join(root, 'workspace-alias')
+    const source = join(root, 'staging')
+    const destination = join(root, 'portable')
+    const importer = join(workspace, 'packages/compaction')
+    const dependency = join(workspace, 'packages/brand')
+    const app = join(workspace, 'apps/electron')
+    const deployedPeer = join(source, 'node_modules/.pnpm/node_modules/fixture-brand')
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    try {
+      await mkdir(importer, { recursive: true })
+      await mkdir(dependency, { recursive: true })
+      await mkdir(app, { recursive: true })
+      await mkdir(dirname(deployedPeer), { recursive: true })
+      const workspacePeer = join(workspace, 'node_modules/.pnpm/node_modules/fixture-brand')
+      await mkdir(dirname(workspacePeer), { recursive: true })
+      await writeFile(join(importer, 'package.json'), JSON.stringify({
+        name: 'fixture-compaction', main: 'index.cjs', peerDependencies: { 'fixture-brand': 'workspace:^' },
+      }))
+      await writeFile(join(importer, 'index.cjs'), "module.exports = require('fixture-brand')")
+      await writeFile(join(dependency, 'package.json'), JSON.stringify({ name: 'fixture-brand', main: 'index.cjs' }))
+      await writeFile(join(dependency, 'index.cjs'), "module.exports = 'portable peer'")
+      await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'app', dependencies: { 'fixture-compaction': '1' } }))
+      await symlink(dependency, workspacePeer, linkType)
+      await symlink(importer, join(source, 'node_modules/fixture-compaction'), linkType)
+      if (kind === 'empty directory') await mkdir(deployedPeer)
+      else {
+        await symlink(workspace, alias, linkType)
+        await symlink(join(alias, 'packages/brand'), deployedPeer, linkType)
+      }
+      await materializePackagingWorkspaceLinks(source, workspace, app)
+      await copyPortablePackageTree(source, destination)
+      await rm(source, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+      expect(createRequire(join(destination, 'package.json'))('fixture-compaction')).toBe('portable peer')
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 

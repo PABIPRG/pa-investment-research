@@ -298,6 +298,16 @@ async function pathResolves(path: string): Promise<boolean> {
   }
 }
 
+function isWithinDirectory(root: string, candidate: string): boolean {
+  const candidateRelative = relative(root, candidate)
+  return candidateRelative !== '..' && !candidateRelative.startsWith(`..${sep}`) && !isAbsolute(candidateRelative)
+}
+
+async function isStagedPackage(stagingRoot: string, packageDir: string): Promise<boolean> {
+  if (!await pathResolves(join(packageDir, 'package.json'))) return false
+  return isWithinDirectory(stagingRoot, await realpath(packageDir))
+}
+
 function runtimeWorkspaceDependencies(
   workspacePackage: WorkspacePackage,
   workspacePackages: ReadonlyMap<string, WorkspacePackage>,
@@ -365,6 +375,7 @@ export async function materializePackagingWorkspaceLinks(
   appSourceDir: string,
   platform: NodeJS.Platform = process.platform,
 ): Promise<number> {
+  const canonicalStagingDir = await realpath(stagingDir)
   const links = await collectPackagingWorkspaceLinks(stagingDir, workspaceDir)
   const materializedRoot = join(stagingDir, 'node_modules/.dsh-workspace-links')
   const deployedModules = join(stagingDir, 'node_modules/.pnpm/node_modules')
@@ -415,7 +426,7 @@ export async function materializePackagingWorkspaceLinks(
       const dependency = workspacePackages.get(dependencyName)
       if (dependency === undefined) continue
       const deployedDependency = join(deployedModules, ...dependencyName.split('/'))
-      if (!await pathResolves(deployedDependency)) {
+      if (!await isStagedPackage(canonicalStagingDir, deployedDependency)) {
         let targetDir = canonicalTargets.get(dependency.sourceDir)
         if (targetDir === undefined) {
           targetDir = join(materializedRoot, relative(workspaceDir, dependency.sourceDir))
@@ -435,18 +446,11 @@ export async function materializePackagingWorkspaceLinks(
     if (workspacePackage === undefined) continue
     const packageDir = canonicalTargets.get(workspacePackage.sourceDir)
       ?? join(deployedModules, ...name.split('/'))
-    const packageRequire = createRequire(join(packageDir, 'package.json'))
     for (const dependencyName of runtimeWorkspaceDependencies(workspacePackage, workspacePackages)) {
-      const searchPaths = packageRequire.resolve.paths(dependencyName) ?? []
-      let resolves = false
-      for (const searchPath of searchPaths) {
-        if (await pathResolves(join(searchPath, ...dependencyName.split('/'), 'package.json'))) {
-          resolves = true
-          break
-        }
-      }
-      if (!resolves) {
-        throw new Error(`materialized workspace dependency cannot be resolved: ${name} -> ${dependencyName}`)
+      const dependencyDir = await resolvedPackageDirectory(packageDir, dependencyName)
+      if (dependencyDir === undefined || !isWithinDirectory(canonicalStagingDir, dependencyDir)) {
+        const paths = JSON.stringify({ stagingRoot: canonicalStagingDir, importer: packageDir, dependency: dependencyDir })
+        throw new Error(`materialized workspace dependency cannot be resolved inside staging: ${name} -> ${dependencyName}; resolved paths: ${paths}`)
       }
     }
   }
