@@ -571,7 +571,8 @@ async function preservePortableDependencies(
       }
       const sourceRelative = relative(sourceRoot, dependencySource)
       if (sourceRelative === '..' || sourceRelative.startsWith(`..${sep}`) || isAbsolute(sourceRelative)) {
-        throw new Error(`deployed runtime dependency escapes staging: ${manifest.name ?? source} -> ${name}`)
+        const paths = JSON.stringify({ sourceRoot, importer: source, dependency: dependencySource })
+        throw new Error(`deployed runtime dependency escapes staging: ${manifest.name ?? source} -> ${name}; resolved paths: ${paths}`)
       }
       let dependencyDestination = await resolvedPackageDirectory(destination, name)
       // Dereferencing moves the importer away from its pnpm dependency siblings.

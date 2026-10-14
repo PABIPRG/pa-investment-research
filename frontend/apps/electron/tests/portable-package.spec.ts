@@ -1,5 +1,5 @@
 /** Windows portable copies retain the deployed dependency graph after relocation. */
-import { mkdtemp, mkdir, writeFile, symlink, rm, lstat, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, symlink, rm, lstat, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -70,7 +70,14 @@ describe('portable package dependencies', () => {
       await mkdir(join(root, 'node_modules/outside'), { recursive: true })
       await writeFile(join(root, 'node_modules/outside/package.json'), JSON.stringify({ name: 'outside', version: '1.0.0' }))
       await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'app', dependencies: { outside: '1.0.0' } }))
-      await expect(copyPortablePackageTree(source, join(root, 'destination'))).rejects.toThrow('deployed runtime dependency escapes staging: app -> outside')
+      const failure = await copyPortablePackageTree(source, join(root, 'destination')).catch((error: unknown) => error)
+      expect(failure).toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain('deployed runtime dependency escapes staging: app -> outside')
+      expect((failure as Error).message).toContain(JSON.stringify({
+        sourceRoot: await realpath(source),
+        importer: await realpath(source),
+        dependency: await realpath(join(root, 'node_modules/outside')),
+      }))
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 })
