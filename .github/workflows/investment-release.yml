@@ -60,7 +60,9 @@ jobs:
       - name: Test desktop acceptance supervisor
         env:
           DSH_DESKTOP_SMOKE_TEST_ROOT: ${{ runner.temp }}/desktop-smoke-tests
-        run: pnpm exec vitest run scripts/smoke-investment-desktop.spec.ts
+        run: >-
+          pnpm exec vitest run scripts/smoke-investment-desktop.spec.ts
+          apps/electron/tests/main-startup.spec.ts apps/electron/tests/restart.spec.ts
 
       - name: Upload desktop acceptance test failures
         if: failure()

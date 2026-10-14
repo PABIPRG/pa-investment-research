@@ -162,7 +162,9 @@ function launch(executable: string, root: string, iteration: number): Promise<vo
     NOTIFICATION_DELIVERY_ENABLED: 'false', EVENT_GENERATION_ENABLED: 'false',
     NO_PROXY: '127.0.0.1,localhost',
   })
-  return runSmokeProcess(executable, [], { cwd: root, env, logPath: join(root, `process-${iteration}.log`), timeoutMs: 120_000 })
+  return runSmokeProcess(executable, ['--enable-logging=file', `--log-file=${join(root, `chromium-${iteration}.log`)}`], {
+    cwd: root, env, logPath: join(root, `process-${iteration}.log`), timeoutMs: 120_000,
+  })
 }
 
 /**

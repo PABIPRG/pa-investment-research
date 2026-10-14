@@ -26,13 +26,15 @@ import {
   STREAM_OPEN_CHANNEL,
 } from './ipc.ts'
 import { formatStartupError, presentStartupFailure } from './startup-error.ts'
-import { configureStartupSmoke, runStartupSmoke } from './startup-smoke.ts'
+import { configureStartupSmoke, recordStartupSmokePhase, runStartupSmoke } from './startup-smoke.ts'
 
 const ELECTRON_PATCH = fileURLToPath(new URL('../electron.patch.yml', import.meta.url))
 const RENDERER_DIR = fileURLToPath(new URL('../renderer/', import.meta.url))
 const PRELOAD = fileURLToPath(new URL('./preload.cjs', import.meta.url))
 const PROFILE = resolveElectronProfile(process.argv, app.isPackaged ? 'investment-research' : 'web')
 const SMOKE_ROOT = configureStartupSmoke()
+const traceStartup = (stage: string): void => { recordStartupSmokePhase(SMOKE_ROOT, stage) }
+traceStartup('main-module-ready')
 
 interface StreamOpenRequest {
   kind: ElectronStreamKind
@@ -73,7 +75,9 @@ protocol.registerSchemesAsPrivileged([
   { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ])
 
+traceStartup('instance-lock-start')
 const singleInstance = app.requestSingleInstanceLock()
+traceStartup(singleInstance ? 'instance-lock-acquired' : 'instance-lock-denied')
 if (!singleInstance) {
   app.quit()
 } else {
@@ -138,10 +142,13 @@ async function runApplication(): Promise<void> {
   })
   app.on('window-all-closed', () => { consume(quitOnce()) })
   try {
+    traceStartup('electron-ready-wait')
     await app.whenReady()
+    traceStartup('electron-ready')
     app.dock?.setIcon(appIdentity.runtimeIconPath)
     // Add launcher-owned plugins while retaining the CLI as the bundle owner.
     healProfilesModuleFallback(fileURLToPath(new URL('../package.json', import.meta.url)))
+    traceStartup('profile-start')
     const { ctx, shutdown } = await runProfile({
       environment: loadLayeredEnv('dsh'),
       profile: PROFILE,
@@ -170,6 +177,7 @@ async function runApplication(): Promise<void> {
         }
         : {}),
     })
+    traceStartup('profile-ready')
     profileShutdown = shutdown
     const connection = ctx.get('connection')
     if (!(isElectronConnectionService(connection))) {
@@ -181,6 +189,7 @@ async function runApplication(): Promise<void> {
       modules: ctx.clientModules,
       fetchFile: fileUrl => net.fetch(fileUrl),
     }))
+    traceStartup('window-create-start')
     const window = new BrowserWindow({
       width: 1280,
       height: 840,
@@ -197,6 +206,7 @@ async function runApplication(): Promise<void> {
         webSecurity: true,
       },
     })
+    traceStartup('window-created')
     const holdingsRuntime = ctx.get('investmentPythonRuntime')
     const holdingsConsent = await createHoldingsConsentStore(join(app.getPath('userData'), 'holdings-consent.json'))
     const disposeHoldings = holdingsRuntime === undefined ? () => {} : bindHoldingsNative(
@@ -226,7 +236,9 @@ async function runApplication(): Promise<void> {
     }
     hardenNavigation(window)
     window.once('ready-to-show', () => { window.show() })
+    traceStartup('renderer-load-start')
     await window.loadURL(APP_INDEX_URL)
+    traceStartup('renderer-loaded')
 
     app.on('second-instance', () => {
       if (window.isMinimized()) window.restore()
@@ -235,10 +247,15 @@ async function runApplication(): Promise<void> {
     })
     lifecycleReady.resolve()
     if (SMOKE_ROOT !== undefined) {
+      traceStartup('smoke-checks-start')
       await runStartupSmoke(SMOKE_ROOT, window, ctx)
+      traceStartup('smoke-checks-passed')
+      traceStartup('shutdown-start')
       await quitOnce()
+      traceStartup('shutdown-requested')
     }
   } catch (error) {
+    traceStartup('startup-failed')
     lifecycleReady.reject(error)
     if (errorCode(error) === 'DSH_INVESTMENT_INSTANCE_CONFLICT') {
       quitCommitted = true

@@ -74,6 +74,8 @@ jobs:
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
           scripts/smoke-investment-desktop.spec.ts
+          apps/electron/tests/main-startup.spec.ts
+          apps/electron/tests/restart.spec.ts
 
       - name: Upload desktop acceptance test failures
         if: failure()
