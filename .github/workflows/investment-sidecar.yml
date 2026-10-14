@@ -66,11 +66,27 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Test backend package privacy gates
+        env:
+          DSH_DESKTOP_SMOKE_TEST_ROOT: ${{ runner.temp }}/desktop-smoke-tests
         run: >-
           pnpm exec vitest run
           scripts/investment-backend-package-policy.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
+          scripts/smoke-investment-desktop.spec.ts
+          apps/electron/tests/portable-package.spec.ts
+          apps/electron/tests/entry-failure.spec.ts
+          apps/electron/tests/main-startup.spec.ts
+          apps/electron/tests/restart.spec.ts
+
+      - name: Upload desktop acceptance test failures
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-acceptance-test-failures-${{ matrix.target }}
+          path: ${{ runner.temp }}/desktop-smoke-tests/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Verify shared application version
         id: app_version
@@ -182,6 +198,7 @@ jobs:
           --destination-root release-assets
 
       - name: Smoke final desktop ZIP
+        timeout-minutes: 25
         run: >-
           node scripts/smoke-investment-desktop.ts
           --zip-root release-assets

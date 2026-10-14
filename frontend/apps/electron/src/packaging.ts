@@ -298,6 +298,16 @@ async function pathResolves(path: string): Promise<boolean> {
   }
 }
 
+function isWithinDirectory(root: string, candidate: string): boolean {
+  const candidateRelative = relative(root, candidate)
+  return candidateRelative !== '..' && !candidateRelative.startsWith(`..${sep}`) && !isAbsolute(candidateRelative)
+}
+
+async function isStagedPackage(stagingRoot: string, packageDir: string): Promise<boolean> {
+  if (!await pathResolves(join(packageDir, 'package.json'))) return false
+  return isWithinDirectory(stagingRoot, await realpath(packageDir))
+}
+
 function runtimeWorkspaceDependencies(
   workspacePackage: WorkspacePackage,
   workspacePackages: ReadonlyMap<string, WorkspacePackage>,
@@ -365,6 +375,7 @@ export async function materializePackagingWorkspaceLinks(
   appSourceDir: string,
   platform: NodeJS.Platform = process.platform,
 ): Promise<number> {
+  const canonicalStagingDir = await realpath(stagingDir)
   const links = await collectPackagingWorkspaceLinks(stagingDir, workspaceDir)
   const materializedRoot = join(stagingDir, 'node_modules/.dsh-workspace-links')
   const deployedModules = join(stagingDir, 'node_modules/.pnpm/node_modules')
@@ -415,7 +426,7 @@ export async function materializePackagingWorkspaceLinks(
       const dependency = workspacePackages.get(dependencyName)
       if (dependency === undefined) continue
       const deployedDependency = join(deployedModules, ...dependencyName.split('/'))
-      if (!await pathResolves(deployedDependency)) {
+      if (!await isStagedPackage(canonicalStagingDir, deployedDependency)) {
         let targetDir = canonicalTargets.get(dependency.sourceDir)
         if (targetDir === undefined) {
           targetDir = join(materializedRoot, relative(workspaceDir, dependency.sourceDir))
@@ -430,23 +441,46 @@ export async function materializePackagingWorkspaceLinks(
     }
   }
 
+  // Bind declared workspace edges after every package copy is complete. A
+  // shared hoist alone does not override consumer-local links or ambient paths.
+  for (const name of visited) {
+    const workspacePackage = workspacePackages.get(name)
+    if (workspacePackage === undefined) continue
+    const candidateDir = canonicalTargets.get(workspacePackage.sourceDir)
+      ?? join(deployedModules, ...name.split('/'))
+    if (!await isStagedPackage(canonicalStagingDir, candidateDir)) {
+      throw new Error(`workspace consumer is not a staged package: ${name} -> ${candidateDir}`)
+    }
+    const packageDir = await realpath(candidateDir)
+    for (const dependencyName of runtimeWorkspaceDependencies(workspacePackage, workspacePackages)) {
+      const deployedDependency = join(deployedModules, ...dependencyName.split('/'))
+      if (!await isStagedPackage(canonicalStagingDir, deployedDependency)) {
+        throw new Error(`workspace dependency is not a staged package: ${name} -> ${dependencyName}`)
+      }
+      const targetDir = await realpath(deployedDependency)
+      const linkPath = join(packageDir, 'node_modules', ...dependencyName.split('/'))
+      if (await pathResolves(linkPath) && await realpath(linkPath) === targetDir) continue
+      for (const directory of new Set([join(packageDir, 'node_modules'), dirname(linkPath)])) {
+        await mkdir(directory, { recursive: true })
+        if (!isWithinDirectory(canonicalStagingDir, await realpath(directory))) {
+          throw new Error(`workspace dependency link parent escapes staging: ${name} -> ${dependencyName}; ${directory}`)
+        }
+      }
+      await rm(linkPath, { force: true, recursive: true })
+      await createPackagingDirectoryLink(targetDir, linkPath, platform)
+    }
+  }
+
   for (const name of visited) {
     const workspacePackage = workspacePackages.get(name)
     if (workspacePackage === undefined) continue
     const packageDir = canonicalTargets.get(workspacePackage.sourceDir)
       ?? join(deployedModules, ...name.split('/'))
-    const packageRequire = createRequire(join(packageDir, 'package.json'))
     for (const dependencyName of runtimeWorkspaceDependencies(workspacePackage, workspacePackages)) {
-      const searchPaths = packageRequire.resolve.paths(dependencyName) ?? []
-      let resolves = false
-      for (const searchPath of searchPaths) {
-        if (await pathResolves(join(searchPath, ...dependencyName.split('/'), 'package.json'))) {
-          resolves = true
-          break
-        }
-      }
-      if (!resolves) {
-        throw new Error(`materialized workspace dependency cannot be resolved: ${name} -> ${dependencyName}`)
+      const dependencyDir = await resolvedPackageDirectory(packageDir, dependencyName)
+      if (dependencyDir === undefined || !isWithinDirectory(canonicalStagingDir, dependencyDir)) {
+        const paths = JSON.stringify({ stagingRoot: canonicalStagingDir, importer: packageDir, dependency: dependencyDir })
+        throw new Error(`materialized workspace dependency cannot be resolved inside staging: ${name} -> ${dependencyName}; resolved paths: ${paths}`)
       }
     }
   }
@@ -457,6 +491,7 @@ async function copyPortablePackageEntry(
   sourcePath: string,
   destinationPath: string,
   ancestorDirectories: ReadonlySet<string>,
+  packageSources: Map<string, string>,
 ): Promise<void> {
   const sourceMetadata = await retryPackagingFileOperation(
     `reading metadata for ${sourcePath}`,
@@ -504,11 +539,19 @@ async function copyPortablePackageEntry(
     `reading directory ${resolvedSource}`,
     () => readdir(resolvedSource, { withFileTypes: true }),
   )
+  const packageDirectory = entries.some(entry => entry.name === 'package.json' && entry.isFile())
+  if (packageDirectory) {
+    packageSources.set(await realpath(destinationPath), canonicalDirectory)
+  }
   for (const entry of entries) {
+    // Reconstruct package-owned dependencies from their source resolutions;
+    // expanding node_modules here duplicates shared graphs and their backing stores.
+    if (packageDirectory && entry.name === 'node_modules') continue
     await copyPortablePackageEntry(
       join(resolvedSource, entry.name),
       join(destinationPath, entry.name),
       nestedAncestors,
+      packageSources,
     )
   }
   await retryPackagingFileOperation(
@@ -517,10 +560,78 @@ async function copyPortablePackageEntry(
   )
 }
 
-/** Dereference a deployed application sequentially so Windows packaging memory stays bounded. */
+interface PortablePackageManifest {
+  name?: string
+  dependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
+}
+
+async function resolvedPackageDirectory(owner: string, name: string): Promise<string | undefined> {
+  for (const directory of createRequire(join(owner, 'package.json')).resolve.paths(name) ?? []) {
+    const candidate = join(directory, ...name.split('/'))
+    if (await pathResolves(join(candidate, 'package.json'))) return realpath(candidate)
+  }
+  return undefined
+}
+
+async function preservePortableDependencies(
+  sourceRoot: string,
+  destinationRoot: string,
+  packageSources: Map<string, string>,
+): Promise<void> {
+  const pending = [...packageSources.keys()]
+  const visited = new Set<string>()
+  while (pending.length > 0) {
+    const destination = pending.pop()
+    if (destination === undefined || visited.has(destination)) continue
+    visited.add(destination)
+    const source = packageSources.get(destination)
+    if (source === undefined) continue
+    const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')) as PortablePackageManifest
+    const dependencies = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+    ])
+    for (const name of dependencies) {
+      const optional = Object.hasOwn(manifest.optionalDependencies ?? {}, name)
+        || (!Object.hasOwn(manifest.dependencies ?? {}, name) && manifest.peerDependenciesMeta?.[name]?.optional === true)
+      const dependencySource = await resolvedPackageDirectory(source, name)
+      if (dependencySource === undefined) {
+        if (optional) continue
+        throw new Error(`deployed runtime dependency is missing: ${manifest.name ?? source} -> ${name}`)
+      }
+      const sourceRelative = relative(sourceRoot, dependencySource)
+      if (sourceRelative === '..' || sourceRelative.startsWith(`..${sep}`) || isAbsolute(sourceRelative)) {
+        const paths = JSON.stringify({ sourceRoot, importer: source, dependency: dependencySource })
+        throw new Error(`deployed runtime dependency escapes staging: ${manifest.name ?? source} -> ${name}; resolved paths: ${paths}`)
+      }
+      let dependencyDestination = await resolvedPackageDirectory(destination, name)
+      // Dereferencing moves the importer away from its pnpm dependency siblings.
+      // Reuse only a destination backed by the exact same source package, which
+      // preserves peer/version contexts and lets cycles resolve through ancestors.
+      if (dependencyDestination === undefined || packageSources.get(dependencyDestination) !== dependencySource) {
+        const hoisted = join(destinationRoot, 'node_modules', ...name.split('/'))
+        dependencyDestination = await pathResolves(hoisted)
+          ? join(destination, 'node_modules', ...name.split('/'))
+          : hoisted
+        await rm(dependencyDestination, { recursive: true, force: true })
+        await copyPortablePackageEntry(dependencySource, dependencyDestination, new Set(), packageSources)
+        dependencyDestination = await realpath(dependencyDestination)
+      }
+      pending.push(dependencyDestination)
+    }
+  }
+}
+
+/** Copy a deploy sequentially, preserving each runtime dependency's original resolution after links become directories. */
 export async function copyPortablePackageTree(sourceDir: string, destinationDir: string): Promise<void> {
   await rm(destinationDir, { force: true, recursive: true })
-  await copyPortablePackageEntry(sourceDir, destinationDir, new Set())
+  const packageSources = new Map<string, string>()
+  await copyPortablePackageEntry(sourceDir, destinationDir, new Set(), packageSources)
+  await preservePortableDependencies(await realpath(sourceDir), await realpath(destinationDir), packageSources)
 }
 
 /** Give Electron Packager only the manifest it needs before the bounded afterCopy install. */

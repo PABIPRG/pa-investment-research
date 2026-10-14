@@ -1,6 +1,6 @@
 /** Opt-in acceptance of the installed application, using only a disposable smoke home. */
 import assert from 'node:assert/strict'
-import { mkdirSync } from 'node:fs'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -29,6 +29,19 @@ export function configureStartupSmoke(): string | undefined {
     app.setPath(name, directory)
   }
   return root
+}
+
+/**
+ * Persist a smoke startup milestone immediately, even if the process later hangs.
+ * @param root - isolated root returned by configureStartupSmoke; undefined disables tracing.
+ * @param stage - fixed application lifecycle milestone, never environment or business data.
+ */
+export function recordStartupSmokePhase(root: string | undefined, stage: string): void {
+  if (root === undefined) return
+  appendFileSync(join(root, 'startup-phases.log'), `${JSON.stringify({
+    at: new Date().toISOString(), pid: process.pid,
+    iteration: process.env.DSH_DESKTOP_SMOKE_ITERATION, stage,
+  })}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
 /**

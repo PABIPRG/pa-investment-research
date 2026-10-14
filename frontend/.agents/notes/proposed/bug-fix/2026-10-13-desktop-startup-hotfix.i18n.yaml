@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/proposed/bug-fix/2026-10-13-desktop-startup-hotfix.md
-2026-10-13-desktop-startup-hotfix.md: 828dfca78885d6ccd630ff64ff797e60b09fb1c9
-2026-10-13-desktop-startup-hotfix.zh.md: d9267a6c6495ae7160a6ed044299c61fdff7b831
+2026-10-13-desktop-startup-hotfix.md: 1f860eb67409e1a286e9f8d861717c0b85516a6f
+2026-10-13-desktop-startup-hotfix.zh.md: bb7603c78495549d4fe500430ce1dfaa837c4690

@@ -8,10 +8,15 @@
  * mocks the module body observes.
  */
 
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APP_SCHEME } from '../src/protocol.ts'
 
 const originalArgv = [...process.argv]
+const homes: string[] = []
 
 interface StartupOptions {
   readonly profile: string
@@ -24,6 +29,8 @@ interface StartupOptions {
 
 afterEach(() => {
   process.argv = [...originalArgv]
+  vi.unstubAllEnvs()
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
 })
 
 const mocks = vi.hoisted(() => {
@@ -41,6 +48,7 @@ const mocks = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: {
     on: vi.fn(),
+    setPath: vi.fn(),
     requestSingleInstanceLock: mocks.requestSingleInstanceLock,
     quit: vi.fn(),
     whenReady: () => mocks.ready.promise,
@@ -64,6 +72,13 @@ vi.mock('@deepseek-ai/dsh/profile-boot', () => ({
 
 describe('Electron main startup', () => {
   it('claims the scheme privileges and finishes evaluation before readiness, then boots the selected profile', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'electron-startup-trace-'))
+    homes.push(root)
+    vi.stubEnv('DSH_DESKTOP_SMOKE', '1')
+    vi.stubEnv('DSH_DESKTOP_SMOKE_ROOT', root)
+    vi.stubEnv('DSH_DESKTOP_SMOKE_ITERATION', '1')
+    vi.stubEnv('DSH_HOME', join(root, 'dsh-home'))
+    const stages = () => readFileSync(join(root, 'startup-phases.log'), 'utf8').trim().split('\n').map(line => JSON.parse(line) as { stage: string; iteration: string; pid: number })
     process.argv = ['/electron', '/app', '--profile', 'investment-research']
     const loading = import('../src/main.ts')
     await vi.waitFor(
@@ -77,6 +92,8 @@ describe('Electron main startup', () => {
     ])
 
     expect(state).toBe('loaded')
+    expect(stages().map(entry => entry.stage)).toEqual(['entry-start', 'application-import-start', 'main-module-ready', 'instance-lock-start', 'instance-lock-acquired', 'electron-ready-wait', 'application-imported'])
+    expect(stages().every(entry => entry.iteration === '1' && entry.pid === process.pid)).toBe(true)
     expect(mocks.registerSchemesAsPrivileged).toHaveBeenCalledWith([{
       scheme: APP_SCHEME,
       privileges: { standard: true, secure: true, supportFetchAPI: true },
@@ -86,7 +103,8 @@ describe('Electron main startup', () => {
     mocks.ready.resolve(undefined)
 
     await vi.waitFor(() => { expect(mocks.runProfile).toHaveBeenCalledOnce() })
-    expect(mocks.healProfilesModuleFallback).toHaveBeenCalledWith(expect.stringMatching(/electron[\/]package\.json$/u))
+    expect(stages().slice(-2).map(entry => entry.stage)).toEqual(['electron-ready', 'profile-start'])
+    expect(mocks.healProfilesModuleFallback).toHaveBeenCalledWith(fileURLToPath(new URL('../package.json', import.meta.url)))
     const startupOptions = mocks.runProfile.mock.calls[0]?.[0]
     expect(startupOptions).toMatchObject({
       profile: 'investment-research',
