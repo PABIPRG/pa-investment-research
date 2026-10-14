@@ -9,6 +9,12 @@ services:
     init: true
     read_only: true
     restart: unless-stopped
+    # Applied on container recreation; changing this file alone does not rotate existing logs.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     stop_grace_period: 30s
     pids_limit: 512
     cap_drop:

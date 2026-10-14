@@ -10,6 +10,7 @@ from pathlib import Path
 import pwd
 import re
 import selectors
+import shlex
 import shutil
 import signal
 import stat
@@ -35,6 +36,9 @@ PULL_ATTEMPTS = 2
 PULL_TIMEOUT_SECONDS = 900
 PULL_RETRY_DELAY_SECONDS = 15
 PULL_PROGRESS_INTERVAL_SECONDS = 60
+ARTIFACT_DIR = Path("/home/admin/pa-investment-artifacts/objects")
+SOURCE_LABEL = "https://github.com/PABIPRG/pa-investment-research"
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 class DeployError(RuntimeError):
@@ -140,6 +144,106 @@ def checked_path(path, owners, secret=False):
     return path.stat()
 
 
+def success_timestamp(name, value):
+    completed = value.get("completed_at")
+    if completed is None:
+        require(re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}", name), "invalid legacy success stamp")
+        return datetime.datetime.strptime(name[:16], "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
+    timestamp = datetime.datetime.fromisoformat(completed)
+    require(timestamp.tzinfo is not None, "success timestamp needs timezone")
+    return timestamp
+
+
+def retained_successes(records, current):
+    """Select distinct verified versions, never Docker creation time or file mtime."""
+    require(isinstance(current, str) and IMAGE_ID.fullmatch(current), "invalid current image ID")
+    successes = []
+    for name, value in records:
+        require(isinstance(value, dict) and isinstance(value.get("phase"), str), "invalid deployment record")
+        if value["phase"] != "complete":
+            continue
+        image = value.get("new_image_id", "")
+        require(isinstance(image, str) and IMAGE_ID.fullmatch(image), "invalid successful image ID")
+        successes.append((success_timestamp(name, value), name, image))
+    require(any(item[2] == current for item in successes), "current image has no successful deployment record")
+    kept = {current}
+    for _, _, image in sorted(successes, reverse=True):
+        kept.add(image)
+        if len(kept) == 3:
+            return kept
+    raise DeployError("retention needs two successful historical versions; keep legacy images until verified")
+
+
+def project_image(item):
+    """Foreign aliases prevent ownership claims even when the source label matches."""
+    refs = (item.get("RepoTags") or []) + (item.get("RepoDigests") or [])
+    return (item.get("Config", {}).get("Labels", {}) or {}).get("org.opencontainers.image.source") == SOURCE_LABEL \
+        and all(ref.startswith(REPOSITORY + ":") or ref.startswith(REPOSITORY + "@sha256:") for ref in refs)
+
+
+def retention_path(path, owners):
+    # /home/admin is a trusted ancestor, but state/records/objects themselves stay root-owned.
+    info = checked_path(path, owners | {pwd.getpwnam("admin").pw_uid})
+    require(info.st_uid in owners, "unexpected retention path owner")
+    return info
+
+
+def retention_file(path, owners):
+    info = retention_path(path, owners)
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, "retention requires regular, unlinked files")
+    return info
+
+
+def retention_policy(state):
+    path = state / "retention-policy.json"
+    if not path.exists() and not path.is_symlink():
+        return {"schema": 1, "mode": "dry-run", "protected_images": [], "config_roots": []}
+    retention_file(path, {0})
+    value = read_json(path)
+    require(isinstance(value, dict) and set(value) == {"schema", "mode", "protected_images", "config_roots"}
+            and value["schema"] == 1 and value["mode"] in {"dry-run", "apply"}, "invalid retention policy")
+    for key in ("protected_images", "config_roots"):
+        require(isinstance(value[key], list) and all(isinstance(item, str) for item in value[key]),
+                "invalid retention policy list")
+    for ref in value["protected_images"]:
+        require(IMAGE_ID.fullmatch(ref) or re.fullmatch(re.escape(REPOSITORY) + r"@sha256:[0-9a-f]{64}", ref),
+                "rollback pins must use full image IDs or repository digests")
+    return value
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def managed_artifacts(root):
+    """Unknown objects are never recursively removed; incomplete imports stay visible."""
+    if not root.exists() and not root.is_symlink():
+        return []
+    retention_path(root, {0})
+    result = []
+    for directory in sorted(root.iterdir()):
+        if directory.name.startswith(".import-"):
+            continue  # Interrupted copy; administrator can inspect it, never infer expiry.
+        retention_path(directory, {0})
+        require(directory.is_dir() and re.fullmatch(r"[0-9a-f]{64}", directory.name), "unknown artifact object")
+        require({path.name for path in directory.iterdir()} == {"archive.tar.gz", "metadata.json"},
+                "unknown artifact contents")
+        for name in ("archive.tar.gz", "metadata.json"):
+            retention_file(directory / name, {0})
+        metadata = read_json(directory / "metadata.json")
+        require(set(metadata) == {"schema", "sha256", "image_id", "imported_at"} and metadata["schema"] == 1
+                and metadata["sha256"] == directory.name and IMAGE_ID.fullmatch(metadata["image_id"]),
+                "invalid artifact metadata")
+        imported = datetime.datetime.fromisoformat(metadata["imported_at"])
+        require(imported.tzinfo is not None, "artifact timestamp needs timezone")
+        result.append((directory, metadata, imported))
+    return result
+
+
 def transact(image, state, driver):
     """A durable marker survives crashes; only a completed run removes it."""
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -177,6 +281,7 @@ def transact(image, state, driver):
             driver.start()
             phase("verifying")
             driver.verify(image)
+            status["completed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             phase("complete")
             active.unlink()
             directory = os.open(state, os.O_RDONLY)
@@ -184,7 +289,6 @@ def transact(image, state, driver):
                 os.fsync(directory)
             finally:
                 os.close(directory)
-            return record
         except BaseException as error:
             # Diagnostics never include .env, Docker Config.Env, or a full inspect.
             status["failed_phase"] = status["phase"]
@@ -215,6 +319,20 @@ def transact(image, state, driver):
                 except Exception:
                     print("old service could not be reverified; recovery marker retained", file=sys.stderr)
             raise
+        # Do not let cleanup errors enter the deployment recovery path after commit.
+        if hasattr(driver, "cleanup"):
+            try:
+                write_json(record / "cleanup.json", {"result": "running"})
+                result = driver.cleanup(state, record)
+                write_json(record / "cleanup.json", result)
+                print(json.dumps({"phase": "retention", "result": result["result"], "record": str(record)}), flush=True)
+            except BaseException as error:
+                with contextlib.suppress(Exception):
+                    report = read_json(record / "cleanup.json") if (record / "cleanup.json").exists() else {}
+                    report.update({"result": "failed", "error_type": type(error).__name__})
+                    write_json(record / "cleanup.json", report)
+                print("deployment complete; retention failed or interrupted; inspect cleanup.json", file=sys.stderr)
+        return record
 
 
 class DockerDriver:
@@ -517,6 +635,162 @@ class DockerDriver:
         with (record / "container.log").open("w") as output:
             subprocess.run(["docker", "logs", "--tail", "200", container["Id"]], env=ENVIRONMENT,
                            cwd="/", stdout=output, stderr=output, timeout=30, check=False)
+
+    def configured_images(self, policy):
+        """Read active and saved configurations; any unresolved reference stops cleanup."""
+        owners = {0, pwd.getpwnam("admin").pw_uid}
+        refs = set()
+        fingerprints = {}
+        roots = {DEPLOY_DIR, *(Path(value) for value in policy["config_roots"])}
+        for root in sorted(roots):
+            require(root.is_absolute() and root != Path("/") and ".." not in root.parts,
+                    "invalid configuration root")
+            checked_path(root, owners)
+            require(root.is_dir(), "configuration root is not a directory")
+            def walk_error(error):
+                raise error
+            for directory, children, files in os.walk(root, followlinks=False, onerror=walk_error):
+                for name in children:
+                    checked_path(Path(directory) / name, owners)
+                for name in files:
+                    path = Path(directory) / name
+                    env_file = name == ".env" or name.startswith(".env.") or name.endswith(".env")
+                    compose_file = (name.startswith("compose") or name.startswith("docker-compose")) \
+                        and path.suffix in {".yaml", ".yml"}
+                    if not (env_file or compose_file):
+                        continue
+                    retention_file(path, owners)
+                    require(path.stat().st_size <= 1024 * 1024, "configuration exceeds retention limit")
+                    fingerprints[str(path)] = sha256_file(path)
+                    if env_file:
+                        for line in path.read_text().splitlines():
+                            if re.match(r"\s*(?:export\s+)?DSH_IMAGE\s*=", line):
+                                tokens = shlex.split(line.split("=", 1)[1], comments=True)
+                                require(len(tokens) == 1 and not re.search(r"[$`\s]", tokens[0]),
+                                        "unresolved image assignment; pin literal image identity")
+                                refs.add(tokens[0])
+                    if compose_file:
+                        args = ["docker", "compose", "--project-directory", str(path.parent)]
+                        env = path.parent / ".env"
+                        if env.exists():
+                            retention_file(env, owners)
+                            args += ["--env-file", str(env)]
+                        # Render actual Compose semantics, including literal images and interpolation.
+                        rendered = json.loads(self.run(args + ["-f", str(path), "config", "--format", "json"]))
+                        for service in rendered["services"].values():
+                            require(isinstance(service.get("image"), str) and service["image"],
+                                    "configuration has unresolved service image")
+                            refs.add(service["image"])
+        require(str(DEPLOY_DIR / ".env") in fingerprints and str(DEPLOY_DIR / "compose.yaml") in fingerprints,
+                "active configuration missing")
+        return refs, fingerprints
+
+    def retention_snapshot(self, state, verify_archives=True):
+        require(not (state / "active.json").exists() and not (state / "active.json").is_symlink(),
+                "active deployment blocks retention")
+        require(not (state / "deployer-update-pending.json").exists()
+                and not (state / "deployer-update-pending.json").is_symlink(), "pending updater blocks retention")
+        policy = retention_policy(state)
+        current = self.container()
+        require(current["State"].get("Running") and current["State"].get("Health", {}).get("Status") == "healthy",
+                "current container must be healthy for retention")
+        records = []
+        for directory in self.record_root.iterdir():
+            retention_path(directory, {0})
+            require(directory.is_dir(), "unknown deployment record")
+            path = directory / "status.json"
+            retention_file(path, {0})
+            records.append((directory.name, read_json(path)))
+        protected = retained_successes(records, current["Image"])
+        refs, fingerprints = self.configured_images(policy)
+        for ref in set(policy["protected_images"]) | refs:
+            protected.add(self.inspect(ref, "image")["Id"])
+        for identifier in self.run(["docker", "ps", "-aq", "--no-trunc"]).split():
+            protected.add(self.inspect(identifier)["Image"])
+        # The previous running image remains a recovery option even if its legacy success was not recorded.
+        latest = max((entry for entry in records if entry[1].get("new_image_id") == current["Image"]
+                      and entry[1]["phase"] == "complete"),
+                     key=lambda entry: (success_timestamp(*entry), entry[0]))[1]
+        if latest.get("old_image_id"):
+            protected.add(latest["old_image_id"])
+        require(all(isinstance(value, str) and IMAGE_ID.fullmatch(value) for value in protected),
+                "invalid protected image ID")
+        # Missing recovery images must not silently reduce the required history.
+        for identifier in protected:
+            require(self.inspect(identifier, "image")["Id"] == identifier, "protected image unavailable")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        objects = managed_artifacts(ARTIFACT_DIR)
+        for _, metadata, imported in objects:
+            if now - imported < datetime.timedelta(days=7):
+                # Imported archives may not have been docker-loaded yet; no inspect required.
+                protected.add(metadata["image_id"])
+        images = {}
+        for identifier in set(self.run(["docker", "image", "ls", "-aq", "--no-trunc"]).split()):
+            item = self.inspect(identifier, "image")
+            require(item["Id"] == identifier, "image identity changed")
+            if project_image(item) and identifier not in protected:
+                images[identifier] = sorted((item.get("RepoTags") or []) + (item.get("RepoDigests") or []))
+        artifacts = []
+        for directory, metadata, imported in objects:
+            if metadata["image_id"] not in protected and now - imported >= datetime.timedelta(days=7):
+                if verify_archives:
+                    require(sha256_file(directory / "archive.tar.gz") == metadata["sha256"], "artifact checksum drift")
+                artifacts.append(directory.name)
+        return {"policy": policy, "current": current["Id"], "protected": sorted(protected),
+                "configurations": fingerprints, "images": images, "artifacts": sorted(artifacts)}
+
+    def cleanup(self, state, record):
+        """Caller owns deploy.lock. Recheck the entire protection boundary before each mutation."""
+        snapshot = self.retention_snapshot(state)
+        result = {"result": "dry-run" if snapshot["policy"]["mode"] == "dry-run" else "running",
+                  "protected": snapshot["protected"], "candidate_images": sorted(snapshot["images"]),
+                  "candidate_artifacts": snapshot["artifacts"], "removed_images": [], "removed_artifacts": [],
+                  "errors": []}
+        write_json(record / "cleanup.json", result)
+        if snapshot["policy"]["mode"] == "dry-run":
+            return result
+
+        def recheck():
+            fresh = self.retention_snapshot(state, verify_archives=False)
+            for key in ("policy", "current", "protected", "configurations"):
+                require(fresh[key] == snapshot[key], "retention protection changed; retry after review")
+            return fresh
+
+        for identifier, original_refs in sorted(snapshot["images"].items()):
+            try:
+                fresh = recheck()
+                require(fresh["images"].get(identifier) == original_refs, "candidate references changed")
+                # Tags are removed individually without force. All stopped/running users were protected above.
+                tags = [ref for ref in original_refs if "@sha256:" not in ref]
+                targets = tags or original_refs or [identifier]
+                for target in targets:
+                    fresh = recheck()
+                    require(identifier in fresh["images"], "candidate became protected")
+                    require(self.inspect(target, "image")["Id"] == identifier, "image reference moved")
+                    self.run(["docker", "image", "rm", "--no-prune", target])
+                require(identifier not in self.run(["docker", "image", "ls", "-aq", "--no-trunc"]).split(),
+                        "image still has references after removal")
+                result["removed_images"].append(identifier)
+            except Exception as error:
+                result["errors"].append({"image_id": identifier, "error_type": type(error).__name__})
+                # Stop at the first race/error; keep archives available for recovery.
+                break
+            finally:
+                write_json(record / "cleanup.json", result)
+        if not result["errors"]:
+            for digest in snapshot["artifacts"]:
+                fresh = recheck()
+                require(digest in fresh["artifacts"], "artifact became protected")
+                directory = ARTIFACT_DIR / digest
+                require(sha256_file(directory / "archive.tar.gz") == digest, "artifact changed before removal")
+                # Exact files only. Interrupted cleanup leaves a visible, non-deletable object for review.
+                (directory / "archive.tar.gz").unlink()
+                (directory / "metadata.json").unlink()
+                directory.rmdir()
+                result["removed_artifacts"].append(digest)
+                write_json(record / "cleanup.json", result)
+        result["result"] = "partial" if result["errors"] else "complete"
+        return result
 
 
 def main():

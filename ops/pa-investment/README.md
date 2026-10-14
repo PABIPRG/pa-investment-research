@@ -68,7 +68,7 @@ id pa-deployer
 
 不在 `/etc`、admin HOME 或部署目录保存 registry 凭据。短期 token 只用于停服前的 `docker login --password-stdin` 和精确 digest 拉取，临时 `DOCKER_CONFIG` 随后删除。检查磁盘预算：脚本要求可用空间大于卷表观大小的两倍加 1 GiB，并在停机前拉取候选镜像；这不是长期容量保证。
 
-还应审查一次完整备份的预估时长、当前卷数据量和恢复路径，确认短暂停机窗口。备份在同一主机只用于升级恢复，**不替代异机灾备**；按 PAB-18 将备份安全复制到独立故障域并做恢复演练。自动保留清理暂未实现，管理员监控磁盘，不运行无差别 prune 或删除历史卷。
+还应审查一次完整备份的预估时长、当前卷数据量和恢复路径，确认短暂停机窗口。备份在同一主机只用于升级恢复，**不替代异机灾备**；按 PAB-18 将备份安全复制到独立故障域并做恢复演练。镜像与受管离线包的保留策略见下文 PAB-36；业务卷、整卷备份与部署记录不参与自动删除，仍需独立容量预算，不运行无差别 prune。
 
 ### 4. 一次性安装部署器自动更新入口
 
@@ -265,3 +265,109 @@ pnpm --dir frontend exec vitest run scripts/investment-container.spec.ts scripts
 再次校验；生产扫描与发布仍读取真实时间及仓库策略。单测通过不表示当前策略例外仍在有效期内。
 本机通过的解析/门禁测试不等于 Linux 新镜像安全通过；发布前必须取得新候选的扫描、
 运行依赖加载、Compose smoke 和表格导入真实产品验收证据。
+
+## PAB-36：镜像、离线包与日志保留
+
+本节是待审阅的启用方案，**不是服务器已经执行的结果**。关联 [PAB-36](https://linear.app/pabiprg/issue/PAB-36/deploy-retention-001-按成功部署记录管理镜像与部署包保留)。2026-10-14 的磁盘与镜像清理结果仅为用户提供的历史背景，不能作为本版本验收或当前磁盘状态。
+
+### 成功记录与保护范围
+
+`deploy.py` 在镜像身份、单实例、Docker 健康状态、聚合探针和 HTTPS 健康均通过后写入 `phase=complete` 与 `completed_at`，清除 `active.json` 并持久化，然后在**同一把部署锁**内执行清理。清理结果写入这次部署目录的 `cleanup.json`，Actions 输出独立 `retention` 结果；清理失败、Docker 冲突或中断不会将成功部署改成 `recovery-required`，也不会自动回滚业务数据。下一次成功部署会重试；管理员也可使用下面的维护入口单独重试。
+
+保留集合取并集：
+
+- 当前运行 image ID，以及按成功记录排序的最近两个**不同的历史成功 image ID**。重复部署同一镜像不占历史名额；回退到旧版本仍保留另外两个最近成功版本。
+- 所有运行或已停止容器使用的 image ID，以及最近一次当前版本成功部署记录中的 `old_image_id`。
+- `retention-policy.json` 的显式回滚 pin。
+- `/home/admin/pa-investment-deploy` 及策略声明的额外 `config_roots` 中的配置引用。递归读取 `.env`、`.env.*`、`*.env` 的 `DSH_IMAGE`，并通过 Docker Compose 渲染 `compose*.yaml/yml` 与 `docker-compose*.yaml/yml` 的服务镜像。嵌套的 `observatory-config.*/.env` 因而受保护。
+- 最近七天导入的离线包对应镜像；重复导入相同归档只更新导入时间，不增加副本。
+
+旧 `complete` 记录使用记录目录中的事务时间排序，**不使用镜像创建时间或文件 mtime 推断成功**。不足两个可信历史成功版本时整轮停止删除，先积累真实成功记录；不能将以前仅按时间选出的镜像伪造为成功记录。配置引用无法解析、文件/目录含符号链接、状态损坏、保护镜像不在本地或引用在执行期间变化时，停止该轮删除。
+
+只有带本项目 OCI source label，且所有 tag/digest 均属于 `ghcr.io/pabiprg/pa-investment-research` 的镜像才进入候选；无标签镜像也须具有该 source label。含其他仓库别名的镜像不删除。使用精确 `docker image rm --no-prune`，不使用 `--force`、全局 prune、卷删除或父镜像递归清理。每次删除前重新读取容器、配置、策略和保护集合，并检查 tag 尚指向预期 ID。
+
+备份快照目录不作为“当前配置根”递归扫描，否则每份历史备份会永久保护所有旧镜像。需要长期离线恢复的备份必须由管理员在策略里 pin 配对镜像。备份本身、数据卷、用户会话、SQLite、日志文件、Kuma、Cloudflared、系统 journal 均不会被此功能删除或修改。
+
+### 首次启用步骤（尚未执行）
+
+以下均须单独获服务器操作授权后，由管理员在 **aly** 执行；当前本地开发不要求用户操作。
+
+| 执行者 | 位置 | 动作 | 状态 | 用户是否需要操作 |
+|---|---|---|---|---|
+| 管理员 | aly 的受控部署目录 | 盘点配置引用与完整镜像 ID，审核 pin | 待启用 | 本轮不用；获准迁移时执行 |
+| 管理员 | aly 的已审阅代码目录 | 建立 root 私有策略和归档对象目录，运行 dry-run | 待启用 | 同上 |
+| 管理员 | aly 的 Compose | 合并日志块并在批准的部署中重建 investment | 待启用 | 同上 |
+| 管理员 | aly | 审核清理候选后改为 apply；后续成功部署自动清理 | 待启用 | 同上 |
+
+1. 先走正常代码评审与发布流程。固定更新器仍只更新 `deploy.py`，不需要改变 wrapper、sudoers 或 `pa-deployer` 权限。管理员维护入口 `maintenance.py` 与同版本 `deploy.py` 放在一个 root/admin 控制、其他用户不可写的已审阅目录，使用现有 Python 3.11；不重跑通用 `install.sh`。
+2. 在同一目录复制 `retention-policy.example.json` 为待审阅策略。默认 `mode=dry-run`，没有策略文件也只预览。`protected_images` 仅接受完整 `sha256:<64 hex>` config ID 或固定 GHCR digest，不能填短 ID、浮动 tag 或占位符。把背景中 `44d0f61db6b6`、`3970f140e00e` 等待确认历史镜像先解析为完整 ID 并 pin；核对当前 `e43bf827f2aa` 与配置引用 `78bc81110171` 的实际完整身份。**这些短 ID 只是历史线索，不能直接复制为当前事实或策略值。**
+3. 默认配置根之外仍在使用的 Compose/环境目录加入 `config_roots`；文件名不符合上述发现规则的配置必须显式 pin 所引用的镜像。协调无部署、更新或 1Panel 操作后，使用共享锁安装**已审阅**策略；首次创建归档对象目录只作用于新建的 `objects`，不递归改属主或删除既有 artifacts 内容：
+
+```sh
+sudo flock -n /var/lib/pa-investment-deploy/deploy.lock \
+  install -o root -g root -m 0600 ./retention-policy.reviewed.json \
+  /var/lib/pa-investment-deploy/retention-policy.json
+sudo install -d -o root -g root -m 0700 /home/admin/pa-investment-artifacts/objects
+sudo /usr/bin/python3.11 -I -B ./maintenance.py retention
+```
+
+`retention` 本身重新获取部署锁；如有 `active.json` 或更新恢复日志会拒绝。它会执行当前实例聚合及 HTTPS 健康检查，因此即使 dry-run 也是需要授权的服务器操作。输出 `record` 路径下的 `cleanup.json` 列出保护 ID、候选镜像/归档摘要与结果；不输出 `.env` 或凭证。如果报历史不足，先确认旧成功记录或等待新真实成功部署积累，不按镜像时间补记录、不降低历史名额。
+
+4. 审阅集合后，将同一份策略的 `mode` 改为 `apply`，保留所有 pin/config_roots，再按相同锁安装。下一次成功部署执行清理，也可再次执行 `maintenance.py retention`。不需要为清理重启服务；实际删除不可逆，先确认保留镜像与配对备份可恢复。`result=partial/failed` 表示清理未完成；部署 `status.json` 仍可为 `complete`。不要以“部署成功”忽略清理告警。
+
+共享锁只约束参与本协议的程序。人工 Docker、1Panel、上传/配置修改也必须与该锁协调，不能在清理时并发改 tag、配置、归档或容器；脚本的复核不能把绕过锁的操作者变成原子事务。
+
+### 部署包目录与迁移
+
+GHCR 日常部署不在服务器额外保留 tar。离线/PR 包统一为：
+
+```text
+/home/admin/pa-investment-artifacts/objects/<归档SHA256>/
+  archive.tar.gz
+  metadata.json        # schema、归档 SHA、实际 config ID、导入时间
+```
+
+后续上传使用独立临时目录，先上传为 `.part`，完成后原子改名为 `investment-container.tar.gz`，在同一部署锁协议下导入；不要长期在 `incoming`、部署目录、HOME 和 PR 临时目录各留一份。导入器不提取 tar：它校验指定 SHA-256、单镜像 Docker save manifest、config/layer 成员和本项目 Linux amd64 source label，拒绝路径穿越、符号链接和设备成员。先落盘并校验受管对象，再按显式参数移除源文件；同摘要只保留一份。
+
+在 aly 的已审阅脚本目录中，对**逐个确认的完整路径**执行：
+
+```sh
+sudo /usr/bin/python3.11 -I -B ./maintenance.py import-archive \
+  /home/admin/incoming/已确认目录/investment-container.tar.gz \
+  --sha256 '<来自可信构建附件的64位SHA256>' --remove-source
+```
+
+SHA 应来自可信构建附件校验清单，不能仅对来源不明包现算一个摘要便视为可信。旧包缺少来源证据时先保留并调查。可先省略 `--remove-source` 检查导入结果，确认后以相同参数加该选项重跑。只删除这个指定 tar；校验文件、配置、其他文件和父目录全部保留，已空的 PR 目录由管理员另行确认。**不执行任何 `rm -rf incoming/PR*` 一类目录清理。** 业务备份根和 Docker 卷目录禁止作为源。
+
+保留当前、两个成功历史版本、显式 pin、容器/配置引用及七天内新导入对象；其余受管对象只在健康成功后的 apply 中删除。未部署包七天过期并不代表部署成功。对象内存在未知文件或摘要漂移时停止清理。普通导入失败清除本次私有暂存目录并保留源；进程被强杀可能留下 `.import-*`，自动清理不会猜测其归属，管理员在共享锁内核对后处理。归档删除若中断，可能留下不完整对象；检查 `cleanup.json` 和剩余两项固定文件，恢复原归档或确认后移除该精确对象，再重试。不能递归删除未知内容以解除阻塞。
+
+### 日志轮转与回退
+
+仓库 Compose 为 investment 配置如下服务级日志选项；aly 既有 Compose **只合并此块**，保留现网网络、端口、secret、数据卷及其他配置：
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+```
+
+修改文件不会改变已创建容器，需在获准部署时重建 investment 才生效；单纯 `restart` 不足以应用。重建后核对 `docker inspect --format '{{json .HostConfig.LogConfig}}' <实际容器ID>` 与健康状态。不要直接截断 Docker 自管日志文件。依据：[Docker json-file 文档](https://docs.docker.com/engine/logging/drivers/json-file/)。此限制只控制该容器 stdout/stderr 日志，不等于整机总日志或应用卷内文件的限额。
+
+停用清理：在共享锁内把策略改回 `dry-run`，保留 pin 与配置根即可，不必降级部署器。已删除镜像无法通过改策略还原，需要从 GHCR 或保留的离线包重新加载精确版本；数据已迁移时仍走原有整卷配对恢复流程。回退日志配置需要恢复审阅过的 Compose 日志块并另行批准重建。不可通过删成功记录、删 active.json、`down -v` 或删数据卷恢复磁盘空间。
+
+### 镜像体积结论与验收边界
+
+当前构建已经使用多阶段与 distroless、`pnpm deploy --prod`、独立 Python runtime；Linux 锁排除了 Chroma/ONNX 等依赖闭包，构建缓存不复制进运行镜像，已有基于校验值的非运行测试文件裁剪。约 1.15 GB 是背景中的旧测量，本轮没有 Linux Docker 层大小/包目录分解证据，**未进一步删除运行依赖，也不宣称镜像缩小或服务器释放空间**。下一次受准镜像构建应记录镜像 ID、`docker image inspect` 的 Size 和 `/opt/dsh`、`/opt/investment-python` 的体积分解后再决定是否裁剪；不能直接删除 numpy/pandas、证书、许可证、包元数据或 runtime.json 校验覆盖的文件。
+
+真实验收结论：`Inconclusive`。本机无 Docker，且无本次服务器授权。
+
+| 关注点 | 状态 | 所需实际证据 |
+|---|---|---|
+| Linux Docker 精确删除及共享层行为 | not-tested | 独立测试 Docker 上含多 tag、digest、停止容器的 dry-run/apply |
+| 健康部署后自动清理与失败隔离 | not-tested | 成功部署、cleanup.json 与失败注入结果；业务仍健康 |
+| 显式 pin 与配对数据恢复 | not-tested | 保留镜像可加载，原恢复流程成功且业务数据完整 |
+| 日志轮转 | not-tested | 重建后的 LogConfig，受控日志写入与轮转观察 |
+
+维护者负责在首次生产 apply 前关闭这些验证债务；本地标准库假驱动测试、真实临时 tar 文件测试与 Compose 解析是辅助证据，不代替上表。没有这些证据不标记 PAB-36 Done。
