@@ -441,6 +441,36 @@ export async function materializePackagingWorkspaceLinks(
     }
   }
 
+  // Bind declared workspace edges after every package copy is complete. A
+  // shared hoist alone does not override consumer-local links or ambient paths.
+  for (const name of visited) {
+    const workspacePackage = workspacePackages.get(name)
+    if (workspacePackage === undefined) continue
+    const candidateDir = canonicalTargets.get(workspacePackage.sourceDir)
+      ?? join(deployedModules, ...name.split('/'))
+    if (!await isStagedPackage(canonicalStagingDir, candidateDir)) {
+      throw new Error(`workspace consumer is not a staged package: ${name} -> ${candidateDir}`)
+    }
+    const packageDir = await realpath(candidateDir)
+    for (const dependencyName of runtimeWorkspaceDependencies(workspacePackage, workspacePackages)) {
+      const deployedDependency = join(deployedModules, ...dependencyName.split('/'))
+      if (!await isStagedPackage(canonicalStagingDir, deployedDependency)) {
+        throw new Error(`workspace dependency is not a staged package: ${name} -> ${dependencyName}`)
+      }
+      const targetDir = await realpath(deployedDependency)
+      const linkPath = join(packageDir, 'node_modules', ...dependencyName.split('/'))
+      if (await pathResolves(linkPath) && await realpath(linkPath) === targetDir) continue
+      for (const directory of new Set([join(packageDir, 'node_modules'), dirname(linkPath)])) {
+        await mkdir(directory, { recursive: true })
+        if (!isWithinDirectory(canonicalStagingDir, await realpath(directory))) {
+          throw new Error(`workspace dependency link parent escapes staging: ${name} -> ${dependencyName}; ${directory}`)
+        }
+      }
+      await rm(linkPath, { force: true, recursive: true })
+      await createPackagingDirectoryLink(targetDir, linkPath, platform)
+    }
+  }
+
   for (const name of visited) {
     const workspacePackage = workspacePackages.get(name)
     if (workspacePackage === undefined) continue

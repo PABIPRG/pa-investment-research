@@ -1,5 +1,5 @@
 /** Windows portable copies retain the deployed dependency graph after relocation. */
-import { mkdtemp, mkdir, writeFile, symlink, rm, lstat, realpath, stat } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, writeFile, symlink, rm, lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -84,6 +84,61 @@ describe('portable package dependencies', () => {
       await rm(source, { recursive: true, force: true })
       await rm(workspace, { recursive: true, force: true })
       expect(createRequire(join(destination, 'package.json'))('fixture-compaction')).toBe('portable peer')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
+  it.each(['local peer', 'node_modules parent'])('handles an external %s beside a valid staged peer', async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), 'portable-shadowed-peer-'))
+    const workspace = join(root, 'workspace')
+    const alias = join(root, 'workspace-alias')
+    const source = join(root, 'staging')
+    const destination = join(root, 'portable')
+    const importer = join(workspace, 'packages/workflow')
+    const dependency = join(workspace, 'packages/agent')
+    const deployedModules = join(source, 'node_modules/.pnpm/node_modules')
+    const consumer = join(source, 'node_modules/.pnpm/workflow/node_modules/fixture-workflow')
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    try {
+      await mkdir(importer, { recursive: true })
+      await mkdir(dependency, { recursive: true })
+      await mkdir(deployedModules, { recursive: true })
+      await mkdir(join(source, 'node_modules/.dsh-workspace-links'))
+      const localModules = join(workspace, 'node_modules/.pnpm/node_modules')
+      await mkdir(localModules, { recursive: true })
+      await writeFile(join(importer, 'package.json'), JSON.stringify({
+        name: 'fixture-workflow', main: 'index.cjs', peerDependencies: { 'fixture-agent': 'workspace:^' },
+      }))
+      await writeFile(join(importer, 'index.cjs'), "module.exports = require('fixture-agent')")
+      await writeFile(join(dependency, 'package.json'), JSON.stringify({ name: 'fixture-agent', main: 'index.cjs' }))
+      await writeFile(join(dependency, 'index.cjs'), "module.exports = 'isolated peer'")
+      await writeFile(join(source, 'package.json'), JSON.stringify({ name: 'app', dependencies: { 'fixture-workflow': '1' } }))
+      await cp(importer, consumer, { recursive: true })
+      await cp(dependency, join(deployedModules, 'fixture-agent'), { recursive: true })
+      await symlink(importer, join(localModules, 'fixture-workflow'), linkType)
+      await symlink(dependency, join(localModules, 'fixture-agent'), linkType)
+      await symlink(consumer, join(deployedModules, 'fixture-workflow'), linkType)
+      await symlink(consumer, join(source, 'node_modules/fixture-workflow'), linkType)
+      await symlink(workspace, alias, linkType)
+      if (kind === 'node_modules parent') {
+        const outside = join(root, 'outside')
+        await mkdir(join(outside, 'fixture-agent'), { recursive: true })
+        const marker = join(outside, 'fixture-agent/marker')
+        await writeFile(marker, 'preserve outside files')
+        await symlink(outside, join(consumer, 'node_modules'), linkType)
+        await expect(materializePackagingWorkspaceLinks(source, workspace, join(workspace, 'apps/electron')))
+          .rejects.toThrow('workspace dependency link parent escapes staging')
+        expect(await readFile(marker, 'utf8')).toBe('preserve outside files')
+        return
+      }
+      await mkdir(join(consumer, 'node_modules'))
+      await symlink(join(alias, 'packages/agent'), join(consumer, 'node_modules/fixture-agent'), linkType)
+      await materializePackagingWorkspaceLinks(source, workspace, join(workspace, 'apps/electron'))
+      expect(await realpath(join(consumer, 'node_modules/fixture-agent')))
+        .toBe(await realpath(join(deployedModules, 'fixture-agent')))
+      await copyPortablePackageTree(source, destination)
+      await rm(source, { recursive: true, force: true })
+      await rm(workspace, { recursive: true, force: true })
+      expect(createRequire(join(destination, 'package.json'))('fixture-workflow')).toBe('isolated peer')
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
