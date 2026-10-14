@@ -457,6 +457,7 @@ async function copyPortablePackageEntry(
   sourcePath: string,
   destinationPath: string,
   ancestorDirectories: ReadonlySet<string>,
+  packageSources: Map<string, string>,
 ): Promise<void> {
   const sourceMetadata = await retryPackagingFileOperation(
     `reading metadata for ${sourcePath}`,
@@ -504,11 +505,19 @@ async function copyPortablePackageEntry(
     `reading directory ${resolvedSource}`,
     () => readdir(resolvedSource, { withFileTypes: true }),
   )
+  const packageDirectory = entries.some(entry => entry.name === 'package.json' && entry.isFile())
+  if (packageDirectory) {
+    packageSources.set(await realpath(destinationPath), canonicalDirectory)
+  }
   for (const entry of entries) {
+    // Reconstruct package-owned dependencies from their source resolutions;
+    // expanding node_modules here duplicates shared graphs and their backing stores.
+    if (packageDirectory && entry.name === 'node_modules') continue
     await copyPortablePackageEntry(
       join(resolvedSource, entry.name),
       join(destinationPath, entry.name),
       nestedAncestors,
+      packageSources,
     )
   }
   await retryPackagingFileOperation(
@@ -517,10 +526,77 @@ async function copyPortablePackageEntry(
   )
 }
 
-/** Dereference a deployed application sequentially so Windows packaging memory stays bounded. */
+interface PortablePackageManifest {
+  name?: string
+  dependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
+}
+
+async function resolvedPackageDirectory(owner: string, name: string): Promise<string | undefined> {
+  for (const directory of createRequire(join(owner, 'package.json')).resolve.paths(name) ?? []) {
+    const candidate = join(directory, ...name.split('/'))
+    if (await pathResolves(join(candidate, 'package.json'))) return realpath(candidate)
+  }
+  return undefined
+}
+
+async function preservePortableDependencies(
+  sourceRoot: string,
+  destinationRoot: string,
+  packageSources: Map<string, string>,
+): Promise<void> {
+  const pending = [...packageSources.keys()]
+  const visited = new Set<string>()
+  while (pending.length > 0) {
+    const destination = pending.pop()
+    if (destination === undefined || visited.has(destination)) continue
+    visited.add(destination)
+    const source = packageSources.get(destination)
+    if (source === undefined) continue
+    const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8')) as PortablePackageManifest
+    const dependencies = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+      ...Object.keys(manifest.optionalDependencies ?? {}),
+    ])
+    for (const name of dependencies) {
+      const optional = Object.hasOwn(manifest.optionalDependencies ?? {}, name)
+        || (!Object.hasOwn(manifest.dependencies ?? {}, name) && manifest.peerDependenciesMeta?.[name]?.optional === true)
+      const dependencySource = await resolvedPackageDirectory(source, name)
+      if (dependencySource === undefined) {
+        if (optional) continue
+        throw new Error(`deployed runtime dependency is missing: ${manifest.name ?? source} -> ${name}`)
+      }
+      const sourceRelative = relative(sourceRoot, dependencySource)
+      if (sourceRelative === '..' || sourceRelative.startsWith(`..${sep}`) || isAbsolute(sourceRelative)) {
+        throw new Error(`deployed runtime dependency escapes staging: ${manifest.name ?? source} -> ${name}`)
+      }
+      let dependencyDestination = await resolvedPackageDirectory(destination, name)
+      // Dereferencing moves the importer away from its pnpm dependency siblings.
+      // Reuse only a destination backed by the exact same source package, which
+      // preserves peer/version contexts and lets cycles resolve through ancestors.
+      if (dependencyDestination === undefined || packageSources.get(dependencyDestination) !== dependencySource) {
+        const hoisted = join(destinationRoot, 'node_modules', ...name.split('/'))
+        dependencyDestination = await pathResolves(hoisted)
+          ? join(destination, 'node_modules', ...name.split('/'))
+          : hoisted
+        await rm(dependencyDestination, { recursive: true, force: true })
+        await copyPortablePackageEntry(dependencySource, dependencyDestination, new Set(), packageSources)
+        dependencyDestination = await realpath(dependencyDestination)
+      }
+      pending.push(dependencyDestination)
+    }
+  }
+}
+
+/** Copy a deploy sequentially, preserving each runtime dependency's original resolution after links become directories. */
 export async function copyPortablePackageTree(sourceDir: string, destinationDir: string): Promise<void> {
   await rm(destinationDir, { force: true, recursive: true })
-  await copyPortablePackageEntry(sourceDir, destinationDir, new Set())
+  const packageSources = new Map<string, string>()
+  await copyPortablePackageEntry(sourceDir, destinationDir, new Set(), packageSources)
+  await preservePortableDependencies(await realpath(sourceDir), await realpath(destinationDir), packageSources)
 }
 
 /** Give Electron Packager only the manifest it needs before the bounded afterCopy install. */

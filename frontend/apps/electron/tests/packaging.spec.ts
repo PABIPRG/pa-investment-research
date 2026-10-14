@@ -639,7 +639,7 @@ describe('Electron investment sidecar packaging', () => {
       const portablePackage = join(portableDir, 'node_modules', '@deepseek-ai', 'example')
       expect((await lstat(portablePackage)).isSymbolicLink()).toBe(false)
       expect(await readFile(join(portablePackage, 'lib', 'index.js'), 'utf8')).toBe('export const value = 1\n')
-      expect(await readFile(join(portablePackage, 'node_modules', 'excluded', 'marker'), 'utf8')).toBe('exclude me')
+      await expect(stat(join(portablePackage, 'node_modules', 'excluded'))).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
@@ -700,7 +700,7 @@ describe('Electron investment sidecar packaging', () => {
   it('keeps Electron Packager away from the full Windows package tree', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-win32-seed-test-'))
     const plan = createPackagingPlan(rootDir, 'win32', 'x64')
-    const workspacePackage = join(rootDir, 'workspace-package')
+    const workspacePackage = join(plan.stagingDir, 'node_modules/.pnpm/example/node_modules/@deepseek-ai/example')
     const packageLink = join(plan.stagingDir, 'node_modules', '@deepseek-ai', 'example')
     const buildPath = join(rootDir, 'packaged', 'resources', 'app')
     try {
@@ -713,6 +713,7 @@ describe('Electron investment sidecar packaging', () => {
         main: 'lib/index.js',
         name: '@deepseek-ai/dsh-electron',
         version: '0.2.0-alpha.2',
+        dependencies: { '@deepseek-ai/example': '1.0.0' },
       }))
       await writeFile(join(plan.stagingDir, 'lib', 'index.js'), 'export const app = true\n')
       await writeFile(join(workspacePackage, 'package.json'), '{"name":"@deepseek-ai/example"}')

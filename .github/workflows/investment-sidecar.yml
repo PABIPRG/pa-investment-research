@@ -74,6 +74,7 @@ jobs:
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
           scripts/smoke-investment-desktop.spec.ts
+          apps/electron/tests/portable-package.spec.ts
           apps/electron/tests/entry-failure.spec.ts
           apps/electron/tests/main-startup.spec.ts
           apps/electron/tests/restart.spec.ts
