@@ -130,6 +130,9 @@ jobs:
           test "$(docker inspect --format '{{.State.Status}}' "$container_id")" = running
           test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$container_id")" = true
           test "$(docker inspect --format '{{.Config.User}}' "$container_id")" = 10001:10001
+          test "$(docker inspect --format '{{.HostConfig.LogConfig.Type}}' "$container_id")" = json-file
+          test "$(docker inspect --format '{{index .HostConfig.LogConfig.Config "max-size"}}' "$container_id")" = 20m
+          test "$(docker inspect --format '{{index .HostConfig.LogConfig.Config "max-file"}}' "$container_id")" = 3
           for attempt in $(seq 1 90); do
             health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id")
             if test "$health" = healthy; then break; fi
@@ -187,6 +190,20 @@ jobs:
           docker save "$IMAGE" | gzip -1 > "${RUNNER_TEMP}/investment-container.tar.gz"
           cd "$RUNNER_TEMP"
           sha256sum investment-container.tar.gz > investment-container.tar.gz.sha256
+
+      - name: Verify the exported archive can enter the managed artifact store
+        run: |
+          PYTHONPATH=ops/pa-investment python3 -B - <<'PY'
+          import os
+          from pathlib import Path
+          from maintenance import archive_image
+          root = Path(os.environ['RUNNER_TEMP'])
+          actual = archive_image(root / 'investment-container.tar.gz')
+          expected = (root / 'investment-container.image-id').read_text().strip()
+          if actual != expected:
+              raise SystemExit('managed archive config ID differs from the smoke-tested image')
+          print('Managed archive identity verified against the smoke-tested image.')
+          PY
 
       - name: Install checksum-pinned security scanners
         timeout-minutes: 5
