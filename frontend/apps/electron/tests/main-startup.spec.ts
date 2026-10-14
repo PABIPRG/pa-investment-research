@@ -92,7 +92,7 @@ describe('Electron main startup', () => {
     ])
 
     expect(state).toBe('loaded')
-    expect(stages().map(entry => entry.stage)).toEqual(['main-module-ready', 'instance-lock-start', 'instance-lock-acquired', 'electron-ready-wait'])
+    expect(stages().map(entry => entry.stage)).toEqual(['entry-start', 'application-import-start', 'main-module-ready', 'instance-lock-start', 'instance-lock-acquired', 'electron-ready-wait', 'application-imported'])
     expect(stages().every(entry => entry.iteration === '1' && entry.pid === process.pid)).toBe(true)
     expect(mocks.registerSchemesAsPrivileged).toHaveBeenCalledWith([{
       scheme: APP_SCHEME,
