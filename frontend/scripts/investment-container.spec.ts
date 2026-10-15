@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -161,7 +162,7 @@ describe('investment container delivery contract', () => {
 
     const pinnedBuildBase = 'node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697'
     const pinnedRuntimeBase = 'gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d'
-    const sidecarBuild = 'CI=true pnpm run investment:sidecar:build --target linux-x64'
+    const sidecarBuild = 'CI=true node --import tsx/esm scripts/build-investment-python-sidecar.ts --target linux-x64'
     const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
     expect(dockerfile).toContain(`FROM ${pinnedBuildBase} AS tools`)
     expect(dockerfile).toContain('pnpm install --frozen-lockfile')
@@ -196,6 +197,37 @@ describe('investment container delivery contract', () => {
     expect(dockerignore).toMatch(/^\*\*\/\.netrc$/mu)
     expect(dockerignore).toMatch(/^\*\*\/\.pypirc$/mu)
     expect(dockerignore).toMatch(/^\*\*\/node_modules$/mu)
+  })
+
+  it('launches the cold sidecar build without a complete frontend workspace', async () => {
+    const dockerfile = await readFile(join(repoRoot, 'Dockerfile'), 'utf8')
+    const pythonStage = dockerfile.split('FROM tools AS python-build')[1]!.split('FROM frontend-deps AS frontend-build')[0]!
+    const command = pythonStage.match(/\|\| CI=true (.+)/u)![1]!.trim().split(/\s+/u)
+    // Never let a package-manager fallback attempt an install during this offline regression.
+    expect(command[0]).toBe('node')
+    const root = await mkdtemp(join(tmpdir(), 'dsh-isolated-sidecar-'))
+    roots.push(root)
+    // Reproduce the stage's source inputs, excluding the installed third-party dependencies.
+    for (const line of pythonStage.split('\n').filter(line => line.startsWith('COPY ') && !line.includes('--from='))) {
+      const entries = line.split(/\s+/u).slice(1)
+      const destination = entries.pop()!.replace(/^\/src\//u, '')
+      for (const source of entries) {
+        const target = destination.endsWith('/') && !source.endsWith('/') ? join(destination, source.replace(/\/$/u, '').split('/').at(-1)!) : destination
+        await mkdir(dirname(join(root, target)), { recursive: true })
+        await cp(join(repoRoot, source), join(root, target), { recursive: true })
+      }
+    }
+    const cwd = join(root, 'frontend')
+    await symlink(join(frontendDir, 'node_modules'), join(cwd, 'node_modules'), 'junction')
+    const args = command.slice(1).map(value => value.startsWith('/opt/') ? join(root, value.slice(1)) : value)
+    const result = spawnSync(process.execPath, [...args, '--offline'], {
+      cwd, encoding: 'utf8', timeout: 30_000, env: { ...process.env, CI: 'true' },
+    })
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(1)
+    // Reaching the archive boundary proves imports and locked input validation worked without pnpm.
+    expect(result.stderr).toContain('offline cache miss or hash mismatch for linux-x64')
+    expect(result.stderr).not.toContain('ERR_PNPM')
   })
 
   it('publishes only the authenticated web edge and mounts one persistent state root', async () => {

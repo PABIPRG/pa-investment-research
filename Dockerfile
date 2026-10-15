@@ -34,7 +34,7 @@ ARG SIDECAR_CACHE_KEY=
 # Cache contents are optional and never become an image layer. Invalid entries rebuild normally.
 RUN --mount=type=bind,source=.investment-sidecar-cache,target=/cache \
     node /src/containers/investment-sidecar-cache.mjs restore /cache "$SIDECAR_CACHE_KEY" /opt/investment-python \
-    || CI=true pnpm run investment:sidecar:build --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
+    || CI=true node --import tsx/esm scripts/build-investment-python-sidecar.ts --target linux-x64 --output /opt/investment-python --cache /opt/python-download-cache
 
 FROM frontend-deps AS frontend-build
 RUN pnpm run build:lib && pnpm run build:web
