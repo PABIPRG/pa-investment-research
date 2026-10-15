@@ -26,6 +26,8 @@ The transfer contains only the allowlisted `lib`, Web `dist` and renderer output
 
 Each native job still installs its own dependencies, assembles its Python sidecar, packages Electron, signs macOS, checks privacy and icons, verifies the packaged sidecar, and launches the final ZIP twice. Local packaging and the manual release workflow keep their existing full-build entry. Acceptance compares the shared job plus the slowest native path, including transfer and queue overhead, with the baseline; a shorter Intel job alone does not establish a shorter PR wait. Cross-platform portability and net speed remain subject to all three final packaged startup checks and the measured PR run.
 
+Complete sidecar verification and post-signing descriptor refresh use four concurrent streaming hash readers. They preserve input order, stop scheduling after the first failure, drain all in-flight reads before rejecting, and write the descriptor only after every file succeeds. Privacy checks, full file inventories, hashes before and after Python, signing order and read-only sealing remain required. Separate timing records identify signature, descriptor, sealing and smoke subphases for subsequent measured improvements.
+
 ### Immutable public identity and verified bytes
 
 A release uses `investment-v<version>` and contains ZIP files for macOS arm64, macOS x64, and Windows x64 plus `SHA256SUMS`. The publish job consumes only the build matrix artifacts, verifies the exact platform set, writes and verifies the checksums, and creates GitHub artifact attestations before publication.

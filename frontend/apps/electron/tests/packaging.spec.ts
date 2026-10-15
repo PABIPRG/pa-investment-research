@@ -959,11 +959,29 @@ describe('Electron investment sidecar packaging', () => {
       }
       expect(descriptor.schemaVersion).toBe(1)
       expect(descriptor.files.map(file => file.path)).toEqual(['runtime/bin/python', 'site-packages.txt'])
-      expect(descriptor.files.every(file => /^[0-9a-f]{64}$/u.test(file.sha256))).toBe(true)
-      expect(descriptor.files.every(file => file.sha256 !== '0'.repeat(64))).toBe(true)
+      expect(descriptor.files.map(file => file.sha256)).toEqual(
+        ['signed python', 'signed packages'].map(content => createHash('sha256').update(content).digest('hex')),
+      )
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
+  })
+
+  it('keeps the descriptor unchanged if any concurrent file hash fails', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-hash-failure-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    try {
+      await mkdir(sidecarRoot, { recursive: true })
+      await writeFile(join(sidecarRoot, 'valid.txt'), 'valid')
+      const original = JSON.stringify({ files: [
+        { path: 'valid.txt', sha256: '0'.repeat(64) },
+        { path: 'missing.txt', sha256: '0'.repeat(64) },
+      ] })
+      await writeFile(join(sidecarRoot, 'runtime.json'), original)
+      await expect(refreshPackagedSidecarDescriptor(appPath)).rejects.toThrow()
+      expect(await readFile(join(sidecarRoot, 'runtime.json'), 'utf8')).toBe(original)
+    } finally { await rm(rootDir, { recursive: true, force: true }) }
   })
 
   it('keeps sidecar outputs and caches out of ordinary Forge staging', () => {

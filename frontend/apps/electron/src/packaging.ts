@@ -1,7 +1,6 @@
 /** Assemble a production deployment into a native Electron application and optional Forge artifacts. */
 
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, opendir, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
@@ -11,6 +10,7 @@ import { downloadArtifact } from '@electron/get'
 import { packager } from '@electron/packager'
 import type { Options as PackagerOptions } from '@electron/packager'
 import { appIdentity, electronAppDir, packagerIconPath } from './app-identity.ts'
+import { hashSidecarFile, mapSidecarFiles } from './sidecar-file-hashes.ts'
 
 const appDir = electronAppDir
 const workspaceDir = resolve(appDir, '../..')
@@ -890,9 +890,8 @@ export async function refreshPackagedSidecarDescriptor(appPath: string): Promise
   const descriptor = JSON.parse(await readFile(descriptorPath, 'utf8')) as PackagedSidecarDescriptor
   if (!Array.isArray(descriptor.files)) throw new TypeError('packaged sidecar descriptor has no files array')
 
-  const files = []
-  for (const file of descriptor.files) {
-    if (typeof file?.path !== 'string' || file.path === '' || file.path.includes('\\')) {
+  const files = await mapSidecarFiles(descriptor.files, async (file: unknown) => {
+    if (!file || typeof file !== 'object' || !('path' in file) || typeof file.path !== 'string' || file.path === '' || file.path.includes('\\')) {
       throw new TypeError('packaged sidecar descriptor contains an invalid file path')
     }
     const absolute = resolve(sidecarRoot, ...file.path.split('/'))
@@ -904,11 +903,8 @@ export async function refreshPackagedSidecarDescriptor(appPath: string): Promise
     if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
       throw new TypeError(`packaged sidecar descriptor path is not a file: ${file.path}`)
     }
-    files.push({
-      path: file.path,
-      sha256: createHash('sha256').update(await readFile(absolute)).digest('hex'),
-    })
-  }
+    return { path: file.path, sha256: await hashSidecarFile(absolute) }
+  })
   await writeFile(descriptorPath, `${JSON.stringify({ ...descriptor, files }, undefined, 2)}\n`, 'utf8')
 }
 
@@ -1008,14 +1004,14 @@ export async function signPackagedMacApplications(
   if (platform !== 'darwin') return
   for (const packagePath of packagePaths) {
     const appPath = resolve(packagePath, `${appIdentity.name}.app`)
-    await runCommand('codesign', ['--force', '--deep', '--sign', identity, appPath], dirname(appPath))
-    await signHelpers(appPath, runCommand, identity)
-    await signSidecar(appPath, runCommand, identity)
-    await refreshDescriptor(appPath)
-    await sealSidecar(appPath)
-    await runCommand('codesign', [
+    await timed('macOS deep signature', () => runCommand('codesign', ['--force', '--deep', '--sign', identity, appPath], dirname(appPath)))
+    await timed('macOS helper signatures', () => signHelpers(appPath, runCommand, identity))
+    await timed('macOS sidecar native signatures', () => signSidecar(appPath, runCommand, identity))
+    await timed('macOS sidecar descriptor hashes', () => refreshDescriptor(appPath))
+    await timed('macOS sidecar read-only seal', () => sealSidecar(appPath))
+    await timed('macOS final application signature', () => runCommand('codesign', [
       '--force', '--options', 'runtime', '--entitlements', macEntitlementsPath, '--sign', identity, appPath,
-    ], dirname(appPath))
+    ], dirname(appPath)))
   }
 }
 

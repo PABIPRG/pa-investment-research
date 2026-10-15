@@ -35,7 +35,10 @@ jobs:
       - name: Install frontend
         run: pnpm install --frozen-lockfile
       - name: Test portable build boundary
-        run: pnpm exec vitest run scripts/investment-desktop-build-artifact.spec.ts
+        run: >-
+          pnpm exec vitest run
+          scripts/investment-desktop-build-artifact.spec.ts
+          scripts/investment-sidecar-file-hashes.spec.ts
       - name: Compile platform-independent desktop outputs once
         run: pnpm run build
       - name: Capture compiled outputs for this checkout
@@ -110,10 +113,12 @@ jobs:
         run: >-
           pnpm exec vitest run
           scripts/investment-desktop-build-artifact.spec.ts
+          scripts/investment-sidecar-file-hashes.spec.ts
           scripts/investment-backend-package-policy.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
           scripts/smoke-investment-desktop.spec.ts
+          apps/electron/tests/packaging.spec.ts
           apps/electron/tests/portable-package.spec.ts
           apps/electron/tests/entry-failure.spec.ts
           apps/electron/tests/main-startup.spec.ts

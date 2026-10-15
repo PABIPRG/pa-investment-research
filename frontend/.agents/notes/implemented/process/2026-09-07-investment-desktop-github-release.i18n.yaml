@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-09-07-investment-desktop-github-release.md
-2026-09-07-investment-desktop-github-release.md: 0240de5a425e851f524c540823957a630e6d6af0
-2026-09-07-investment-desktop-github-release.zh.md: 888bae5ef8b50e35f0a069d5e246ea579272dc4e
+2026-09-07-investment-desktop-github-release.md: 03aba29064b61ec5dfd28f2b4c727210a05844c2
+2026-09-07-investment-desktop-github-release.zh.md: 06301ec65f567fc02f1d3cfd3e83b7e8d0755a0a
