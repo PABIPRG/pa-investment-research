@@ -12,8 +12,47 @@ permissions:
   contents: read
 
 jobs:
+  shared-build:
+    name: portable desktop build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    outputs:
+      artifact-id: ${{ steps.compiled.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install frontend
+        run: pnpm install --frozen-lockfile
+      - name: Test portable build boundary
+        run: pnpm exec vitest run scripts/investment-desktop-build-artifact.spec.ts
+      - name: Compile platform-independent desktop outputs once
+        run: pnpm run build
+      - name: Capture compiled outputs for this checkout
+        run: node scripts/investment-desktop-build-artifact.ts capture "${{ runner.temp }}/desktop-build" "${{ github.sha }}"
+      - name: Transfer compiled outputs to native runners
+        id: compiled
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-build-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/desktop-build/
+          if-no-files-found: error
+          retention-days: 1
+          include-hidden-files: true
+
   package-smoke:
     name: ${{ matrix.target }} packaged smoke
+    needs: shared-build
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     defaults:
@@ -70,6 +109,7 @@ jobs:
           DSH_DESKTOP_SMOKE_TEST_ROOT: ${{ runner.temp }}/desktop-smoke-tests
         run: >-
           pnpm exec vitest run
+          scripts/investment-desktop-build-artifact.spec.ts
           scripts/investment-backend-package-policy.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
@@ -101,6 +141,18 @@ jobs:
         shell: bash
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # The immutable artifact ID comes from this run, never a branch cache or
+      # another successful run. Restore only after native dependency installation.
+      - name: Download this run's compiled outputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.shared-build.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/desktop-build
+
+      - name: Verify and restore portable desktop build
+        run: node scripts/investment-desktop-build-artifact.ts restore "${{ runner.temp }}/desktop-build" "${{ github.sha }}"
+
       - name: Build test application and sidecar (macOS)
         env:
           INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
@@ -110,7 +162,7 @@ jobs:
         shell: bash
         run: |
           ulimit -n 10240
-          pnpm run make:electron
+          pnpm exec tsx apps/electron/src/packaging.ts make
 
       - name: Build test application and sidecar (Windows)
         env:
@@ -118,7 +170,7 @@ jobs:
           PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
           ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
         if: runner.os == 'Windows'
-        run: pnpm run make:electron
+        run: pnpm exec tsx apps/electron/src/packaging.ts make
 
       - name: Verify packaged application icon (macOS)
         if: runner.os == 'macOS'

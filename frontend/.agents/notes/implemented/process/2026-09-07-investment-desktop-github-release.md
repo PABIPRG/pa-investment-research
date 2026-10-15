@@ -18,6 +18,14 @@ After immutable staging, each native target must pass the [final ZIP startup che
 
 The preflight records the complete `github.sha`, and every platform job checks out that value. Later commits on `master` cannot change an in-progress release. Pull request package artifacts carry the seven-character commit prefix so multiple builds with one development version remain distinguishable.
 
+### Compile portable outputs once in pull request CI
+
+The desktop validation workflow compiles Host/Client libraries, Web assets and the Electron renderer once on Linux. In the measured Intel baseline ([run 38700755396](https://github.com/PABIPRG/pa-investment-research/actions/runs/38700755396)), these stages took about 293 seconds of a 19m11s job despite download-cache hits. The native matrix consumes the immutable artifact ID emitted by that same workflow run, with the full checkout SHA checked again before restore. No earlier run or branch cache supplies compiled code.
+
+The transfer contains only the allowlisted `lib`, Web `dist` and renderer outputs, including UI theme CSS and the Landlock JavaScript entry. It excludes `node_modules`, native binaries and TypeScript build-state files. A manifest records each file's SHA-256 and executable mode; restore validates the complete inventory, revision, paths and hashes before replacing generated output. Missing entries, extra files, symbolic links and native executables fail the job. Native dependency installation precedes restore so artifact download permission normalization does not remove executable bits from generated CLI entries.
+
+Each native job still installs its own dependencies, assembles its Python sidecar, packages Electron, signs macOS, checks privacy and icons, verifies the packaged sidecar, and launches the final ZIP twice. Local packaging and the manual release workflow keep their existing full-build entry. Acceptance compares the shared job plus the slowest native path, including transfer and queue overhead, with the baseline; a shorter Intel job alone does not establish a shorter PR wait. Cross-platform portability and net speed remain subject to all three final packaged startup checks and the measured PR run.
+
 ### Immutable public identity and verified bytes
 
 A release uses `investment-v<version>` and contains ZIP files for macOS arm64, macOS x64, and Windows x64 plus `SHA256SUMS`. The publish job consumes only the build matrix artifacts, verifies the exact platform set, writes and verifies the checksums, and creates GitHub artifact attestations before publication.
