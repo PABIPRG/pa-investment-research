@@ -111,6 +111,16 @@ describe('investment Python sidecar smoke', () => {
     })).rejects.toThrow(/smoke failed with exit code 17/u)
   })
 
+  it.each(['modified', 'extra'])('checks the complete file set again after Python (%s)', async (kind) => {
+    const { root } = await fixture()
+    await expect(smokeInvestmentPythonSidecar(root, {
+      runCommand: async () => {
+        await writeFile(join(root, kind === 'modified' ? 'site-packages/native.so' : 'site-packages/unlisted.py'), 'changed')
+        return { exitCode: 0, signalCode: null }
+      },
+    })).rejects.toThrow(kind === 'modified' ? /hash mismatch/ : /incomplete file list/)
+  })
+
   it('retries one signal-terminated first launch without masking deterministic failures', async () => {
     const { root } = await fixture()
     const runCommand = vi.fn<NonNullable<SmokeInvestmentSidecarDependencies['runCommand']>>()

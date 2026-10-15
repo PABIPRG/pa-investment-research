@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, posix, resolve } from 'node:path'
@@ -6,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 
 import { scanPackagedBackends } from './investment-backend-package-policy.ts'
+import { hashSidecarFile, mapSidecarFiles } from '../apps/electron/src/sidecar-file-hashes.ts'
 
 const BACKENDS = ['trading-core', 'market-watch', 'industry-chain'] as const
 
@@ -59,8 +59,11 @@ function commandFailure(result: SmokeCommandResult): string | undefined {
   return undefined
 }
 
-async function sha256(path: string): Promise<string> {
-  return createHash('sha256').update(await readFile(path)).digest('hex')
+async function timedCheck<T>(phase: string, action: () => Promise<T>): Promise<T> {
+  const started = Date.now()
+  const result = await action()
+  console.info(`Investment sidecar smoke: ${phase} completed in ${Date.now() - started}ms`)
+  return result
 }
 
 async function verifyFiles(root: string, files: RuntimeDescriptor['files']): Promise<void> {
@@ -81,14 +84,14 @@ async function verifyFiles(root: string, files: RuntimeDescriptor['files']): Pro
   if (actual.length !== declared.length || actual.some((path, index) => path !== declared[index])) {
     throw new Error('sidecar descriptor has an incomplete file list')
   }
-  for (const file of files) {
+  await mapSidecarFiles(files, async (file) => {
     const path = safePath(file.path)
     if (!/^[0-9a-f]{64}$/u.test(file.sha256)) throw new Error(`invalid descriptor hash: ${path}`)
     const absolute = join(root, ...path.split('/'))
-    if (!(await stat(absolute)).isFile() || await sha256(absolute) !== file.sha256) {
+    if (!(await stat(absolute)).isFile() || await hashSidecarFile(absolute) !== file.sha256) {
       throw new Error(`sidecar file hash mismatch: ${path}`)
     }
-  }
+  })
 }
 
 /** Verify the immutable descriptor, backend apps, health routes, and representative native dependencies. */
@@ -111,8 +114,8 @@ export async function smokeInvestmentPythonSidecar(
     if (backend === undefined) throw new Error(`missing backend descriptor: ${id}`)
     return { projectDir: safePath(backend.projectDir), module: backend.module }
   })
-  await scanPackagedBackends(root)
-  await verifyFiles(root, descriptor.files)
+  await timedCheck('backend privacy scan', () => scanPackagedBackends(root))
+  await timedCheck('complete file verification before Python', () => verifyFiles(root, descriptor.files))
   const stateRoot = await mkdtemp(join(tmpdir(), 'dsh-investment-sidecar-smoke-'))
   const script = [
     'import importlib, sys',
@@ -136,6 +139,7 @@ export async function smokeInvestmentPythonSidecar(
       DSH_INVESTMENT_STATE_DIR: stateRoot,
       PYTHONDONTWRITEBYTECODE: '1',
     }
+    const importsStarted = Date.now()
     let result = await runCommand(
       command,
       args,
@@ -157,7 +161,8 @@ export async function smokeInvestmentPythonSidecar(
       const retryContext = firstSignal === null ? '' : ` after retry (first attempt signal ${firstSignal})`
       throw new Error(`investment Python sidecar smoke failed with ${failure}${retryContext}`)
     }
-    await verifyFiles(root, descriptor.files)
+    console.info(`Investment sidecar smoke: Python imports and routes completed in ${Date.now() - importsStarted}ms`)
+    await timedCheck('complete file verification after Python', () => verifyFiles(root, descriptor.files))
   } finally {
     await rm(stateRoot, { recursive: true, force: true })
   }

@@ -33,6 +33,9 @@ import {
   validatePackagerIcon,
 } from '../src/packaging.ts'
 
+// Windows exposes only owner read/write permissions; POSIX runners verify every mode bit.
+const supportedPermissionBits = process.platform === 'win32' ? 0o600 : 0o777
+
 function decodeGeneratedPng(png: Buffer): { data: Buffer; height: number; width: number } {
   const idat: Buffer[] = []
   let width = 0
@@ -613,7 +616,8 @@ describe('Electron investment sidecar packaging', () => {
 
       const packagedSidecar = join(rootDir, `${appIdentity.name}.app`, 'Contents', 'Resources', 'investment-python')
       expect(await readFile(join(packagedSidecar, 'runtime.json'), 'utf8')).toBe('{"version":1}')
-      expect((await stat(join(packagedSidecar, 'runtime', 'bin', 'python'))).mode & 0o777).toBe(0o755)
+      expect((await stat(join(packagedSidecar, 'runtime', 'bin', 'python'))).mode & supportedPermissionBits)
+        .toBe(0o755 & supportedPermissionBits)
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
@@ -772,8 +776,8 @@ describe('Electron investment sidecar packaging', () => {
     const signSidecar = async (appPath: string) => { signedSidecars.push(appPath) }
     const signHelpers = async (appPath: string) => { signedHelpers.push(appPath) }
     const sealSidecar = async (appPath: string) => { sealedSidecars.push(appPath) }
-    const firstPackage = `/tmp/out/${appIdentity.name}-darwin-arm64`
-    const secondPackage = `/tmp/out/${appIdentity.name}-darwin-x64`
+    const firstPackage = resolve('/tmp/out', `${appIdentity.name}-darwin-arm64`)
+    const secondPackage = resolve('/tmp/out', `${appIdentity.name}-darwin-x64`)
     const firstApp = join(firstPackage, `${appIdentity.name}.app`)
     const secondApp = join(secondPackage, `${appIdentity.name}.app`)
 
@@ -842,9 +846,9 @@ describe('Electron investment sidecar packaging', () => {
 
       await sealPackagedSidecarReadOnly(appPath)
 
-      expect((await stat(executable)).mode & 0o777).toBe(0o555)
-      expect((await stat(source)).mode & 0o777).toBe(0o444)
-      expect((await stat(sidecarRoot)).mode & 0o777).toBe(0o555)
+      expect((await stat(executable)).mode & supportedPermissionBits).toBe(0o555 & supportedPermissionBits)
+      expect((await stat(source)).mode & supportedPermissionBits).toBe(0o444 & supportedPermissionBits)
+      expect((await stat(sidecarRoot)).mode & supportedPermissionBits).toBe(0o555 & supportedPermissionBits)
     } finally {
       await chmod(sidecarRoot, 0o755).catch(() => undefined)
       await chmod(join(sidecarRoot, 'runtime'), 0o755).catch(() => undefined)
@@ -869,8 +873,9 @@ describe('Electron investment sidecar packaging', () => {
 
       await preparePackagerOutputForOverwrite(outDir, 'darwin', 'arm64')
 
-      expect((await stat(sidecarRoot)).mode & 0o700).toBe(0o700)
-      expect((await stat(nestedDir)).mode & 0o700).toBe(0o700)
+      const ownerAccess = 0o700 & supportedPermissionBits
+      expect((await stat(sidecarRoot)).mode & ownerAccess).toBe(ownerAccess)
+      expect((await stat(nestedDir)).mode & ownerAccess).toBe(ownerAccess)
       await expect(rm(packageDir, { force: true, recursive: true })).resolves.toBeUndefined()
     } finally {
       await chmod(sidecarRoot, 0o755).catch(() => undefined)
@@ -935,6 +940,67 @@ describe('Electron investment sidecar packaging', () => {
     }
   })
 
+  it('bounds complete native-file inspection and finishes it before signing', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-sidecar-scan-test-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    let active = 0
+    let maximum = 0
+    const inspected: string[] = []
+    const signed: string[] = []
+    try {
+      await mkdir(sidecarRoot, { recursive: true })
+      const files = Array.from({ length: 11 }, (_, index) => join(sidecarRoot, `file-${index}`)).sort()
+      await Promise.all(files.map(file => writeFile(file, 'ordinary bytes')))
+      await signPackagedSidecarMachO(appPath, async (_command, args) => {
+        expect(active).toBe(0)
+        expect(inspected).toHaveLength(files.length)
+        signed.push(args.at(-1)!)
+      }, '-', async (file) => {
+        active += 1
+        maximum = Math.max(maximum, active)
+        await new Promise<void>(resolveWait => setTimeout(resolveWait, 2))
+        inspected.push(file)
+        active -= 1
+        return file.endsWith('0') || file.endsWith('3')
+      })
+      expect(maximum).toBe(4)
+      expect(inspected.toSorted()).toEqual(files)
+      expect(signed).toEqual(files.filter(file => file.endsWith('0') || file.endsWith('3')))
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
+  it('drains failed native-file inspection without starting any signatures', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-sidecar-scan-failure-test-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    let active = 0
+    let inspected = 0
+    let signed = 0
+    try {
+      await mkdir(sidecarRoot, { recursive: true })
+      await Promise.all(Array.from({ length: 12 }, (_, index) => writeFile(join(sidecarRoot, `file-${index}`), 'bytes')))
+      await expect(signPackagedSidecarMachO(appPath, async () => { signed += 1 }, '-', async (file) => {
+        active += 1
+        inspected += 1
+        try {
+          if (file.endsWith('file-0')) throw new Error('inspection failed')
+          await new Promise<void>(resolveWait => setTimeout(resolveWait, 5))
+          return true
+        } finally {
+          active -= 1
+        }
+      })).rejects.toThrow('inspection failed')
+      expect(active).toBe(0)
+      expect(inspected).toBeLessThanOrEqual(4)
+      expect(signed).toBe(0)
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
   it('refreshes packaged sidecar hashes after recursive macOS signing', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-signed-sidecar-test-'))
     const appPath = join(rootDir, `${appIdentity.name}.app`)
@@ -959,11 +1025,29 @@ describe('Electron investment sidecar packaging', () => {
       }
       expect(descriptor.schemaVersion).toBe(1)
       expect(descriptor.files.map(file => file.path)).toEqual(['runtime/bin/python', 'site-packages.txt'])
-      expect(descriptor.files.every(file => /^[0-9a-f]{64}$/u.test(file.sha256))).toBe(true)
-      expect(descriptor.files.every(file => file.sha256 !== '0'.repeat(64))).toBe(true)
+      expect(descriptor.files.map(file => file.sha256)).toEqual(
+        ['signed python', 'signed packages'].map(content => createHash('sha256').update(content).digest('hex')),
+      )
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
+  })
+
+  it('keeps the descriptor unchanged if any concurrent file hash fails', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-hash-failure-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    try {
+      await mkdir(sidecarRoot, { recursive: true })
+      await writeFile(join(sidecarRoot, 'valid.txt'), 'valid')
+      const original = JSON.stringify({ files: [
+        { path: 'valid.txt', sha256: '0'.repeat(64) },
+        { path: 'missing.txt', sha256: '0'.repeat(64) },
+      ] })
+      await writeFile(join(sidecarRoot, 'runtime.json'), original)
+      await expect(refreshPackagedSidecarDescriptor(appPath)).rejects.toThrow()
+      expect(await readFile(join(sidecarRoot, 'runtime.json'), 'utf8')).toBe(original)
+    } finally { await rm(rootDir, { recursive: true, force: true }) }
   })
 
   it('keeps sidecar outputs and caches out of ordinary Forge staging', () => {
