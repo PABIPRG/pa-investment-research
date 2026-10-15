@@ -49,20 +49,48 @@ jobs:
           scripts/build-investment-python-sidecar.spec.ts
           scripts/investment-backend-package-policy.spec.ts
           scripts/investment-container-test-payloads.spec.ts
+          scripts/investment-sidecar-cache.spec.ts
+
+      - name: Fingerprint Linux sidecar inputs
+        id: sidecar_inputs
+        run: echo "key=$(node containers/investment-sidecar-cache.mjs key .)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore a previously scanned sidecar
+        id: sidecar_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .investment-sidecar-cache
+          key: investment-scanned-sidecar-v1-linux-x64-${{ steps.sidecar_inputs.outputs.key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: investment-scanned-sidecar-v1-linux-x64-${{ steps.sidecar_inputs.outputs.key }}-
+
+      - name: Validate the restored sidecar
+        id: sidecar_cache_check
+        env:
+          SIDECAR_CACHE_KEY: ${{ steps.sidecar_inputs.outputs.key }}
+        run: |
+          if node containers/investment-sidecar-cache.mjs validate .investment-sidecar-cache "$SIDECAR_CACHE_KEY"; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+            echo "Python sidecar cache: verified hit" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "Python sidecar cache: miss or invalid; full build required" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: docker/setup-buildx-action@v3
 
       - name: Build the commit image without pushing
         env:
           IMAGE: pa-investment-research:${{ github.sha }}
+          SIDECAR_CACHE_KEY: ${{ steps.sidecar_inputs.outputs.key }}
         run: >-
           docker buildx build
           --platform linux/amd64
           --load
           --tag "$IMAGE"
           --build-arg "VCS_REF=${GITHUB_SHA}"
+          --build-arg "SIDECAR_CACHE_KEY=$SIDECAR_CACHE_KEY"
           --metadata-file "${RUNNER_TEMP}/investment-container-build.json"
-          --cache-from type=gha
+          --progress plain
           .
 
       - name: Assert image boundary
@@ -223,6 +251,35 @@ jobs:
           --revision "$SHA"
           --work-parent "$RUNNER_TEMP"
           --summary "${RUNNER_TEMP}/investment-container.security.json"
+
+      - name: Extract the scanned sidecar for reuse
+        if: >-
+          github.repository == 'PABIPRG/pa-investment-research' &&
+          github.ref == 'refs/heads/master' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          steps.sidecar_cache_check.outputs.valid != 'true'
+        env:
+          IMAGE: pa-investment-research:${{ github.sha }}
+          SIDECAR_CACHE_KEY: ${{ steps.sidecar_inputs.outputs.key }}
+        run: |
+          expected=$(cat "${RUNNER_TEMP}/investment-container.image-id")
+          test "$(docker image inspect --format '{{.Id}}' "$IMAGE")" = "$expected"
+          container_id=$(docker create "$expected")
+          trap 'docker rm -f "$container_id"' EXIT
+          rm -rf .investment-sidecar-cache/sidecar .investment-sidecar-cache/metadata.json
+          docker cp "$container_id:/opt/investment-python" .investment-sidecar-cache/sidecar
+          node containers/investment-sidecar-cache.mjs seal .investment-sidecar-cache "$SIDECAR_CACHE_KEY"
+
+      - name: Save only the scanned sidecar from master
+        if: >-
+          github.repository == 'PABIPRG/pa-investment-research' &&
+          github.ref == 'refs/heads/master' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+          steps.sidecar_cache_check.outputs.valid != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .investment-sidecar-cache
+          key: ${{ steps.sidecar_cache.outputs.cache-primary-key }}
 
       - name: Upload commit-addressed image delivery
         uses: actions/upload-artifact@v4

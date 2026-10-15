@@ -161,21 +161,29 @@ describe('investment container delivery contract', () => {
 
     const pinnedBuildBase = 'node:24.21.0-trixie-slim@sha256:b64fccfbcd1ae10d11b969a868b50e1c2530a7054813d5cdea04ac3bce551697'
     const pinnedRuntimeBase = 'gcr.io/distroless/nodejs24-debian13:nonroot@sha256:bb6b03d81066993293a10feda7250e8e1cc034035fe9b61cfceededa7c8bf04d'
-    const sidecarBuild = 'RUN CI=true pnpm run investment:sidecar:build --target linux-x64'
+    const sidecarBuild = 'CI=true pnpm run investment:sidecar:build --target linux-x64'
     const applicationDeploy = 'RUN node --import tsx/esm scripts/build-investment-container-app.ts'
-    expect(dockerfile).toContain(`FROM ${pinnedBuildBase} AS build`)
+    expect(dockerfile).toContain(`FROM ${pinnedBuildBase} AS tools`)
     expect(dockerfile).toContain('pnpm install --frozen-lockfile')
     expect(dockerfile).toContain(sidecarBuild)
     expect(dockerfile).toContain(applicationDeploy)
-    expect(dockerfile.indexOf(sidecarBuild)).toBeLessThan(dockerfile.indexOf(applicationDeploy))
+    const pythonStage = dockerfile.split('FROM tools AS python-build')[1]!.split('FROM frontend-deps AS frontend-build')[0]!
+    expect(pythonStage).toContain(sidecarBuild)
+    expect(pythonStage).toContain('COPY --from=frontend-deps /src/frontend/node_modules /src/frontend/node_modules')
+    expect(pythonStage).not.toMatch(/COPY (?:\. |frontend\/ )/u)
+    expect(dockerfile).not.toContain('COPY . .')
+    expect(dockerfile).toContain('COPY --from=python-build --chown=0:0 /opt/investment-python /opt/investment-python')
+    expect(dockerfile).toContain('COPY --from=frontend-build --chown=0:0 /opt/dsh /opt/dsh')
+    expect(pythonStage).toContain('source=.investment-sidecar-cache,target=/cache')
+    expect(pythonStage).toContain('restore /cache "$SIDECAR_CACHE_KEY" /opt/investment-python')
     expect(dockerfile).not.toContain('confirmModulesPurge=false')
     expect(dockerfile).not.toMatch(/^ENV CI=/mu)
     expect(dockerfile).toContain(`FROM ${pinnedRuntimeBase} AS runtime`)
     expect(dockerfile).toMatch(/^USER 10001:10001$/mu)
     expect(dockerfile).toMatch(/^\s+HOME=\/var\/lib\/dsh \\/mu)
     expect(dockerfile).toContain('install -d -m 0700 -o 10001 -g 10001 /opt/runtime-root/var/lib/dsh')
-    expect(dockerfile).toContain('RUN node ../containers/prepare-runtime-openssl.mjs /opt/runtime-openssl')
-    expect(dockerfile).toContain('COPY --from=build --chown=0:0 /opt/runtime-openssl/ /')
+    expect(dockerfile).toContain('RUN node containers/prepare-runtime-openssl.mjs /opt/runtime-openssl')
+    expect(dockerfile).toContain('COPY --from=runtime-files --chown=0:0 /opt/runtime-openssl/ /')
     expect(dockerfile).toContain('ENTRYPOINT ["/nodejs/bin/node", "/opt/container/investment-entrypoint.mjs"]')
     expect(dockerfile).not.toContain('ln -s /opt/container/investment-entrypoint.mjs')
     expect(dockerfile).toContain('org.opencontainers.image.revision="$VCS_REF"')
@@ -257,8 +265,20 @@ describe('investment container delivery contract', () => {
     expect(smoke.steps[scanIndex]?.['continue-on-error']).toBeUndefined()
     for (const [index, step] of smoke.steps.entries()) {
       if (step.uses?.includes('upload-artifact')) expect(index).toBeGreaterThan(scanIndex)
+      if (step.uses?.includes('actions/cache/save') || step.run?.includes('sidecar-cache.mjs seal')) {
+        expect(index).toBeGreaterThan(scanIndex)
+        expect(step.if).toContain("github.repository == 'PABIPRG/pa-investment-research'")
+        expect(step.if).toContain("github.ref == 'refs/heads/master'")
+        expect(step.if).toContain("github.event_name == 'push' || github.event_name == 'workflow_dispatch'")
+        expect(step.if).not.toMatch(/always\(|failure\(|continue-on-error/u)
+      }
+      // The combined cache action saves in a post step, outside the explicit scan ordering.
+      expect(step.uses ?? '').not.toMatch(/^actions\/cache@/u)
       expect(step.run ?? '').not.toContain('--cache-to')
     }
+    expect(workflow).not.toContain('--cache-from type=gha')
+    expect(workflow).toContain('docker create "$expected"')
+    expect(workflow).toContain('docker cp "$container_id:/opt/investment-python" .investment-sidecar-cache/sidecar')
     expect(parsed.jobs.publish?.needs).toBe('image-smoke')
     const publish = parsed.jobs.publish!.steps
     const verifyIndex = publish.findIndex(step => step.run?.includes('image_security.py verify'))
