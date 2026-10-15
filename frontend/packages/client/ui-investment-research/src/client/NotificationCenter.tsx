@@ -521,8 +521,10 @@ export function NotificationCenter({ requestData, requestNotificationChannels, n
                   <li>在上方「Server 酱」中粘贴完整 SendKey，保存后发送测试。支持 SCT 开头的 Turbo 密钥，暂不支持 sctp 开头的 Server 酱 3 密钥。</li>
                 </ol></section>
                 <section className={css.channelRow} aria-label="企业微信配置步骤"><h4>企业微信</h4><ol className={css.setupGuide}>
-                  <li>在企业微信的目标群中添加群机器人，复制该机器人的 Webhook 地址；需具有相应群管理权限。</li>
-                  <li>在上方「企业微信」粘贴完整地址或 key，保存后发送测试；消息发往该机器人所在群，无需填写企业 ID 或个人微信号。</li>
+                  <li>电脑端企业微信打开接收通知的群，进入「管理聊天信息 → 消息推送 → 自定义消息推送」（旧版称「群机器人」），创建机器人并复制完整 Webhook 地址。<a href="https://cloud.tencent.com/document/product/1759/128391" target="_blank" rel="noopener noreferrer">查看官方图文教程</a>。</li>
+                  <li>在上方「企业微信」粘贴地址并保存，点击「发送测试」后到群里确认收到；无需企业 ID 或应用 Secret。</li>
+                  <li>在「通知类型与渠道」的企业微信列勾选需要推送的类型，勾选自动保存；仅影响后续事件，不补发历史通知。当前实例的后台需持续运行才能发送。</li>
+                  <li>Webhook 仅机器人创建者可查看，地址内含密钥，请勿公开或分享给无关人员。</li>
                 </ol></section>
                 <section className={css.channelRow} aria-label="邮件配置步骤"><h4>邮件</h4><ol className={css.setupGuide}>
                   <li>在发件邮箱设置中开启 SMTP / 第三方客户端服务，按服务商要求生成专用授权码。</li>

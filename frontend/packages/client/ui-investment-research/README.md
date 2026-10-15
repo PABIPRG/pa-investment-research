@@ -61,3 +61,5 @@ Business pages do not create model requests, so they do not affect the KV cache.
 Holdings onboarding defaults to the simulated account and preserves later choices. The dialog separates client preparation, read-only preview, and confirmed replacement; Web guides manual navigation while Electron requires consent for each foreground read.
 
 通知按业务动作进入现有页面：持仓同步直达工作台同步面板，持仓计划进入持仓明细，研究报告打开报告列表。跳转不会开始读取或修改持仓；不支持券商同步的环境提供导入入口。系统通知发送状态单独说明，归档保留撤销。全局风险配置以中文显示画像，固定计算方式使用静态文字与共享 UI 库的计算示例提示。
+
+企业微信配置表单在 Webhook 输入框下提供接入步骤与官方图文教程，覆盖创建机器人、保存、测试和通知类型选择；底部说明密钥保护、后续事件生效范围与后台运行要求。

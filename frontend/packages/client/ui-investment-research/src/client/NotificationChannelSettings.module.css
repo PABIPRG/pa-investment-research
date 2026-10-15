@@ -15,6 +15,11 @@
 .fields label { display: grid; min-width: 0; gap: 6px; }
 .fields label:only-child { grid-column: 1 / -1; }
 .fields input { font: inherit; }
+.setupGuide { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 0.8571rem; line-height: 1.5; overflow-wrap: anywhere; }
+.setupGuide ol { margin: 0 0 8px; padding-left: 20px; }
+.setupGuide li + li { margin-top: 4px; }
+.setupGuide a { color: var(--dsw-alias-brand-primary); text-decoration: underline; }
+.setupGuide a:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 3px; }
 .root > p { margin-top: 12px; }
 .error { color: var(--dsw-alias-state-error-primary); }
 .test, .confirm { display: grid; gap: 8px; margin-top: 12px; padding: 12px; background: var(--dsw-alias-bg-layer-1); border-radius: 8px; overflow-wrap: anywhere; }
