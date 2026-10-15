@@ -28,6 +28,9 @@ Each native job still installs its own dependencies, assembles its Python sideca
 
 Complete sidecar verification and post-signing descriptor refresh use four concurrent streaming hash readers. They preserve input order, stop scheduling after the first failure, drain all in-flight reads before rejecting, and write the descriptor only after every file succeeds. Privacy checks, full file inventories, hashes before and after Python, signing order and read-only sealing remain required. Separate timing records identify signature, descriptor, sealing and smoke subphases for subsequent measured improvements.
 
+
+The macOS native-file scan also inspects the complete actual sidecar tree with at most four file headers in flight. All reads must finish successfully before sequential leaf signing starts; no descriptor entry can hide an extra file, and symbolic links still fail. Scan, leaf signing and sidecar resource copy have separate timings. The workflow retains the native job dependency on the shared build: removing that barrier would require a separately proven artifact-selection contract for partial reruns.
+
 ### Immutable public identity and verified bytes
 
 A release uses `investment-v<version>` and contains ZIP files for macOS arm64, macOS x64, and Windows x64 plus `SHA256SUMS`. The publish job consumes only the build matrix artifacts, verifies the exact platform set, writes and verifies the checksums, and creates GitHub artifact attestations before publication.

@@ -940,6 +940,67 @@ describe('Electron investment sidecar packaging', () => {
     }
   })
 
+  it('bounds complete native-file inspection and finishes it before signing', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-sidecar-scan-test-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    let active = 0
+    let maximum = 0
+    const inspected: string[] = []
+    const signed: string[] = []
+    try {
+      await mkdir(sidecarRoot, { recursive: true })
+      const files = Array.from({ length: 11 }, (_, index) => join(sidecarRoot, `file-${index}`)).sort()
+      await Promise.all(files.map(file => writeFile(file, 'ordinary bytes')))
+      await signPackagedSidecarMachO(appPath, async (_command, args) => {
+        expect(active).toBe(0)
+        expect(inspected).toHaveLength(files.length)
+        signed.push(args.at(-1)!)
+      }, '-', async (file) => {
+        active += 1
+        maximum = Math.max(maximum, active)
+        await new Promise<void>(resolveWait => setTimeout(resolveWait, 2))
+        inspected.push(file)
+        active -= 1
+        return file.endsWith('0') || file.endsWith('3')
+      })
+      expect(maximum).toBe(4)
+      expect(inspected.toSorted()).toEqual(files)
+      expect(signed).toEqual(files.filter(file => file.endsWith('0') || file.endsWith('3')))
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
+  it('drains failed native-file inspection without starting any signatures', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-sidecar-scan-failure-test-'))
+    const appPath = join(rootDir, `${appIdentity.name}.app`)
+    const sidecarRoot = join(appPath, 'Contents', 'Resources', 'investment-python')
+    let active = 0
+    let inspected = 0
+    let signed = 0
+    try {
+      await mkdir(sidecarRoot, { recursive: true })
+      await Promise.all(Array.from({ length: 12 }, (_, index) => writeFile(join(sidecarRoot, `file-${index}`), 'bytes')))
+      await expect(signPackagedSidecarMachO(appPath, async () => { signed += 1 }, '-', async (file) => {
+        active += 1
+        inspected += 1
+        try {
+          if (file.endsWith('file-0')) throw new Error('inspection failed')
+          await new Promise<void>(resolveWait => setTimeout(resolveWait, 5))
+          return true
+        } finally {
+          active -= 1
+        }
+      })).rejects.toThrow('inspection failed')
+      expect(active).toBe(0)
+      expect(inspected).toBeLessThanOrEqual(4)
+      expect(signed).toBe(0)
+    } finally {
+      await rm(rootDir, { force: true, recursive: true })
+    }
+  })
+
   it('refreshes packaged sidecar hashes after recursive macOS signing', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-signed-sidecar-test-'))
     const appPath = join(rootDir, `${appIdentity.name}.app`)

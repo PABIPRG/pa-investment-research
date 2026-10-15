@@ -768,7 +768,7 @@ export function createPackagerOptions(input: PackagerOptionsInput): PackagerOpti
         if (boundedWindowsCopy) {
           await copyPortablePackageTree(input.stagingDir, buildPath)
         }
-        await copySidecarTree(input.sidecarDir, destination)
+        await timed('sidecar resource copy', () => copySidecarTree(input.sidecarDir, destination))
       }
       installResources().then(
         () => { callback() },
@@ -946,6 +946,7 @@ export async function signPackagedSidecarMachO(
   appPath: string,
   runCommand: RunCommand = run,
   identity: string = resolveMacCodesignIdentity(),
+  inspectFile: (path: string) => Promise<boolean> = isMachOFile,
 ): Promise<void> {
   const sidecarRoot = join(resolve(appPath), 'Contents', 'Resources', 'investment-python')
   const files: string[] = []
@@ -958,13 +959,22 @@ export async function signPackagedSidecarMachO(
       const entryPath = join(directoryPath, entry.name)
       if (entry.isSymbolicLink()) throw new TypeError(`packaged sidecar contains a symbolic link: ${entryPath}`)
       if (entry.isDirectory()) pending.push(entryPath)
-      else if (entry.isFile() && await isMachOFile(entryPath)) files.push(entryPath)
+      else if (entry.isFile()) files.push(entryPath)
     }
   }
   files.sort()
-  for (const file of files) {
-    await runCommand('codesign', ['--force', '--sign', identity, file], dirname(file))
-  }
+  // Inspect the actual tree, including files absent from a descriptor. Keep all
+  // signatures behind the completed scan, and keep codesign itself sequential.
+  const nativeFiles = await timed('macOS sidecar header inspection', async () => {
+    const native = await mapSidecarFiles(files, inspectFile)
+    return files.filter((_file, index) => native[index])
+  })
+  console.log(`Electron packaging: inspected ${files.length} sidecar files; signing ${nativeFiles.length} Mach-O files`)
+  await timed('macOS sidecar leaf signatures', async () => {
+    for (const file of nativeFiles) {
+      await runCommand('codesign', ['--force', '--sign', identity, file], dirname(file))
+    }
+  })
 }
 
 /** Sign Electron helper processes with local-development library loading enabled. */
