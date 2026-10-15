@@ -4,6 +4,7 @@ import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { load } from 'js-yaml'
 import { afterEach, describe, expect, it } from 'vitest'
 
 interface CacheModule {
@@ -14,6 +15,8 @@ interface CacheModule {
 const helperUrl = new URL('../../containers/investment-sidecar-cache.mjs', import.meta.url)
 const cache = await import(helperUrl.href) as CacheModule
 const roots: string[] = []
+const tarCommand = process.platform === 'darwin' ? 'gtar' : 'tar'
+const hasGnuTar = process.platform !== 'win32' && spawnSync(tarCommand, ['--version'], { encoding: 'utf8' }).stdout?.includes('GNU tar')
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
@@ -22,13 +25,14 @@ async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'investment-sidecar-cache-'))
   roots.push(root)
   const files = [
-    { path: 'runtime/bin/python3', content: 'fixture-python', mode: 0o755 },
-    { path: 'runtime/lib/python3.10/site-packages/certifi/cacert.pem', content: 'public CA fixture', mode: 0o644 },
-    { path: 'runtime/lib/python3.10/site-packages/package/data/schema.json', content: '{}', mode: 0o644 },
+    { path: 'runtime/bin/python3', content: 'fixture-python', mode: 0o775 },
+    { path: 'runtime/lib/python3.10/site-packages/certifi/cacert.pem', content: 'public CA fixture', mode: 0o664 },
+    { path: 'runtime/lib/python3.10/site-packages/package/data/schema.json', content: '{}', mode: 0o664 },
   ]
   for (const file of files) {
     await mkdir(join(root, 'sidecar', file.path, '..'), { recursive: true })
-    await writeFile(join(root, 'sidecar', file.path), file.content, { mode: file.mode })
+    await writeFile(join(root, 'sidecar', file.path), file.content)
+    await chmod(join(root, 'sidecar', file.path), file.mode)
   }
   await writeFile(join(root, 'sidecar/runtime.json'), JSON.stringify({
     schemaVersion: 1,
@@ -48,6 +52,38 @@ describe('scanned container sidecar cache', () => {
     expect(await cache.restore(root, key, output)).toBe(true)
     expect(await readFile(join(output, 'runtime/bin/python3'), 'utf8')).toBe('fixture-python')
     expect((await stat(join(output, 'runtime/bin/python3'))).mode & 0o111).toBe(0o111)
+  })
+
+  it.skipIf(process.platform !== 'linux' && !hasGnuTar)('preserves sealed modes through the Actions GNU tar restore under a restrictive umask', async () => {
+    expect(hasGnuTar).toBe(true)
+    // Hosted Linux CI and local reproduction run as non-root, like actions/cache.
+    expect(process.getuid?.()).not.toBe(0)
+    const root = await fixture()
+    await cache.seal(root, key)
+    const archive = join(root, 'cache.tar')
+    execFileSync(tarCommand, ['--posix', '-cf', archive, '-C', root, 'sidecar', 'metadata.json'], {
+      env: { ...process.env, TAR_OPTIONS: '' },
+    })
+    const workflow = load(await readFile(new URL('../../.github/workflows/investment-container.yml', import.meta.url), 'utf8')) as {
+      jobs: { 'image-smoke': { steps: { name?: string; env?: Record<string, string> }[] } }
+    }
+    const restoreEnv = workflow.jobs['image-smoke'].steps.find(step => step.name === 'Restore a previously scanned sidecar')?.env
+    const extract = async (name: string, tarOptions: string) => {
+      const output = join(root, name)
+      await mkdir(output)
+      execFileSync(process.execPath, ['-e', `
+        process.umask(0o022)
+        require('node:child_process').execFileSync(process.argv[1], ['-xf', process.argv[2], '-P', '-C', process.argv[3]], { stdio: 'inherit' })
+      `, tarCommand, archive, output], { env: { ...process.env, TAR_OPTIONS: tarOptions } })
+      return output
+    }
+    const unpreserved = await extract('default-restore', '')
+    expect((await stat(join(unpreserved, 'sidecar/runtime/bin/python3'))).mode & 0o777).toBe(0o755)
+    expect(await cache.restore(unpreserved, key, join(root, 'rejected'))).toBe(false)
+    const preserved = await extract('workflow-restore', restoreEnv?.TAR_OPTIONS ?? '')
+    expect((await stat(join(preserved, 'sidecar/runtime/bin/python3'))).mode & 0o777).toBe(0o775)
+    expect((await stat(join(preserved, 'sidecar/runtime/lib/python3.10/site-packages/certifi/cacert.pem'))).mode & 0o777).toBe(0o664)
+    expect(await cache.restore(preserved, key, join(root, 'accepted'))).toBe(true)
   })
 
   // The container CI lane requires this real Docker transfer; ordinary host suites stay Docker-free.
