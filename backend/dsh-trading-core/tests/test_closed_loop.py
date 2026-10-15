@@ -26,6 +26,7 @@ from adapter.scheduler import (
     should_run_startup_backtest_catchup,
 )
 from adapter.store import JsonStore
+from tests.test_config_precedence import load_config_from_temporary_project
 
 
 def _temp_store() -> JsonStore:
@@ -33,6 +34,14 @@ def _temp_store() -> JsonStore:
 
 
 class ClosedLoopSchedulerTests(unittest.TestCase):
+    def setUp(self):
+        # 本组验证调度编排；市场环境刷新不能访问真实行情或改变完成状态。
+        market_regime = patch(
+            "adapter.regime.refresh_and_classify", return_value={"regime": None, "samples": 0}
+        )
+        market_regime.start()
+        self.addCleanup(market_regime.stop)
+
     def test_next_closed_loop_run_is_timezone_aware_and_rolls_forward(self):
         now = datetime(2026, 9, 4, 15, 36, tzinfo=ZoneInfo("Asia/Shanghai"))
         with patch.object(__import__("adapter.scheduler", fromlist=["settings"]).settings, "closed_loop_enabled", True), \
@@ -251,6 +260,27 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
 
 
 class SetupSchedulerGatingTests(unittest.TestCase):
+    def test_loaded_default_enables_daily_job_and_explicit_false_disables_it(self):
+        """从真实配置入口验证调度注册，不启动后台线程或触发真实闭环。"""
+        now = datetime(2026, 9, 4, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        for user_env, expected in ((None, True), ("CLOSED_LOOP_ENABLED=false\n", False)):
+            with self.subTest(user_env=user_env), tempfile.TemporaryDirectory() as state_root, patch.dict(
+                os.environ, {"DSH_INVESTMENT_STATE_DIR": state_root}, clear=True
+            ):
+                config, temporary_project = load_config_from_temporary_project("", user_env)
+                self.addCleanup(temporary_project.cleanup)
+                with patch("adapter.scheduler.settings", config.settings), \
+                        patch("adapter.scheduler.BackgroundScheduler.start"):
+                    sched = setup_scheduler(now=now)
+                    if expected:
+                        self.assertIsNotNone(sched)
+                        self.assertIsNotNone(sched.get_job("closed_loop_daily"))
+                        self.assertIsNone(sched.get_job("closed_loop_startup_catchup"))
+                        self.assertEqual(next_closed_loop_run_at(now=now), "2026-09-04T15:35:00+08:00")
+                    else:
+                        self.assertIsNone(sched)
+                        self.assertIsNone(next_closed_loop_run_at(now=now))
+
     def test_all_disabled_returns_none(self):
         with patch("adapter.scheduler.settings.closed_loop_enabled", False), \
                 patch("adapter.scheduler.settings.schedule_enabled", False), \
