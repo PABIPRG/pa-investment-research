@@ -35,3 +35,7 @@ docs
 secrets
 *.pabackup
 **/.pab29-cache
+# Preserve the scanned sidecar's complete inventory, including public CA bundles and package data.
+# The cache remains fingerprint/hash/mode validated and is mounted read-only during the build.
+!.investment-sidecar-cache/
+!.investment-sidecar-cache/**

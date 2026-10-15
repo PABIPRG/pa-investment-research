@@ -288,9 +288,10 @@ describe('investment container delivery contract', () => {
     const workflow = await readFile(join(repoRoot, '.github/workflows/investment-container.yml'), 'utf8')
     const parsed = load(workflow) as { jobs: Record<string, {
       needs?: string
-      steps: { name?: string; uses?: string; run?: string; if?: string; 'continue-on-error'?: boolean }[]
+      steps: { name?: string; uses?: string; run?: string; if?: string; env?: Record<string, string>; 'continue-on-error'?: boolean }[]
     }> }
     const smoke = parsed.jobs['image-smoke']!
+    expect(smoke.steps.find(step => step.name === 'Test container contracts')?.env?.DSH_TEST_DOCKER_CONTEXT).toBe('1')
     const scanIndex = smoke.steps.findIndex(step => step.run?.includes('image_security.py scan'))
     expect(scanIndex).toBeGreaterThan(0)
     expect(smoke.steps[scanIndex]?.if).toBeUndefined()
