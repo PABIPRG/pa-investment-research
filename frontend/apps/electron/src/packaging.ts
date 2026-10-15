@@ -659,41 +659,68 @@ export async function removePackagingRoot(
   })
 }
 
-/** Copy one immutable sidecar tree sequentially so large Python runtimes cannot exhaust file descriptors. */
-async function copySidecarTree(source: string, destination: string): Promise<void> {
-  const sourceStat = await retryPackagingFileOperation(
-    `reading metadata for ${source}`,
-    () => lstat(source),
-  )
-  if (sourceStat.isFile()) {
+/**
+ * Copy an immutable sidecar with four file operations in flight across the whole tree.
+ * Reject links and special entries before copying; drain failures before the caller can clean up.
+ * Directory modes are restored child-first only after every file copy and chmod completes.
+ * @param source - Immutable source tree or regular file.
+ * @param destination - Packaging-owned destination with writable parent directories.
+ * @param copy - File-copy implementation; retries and mode restoration remain owned here.
+ * @returns Completion of every copy and permission update, or the first failure after draining.
+ */
+export async function copySidecarTree(
+  source: string,
+  destination: string,
+  copy: typeof copyFile = copyFile,
+): Promise<void> {
+  const files: Array<{ source: string; destination: string; mode: number }> = []
+  const directories: Array<{ destination: string; mode: number }> = []
+  let totalBytes = 0
+  const visit = async (from: string, to: string): Promise<void> => {
+    const metadata = await retryPackagingFileOperation(`reading metadata for ${from}`, () => lstat(from))
+    if (metadata.isFile()) {
+      files.push({ source: from, destination: to, mode: metadata.mode })
+      totalBytes += metadata.size
+      return
+    }
+    if (!metadata.isDirectory()) {
+      throw new TypeError(`investment sidecar contains an unsupported entry: ${from}`)
+    }
+    directories.push({ destination: to, mode: metadata.mode })
+    const entries = await retryPackagingFileOperation(
+      `reading directory ${from}`,
+      () => readdir(from, { withFileTypes: true }),
+    )
+    for (const entry of entries) await visit(join(from, entry.name), join(to, entry.name))
+  }
+  await timed('sidecar copy inventory', () => visit(source, destination))
+  console.log(`Electron packaging: sidecar copy inventory contains ${files.length} files, ${directories.length} directories, ${totalBytes} bytes`)
+  await timed('sidecar copy directory creation', async () => {
+    for (const directory of directories) {
+      await retryPackagingFileOperation(
+        `creating ${directory.destination}`,
+        () => mkdir(directory.destination, { mode: (directory.mode & 0o777) | 0o700, recursive: true }),
+      )
+    }
+  })
+  await timed('sidecar copy files and modes', () => mapSidecarFiles(files, async (file) => {
     await retryPackagingFileOperation(
-      `copying ${source} to ${destination}`,
-      () => copyFile(source, destination),
+      `copying ${file.source} to ${file.destination}`,
+      () => copy(file.source, file.destination),
     )
     await retryPackagingFileOperation(
-      `applying mode to ${destination}`,
-      () => chmod(destination, sourceStat.mode),
+      `applying mode to ${file.destination}`,
+      () => chmod(file.destination, file.mode),
     )
-    return
-  }
-  if (!sourceStat.isDirectory()) {
-    throw new TypeError(`investment sidecar contains an unsupported entry: ${source}`)
-  }
-  await retryPackagingFileOperation(
-    `creating ${destination}`,
-    () => mkdir(destination, { mode: sourceStat.mode, recursive: true }),
-  )
-  const entries = await retryPackagingFileOperation(
-    `reading directory ${source}`,
-    () => readdir(source, { withFileTypes: true }),
-  )
-  for (const entry of entries) {
-    await copySidecarTree(join(source, entry.name), join(destination, entry.name))
-  }
-  await retryPackagingFileOperation(
-    `applying mode to ${destination}`,
-    () => chmod(destination, sourceStat.mode),
-  )
+  }))
+  await timed('sidecar copy directory modes', async () => {
+    for (const directory of directories.toReversed()) {
+      await retryPackagingFileOperation(
+        `applying mode to ${directory.destination}`,
+        () => chmod(directory.destination, directory.mode),
+      )
+    }
+  })
 }
 
 async function makePackagedDirectoriesWritable(candidate: string): Promise<void> {
