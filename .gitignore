@@ -11,3 +11,7 @@ backend/*/.venv/
 backend/dsh-trading-core/tmp*/
 backend/dsh-trading-core/cards.json
 backend/market-watch/run-8100.log
+
+# Optional cache extracted from a security-scanned CI image.
+.investment-sidecar-cache/*
+!.investment-sidecar-cache/.gitkeep
