@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,12 +21,19 @@ afterEach(async () => {
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'investment-sidecar-cache-'))
   roots.push(root)
-  await mkdir(join(root, 'sidecar/runtime/bin'), { recursive: true })
-  await writeFile(join(root, 'sidecar/runtime/bin/python3'), 'fixture-python', { mode: 0o755 })
+  const files = [
+    { path: 'runtime/bin/python3', content: 'fixture-python', mode: 0o755 },
+    { path: 'runtime/lib/python3.10/site-packages/certifi/cacert.pem', content: 'public CA fixture', mode: 0o644 },
+    { path: 'runtime/lib/python3.10/site-packages/package/data/schema.json', content: '{}', mode: 0o644 },
+  ]
+  for (const file of files) {
+    await mkdir(join(root, 'sidecar', file.path, '..'), { recursive: true })
+    await writeFile(join(root, 'sidecar', file.path), file.content, { mode: file.mode })
+  }
   await writeFile(join(root, 'sidecar/runtime.json'), JSON.stringify({
     schemaVersion: 1,
     python: { platform: 'linux', arch: 'x64', executable: 'runtime/bin/python3' },
-    files: [{ path: 'runtime/bin/python3', sha256: createHash('sha256').update('fixture-python').digest('hex') }],
+    files: files.map(({ path, content }) => ({ path, sha256: createHash('sha256').update(content).digest('hex') })),
   }))
   return root
 }
@@ -43,6 +50,32 @@ describe('scanned container sidecar cache', () => {
     expect((await stat(join(output, 'runtime/bin/python3'))).mode & 0o111).toBe(0o111)
   })
 
+  // The container CI lane requires this real Docker transfer; ordinary host suites stay Docker-free.
+  it.skipIf(process.env.DSH_TEST_DOCKER_CONTEXT !== '1')('keeps a sealed sidecar intact through Docker context filtering while excluding private source files', async () => {
+    const root = await fixture()
+    await cache.seal(root, key)
+    const context = await mkdtemp(join(tmpdir(), 'investment-cache-context-'))
+    roots.push(context)
+    await cp(root, join(context, '.investment-sidecar-cache'), { recursive: true })
+    await cp(new URL('../../.dockerignore', import.meta.url), join(context, '.dockerignore'))
+    const privateFiles = ['private.pem', '.env', 'nested/credentials.json', 'user/data/account.json', 'secrets/token']
+    for (const path of privateFiles) {
+      await mkdir(join(context, path, '..'), { recursive: true })
+      await writeFile(join(context, path), 'excluded fixture')
+    }
+    await writeFile(join(context, 'Dockerfile'), 'FROM scratch\nCOPY . /\n')
+    const output = join(root, 'exported-context')
+    execFileSync('docker', ['build', '--network=none', '--output', `type=local,dest=${output}`, context], {
+      env: { ...process.env, DOCKER_BUILDKIT: '1' }, encoding: 'utf8', timeout: 120_000,
+    })
+    const restored = join(root, 'restored-from-context')
+    expect(await cache.restore(join(output, '.investment-sidecar-cache'), key, restored)).toBe(true)
+    expect(await readFile(join(restored, 'runtime/lib/python3.10/site-packages/certifi/cacert.pem'), 'utf8')).toBe('public CA fixture')
+    expect(await readFile(join(restored, 'runtime/lib/python3.10/site-packages/package/data/schema.json'), 'utf8')).toBe('{}')
+    expect((await stat(join(restored, 'runtime/bin/python3'))).mode & 0o111).toBe(0o111)
+    for (const path of privateFiles) await expect(stat(join(output, path))).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 180_000)
+
   it('treats an absent cache and an input mismatch as misses without installing files', async () => {
     const root = await fixture()
     const output = join(root, 'restored')
@@ -52,7 +85,7 @@ describe('scanned container sidecar cache', () => {
     await expect(readFile(join(output, 'runtime.json'))).rejects.toThrow()
   })
 
-  it.each(['changed', 'extra', 'missing', 'symlink', 'mode', 'descriptor', 'metadata'])('rejects %s cache corruption', async change => {
+  it.each(['changed', 'extra', 'missing', 'symlink', 'mode', 'descriptor', 'metadata'])('rejects %s cache corruption', async (change) => {
     const root = await fixture()
     await cache.seal(root, key)
     const executable = join(root, 'sidecar/runtime/bin/python3')

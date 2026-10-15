@@ -41,6 +41,8 @@ jobs:
 
       - name: Test container contracts
         working-directory: frontend
+        env:
+          DSH_TEST_DOCKER_CONTEXT: '1'
         run: >-
           pnpm exec vitest run
           apps/cli/tests/investment-instance.spec.ts
