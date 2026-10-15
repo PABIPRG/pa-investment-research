@@ -675,10 +675,12 @@ export async function copySidecarTree(
 ): Promise<void> {
   const files: Array<{ source: string; destination: string; mode: number }> = []
   const directories: Array<{ destination: string; mode: number }> = []
+  let totalBytes = 0
   const visit = async (from: string, to: string): Promise<void> => {
     const metadata = await retryPackagingFileOperation(`reading metadata for ${from}`, () => lstat(from))
     if (metadata.isFile()) {
       files.push({ source: from, destination: to, mode: metadata.mode })
+      totalBytes += metadata.size
       return
     }
     if (!metadata.isDirectory()) {
@@ -691,14 +693,17 @@ export async function copySidecarTree(
     )
     for (const entry of entries) await visit(join(from, entry.name), join(to, entry.name))
   }
-  await visit(source, destination)
-  for (const directory of directories) {
-    await retryPackagingFileOperation(
-      `creating ${directory.destination}`,
-      () => mkdir(directory.destination, { mode: (directory.mode & 0o777) | 0o700, recursive: true }),
-    )
-  }
-  await mapSidecarFiles(files, async (file) => {
+  await timed('sidecar copy inventory', () => visit(source, destination))
+  console.log(`Electron packaging: sidecar copy inventory contains ${files.length} files, ${directories.length} directories, ${totalBytes} bytes`)
+  await timed('sidecar copy directory creation', async () => {
+    for (const directory of directories) {
+      await retryPackagingFileOperation(
+        `creating ${directory.destination}`,
+        () => mkdir(directory.destination, { mode: (directory.mode & 0o777) | 0o700, recursive: true }),
+      )
+    }
+  })
+  await timed('sidecar copy files and modes', () => mapSidecarFiles(files, async (file) => {
     await retryPackagingFileOperation(
       `copying ${file.source} to ${file.destination}`,
       () => copy(file.source, file.destination),
@@ -707,13 +712,15 @@ export async function copySidecarTree(
       `applying mode to ${file.destination}`,
       () => chmod(file.destination, file.mode),
     )
+  }))
+  await timed('sidecar copy directory modes', async () => {
+    for (const directory of directories.toReversed()) {
+      await retryPackagingFileOperation(
+        `applying mode to ${directory.destination}`,
+        () => chmod(directory.destination, directory.mode),
+      )
+    }
   })
-  for (const directory of directories.toReversed()) {
-    await retryPackagingFileOperation(
-      `applying mode to ${directory.destination}`,
-      () => chmod(directory.destination, directory.mode),
-    )
-  }
 }
 
 async function makePackagedDirectoriesWritable(candidate: string): Promise<void> {
