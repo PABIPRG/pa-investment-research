@@ -33,6 +33,9 @@ import {
   validatePackagerIcon,
 } from '../src/packaging.ts'
 
+// Windows exposes only owner read/write permissions; POSIX runners verify every mode bit.
+const supportedPermissionBits = process.platform === 'win32' ? 0o600 : 0o777
+
 function decodeGeneratedPng(png: Buffer): { data: Buffer; height: number; width: number } {
   const idat: Buffer[] = []
   let width = 0
@@ -613,7 +616,8 @@ describe('Electron investment sidecar packaging', () => {
 
       const packagedSidecar = join(rootDir, `${appIdentity.name}.app`, 'Contents', 'Resources', 'investment-python')
       expect(await readFile(join(packagedSidecar, 'runtime.json'), 'utf8')).toBe('{"version":1}')
-      expect((await stat(join(packagedSidecar, 'runtime', 'bin', 'python'))).mode & 0o777).toBe(0o755)
+      expect((await stat(join(packagedSidecar, 'runtime', 'bin', 'python'))).mode & supportedPermissionBits)
+        .toBe(0o755 & supportedPermissionBits)
     } finally {
       await rm(rootDir, { force: true, recursive: true })
     }
@@ -772,8 +776,8 @@ describe('Electron investment sidecar packaging', () => {
     const signSidecar = async (appPath: string) => { signedSidecars.push(appPath) }
     const signHelpers = async (appPath: string) => { signedHelpers.push(appPath) }
     const sealSidecar = async (appPath: string) => { sealedSidecars.push(appPath) }
-    const firstPackage = `/tmp/out/${appIdentity.name}-darwin-arm64`
-    const secondPackage = `/tmp/out/${appIdentity.name}-darwin-x64`
+    const firstPackage = resolve('/tmp/out', `${appIdentity.name}-darwin-arm64`)
+    const secondPackage = resolve('/tmp/out', `${appIdentity.name}-darwin-x64`)
     const firstApp = join(firstPackage, `${appIdentity.name}.app`)
     const secondApp = join(secondPackage, `${appIdentity.name}.app`)
 
@@ -842,9 +846,9 @@ describe('Electron investment sidecar packaging', () => {
 
       await sealPackagedSidecarReadOnly(appPath)
 
-      expect((await stat(executable)).mode & 0o777).toBe(0o555)
-      expect((await stat(source)).mode & 0o777).toBe(0o444)
-      expect((await stat(sidecarRoot)).mode & 0o777).toBe(0o555)
+      expect((await stat(executable)).mode & supportedPermissionBits).toBe(0o555 & supportedPermissionBits)
+      expect((await stat(source)).mode & supportedPermissionBits).toBe(0o444 & supportedPermissionBits)
+      expect((await stat(sidecarRoot)).mode & supportedPermissionBits).toBe(0o555 & supportedPermissionBits)
     } finally {
       await chmod(sidecarRoot, 0o755).catch(() => undefined)
       await chmod(join(sidecarRoot, 'runtime'), 0o755).catch(() => undefined)
@@ -869,8 +873,9 @@ describe('Electron investment sidecar packaging', () => {
 
       await preparePackagerOutputForOverwrite(outDir, 'darwin', 'arm64')
 
-      expect((await stat(sidecarRoot)).mode & 0o700).toBe(0o700)
-      expect((await stat(nestedDir)).mode & 0o700).toBe(0o700)
+      const ownerAccess = 0o700 & supportedPermissionBits
+      expect((await stat(sidecarRoot)).mode & ownerAccess).toBe(ownerAccess)
+      expect((await stat(nestedDir)).mode & ownerAccess).toBe(ownerAccess)
       await expect(rm(packageDir, { force: true, recursive: true })).resolves.toBeUndefined()
     } finally {
       await chmod(sidecarRoot, 0o755).catch(() => undefined)
