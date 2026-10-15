@@ -19,6 +19,17 @@ On Windows, use `init.bat`, `start_all.bat [fake|engine]`, and `verify.bat`. The
 
 `stop_all.sh` and `stop_all.bat` are manual Python-backend wrappers for port `8000`. They do not implement the Phase 2 Runtime's owned-process rules.
 
+## 自动自进化配置
+
+自动闭环默认开启：服务常驻时每天按 `CLOSED_LOOP_TIME`（默认 `15:35`，默认时区 `Asia/Shanghai`）触发，非交易日跳过。闭环包含事件生成候选、影子验证、自动进化、候选回测与通知；进化仍需满足有效影子数据等门槛。启动时已错过当天计划会补跑，当天已运行则跳过。
+
+需要关闭时显式设置 `CLOSED_LOOP_ENABLED=false` 并重启后端；恢复时删除该覆盖值或改为 `true`。配置优先级为：进程环境 > 用户 `backend.env` > 项目 `.env` > 代码默认值。已有显式 `false` 在升级后仍保持关闭。
+
+- Host 托管（桌面/Web/容器）：使用 `$DSH_HOME/investment-research/trading-core/user-config/backend.env`；容器完整路径及操作步骤见[云端部署指南](../../docs/云端部署指南.md#自动自进化的启停)。
+- Python 独立启动：使用本目录 `config/backend.env`、`.env` 或启动进程环境；`fake` 仅切换分析 runner，不关闭调度，隔离联调时也应显式关闭闭环。
+
+关闭闭环不关闭独立的 `SHADOW_SCHEDULE_ENABLED` 或 `AUTO_RETEST_ENABLED` 调度；这些开关保持原有默认值。`GET /evolution/status` 的 `closed_loop_enabled` 和 `next_scheduled_run_at` 可用于核对生效状态，开启不等同于已有成功运行记录。
+
 ## API
 
 ### 观察室批量历史

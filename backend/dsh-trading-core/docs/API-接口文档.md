@@ -1215,10 +1215,11 @@ R→U→K 画像修正（feedback_delta / interest 集合）与 R→V 效果归�
               "rejected": 0 },
   "lifecycle": { "active": [], "candidate": [], "retired": [], "watch": [], "rejected": [] },
   "per_strategy": [], "recent_applied": [], "last_applied_at": null,
-  "closed_loop_enabled": false, "closed_loop_time": "15:35",
+  "closed_loop_enabled": true, "closed_loop_time": "15:35",
   "note": "影子净值仅 1 日，自进化待累积至 5 日" }
 ```
 
+- `closed_loop_enabled`：自动闭环默认开启；显式 `CLOSED_LOOP_ENABLED=false` 并重启后关闭。已有显式关闭配置不会被升级覆盖；此字段表示配置生效状态，不代表最近一轮运行成功。
 - `days_of_data`：shadow_equity 有效净值日数；`min_days`：进化阈值（默认 5，`EVOLVE_MIN_DAYS`）。
 - `ready = days_of_data >= min_days`。不足时只出归因报告，`/evolution/run` 返回 `waiting_data` 不动作。
 - `counts.watch` = 自进化降级观察中的策略；变异是来源标记（`source='evolution'`/`mutated_from`），变异候选按真实状态计入 `candidate`，无独立 `mutated` 计数。
