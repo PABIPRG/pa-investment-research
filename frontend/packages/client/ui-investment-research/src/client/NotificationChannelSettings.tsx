@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button, Input } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { NotificationChannelResult, NotificationChannelStatus, NotificationExternalChannel } from '@deepseek-ai/dsh-client-investment-research-runtime/client'
 import type { RequestData, RequestNotificationChannels } from './research-types.ts'
@@ -35,6 +35,7 @@ export function NotificationChannelSettings({ request, requestData, onStatus }: 
   requestData: RequestData
   onStatus: (status: NotificationChannelResult | undefined) => void
 }) {
+  const wecomGuideId = useId()
   const [status, setStatus] = useState<NotificationChannelResult>()
   const [editing, setEditing] = useState<NotificationExternalChannel>()
   const [fields, setFields] = useState<Record<string, string>>({})
@@ -160,8 +161,17 @@ export function NotificationChannelSettings({ request, requestData, onStatus }: 
         {editing === channel && <form className={css.form} onSubmit={(event) => { event.preventDefault(); void commit(current, channel, 'save', current?.configured ? current.enabled : true) }}>
           <div className={css.fields}>{fieldDefinitions.map(field => <label key={field.key}>
             <span>{field.label}</span>
-            <Input aria-label={`${title} · ${field.label}`} type={field.secret ? 'password' : 'text'} autoComplete={field.secret ? 'new-password' : 'off'} required={!field.secret || !current?.secretConfigured} value={fields[field.key] ?? ''} placeholder={field.secret && current?.secretConfigured ? '已保存，留空保留原值' : field.placeholder} onChange={(event) => { setFields(values => ({ ...values, [field.key]: event.target.value })) }} disabled={busy} />
+            <Input aria-label={`${title} · ${field.label}`} aria-describedby={channel === 'wecom' ? wecomGuideId : undefined} type={field.secret ? 'password' : 'text'} autoComplete={field.secret ? 'new-password' : 'off'} required={!field.secret || !current?.secretConfigured} value={fields[field.key] ?? ''} placeholder={field.secret && current?.secretConfigured ? '已保存，留空保留原值' : field.placeholder} onChange={(event) => { setFields(values => ({ ...values, [field.key]: event.target.value })) }} disabled={busy} />
           </label>)}</div>
+          {channel === 'wecom' && <div id={wecomGuideId} className={css.setupGuide}>
+            <ol>
+              <li>电脑端企业微信打开接收通知的群，进入「管理聊天信息 → 消息推送 → 自定义消息推送」（旧版称「群机器人」）。</li>
+              <li>创建机器人，复制完整 Webhook 地址粘贴到上方输入框。</li>
+              <li>保存配置后点击「发送测试」，到群里确认收到。</li>
+              <li>在下方「通知类型与渠道」的企业微信列勾选需要推送的通知类型，勾选自动保存。</li>
+            </ol>
+            <p>无需企业 ID 或应用 Secret。<a href="https://cloud.tencent.com/document/product/1759/128391" target="_blank" rel="noopener noreferrer">查看官方图文教程</a></p>
+          </div>}
           <p>密钥不回显。保存或停用会取消旧配置的待发任务；已开始发送的消息无法撤回。</p>
           <div className={css.actions}><Button type="submit" variant="primary" disabled={busy}>{busy ? '保存中…' : '保存配置'}</Button><Button disabled={busy} onClick={() => { setEditing(undefined); setFields({}); setRemoving(undefined); setError('') }}>取消</Button>
             {current?.configured && <Button disabled={busy} onClick={() => { setRemoving(channel) }}>移除配置</Button>}</div>
