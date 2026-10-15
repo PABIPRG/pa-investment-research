@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -14,6 +14,7 @@ import { appIdentity, packagerIconPath } from '../src/app-identity.ts'
 import {
   commandRequiresShell,
   copyPortablePackageTree,
+  copySidecarTree,
   createPackagerOptions,
   createPackagerSeed,
   createPackagingPlan,
@@ -623,6 +624,132 @@ describe('Electron investment sidecar packaging', () => {
     }
   })
 
+  it('copies complete sidecar bytes and modes before sealing nested and empty directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sidecar-copy-bytes-'))
+    const source = join(root, 'source')
+    const destination = join(root, 'destination')
+    const directories = ['', 'runtime', 'runtime/bin', 'empty']
+    try {
+      for (const directory of directories) await mkdir(join(source, directory), { recursive: true })
+      await writeFile(join(source, 'runtime/bin/python'), Buffer.from([0, 255, 42, 0, 128]))
+      await chmod(join(source, 'runtime/bin/python'), 0o755)
+      await writeFile(join(source, 'runtime.json'), '{"files":["runtime/bin/python"]}')
+      await chmod(join(source, 'runtime.json'), 0o640)
+      for (const directory of directories.toReversed()) await chmod(join(source, directory), 0o550)
+
+      await copySidecarTree(source, destination)
+
+      for (const file of ['runtime/bin/python', 'runtime.json']) {
+        expect(await readFile(join(destination, file))).toEqual(await readFile(join(source, file)))
+        expect((await stat(join(destination, file))).mode & supportedPermissionBits)
+          .toBe((await stat(join(source, file))).mode & supportedPermissionBits)
+      }
+      for (const directory of directories) {
+        expect((await stat(join(destination, directory))).mode & supportedPermissionBits)
+          .toBe(0o550 & supportedPermissionBits)
+      }
+      expect(await readdir(join(destination, 'empty'))).toEqual([])
+      await writeFile(join(destination, 'runtime/bin/python'), 'changed destination')
+      expect(await readFile(join(source, 'runtime/bin/python'))).toEqual(Buffer.from([0, 255, 42, 0, 128]))
+    } finally {
+      for (const tree of [source, destination]) {
+        for (const directory of directories) await chmod(join(tree, directory), 0o755).catch(() => undefined)
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('shares four sidecar copy slots across directories and waits for every file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sidecar-copy-limit-'))
+    const source = join(root, 'source')
+    const destination = join(root, 'destination')
+    let active = 0
+    let maximum = 0
+    const copied: string[] = []
+    const files = Array.from({ length: 13 }, (_, index) => join(`dir-${index % 3}`, `file-${index}`))
+    try {
+      for (const file of files) {
+        await mkdir(dirname(join(source, file)), { recursive: true })
+        await writeFile(join(source, file), file)
+      }
+      await copySidecarTree(source, destination, async (from, to) => {
+        active += 1
+        maximum = Math.max(maximum, active)
+        try {
+          await new Promise<void>(done => setTimeout(done, 5))
+          await copyFile(from, to)
+          copied.push(relative(source, from.toString()))
+        } finally { active -= 1 }
+      })
+      expect(maximum).toBe(4)
+      expect(active).toBe(0)
+      expect(copied.toSorted()).toEqual(files.toSorted())
+      for (const file of files) expect(await readFile(join(destination, file), 'utf8')).toBe(file)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
+  it('stops taking new sidecar files and drains active copies before reporting failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sidecar-copy-failure-'))
+    const source = join(root, 'source')
+    const destination = join(root, 'destination')
+    let started = 0
+    let active = 0
+    let finished = 0
+    const failure = Object.assign(new Error('copy denied'), { code: 'EACCES' })
+    try {
+      await mkdir(source)
+      for (let index = 0; index < 12; index += 1) await writeFile(join(source, `file-${index}`), 'bytes')
+      await expect(copySidecarTree(source, destination, async (from, to) => {
+        started += 1
+        active += 1
+        const first = started === 1
+        try {
+          if (first) throw failure
+          await new Promise<void>(done => setTimeout(done, 5))
+          await copyFile(from, to)
+        } finally { active -= 1; finished += 1 }
+      })).rejects.toBe(failure)
+      expect(started).toBe(4)
+      expect(active).toBe(0)
+      expect(finished).toBe(started)
+      await rm(destination, { recursive: true, force: true })
+      await expect(stat(destination)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
+  it.each([false, true])('rejects sidecar links before copying any files (dangling=%s)', async (dangling) => {
+    const root = await mkdtemp(join(tmpdir(), 'sidecar-copy-link-'))
+    const source = join(root, 'source')
+    let copied = 0
+    try {
+      await mkdir(source)
+      const target = join(root, 'target')
+      if (!dangling) await mkdir(target)
+      await writeFile(join(source, 'a-file'), 'bytes')
+      await symlink(target, join(source, 'z-link'), process.platform === 'win32' ? 'junction' : 'dir')
+      await expect(copySidecarTree(source, join(root, 'destination'), async (from, to) => { copied += 1; await copyFile(from, to) }))
+        .rejects.toThrow('unsupported entry')
+      expect(copied).toBe(0)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
+  it('retains descriptor exhaustion retries for sidecar copies', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sidecar-copy-retry-'))
+    let attempts = 0
+    try {
+      const source = join(root, 'source')
+      const destination = join(root, 'destination')
+      await writeFile(source, 'complete bytes')
+      await copySidecarTree(source, destination, async (from, to) => {
+        attempts += 1
+        if (attempts === 1) throw Object.assign(new Error('descriptor pressure'), { code: 'EMFILE' })
+        await copyFile(from, to)
+      })
+      expect(attempts).toBe(2)
+      expect(await readFile(destination, 'utf8')).toBe('complete bytes')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
   it('copies a portable package tree without retaining deploy-time links', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-electron-portable-links-test-'))
     const stagingDir = join(rootDir, 'app')
@@ -666,8 +793,9 @@ describe('Electron investment sidecar packaging', () => {
 
         const packagingModule = pathToFileURL(join(process.cwd(), 'apps/electron/src/packaging.ts')).href
         const childScript = [
-          `import { copyPortablePackageTree } from ${JSON.stringify(packagingModule)}`,
+          `import { copyPortablePackageTree, copySidecarTree } from ${JSON.stringify(packagingModule)}`,
           'await copyPortablePackageTree(process.env.DSH_TEST_SOURCE, process.env.DSH_TEST_DESTINATION)',
+          'await copySidecarTree(process.env.DSH_TEST_SOURCE, process.env.DSH_TEST_DESTINATION + "-sidecar")',
         ].join(';')
         const result = await new Promise<{ code: number | null; stderr: string }>((resolvePromise, reject) => {
           const child = spawn('bash', [
@@ -693,6 +821,8 @@ describe('Electron investment sidecar packaging', () => {
 
         expect(result, result.stderr).toMatchObject({ code: 0 })
         expect(await readFile(join(destinationDir, relative(sourceDir, currentDir), 'leaf.txt'), 'utf8'))
+          .toBe('bounded descriptors')
+        expect(await readFile(join(destinationDir + '-sidecar', relative(sourceDir, currentDir), 'leaf.txt'), 'utf8'))
           .toBe('bounded descriptors')
       } finally {
         await rm(rootDir, { force: true, recursive: true })

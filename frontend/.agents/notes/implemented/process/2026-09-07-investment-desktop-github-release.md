@@ -31,6 +31,8 @@ Complete sidecar verification and post-signing descriptor refresh use four concu
 
 The macOS native-file scan also inspects the complete actual sidecar tree with at most four file headers in flight. All reads must finish successfully before sequential leaf signing starts; no descriptor entry can hide an extra file, and symbolic links still fail. Scan, leaf signing and sidecar resource copy have separate timings. The workflow retains the native job dependency on the shared build: removing that barrier would require a separately proven artifact-selection contract for partial reruns.
 
+Sidecar resource copying validates the actual tree before copying regular files with a global limit of four in-flight operations. Copies retain their bytes and modes without hard-linking the source; empty directories are preserved. Destination directories stay owner-writable until all file copies and mode updates succeed, then recover their source modes child-first. Descriptor-exhaustion retries remain active. The first failure stops new file work and drains in-flight copies before the packaging hook reports failure, so cleanup cannot race background writes. The copy timing remains part of full workflow acceptance; bounded concurrency alone is not evidence of net CI speedup.
+
 ### Immutable public identity and verified bytes
 
 A release uses `investment-v<version>` and contains ZIP files for macOS arm64, macOS x64, and Windows x64 plus `SHA256SUMS`. The publish job consumes only the build matrix artifacts, verifies the exact platform set, writes and verifies the checksums, and creates GitHub artifact attestations before publication.
