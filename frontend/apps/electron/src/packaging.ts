@@ -156,12 +156,23 @@ export function commandRequiresShell(command: string, platform: NodeJS.Platform 
  * @param platform - Electron target platform.
  * @param arch - Electron target architecture.
  * @param downloadCacheRoot - Optional persistent download directory outside staging.
- * @returns Ordered command inputs and sibling staging paths.
+ * @param assembledCacheRoot - Optional desktop-only source cache outside temporary packaging staging.
+ * @returns Ordered command inputs and isolated staging/source paths.
  */
-export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, arch: string, downloadCacheRoot?: string): PackagingPlan {
+export function createPackagingPlan(
+  rootDir: string, platform: NodeJS.Platform, arch: string, downloadCacheRoot?: string, assembledCacheRoot?: string,
+): PackagingPlan {
   const stagingDir = join(rootDir, 'app')
   const packagerSeedDir = join(rootDir, 'packager-seed')
-  const sidecarDir = join(rootDir, 'investment-python')
+  const desktopCache = (platform === 'darwin' || platform === 'win32') && assembledCacheRoot?.trim()
+    ? resolve(assembledCacheRoot) : undefined
+  if (desktopCache !== undefined) {
+    const distances = [relative(resolve(rootDir), desktopCache), relative(desktopCache, resolve(rootDir))]
+    if (distances.some(distance => distance === '' || (!distance.startsWith(`..${sep}`) && distance !== '..' && !isAbsolute(distance)))) {
+      throw new Error('assembled sidecar cache must be outside temporary packaging staging')
+    }
+  }
+  const sidecarDir = join(desktopCache ?? rootDir, 'investment-python')
   const sidecarCacheDir = downloadCacheRoot
     ? resolve(downloadCacheRoot, `${platform}-${arch}`)
     : join(rootDir, 'sidecar-cache')
@@ -183,7 +194,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
     packagerSeedDir,
     rootDir,
     sidecar: {
-      args: [
+      args: desktopCache === undefined ? [
         '--workspace-root',
         'run',
         'investment:sidecar:build',
@@ -193,7 +204,7 @@ export function createPackagingPlan(rootDir: string, platform: NodeJS.Platform, 
         sidecarDir,
         '--cache',
         sidecarCacheDir,
-      ],
+      ] : ['exec', 'tsx', 'scripts/investment-desktop-sidecar-cache.ts', 'build', `${platform}-${arch}`, desktopCache, sidecarCacheDir],
       command: pnpmCommand,
       cwd: workspaceDir,
     },
@@ -1074,7 +1085,9 @@ async function packageApplication(): Promise<void> {
     INVESTMENT_PYTHON_DOWNLOAD_CACHE: downloadCaches.python,
     PIP_CACHE_DIR: downloadCaches.pip,
   }
-  const plan = createPackagingPlan(rootDir, process.platform, process.arch, downloadCaches.python)
+  const plan = createPackagingPlan(
+    rootDir, process.platform, process.arch, downloadCaches.python, process.env.INVESTMENT_DESKTOP_SIDECAR_CACHE,
+  )
   console.log(`Electron packaging: Python download cache ${plan.sidecarCacheDir}`)
   console.log(`Electron packaging: pip download cache ${downloadCaches.pip}`)
   console.log(`Electron packaging: Electron download cache ${downloadCaches.electron}`)
