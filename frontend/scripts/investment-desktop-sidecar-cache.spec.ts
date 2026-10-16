@@ -255,11 +255,12 @@ describe('desktop assembled sidecar cache', () => {
       ? join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git/usr/bin/tar.exe') : 'tar'
     expect(execFileSync(tar, ['--version'], { encoding: 'utf8' })).toContain('GNU tar')
     const sourceMode = (await lstat(payload)).mode
-    const archive = join(root, 'cache.tar')
-    execFileSync(tar, ['--force-local', '-cf', archive, '-C', options.cacheRoot, '.'])
+    // Node owns the native cwd; Git's MSYS tar receives only relative POSIX paths.
+    const archive = '../cache.tar'
+    execFileSync(tar, ['--force-local', '-cf', archive, '.'], { cwd: options.cacheRoot })
     const restored = join(root, 'restored')
     await mkdir(restored)
-    execFileSync(tar, ['--force-local', '-xf', archive, '-C', restored], { env: { ...process.env, TAR_OPTIONS: '--same-permissions' } })
+    execFileSync(tar, ['--force-local', '-xf', archive], { cwd: restored, env: { ...process.env, TAR_OPTIONS: '--same-permissions' } })
     expect((await lstat(join(restored, 'investment-python'))).mode).toBe(sourceMode)
     expect(await validateDesktopSidecarCache({ ...options, cacheRoot: restored })).toBe(true)
   }))
