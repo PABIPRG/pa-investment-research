@@ -66,6 +66,30 @@ function alphaAt(image: { data: Buffer; width: number }, x: number, y: number): 
 }
 
 describe('Electron investment sidecar packaging', () => {
+  it('uses an opt-in verified desktop cache source without changing its resource name or cleaning it', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'desktop-assembled-cache-plan-'))
+    try {
+      const cache = join(fixture, 'assembled-cache')
+      const plan = createPackagingPlan(join(fixture, 'staging'), 'darwin', 'arm64', join(fixture, 'downloads'), cache)
+      expect(plan.sidecarDir).toBe(join(cache, 'investment-python'))
+      expect(plan.sidecar.args).toEqual(['exec', 'tsx', 'scripts/investment-desktop-sidecar-cache.ts', 'build', 'darwin-arm64', cache, plan.sidecarCacheDir])
+      await mkdir(plan.rootDir)
+      await mkdir(plan.sidecarDir, { recursive: true })
+      await writeFile(join(plan.sidecarDir, 'keep'), 'unsigned source')
+      await removePackagingRoot(plan.rootDir)
+      expect(await readFile(join(plan.sidecarDir, 'keep'), 'utf8')).toBe('unsigned source')
+      expect(createPackagingPlan(join(fixture, 'linux'), 'linux', 'x64', undefined, cache).sidecarDir)
+        .toBe(join(fixture, 'linux', 'investment-python'))
+    } finally { await rm(fixture, { recursive: true, force: true }) }
+  })
+
+  it('rejects assembled cache paths that overlap disposable packaging staging', () => {
+    const root = resolve('staging')
+    for (const cache of [root, join(root, 'cache'), dirname(root)]) {
+      expect(() => createPackagingPlan(root, 'darwin', 'arm64', undefined, cache)).toThrow('outside temporary')
+    }
+  })
+
   it('prefers an explicit stable macOS signing identity over ad-hoc signing', () => {
     expect(resolveMacCodesignIdentity({
       CSC_NAME: 'Developer ID Application: fallback',

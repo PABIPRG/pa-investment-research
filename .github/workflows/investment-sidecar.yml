@@ -1,12 +1,14 @@
 name: 桌面版打包验证
 
 on:
+  push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
 concurrency:
   group: Investment packaged sidecar-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -85,7 +87,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      # Cache downloads only; packages are assembled and verified on every run.
+      # Download caches remain the fallback when the assembled desktop cache is absent or rejected.
       - name: Cache verified Python archive
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -107,13 +109,36 @@ jobs:
       - name: Install frontend
         run: pnpm install --frozen-lockfile
 
+      - name: Fingerprint native sidecar inputs
+        id: desktop_cache
+        run: node scripts/investment-desktop-sidecar-cache.ts fingerprint "${{ matrix.target }}"
+
+      # GNU tar must retain POSIX modes; Windows permissions are checked by the
+      # real tar roundtrip in the native regression suite below.
+      - name: Verify macOS cache archive tool
+        if: runner.os == 'macOS'
+        shell: bash
+        run: gtar --version | grep 'GNU tar'
+
+      - name: Restore assembled desktop sidecar
+        id: restored_sidecar
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        env:
+          TAR_OPTIONS: --same-permissions
+        with:
+          path: ${{ runner.temp }}/investment-desktop-sidecar
+          key: ${{ steps.desktop_cache.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.desktop_cache.outputs.prefix }}
+
       - name: Test backend package privacy gates
         env:
+          DSH_TEST_DESKTOP_CACHE_TAR: '1'
           DSH_DESKTOP_SMOKE_TEST_ROOT: ${{ runner.temp }}/desktop-smoke-tests
         run: >-
           pnpm exec vitest run
           scripts/investment-desktop-build-artifact.spec.ts
           scripts/investment-sidecar-file-hashes.spec.ts
+          scripts/investment-desktop-sidecar-cache.spec.ts
           scripts/investment-backend-package-policy.spec.ts
           scripts/build-investment-python-sidecar.spec.ts
           scripts/smoke-investment-python-sidecar.spec.ts
@@ -160,6 +185,7 @@ jobs:
 
       - name: Build test application and sidecar (macOS)
         env:
+          INVESTMENT_DESKTOP_SIDECAR_CACHE: ${{ runner.temp }}/investment-desktop-sidecar
           INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
           PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
           ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
@@ -171,6 +197,7 @@ jobs:
 
       - name: Build test application and sidecar (Windows)
         env:
+          INVESTMENT_DESKTOP_SIDECAR_CACHE: ${{ runner.temp }}/investment-desktop-sidecar
           INVESTMENT_PYTHON_DOWNLOAD_CACHE: ${{ runner.temp }}/investment-downloads/python
           PIP_CACHE_DIR: ${{ runner.temp }}/investment-downloads/pip
           ELECTRON_CACHE: ${{ runner.temp }}/investment-downloads/electron
@@ -282,3 +309,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+      # Each target has its own producer key. Only successful mainline builds
+      # publish that target's pre-signing source, after all its final ZIP checks.
+      - name: Revalidate unsigned cache source after final package acceptance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && env.INVESTMENT_DESKTOP_SIDECAR_BUILT == 'true'
+        run: >-
+          node scripts/investment-desktop-sidecar-cache.ts validate
+          "${{ matrix.target }}" "${{ runner.temp }}/investment-desktop-sidecar"
+
+      - name: Save accepted mainline desktop sidecar
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master' && env.INVESTMENT_DESKTOP_SIDECAR_BUILT == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/investment-desktop-sidecar
+          key: ${{ steps.desktop_cache.outputs.prefix }}${{ github.run_id }}-${{ github.run_attempt }}
