@@ -41,6 +41,15 @@ class ClosedLoopSchedulerTests(unittest.TestCase):
         )
         market_regime.start()
         self.addCleanup(market_regime.stop)
+        # 闭环现在会把策略事件投递给委托核心；测试不得写真实本地库。
+        partner_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(partner_dir.cleanup)
+        partner_env = patch.dict(
+            os.environ,
+            {"RESEARCH_PARTNER_SQLITE_PATH": str(Path(partner_dir.name) / "partner.sqlite3")},
+        )
+        partner_env.start()
+        self.addCleanup(partner_env.stop)
 
     def test_next_closed_loop_run_is_timezone_aware_and_rolls_forward(self):
         now = datetime(2026, 9, 4, 15, 36, tzinfo=ZoneInfo("Asia/Shanghai"))

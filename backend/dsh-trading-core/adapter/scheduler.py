@@ -394,6 +394,29 @@ def _run_closed_loop_once(store: JsonStore, today: str, notification_service=Non
         logger.error("闭环运行时间留痕失败: %s", exc)
         return
 
+    # 策略自进化复用为委托：把本轮动作落成统一事件，投递给显式订阅的委托。
+    # 旧策略不会因此自动获得生效委托；没有订阅者时事件只留档。
+    try:
+        from . import evolution_events
+
+        staged = evolution_events.stage_closed_loop(
+            store,
+            run_id=today,
+            occurred_at=run_at_value,
+            actions=actions,
+            status_value=(
+                "partial" if any("失败" in line for line in lines) else "completed"
+            ),
+        )
+        # 有待发（含上一轮投递失败）就重试，不能只在有新事件时才发。
+        if staged or evolution_events.pending_events(store):
+            delivered = evolution_events.publish_to_partner(store)
+            logger.info(
+                "闭环事件登记 %d 条，投递委托核心：%s", len(staged), delivered
+            )
+    except Exception as exc:  # noqa: BLE001 — 事件失败不得回滚业务留痕
+        logger.error("闭环事件登记/投递失败: %s", exc)
+
     if notification_service is not None:
         try:
             from .notifications.models import NotificationEvent

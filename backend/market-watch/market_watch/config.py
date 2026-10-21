@@ -64,12 +64,17 @@ class Settings:
         ]
         self.serverchan_sendkey = os.getenv("SERVERCHAN_SENDKEY", "")
         self.wecom_webhook_key = os.getenv("WECOM_WEBHOOK_KEY", "")
-        # 统一通知中心：auto 在配置内部令牌后启用，legacy 可快速回滚到旧直推。
+        # 统一通知中心：auto 在配置内部令牌后启用，legacy 可快速回滚到旧直推，
+        # partner 表示同一类提醒已由研究委托核心接管（不再直推通知中心）。
         self.notification_mode = os.getenv("MW_NOTIFICATION_MODE", "auto").strip().lower()
-        if self.notification_mode not in {"auto", "center", "legacy"}:
-            raise ValueError("MW_NOTIFICATION_MODE 必须是 auto、center 或 legacy")
+        if self.notification_mode not in {"auto", "center", "partner", "legacy"}:
+            raise ValueError("MW_NOTIFICATION_MODE 必须是 auto、center、partner 或 legacy")
         self.notification_internal_token = os.getenv("NOTIFICATION_INTERNAL_TOKEN", "")
         self.notification_timeout = float(os.getenv("MW_NOTIFICATION_TIMEOUT", "3"))
+        # 研究委托核心（Slice 7 接管出口）：配置地址后新闻、异动与风险事件改为
+        # 投递统一事件，由委托核心决定是否复核与联系；留空则保持旧出口。
+        self.research_partner_url = os.getenv("MW_RESEARCH_PARTNER", "").strip()
+        self.research_partner_timeout = float(os.getenv("MW_RESEARCH_PARTNER_TIMEOUT", "3"))
         # 调度
         self.schedule_enabled = _true("MW_SCHEDULE_ENABLED", default=True)
         self.poll_interval = int(os.getenv("MW_POLL_INTERVAL", "30"))

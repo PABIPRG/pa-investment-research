@@ -20,6 +20,7 @@ from . import llm, news, quotes
 from .config import settings
 from .store import JsonStore
 from .notification_publisher import center_enabled, market_event_event, publish_event
+from .partner_publisher import publish_news_events_async
 
 logger = logging.getLogger("market_watch.events")
 
@@ -234,6 +235,8 @@ def extract_events(limit: int = 30, *, force: bool = False) -> list[dict]:
     # 会被 [:limit] 截断导致个性化面板定向卡片消失；LLM 事件在其后仍按新→旧。
     events.sort(key=lambda e: (str(e.get("id", "")).startswith("ev-stock"), e.get("time", "")), reverse=True)
     _EVENT_CACHE["events"] = (now, events)
+    # 委托核心接管出口：结构化事件异步投递，是否联系用户由委托决定。
+    publish_news_events_async(events[: max(limit, settings.event_batch)])
     return events[:limit]
 
 

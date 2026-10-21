@@ -84,6 +84,19 @@ def _render(event: NotificationEvent) -> dict[str, Any]:
             "summary": summary, "body": summary, "action": action,
             "dedupeKey": dedupe, "externalContent": summary,
         }
+    if kind == "research.contact.send.v1":
+        title = _text(payload.get("title"), "研究委托有新进展")
+        summary = _text(payload.get("summary"))
+        return {
+            "category": "research",
+            "severity": str(payload.get("severity") or "information"),
+            "title": title,
+            "summary": summary,
+            "body": summary,
+            "action": action,
+            "dedupeKey": f"{kind}:{_text(payload.get('decisionId'), event.subject_id)}",
+            "externalContent": f"{title}：{summary}",
+        }
     if kind in {"research.brief.completed.v1", "research.brief.failed.v1"}:
         name = _text(payload.get("briefName"), "投研简报")
         failed = kind.endswith("failed.v1")
