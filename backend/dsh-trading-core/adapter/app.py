@@ -28,6 +28,11 @@ from .analyzer import TaskManager
 from .backtest_engine import compute_summary
 from .decision_recorder import load_evaluated_results
 from .data_transfer import recover_incomplete_transactions, register_data_transfer_routes
+from .product_package import (
+    TradingCoreDomain,
+    default_journal_path,
+    register_product_package_routes,
+)
 from .holdings_providers.base import ProviderUnavailable
 from .holdings_source import (
     EmptyHoldingsError,
@@ -51,6 +56,11 @@ from . import position_risk
 from .risk_profiles import get_risk_profile, profile
 from .runner import FakeBriefRunner, FakeHoldingsRunner, FakeRunner
 from .manual_trades import ManualTradeRequest, apply_trade, history as manual_trade_history
+from .trade_revisions import (
+    TradeRevisionRequest,
+    apply_revision,
+    revision_history,
+)
 from .schemas import (
     AnalyzeRequest,
     BacktestRunRequest,
@@ -148,6 +158,22 @@ def _report_detail_projection(report: dict) -> dict:
         for key in report["section_keys"]
     ]
     return projected
+
+
+def _publish_investment_facts(store) -> dict:
+    """把投资记录 outbox 交给委托核心；委托服务不可用时保留待发。"""
+
+    try:
+        from research_partner.factory import build_store
+
+        from .investment_events import publish_pending
+    except Exception as exc:  # noqa: BLE001 — 装配缺失不应阻断投资记录本身
+        return {"published": 0, "failed": [], "pending": None, "error": str(exc)}
+    partner_store = build_store()
+    try:
+        return publish_pending(store, partner_store)
+    finally:
+        partner_store.close()
 
 
 def _build_registry() -> dict:
@@ -364,6 +390,17 @@ def create_app(
         notification_repository=notification_service.repository,
         on_committed=lambda store: position_risk.reconcile(store, risk_rule_port),
     )
+    # 跨领域数据包先接入 trading-core；委托域随 :8300 合并部署再注册适配器，
+    # 导出范围会如实写明当前覆盖的领域。
+    register_product_package_routes(
+        app,
+        {
+            "trading-core": TradingCoreDomain(
+                JsonStore, notification_repository=notification_service.repository
+            )
+        },
+        default_journal_path(),
+    )
     register_public_observatory_routes(app, price_loader=portfolio_price_cache.load)
 
     def publish_holdings_notification(result: dict, source_name: str) -> None:
@@ -494,6 +531,30 @@ def create_app(
             except Exception:
                 result["warning"] = "成交已保存，风险计划刷新失败，请稍后刷新。"
         return result
+
+    @app.get("/holdings/trades/revisions", response_model=dict)
+    async def holdings_trade_revisions(trade_request_id: str | None = None):
+        return {"entries": await run_in_threadpool(revision_history, JsonStore(), trade_request_id=trade_request_id)}
+
+    @app.post("/holdings/trades/revisions", response_model=dict)
+    async def holdings_trade_revision(req: TradeRevisionRequest):
+        store = JsonStore()
+        try:
+            result = await run_in_threadpool(apply_revision, store, req)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if result["saved"]:
+            try:
+                result["position_risk"] = await run_in_threadpool(position_risk.reconcile, store, risk_rule_port)
+            except Exception:
+                result["warning"] = "修订已保存，风险计划刷新失败，请稍后刷新。"
+            result["facts_event"] = await run_in_threadpool(_publish_investment_facts, store)
+        return result
+
+    @app.post("/holdings/facts/publish", response_model=dict)
+    async def holdings_facts_publish():
+        """把待发的事实修订事件交给委托核心；失败的事件留待下次重试。"""
+        return await run_in_threadpool(_publish_investment_facts, JsonStore())
 
     @app.post("/holdings/save", response_model=dict)
     async def holdings_save(req: HoldingsSaveRequest):

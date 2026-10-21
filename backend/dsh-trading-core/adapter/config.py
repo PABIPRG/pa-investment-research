@@ -6,6 +6,7 @@
     必须让它优先于配置文件里的同名字段，所以 load_dotenv 用 override=False。
 """
 
+import json
 import os
 from pathlib import Path
 
@@ -40,6 +41,15 @@ def _load_environment(state_root: Path | None) -> None:
 # 先加载用户配置再加载项目 .env，配合 override=False 保持 shell > 用户 > 项目。
 _user_state_root = _investment_state_root()
 _load_environment(_user_state_root)
+
+
+def _chat_llm_settings(directory: Path) -> dict:
+    """读取对话功能使用的模型配置（config/settings.json）；缺失或损坏时返回空。"""
+    try:
+        raw = json.loads((directory / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 class Settings:
@@ -106,10 +116,22 @@ class Settings:
         self.schedule_enabled = os.getenv("BRIEF_SCHEDULE_ENABLED", "false").lower() == "true"
         self.pre_market_time = os.getenv("BRIEF_PRE_MARKET_TIME", "08:50")
         self.post_market_time = os.getenv("BRIEF_POST_MARKET_TIME", "15:30")
-        # 简报 LLM（openai 直连 DeepSeek，绕开 LangChain 层）
-        self.llm_model = os.getenv("BRIEF_LLM_MODEL", "deepseek-chat")
+        # 简报/研报 LLM（openai 直连 DeepSeek，绕开 LangChain 层）。
+        # 默认跟随对话功能（config/settings.json）的 DeepSeek 通道：同一个 provider、
+        # 同一个模型、同一个 base_url，保证报告与对话用的是同一套大模型。
+        chat_llm = _chat_llm_settings(self.user_config_dir)
+        chat_provider = str(chat_llm.get("llm_provider") or "").strip().lower()
+        follows_chat = chat_provider in ("", "deepseek")
+        chat_model = str(chat_llm.get("deep_think_llm") or "").strip() if follows_chat else ""
+        chat_base_url = str(chat_llm.get("backend_url") or "").strip() if follows_chat else ""
+        self.llm_provider = chat_provider or "deepseek"
+        self.llm_model = (
+            os.getenv("BRIEF_LLM_MODEL") or chat_model or "deepseek-chat"
+        )
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
-        self.deepseek_base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        self.deepseek_base_url = (
+            os.getenv("DEEPSEEK_BASE_URL") or chat_base_url or "https://api.deepseek.com"
+        )
         # 二期：事件→策略（事件源 + 影子验证）
         self.mw_url = os.getenv("MW_URL", "http://127.0.0.1:8100")
         self.position_risk_token = os.getenv("DSH_POSITION_RISK_TOKEN", "")

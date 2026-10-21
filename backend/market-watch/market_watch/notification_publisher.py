@@ -17,6 +17,11 @@ logger = logging.getLogger("market_watch.notification_publisher")
 
 
 def center_enabled() -> bool:
+    # 委托核心接管后（显式 partner 或已配置核心地址），旧通知出口必须停用。
+    from .partner_publisher import partner_takeover
+
+    if partner_takeover():
+        return False
     mode = settings.notification_mode
     return mode == "center" or (mode == "auto" and bool(settings.notification_internal_token))
 

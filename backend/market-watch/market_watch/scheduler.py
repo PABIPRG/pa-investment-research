@@ -21,6 +21,7 @@ from . import briefs, news, position_risk, quotes, rules
 from .config import settings
 from .push import PusherManager
 from .notification_publisher import center_enabled, price_alert_event, publish_event
+from .partner_publisher import partner_takeover, publish_price_alerts
 from .store import JsonStore
 
 logger = logging.getLogger("market_watch.scheduler")
@@ -194,7 +195,15 @@ def run_watch_cycle(manual: bool = False) -> dict:
                 text += f"\n\n> LLM解读：{interp}"
             pushes.append((f"盯盘触发 {quote['name']}", text))
 
-    if center_enabled():
+    if partner_takeover():
+        # 委托核心接管：只登记“规则已命中”，是否联系由委托与消推算法决定。
+        summary["push_results"].extend(
+            {"channel": "research_partner", **item}
+            for item in publish_price_alerts(
+                [trigger for trigger in summary["triggered"]]
+            )
+        )
+    elif center_enabled():
         for event in notification_events:
             summary["push_results"].append({"channel": "notification_center", **publish_event(event)})
     elif settings.push_enabled and pushes:

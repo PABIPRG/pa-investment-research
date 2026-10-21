@@ -17,6 +17,7 @@ EVENT_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "market.event.matched.v1": ("headline", "sourceName"),
     "research.brief.completed.v1": ("briefId", "briefName"),
     "research.brief.failed.v1": ("briefName", "reasonCode"),
+    "research.contact.send.v1": ("mandateId", "mandateRevision", "title", "summary"),
     "portfolio.plan.due.v1": ("planId", "planName", "dueAt"),
     "portfolio.plan.threshold_reached.v1": ("planId", "planName", "triggerName"),
     "portfolio.plan.expired.v1": ("planId", "planName"),
@@ -29,7 +30,15 @@ EVENT_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "evolution.closed_loop.completed.v1": ("runId", "summary"),
 }
 
-SUBJECT_KINDS = {"security", "portfolio-plan", "holdings-sync", "report", "evolution", "none"}
+SUBJECT_KINDS = {
+    "security",
+    "portfolio-plan",
+    "holdings-sync",
+    "report",
+    "evolution",
+    "mandate",
+    "none",
+}
 
 
 def _required_text(value: Any, field: str) -> str:

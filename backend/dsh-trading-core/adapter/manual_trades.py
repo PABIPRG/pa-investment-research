@@ -81,7 +81,8 @@ def apply_trade(store: JsonStore, req: ManualTradeRequest):
             if after_qty:
                 remaining.append({**(current or {}), "ticker": req.ticker, "quantity": float(after_qty), "cost_price": float(after_cost), "position_time": at.isoformat(), "time_source": "user_modified"})
             remaining = _positions(remaining)
-        entry = {**payload, "quantity": float(req.quantity), "price": float(req.price), "fees": float(req.fees), "traded_at": at.isoformat(), "source": "manual", "before_quantity": float(qty), "after_quantity": float(after_qty), "after_cost_price": float(after_cost) if after_qty else None, "request": payload}
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        entry = {**payload, "quantity": float(req.quantity), "price": float(req.price), "fees": float(req.fees), "traded_at": at.isoformat(), "occurred_at": at.isoformat(), "recorded_at": recorded_at, "source": "manual", "before_quantity": float(qty), "after_quantity": float(after_qty), "after_cost_price": float(after_cost) if after_qty else None, "request": payload}
         result = {"saved": req.action == "commit", "version": version, "entry": entry, "holdings": remaining, "backdated": backdated}
         if req.action != "commit":
             return document

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 import hashlib
 from typing import Callable
 
+from .partner_publisher import publish_risk_event
+
 
 RULES_COLLECTION = "position_risk_rules"
 DELIVERIES_COLLECTION = "position_risk_deliveries"
@@ -200,6 +202,9 @@ def evaluate_and_deliver(
             continue
         before = event["event_id"] in store.all(DELIVERIES_COLLECTION)
         _persist_delivery(store, event)
+        if not before:
+            # 风险条件已经发生：即使旧通道投递失败，也要让委托核心看到这次变化。
+            publish_risk_event(event)
         created += 0 if before else 1
 
     delivered = 0
